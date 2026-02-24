@@ -1,0 +1,668 @@
+/******************************************************************************
+ * @file    app.cpp
+ * @brief   application class
+ *****************************************************************************/
+
+#include "pch.h"
+#include <freeglut.h>
+
+/*
+================================================================================
+ App
+================================================================================
+*/
+constexpr float	MOUSE_SENSITIVE = 0.2f;
+
+// movement
+constexpr float		VIEW_HEIGHT = 7000.0f;
+constexpr float		GRAVITE = 10.0f * WORLD_UNITS_PER_METER;
+constexpr float		MIN_MOVE_SPEED = 8.0f * WORLD_UNITS_PER_METER;
+constexpr float		MAX_MOVE_SPEED = 8192.0f * WORLD_UNITS_PER_METER;
+constexpr float		MIN_JUMP_SPEED = 4.0f * WORLD_UNITS_PER_METER;
+constexpr float		MAX_JUMP_SPEED = 512.0f * WORLD_UNITS_PER_METER;
+
+
+// movement key down flags
+constexpr int MK_FORWARD		= FLAG_BIT(0);
+constexpr int MK_BACKWARD		= FLAG_BIT(1);
+constexpr int MK_LEFT			= FLAG_BIT(2);
+constexpr int MK_RIGHT			= FLAG_BIT(3);
+constexpr int MK_STRAIGHT_UP	= FLAG_BIT(4);
+constexpr int MK_STRAIGHT_DOWN	= FLAG_BIT(5);
+constexpr int MK_JUMP			= FLAG_BIT(6);
+constexpr int MK_ROLL_INC		= FLAG_BIT(7);
+constexpr int MK_ROLL_DEC		= FLAG_BIT(8);
+
+App::App():
+	frame_(0),
+	terrain_mod_options_(-1),
+	prior_frame_time_(0),
+	skip_input_on_motion_once_(false)
+{
+	view_define_.pos_ = glm::vec3(0.0f);
+	view_define_.forward_ = VEC3_Y_DIR;
+	view_define_.right_ = VEC3_X_DIR;
+	view_define_.up_ = VEC3_Z_DIR;
+	view_define_.fovx_ = glm::radians(FOVY_IN_DEGREE);
+	view_define_.fovy_ = glm::radians(FOVY_IN_DEGREE);
+	view_define_.render_z_near_ = RENDER_Z_NEAR;
+	view_define_.render_z_far_ = RENDER_Z_FAR;
+	view_define_.render_min_depth_ = RENDER_DEPTH_MIN;
+	view_define_.render_max_depth_ = RENDER_DEPTH_MAX;
+	view_define_.viewport_width_ = 1;
+	view_define_.viewport_height_ = 1;
+
+	draw_params_.view_define_ = &view_define_;
+	draw_params_.overlay_wireframe_ = false;
+	draw_params_.draw_parts_ = -1;
+	draw_params_.draw_terrain_options_ = -1;
+	draw_params_.flat_sky_layer_is_visible_ = true;
+	draw_params_.num_terrain_render_chunk_ = 0;
+
+	memset(&window_state_, 0, sizeof(window_state_));
+	memset(&mouse_state_, 0, sizeof(mouse_state_));
+	memset(&input_, 0, sizeof(input_));
+
+	window_state_.cursor_visible_ = true;
+
+	memset(&viewer_, 0, sizeof(viewer_));
+	viewer_.clip_to_z_ = true;
+	viewer_.move_speed_ = MIN_MOVE_SPEED;
+	viewer_.jump_speed_ = MIN_JUMP_SPEED;
+}
+
+App::~App() {
+	Shutdown();
+}
+
+bool App::Init(int argc, char** argv) {
+	if (!renderer_.Init()) {
+		return false;
+	}
+
+	// read options from command line
+	draw_params_.overlay_wireframe_ = Arg_OptionIdx(argc, argv, "-wireframe") > 0;
+	draw_params_.draw_parts_ = Arg_ReadInt(argc, argv, "-draw_parts", -1);
+	draw_params_.draw_terrain_options_ = Arg_ReadInt(argc, argv, "-draw_terrain_opts", -1);
+	terrain_mod_options_ = Arg_ReadInt(argc, argv, "-terrain_mod_opts", terrain_mod_options_);
+
+	int start_level = Arg_ReadInt(argc, argv, "-level", 0);
+	if (start_level >= MIN_LEVEL_NO && start_level <= MAX_LEVEL_NO) {
+		LoadLevel(start_level);
+	}
+
+	if (Arg_OptionIdx(argc, argv, "-yaw") > -1) {
+		// override yaw
+		viewer_.yaw_ = Arg_ReadFloat(argc, argv, "-yaw", 0.0f);
+		UpdateViewerVectors();
+	}
+
+	if (Arg_OptionIdx(argc, argv, "-pitch") > -1) {
+		// override pitch
+		viewer_.pitch_ = Arg_ReadFloat(argc, argv, "-pitch", 0.0f);
+		UpdateViewerVectors();
+	}
+
+	prior_frame_time_ = Sys_Milliseconds();
+
+	return true;
+}
+
+void App::Shutdown() {
+	level_.Unload();
+	level_.FreeTerrainCubeDataPools();
+	renderer_.Shutdown();
+}
+
+void App::LoadLevel(int level_no) {
+	renderer_.BeginLoadLevel();
+
+	Level::load_params_s level_load_params_s = {
+		.level_no_ = level_no,
+		.render_res_loader_ = &renderer_
+	};
+
+	glm::vec3 start_pos;
+	float start_yaw;
+	if (level_.Load(level_load_params_s, start_pos, start_yaw)) {
+		viewer_.pos_ = start_pos;
+		viewer_.yaw_ = glm::degrees(start_yaw);
+		viewer_.pitch_ = 0.0f;
+		viewer_.roll_ = 0.0f;
+
+		UpdateViewerVectors();
+	}
+
+}
+
+int App::GetCurLevelNo() const {
+	return level_.GetLevelNo();
+}
+
+void App::ToggleOverlayWireframe() {
+	draw_params_.overlay_wireframe_ = !draw_params_.overlay_wireframe_;
+}
+
+void App::ToggleDrawParts(int part) {
+	if (draw_params_.draw_parts_ & part) {
+		draw_params_.draw_parts_ &= ~part;
+	}
+	else {
+		draw_params_.draw_parts_ |= part;
+	}
+}
+
+void App::ToggleTerrainDrawOption(int opt) {
+	if (draw_params_.draw_terrain_options_ & opt) {
+		draw_params_.draw_terrain_options_ &= ~opt;
+	}
+	else {
+		draw_params_.draw_terrain_options_ |= opt;
+	}
+}
+
+void App::ToggleTerrainModOption(int opt) {
+	if (terrain_mod_options_ & opt) {
+		terrain_mod_options_ &= ~opt;
+	}
+	else {
+		terrain_mod_options_ |= opt;
+	}
+}
+
+bool App::GetOverlayWireframe() const {
+	return draw_params_.overlay_wireframe_;
+}
+
+int	App::GetDrawParts() const {
+	return draw_params_.draw_parts_;
+}
+
+int	App::GetTerrainDrawOptions() const {
+	return draw_params_.draw_terrain_options_;
+}
+
+int	App::GetTerrainModOptions() const {
+	return terrain_mod_options_;
+}
+
+// events
+void App::OnWindowResize(int width, int height) {
+	window_state_.viewport_width_ = std::max(1, width);
+	window_state_.viewport_height_ = std::max(1, height);
+
+	view_define_.viewport_width_ = window_state_.viewport_width_;
+	view_define_.viewport_height_ = window_state_.viewport_height_;
+
+	// update fovx_
+	float h = std::tan(view_define_.fovy_ * 0.5f);
+	float w = h * width / height;
+	view_define_.fovx_ = std::atan(w) * 2.0f;
+
+	float tan_half_fovx = (float)std::tan(view_define_.fovx_ * 0.5);
+	float tan_half_fovy = (float)std::tan(view_define_.fovy_ * 0.5);
+
+	view_define_.tan_half_fovx_ = tan_half_fovx;
+	view_define_.tan_half_fovy_ = tan_half_fovy;
+
+	view_define_.half_viewport_width_div_tan_half_fovx_ = window_state_.viewport_width_ * 0.5f / tan_half_fovx;
+	view_define_.half_viewport_height_div_tan_half_fovy_ = window_state_.viewport_height_ * 0.5f / tan_half_fovy;
+
+}
+
+void App::OnDisplay() {
+	// ignore
+}
+
+// input
+void App::Input_OnMouse(int button, int state, int x, int y) {
+	if (button == GLUT_LEFT_BUTTON) {
+		if (GLUT_DOWN == state) {
+			mouse_state_.left_button_down_ = true;
+			
+		}
+		else if (GLUT_UP == state) {
+			mouse_state_.left_button_down_ = false;
+
+			if (window_state_.cursor_visible_) {
+				input_.mouse_delta_x_ = 0;
+				input_.mouse_delta_y_ = 0;
+			}
+		}
+	}
+
+	mouse_state_.prior_x_ = x;
+	mouse_state_.prior_y_ = y;
+}
+
+void App::Input_OnMotion(int x, int y) {
+	if (window_state_.cursor_visible_) {
+		if (mouse_state_.left_button_down_) {
+			input_.mouse_delta_x_ = x - mouse_state_.prior_x_;
+			input_.mouse_delta_y_ = y - mouse_state_.prior_y_;
+
+			mouse_state_.prior_x_ = x;
+			mouse_state_.prior_y_ = y;
+		}
+	}
+	else {
+		if (skip_input_on_motion_once_) {
+			skip_input_on_motion_once_ = false;
+			return;
+		}
+
+		int center_x = window_state_.viewport_width_ >> 1;
+		int center_y = window_state_.viewport_height_ >> 1;
+
+		input_.mouse_delta_x_ += x - center_x;
+		input_.mouse_delta_y_ += y - center_y;
+
+		mouse_state_.prior_x_ = x;
+		mouse_state_.prior_y_ = y;
+
+		glutWarpPointer(center_x, center_y); // move cursor to view center
+		skip_input_on_motion_once_ = true;   // skip next cursor motion event caused by glutWarpPointer
+	}
+}
+
+void App::Input_OnSpecial(int key, int x, int y) {
+	if (key == GLUT_KEY_F3) {
+		viewer_.clip_to_z_ = !viewer_.clip_to_z_;
+		return;
+	}
+	else if (key == GLUT_KEY_F4) {
+		window_state_.cursor_visible_ = !window_state_.cursor_visible_;
+
+		glutSetCursor(window_state_.cursor_visible_ ? GLUT_CURSOR_LEFT_ARROW : GLUT_CURSOR_NONE);
+
+		if (!window_state_.cursor_visible_) {
+			glutWarpPointer(window_state_.viewport_width_ >> 1, window_state_.viewport_height_ >> 1);
+			input_.mouse_delta_x_ = input_.mouse_delta_y_ = 0;
+		}
+
+		return;
+	}
+
+	if (key == GLUT_KEY_PAGE_UP) {
+		viewer_.move_speed_ *= 2.0f;
+		viewer_.jump_speed_ *= 2.0f;
+
+		if (viewer_.move_speed_ > MAX_MOVE_SPEED) {
+			viewer_.move_speed_ = MAX_MOVE_SPEED;
+		}
+
+		if (viewer_.jump_speed_ > MAX_JUMP_SPEED) {
+			viewer_.jump_speed_ = MAX_JUMP_SPEED;
+		}
+
+		printf("current move speed set to %d, jump speed set to %d\n",
+			(int)viewer_.move_speed_, (int)viewer_.jump_speed_);
+
+		return;
+	}
+
+	if (key == GLUT_KEY_PAGE_DOWN) {
+		viewer_.move_speed_ *= 0.5f;
+		viewer_.jump_speed_ *= 0.5f;
+
+		if (viewer_.move_speed_ < MIN_MOVE_SPEED) {
+			viewer_.move_speed_ = MIN_MOVE_SPEED;
+		}
+
+		if (viewer_.jump_speed_ < MIN_JUMP_SPEED) {
+			viewer_.jump_speed_ = MIN_JUMP_SPEED;
+		}
+
+		printf("current move speed set to %d, jump speed set to %d\n",
+			(int)viewer_.move_speed_, (int)viewer_.jump_speed_);
+
+		return;
+	}
+
+	if (key == GLUT_KEY_LEFT) {
+		input_.keys_ |= MK_ROLL_DEC;
+		return;
+	}
+
+	if (key == GLUT_KEY_RIGHT) {
+		input_.keys_ |= MK_ROLL_INC;
+		return;
+	}
+}
+
+void App::Input_OnSpecialUp(int key, int x, int y) {
+	if (key == GLUT_KEY_LEFT) {
+		input_.keys_ &= ~MK_ROLL_DEC;
+		return;
+	}
+
+	if (key == GLUT_KEY_RIGHT) {
+		input_.keys_ &= ~MK_ROLL_INC;
+		return;
+	}
+}
+
+struct movement_key_s {
+	char	lower_case_;
+	char	upper_case_;
+	int		key_flag_;
+};
+
+static constexpr movement_key_s MOVEMENT_KEYS[] = {
+	'w', 'W', MK_FORWARD,
+	's', 'S', MK_BACKWARD,
+	'a', 'A', MK_LEFT,
+	'd', 'D', MK_RIGHT,
+	'q', 'Q', MK_STRAIGHT_UP,
+	'z', 'Z', MK_STRAIGHT_DOWN,
+	' ', ' ', MK_JUMP
+};
+
+void App::Input_OnKeyboard(unsigned char key, int x, int y) {
+	if ((key == 13) && (glutGetModifiers() & GLUT_ACTIVE_ALT)) { // ALT + ENTER toggle full screen mode
+		window_state_.full_screen_ = !window_state_.full_screen_;
+
+		if (window_state_.full_screen_) {
+
+			window_state_.old_viewport_width_ = window_state_.viewport_width_;
+			window_state_.old_viewport_height_ = window_state_.viewport_height_;
+
+			glutFullScreen();
+		}
+		else {
+			glutReshapeWindow(window_state_.old_viewport_width_, window_state_.old_viewport_height_);
+		}
+
+		return;
+	}
+
+	for (int i = 0; i < count_of(MOVEMENT_KEYS); ++i) {
+		const movement_key_s& mk = MOVEMENT_KEYS[i];
+		if (key == mk.lower_case_ || key == mk.upper_case_) {
+			input_.keys_ |= mk.key_flag_;
+			return;
+		}
+	}
+}
+
+void App::Input_OnKeyboardUp(unsigned char key, int x, int y) {
+	for (int i = 0; i < count_of(MOVEMENT_KEYS); ++i) {
+		const movement_key_s& mk = MOVEMENT_KEYS[i];
+		if (key == mk.lower_case_ || key == mk.upper_case_) {
+			input_.keys_ &= ~mk.key_flag_;
+			return;
+		}
+	}
+}
+
+// idle
+void App::OnIdle() {
+	int64_t cur_time = Sys_Milliseconds();
+	int64_t delta_time = cur_time - prior_frame_time_;
+	if (delta_time < 16) {
+		return;
+	}
+
+	Frame(delta_time * 0.001f);	// convert to seconds
+
+	prior_frame_time_ = cur_time;
+}
+
+void App::Frame(float delta_seconds) {
+	frame_++;
+	frame_ %= 0xFFFFFFFF;	// reserve value 0xFFFFFFFF (-1) for INVALID_FRAME
+
+	ProcessInput(delta_seconds);
+
+	UpdateViewDefine();
+
+	vert_flat_sky_layer_s * fsl_vb = renderer_.MapFlatSkyLayersVB();
+	vert_pos_a_uv_s* terrain_vb = renderer_.MapTerrainVB();
+	uint32_t* terrain_ib = renderer_.MapTerrainIB();
+	render_chunk_s* render_chunks = renderer_.GetTerrainRenderChunckBuffer();
+
+	update_params_s update_params = {
+		.frame_ = frame_,
+		.delta_seconds_ = delta_seconds,
+		.view_define_ = &view_define_,
+		.flat_sky_layer_vb_ = fsl_vb,
+		.terrain_mod_options_ = terrain_mod_options_,
+		.terrain_vb_ = terrain_vb,
+		.terrain_ib_ = terrain_ib,
+		.terrain_render_chunks_ = render_chunks
+	};
+
+	level_.Update(update_params);
+
+	if (terrain_ib) {
+		renderer_.UnmapTerrainIB();
+	}
+
+	if (terrain_vb) {
+		renderer_.UnmapTerrainVB();
+	}
+
+	if (fsl_vb) {
+		renderer_.UnmapFlatSkyLayersVB();
+	}
+
+	draw_params_.flat_sky_layer_is_visible_ = update_params.flat_sky_layer_is_visible_;
+	draw_params_.num_terrain_render_chunk_ = update_params.num_terrain_render_chunk_;
+
+	renderer_.Draw(draw_params_);
+
+	glutSwapBuffers();
+}
+
+void App::ProcessInput(float delta_seconds) {
+	viewer_.yaw_ += -input_.mouse_delta_x_ * MOUSE_SENSITIVE;
+	viewer_.pitch_ += -input_.mouse_delta_y_ * MOUSE_SENSITIVE;
+
+	input_.mouse_delta_x_ = 0;
+	input_.mouse_delta_y_ = 0;
+
+	UpdateViewerVectors();
+
+	if (viewer_.clip_to_z_) {
+
+		float z0 = viewer_.pos_.z - VIEW_HEIGHT;
+		float friction = viewer_.move_speed_ * 2.0f;
+
+		// check movement
+		if (input_.keys_ & MK_FORWARD) {
+			viewer_.velocity_.x = viewer_.forward_.x * viewer_.move_speed_;
+			viewer_.velocity_.y = viewer_.forward_.y * viewer_.move_speed_;
+		}
+
+		if (input_.keys_ & MK_BACKWARD) {
+			viewer_.velocity_.x = viewer_.forward_.x * -viewer_.move_speed_;
+			viewer_.velocity_.y = viewer_.forward_.y * -viewer_.move_speed_;
+		}
+
+		if (input_.keys_ & MK_LEFT) {
+			viewer_.velocity_.x = viewer_.right_.x * -viewer_.move_speed_;
+			viewer_.velocity_.y = viewer_.right_.y * -viewer_.move_speed_;
+		}
+
+		if (input_.keys_ & MK_RIGHT) {
+			viewer_.velocity_.x = viewer_.right_.x * viewer_.move_speed_;
+			viewer_.velocity_.y = viewer_.right_.y * viewer_.move_speed_;
+		}
+
+		if (input_.keys_ & MK_JUMP && viewer_.clip_to_z_) {
+			if (viewer_.velocity_.z <= 0.0f && viewer_.on_ground_) {
+				viewer_.velocity_.z = viewer_.jump_speed_;
+			}
+		}
+
+		if (!input_.keys_ && viewer_.on_ground_) {
+
+			float speed = (float)std::sqrt(viewer_.velocity_.x * viewer_.velocity_.x + viewer_.velocity_.y * viewer_.velocity_.y);
+			if (speed > 1.0f) {
+				float one_over_speed = 1.0f / speed;
+				float dir_x = viewer_.velocity_.x * one_over_speed;
+				float dir_y = viewer_.velocity_.y * one_over_speed;
+
+				float speed_drop = friction * delta_seconds;
+				speed -= speed_drop;
+
+				if (speed <= 1.0f) {
+					speed = 0.0f;
+				}
+
+				viewer_.velocity_.x = dir_x * speed;
+				viewer_.velocity_.y = dir_y * speed;
+			}
+			else {
+				viewer_.velocity_.x = 0.0f;
+				viewer_.velocity_.y = 0.0f;
+			}
+		}
+
+		glm::vec3 move_delta = viewer_.velocity_ * delta_seconds;
+		viewer_.pos_ += move_delta;
+
+		if (viewer_.velocity_.z <= 0.0f) {
+
+			float ret_z = 0.0f;
+			glm::vec3 get_z_pos = viewer_.pos_;
+			get_z_pos.z = viewer_.pos_.z - VIEW_HEIGHT;
+			bool ok = level_.GetTerrainZ(get_z_pos, ret_z);
+
+			if (ok) {
+				float view_z = ret_z + VIEW_HEIGHT;
+
+				if (viewer_.pos_.z < view_z) {
+					viewer_.pos_.z = view_z;
+					viewer_.velocity_.z = 0.0f;
+					viewer_.on_ground_ = true;
+				}
+				else {
+					viewer_.on_ground_ = false;
+				}
+
+			}
+			else {
+				viewer_.on_ground_ = false;
+			}
+
+		}
+		else {
+			viewer_.on_ground_ = false;	// moving upward
+		}
+
+		if (!viewer_.on_ground_) {
+			viewer_.velocity_.z -= GRAVITE * delta_seconds;
+		}
+
+	}
+	else {
+
+		// check movement
+		if (input_.keys_ & MK_FORWARD) {
+			viewer_.pos_ += viewer_.forward_ * viewer_.move_speed_ * delta_seconds;
+		}
+
+		if (input_.keys_ & MK_BACKWARD) {
+			viewer_.pos_ -= viewer_.forward_ * viewer_.move_speed_ * delta_seconds;
+		}
+
+		if (input_.keys_ & MK_LEFT) {
+			viewer_.pos_ -= viewer_.right_ * viewer_.move_speed_ * delta_seconds;
+		}
+
+		if (input_.keys_ & MK_RIGHT) {
+			viewer_.pos_ += viewer_.right_ * viewer_.move_speed_ * delta_seconds;
+		}
+
+		if (input_.keys_ & MK_STRAIGHT_UP && !viewer_.clip_to_z_) {
+			viewer_.pos_ += VEC3_Z_DIR * viewer_.move_speed_ * delta_seconds;
+		}
+
+		if (input_.keys_ & MK_STRAIGHT_DOWN && !viewer_.clip_to_z_) {
+			viewer_.pos_ -= VEC3_Z_DIR * viewer_.move_speed_ * delta_seconds;
+		}
+
+	}
+
+	// check rotation
+	bool update_orientation = false;
+
+	if (input_.keys_ & MK_ROLL_INC) {
+		update_orientation = true;
+		viewer_.roll_ += 1.0f;
+	}
+
+	if (input_.keys_ & MK_ROLL_DEC) {
+		update_orientation = true;
+		viewer_.roll_ -= 1.0f;
+	}
+
+	if (update_orientation) {
+		UpdateViewerVectors();
+	}
+}
+
+void App::UpdateViewerVectors() {
+	// clamp yaw, pitch & roll
+
+	while (viewer_.yaw_ < 0.0f) {
+		viewer_.yaw_ += 360.0f;
+	}
+
+	while (viewer_.yaw_ > 360.0f) {
+		viewer_.yaw_ -= 360.0f;
+	}
+
+	if (viewer_.pitch_ < -89.0f) {
+		viewer_.pitch_ = -89.0f;
+	}
+
+	if (viewer_.pitch_ > 89.0f) {
+		viewer_.pitch_ = 89.0f;
+	}
+
+	while (viewer_.roll_ < 0.0f) {
+		viewer_.roll_ += 360.0f;
+	}
+
+	while (viewer_.roll_ > 360.0f) {
+		viewer_.roll_ -= 360.0f;
+	}
+
+	AngleToVectors(viewer_.yaw_, viewer_.pitch_, viewer_.roll_,
+		viewer_.forward_, viewer_.right_, viewer_.up_);
+}
+
+void App::UpdateViewDefine() {
+	view_define_.pos_ = viewer_.pos_;
+	view_define_.forward_ = viewer_.forward_;
+	view_define_.right_ = viewer_.right_;
+	view_define_.up_ = viewer_.up_;
+
+	/* rotate to coordinate:
+
+	  Z
+	  /
+	 /
+	/________X
+	|
+	|
+	|
+	Y
+
+	 */
+
+	// rotation only, with out translate
+	view_define_.mat_rot_[0][0] = view_define_.right_.x;
+	view_define_.mat_rot_[1][0] = view_define_.right_.y;
+	view_define_.mat_rot_[2][0] = view_define_.right_.z;
+
+	view_define_.mat_rot_[0][1] = -view_define_.up_.x;
+	view_define_.mat_rot_[1][1] = -view_define_.up_.y;
+	view_define_.mat_rot_[2][1] = -view_define_.up_.z;
+
+	view_define_.mat_rot_[0][2] = view_define_.forward_.x;
+	view_define_.mat_rot_[1][2] = view_define_.forward_.y;
+	view_define_.mat_rot_[2][2] = view_define_.forward_.z;
+}
