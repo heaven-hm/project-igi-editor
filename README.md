@@ -240,15 +240,15 @@ Here is a simplified recursive version of LUA like pseudo code to demonstrates h
 # Note
 
 This project does not do a thorough testing, crash might occur occasionally.
-Fill free to report bugs to me. :)
+Feel free to report bugs to me. :)
 
 # References
 
-DirectX 7.0 Programmer's Reference. 1999. Microsoft Corporation.
-Douglas Rogers. Implementing Fog in Direct3D. NVIDIA Corporation.
+DirectX 7.0 Programmer's Reference. 1999. Microsoft Corporation. <br>
+Douglas Rogers. Implementing Fog in Direct3D. NVIDIA Corporation. <br>
 
 # Other github repositories
 
-https://github.com/NEWME0/Project-IGI
-https://github.com/Jones-HM/project-igi-qvm-editor
-https://github.com/elishacloud/dxwrapper
+https://github.com/NEWME0/Project-IGI <br>
+https://github.com/Jones-HM/project-igi-qvm-editor <br>
+https://github.com/elishacloud/dxwrapper <br>
