@@ -4,6 +4,10 @@
  *****************************************************************************/
 
 #include "pch.h"
+#include <filesystem>
+#include "logger.h"
+
+
 
 /*
 ================================================================================
@@ -104,9 +108,10 @@ void Level::DecompileObjects(int levelNo) {
 	Str_SPrintf(qvmPath, 1024, "%s\\missions\\location0\\level%d\\objects.qvm", igiPath.c_str(), levelNo);
 
 	if (!File_Exists(qvmPath)) {
-		printf("Error: QVM file not found at %s\n", qvmPath);
+		Logger::Get().Log(LogLevel::ERR, "[Decompile] QVM file not found at: " + std::string(qvmPath));
 		return;
 	}
+
 
 	char appData[1024];
 	GetEnvironmentVariableA("APPDATA", appData, 1024);
@@ -124,8 +129,9 @@ void Level::DecompileObjects(int levelNo) {
 		char cmd[2048];
 		Str_SPrintf(cmd, 2048, "cd /d \"%s\" && decompile.bat", decompileDir);
 
-		printf("Running decompiler: %s\n", cmd);
+		Logger::Get().Log(LogLevel::INFO, "[Decompile] Running decompiler: " + std::string(cmd));
 		system(cmd);
+
 
 		char outputPath[1024];
 		Str_SPrintf(outputPath, 1024, "%s\\output\\objects.qsc", decompileDir);
@@ -136,14 +142,16 @@ void Level::DecompileObjects(int levelNo) {
 		std::filesystem::create_directories(std::filesystem::path(destPath).parent_path());
 		if (std::filesystem::exists(outputPath)) {
 			std::filesystem::rename(outputPath, destPath);
-			printf("Decompiled objects saved to %s\n", destPath);
+			Logger::Get().Log(LogLevel::INFO, "[Decompile] Success! Saved to: " + std::string(destPath));
 		} else {
-			printf("Error: Decompiler did not produce output at %s\n", outputPath);
+			Logger::Get().Log(LogLevel::ERR, "[Decompile] FAILED: Decompiler did not produce output at: " + std::string(outputPath));
 		}
+
 	}
 	catch (const std::exception& e) {
-		printf("DecompileObjects error: %s\n", e.what());
+		Logger::Get().Log(LogLevel::ERR, "[Decompile] Exception: " + std::string(e.what()));
 	}
+
 }
 
 

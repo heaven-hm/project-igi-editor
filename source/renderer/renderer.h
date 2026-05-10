@@ -18,10 +18,12 @@ class Renderer : public IRenderResLoader {
 public:
 
 	// draw parts
-	static constexpr int	DRAW_SKYDOME = FLAG_BIT(0);
-	static constexpr int	DRAW_FLAT_SKY_LAYER = FLAG_BIT(1);
-	static constexpr int	DRAW_TERRAIN = FLAG_BIT(2);
-	static constexpr int	DRAW_OBJECTS = FLAG_BIT(3);
+	static constexpr int	DRAW_TERRAIN = FLAG_BIT(0);        // 1
+	static constexpr int	DRAW_SKY = FLAG_BIT(1);            // 2
+	static constexpr int	DRAW_OBJECTS = FLAG_BIT(2);        // 4
+	static constexpr int	DRAW_FLAT_SKY_LAYER = FLAG_BIT(3); // 8
+    static constexpr int    DRAW_SKYDOME = FLAG_BIT(1);        // Alias for SKY
+
 
 
 	struct draw_params_s {
@@ -32,6 +34,7 @@ public:
 		bool				flat_sky_layer_is_visible_;
 		int					num_terrain_render_chunk_;
 		const class LevelObjects* level_objects_;
+		int					selected_object_index_;
 
 	};
 
@@ -47,7 +50,11 @@ public:
 		float view_h_, view_v_;
 		float cam_pitch_, cam_yaw_, cam_roll_, cam_fov_;
 		bool pause_mode_;
+		bool show_debug_;
+		int selected_object_index_;
+		const class LevelObjects* level_objects_;
 	};
+
 
 	Renderer();
 	~Renderer() override;

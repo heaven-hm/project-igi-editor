@@ -53,6 +53,8 @@ public:
 	int						GetDrawParts() const;
 	int						GetTerrainDrawOptions() const;
 	int						GetTerrainModOptions() const;
+	void					SetSelectedObjectScale(float scale);
+	float					GetSelectedObjectScale() const;
 
 	// events
 	void					OnWindowResize(int width, int height);

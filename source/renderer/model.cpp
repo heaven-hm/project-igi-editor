@@ -3,6 +3,7 @@
 #include "../../third_party/tiny_obj_loader.h"
 #include "model.h"
 #include "../pch.h"
+#include <glm/gtc/type_ptr.hpp>
 #include <vector>
 #include <stdexcept>
 #include <iostream>
@@ -15,9 +16,17 @@ Mesh loadObjModel(const std::string& filepath) {
 
     bool ok = tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, filepath.c_str());
 
-    if (!warn.empty()) std::cout << "[OBJ WARN] " << warn << "\n";
-    if (!err.empty())  std::cerr << "[OBJ ERR]  " << err  << "\n";
-    if (!ok)           throw std::runtime_error("Failed to load OBJ: " + filepath);
+    if (!warn.empty()) {
+		std::cerr << "[OBJ WARN] " << warn << "\n";
+	}
+
+    if (!err.empty()) {
+		std::cerr << "[OBJ ERR]  " << err  << "\n";
+	}
+    
+	if (!ok) {
+		throw std::runtime_error("Failed to load OBJ: " + filepath);
+	}
 
     // Layout: position(3) + normal(3) + uv(2) = 8 floats per vertex
     std::vector<float> vertices;
@@ -54,6 +63,7 @@ Mesh loadObjModel(const std::string& filepath) {
     }
 
     Mesh mesh;
+    mesh.textureID = 0;
     mesh.vertexCount = static_cast<int>(vertices.size()) / 8;
 
     // Store vertex data in the mesh for client-side rendering
@@ -86,29 +96,12 @@ Mesh loadObjModel(const std::string& filepath) {
 }
 
 void renderModel(const Mesh& mesh) {
-    // Set up fixed-function pipeline for rendering
-    glUseProgram(0); // Use fixed-function pipeline
+    if (mesh.VAO == 0) return;
 
-    // Set a bright color to make it visible
-    glColor3f(1.0f, 0.0f, 0.0f); // Red color
-
-    // Use client-side arrays for fixed-function compatibility
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glEnableClientState(GL_NORMAL_ARRAY);
-    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-
-    // Set up vertex pointers
-    glVertexPointer(3, GL_FLOAT, 8 * sizeof(float), mesh.vertexData);
-    glNormalPointer(GL_FLOAT, 8 * sizeof(float), mesh.vertexData + 3);
-    glTexCoordPointer(2, GL_FLOAT, 8 * sizeof(float), mesh.vertexData + 6);
-
-    // Draw the model
+    // Draw
+    glBindVertexArray(mesh.VAO);
     glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);
-
-    // Disable client-side arrays
-    glDisableClientState(GL_VERTEX_ARRAY);
-    glDisableClientState(GL_NORMAL_ARRAY);
-    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glBindVertexArray(0);
 }
 
 void destroyModel(Mesh& mesh) {

@@ -11,7 +11,13 @@ struct LevelObject {
     glm::vec3 pos;
     glm::vec3 rot;
     bool isBuilding;
+
+    // Lighting
+    float dirlightR = 1.0f, dirlightG = 1.0f, dirlightB = 1.0f;
+    float ambientR = 0.3f, ambientG = 0.3f, ambientB = 0.3f;
+    float scale = 1.0f;
 };
+
 
 struct qtask_object_s : qtask_s {
     char model_id_[32];

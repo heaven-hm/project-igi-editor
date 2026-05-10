@@ -5,6 +5,9 @@
 
 #include "pch.h"
 #include "level_common.h"
+#include "logger.h"
+#include <string>
+
 
 /*
 ================================================================================
@@ -370,9 +373,12 @@ QSC::~QSC() {
 void QSC::Load(const char* filename) {
 	Unload();
 
+	Logger::Get().Log(LogLevel::INFO, "[QSC] Loading script: " + std::string(filename));
 	if (!File_LoadText(filename, scripts_)) {
+		Logger::Get().Log(LogLevel::ERR, "[QSC] FAILED to load script file: " + std::string(filename));
 		return;
 	}
+
 
 	pc_ = scripts_;
 
@@ -580,8 +586,9 @@ bool QSC::Parser_SkipWhiteChar() {
 	}
 
 	if (!*pc_) {
-		Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "eof\n");
+		// Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "eof\n");
 	}
+
 
 	return *pc_ != '\0';
 }
@@ -658,8 +665,10 @@ QSC::func_s* QSC::ParseFunc() {
 	char* func_name = pc_;
 
 	if (!Parser_SkipFuncName()) {
+		Logger::Get().Log(LogLevel::WARNING, "[QSC] Failed to parse function name at line " + std::to_string(line_));
 		return nullptr;
 	}
+
 
 	char* func_name_end = pc_;
 

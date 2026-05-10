@@ -68,6 +68,7 @@ App::App():
 	draw_params_.draw_terrain_options_ = -1;
 	draw_params_.flat_sky_layer_is_visible_ = true;
 	draw_params_.num_terrain_render_chunk_ = 0;
+	draw_params_.selected_object_index_ = -1;
 
 	memset(&window_state_, 0, sizeof(window_state_));
 	memset(&mouse_state_, 0, sizeof(mouse_state_));
@@ -87,7 +88,7 @@ App::~App() {
 
 bool App::Init(int argc, char** argv) {
 	Logger::Get().Init("igi_terrain_editor.log");
-	Logger::Get().Log(LogLevel::INFO, "Project IGI Terrain Editor Initializing...");
+	Logger::Get().Log(LogLevel::INFO, "Project IGI 3D Editor Initializing...");
 
 	char appDataPath[1024];
 	GetEnvironmentVariableA("APPDATA", appDataPath, 1024);
@@ -641,9 +642,13 @@ void App::Frame(float delta_seconds) {
 			.cam_yaw_ = viewer_.yaw_,
 			.cam_roll_ = viewer_.roll_,
 			.cam_fov_ = 60.0f,
-			.pause_mode_ = true
+			.pause_mode_ = true,
+			.show_debug_ = show_debug_,
+			.selected_object_index_ = selected_object_index_,
+			.level_objects_ = &level_.GetLevelObjects()
 		};
 		draw_params_.level_objects_ = &level_.GetLevelObjects();
+		draw_params_.selected_object_index_ = selected_object_index_;
 		renderer_.Draw(draw_params_, hud);
 
 		glutSwapBuffers();
@@ -694,6 +699,7 @@ void App::Frame(float delta_seconds) {
 	draw_params_.flat_sky_layer_is_visible_ = update_params.flat_sky_layer_is_visible_;
 	draw_params_.num_terrain_render_chunk_ = update_params.num_terrain_render_chunk_;
 	draw_params_.level_objects_ = &level_.GetLevelObjects();
+	draw_params_.selected_object_index_ = selected_object_index_;
 
 
 	float ground_z = 0.0f;
@@ -715,8 +721,12 @@ void App::Frame(float delta_seconds) {
 		.cam_yaw_ = viewer_.yaw_,
 		.cam_roll_ = viewer_.roll_,
 		.cam_fov_ = 60.0f, // Placeholder
-		.pause_mode_ = pause_mode_
+		.pause_mode_ = pause_mode_,
+		.show_debug_ = show_debug_,
+		.selected_object_index_ = selected_object_index_,
+		.level_objects_ = &level_.GetLevelObjects()
 	};
+
 
 	renderer_.Draw(draw_params_, hud);
 
@@ -981,6 +991,20 @@ int App::GetEditBrush() const {
 	return edit_brush_;
 }
 
+void App::SetSelectedObjectScale(float scale) {
+	if (selected_object_index_ >= 0 && selected_object_index_ < (int)level_.GetLevelObjects().GetObjects().size()) {
+		level_.GetLevelObjects().GetObjects()[selected_object_index_].scale = scale;
+		Logger::Get().Log(LogLevel::INFO, "[App] Scale changed to " + std::to_string(scale) + " for object " + std::to_string(selected_object_index_));
+	}
+}
+
+float App::GetSelectedObjectScale() const {
+	if (selected_object_index_ >= 0 && selected_object_index_ < (int)level_.GetLevelObjects().GetObjects().size()) {
+		return level_.GetLevelObjects().GetObjects()[selected_object_index_].scale;
+	}
+	return 1.0f;
+}
+
 #include <glm/ext/matrix_projection.hpp>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
@@ -1011,6 +1035,47 @@ void App::EditorProcessClick() {
 	
 	glm::vec3 ray_origin = (glm::vec3)start_pos;
 	glm::vec3 ray_dir = glm::normalize((glm::vec3)(end_pos - start_pos));
+
+	// First, try to select an object (object selection takes priority)
+	LevelObjects& lo = level_.GetLevelObjects();
+	std::vector<LevelObject>& objects = lo.GetObjects();
+	
+	float closest_dist = FLT_MAX;
+	int closest_object = -1;
+	
+	// Simple sphere intersection test for object selection
+	constexpr float SELECTION_RADIUS = 5000.0f; // Hit radius in world units
+	
+	for (size_t i = 0; i < objects.size(); ++i) {
+		glm::vec3 obj_pos = objects[i].pos;
+		
+		// Ray-sphere intersection
+		glm::vec3 to_obj = obj_pos - ray_origin;
+		float projection = glm::dot(to_obj, ray_dir);
+		
+		if (projection > 0) {
+			glm::vec3 closest_point = ray_origin + ray_dir * projection;
+			float dist_to_center = glm::length(closest_point - obj_pos);
+			
+			if (dist_to_center < SELECTION_RADIUS) {
+				float dist_to_camera = glm::length(obj_pos - ray_origin);
+				if (dist_to_camera < closest_dist) {
+					closest_dist = dist_to_camera;
+					closest_object = (int)i;
+				}
+			}
+		}
+	}
+	
+	if (closest_object != -1) {
+		selected_object_index_ = closest_object;
+		const LevelObject& obj = objects[closest_object];
+		printf("SELECTED Object [%d]: %s (%s)\n", closest_object, obj.name.c_str(), obj.modelId.c_str());
+		printf("  Pos: (%.0f, %.0f, %.0f)\n", obj.pos.x, obj.pos.y, obj.pos.z);
+		printf("  Rot (Alpha/Beta/Gamma): (%.2f, %.2f, %.2f)\n", obj.rot.x, obj.rot.y, obj.rot.z);
+		printf("  Scale: %.2f\n", obj.scale);
+		return; // Don't do terrain editing if we selected an object
+	}
 
 	printf("EditorClick: Mouse(%.0f, %.0f), RayDir(%.2f, %.2f, %.2f)\n", winX, winY, ray_dir.x, ray_dir.y, ray_dir.z);
 

@@ -4,6 +4,7 @@
 
 struct Mesh {
     unsigned int VAO, VBO;
+    unsigned int textureID; // Added texture support
     int vertexCount;
     float* vertexData; // For client-side array rendering
 };

@@ -42,6 +42,13 @@ constexpr int MENU_EDITOR_BRUSH_RAISE = 72;
 constexpr int MENU_EDITOR_BRUSH_LOWER = 73;
 constexpr int MENU_EDITOR_SAVE = 74;
 constexpr int MENU_IGI_LIVE_DATA = 75;
+constexpr int MENU_SCALE_0_1 = 81;
+constexpr int MENU_SCALE_0_5 = 82;
+constexpr int MENU_SCALE_1 = 83;
+constexpr int MENU_SCALE_2 = 84;
+constexpr int MENU_SCALE_5 = 85;
+constexpr int MENU_SCALE_10 = 86;
+constexpr int MENU_SCALE_20 = 87;
 
 constexpr int BRUSH_RAISE = 0;
 constexpr int BRUSH_LOWER = 1;
@@ -55,6 +62,7 @@ static int g_menu_terrain_draw_opts;
 static int g_menu_terrain_modifier_opts;
 static int g_menu_choose_level;
 static int g_menu_editor_tools;
+static int g_menu_object_scale;
 static int g_main_menu;
 
 // glut (ubuntu): Menu manipulation not allowed while menus in use.
@@ -122,6 +130,7 @@ static void UpdateTerrainModOptionsMenuText();
 static void UpdateChooseLevelMenuText();
 static void UpdateEditorToolsMenuText();
 static void UpdateIGILiveDataMenuText();
+static void UpdateScaleMenuText();
 
 static void OnIdle() {
 	g_app.OnIdle();
@@ -151,6 +160,7 @@ static void OnIdle() {
 		if (g_update_menu_flags & UPDATE_MENU_EDITOR_TOOLS) {
 			UpdateEditorToolsMenuText();
 			UpdateIGILiveDataMenuText();
+			UpdateScaleMenuText();
 		}
 
 		// clear menu update flags
@@ -311,6 +321,18 @@ static void UpdateIGILiveDataMenuText() {
 	}
 }
 
+static void UpdateScaleMenuText() {
+	float s = g_app.GetSelectedObjectScale();
+	glutSetMenu(g_menu_object_scale);
+	glutChangeToMenuEntry(1, (s == 0.1f)  ? "0.1x (*)" : "0.1x", MENU_SCALE_0_1);
+	glutChangeToMenuEntry(2, (s == 0.5f)  ? "0.5x (*)" : "0.5x", MENU_SCALE_0_5);
+	glutChangeToMenuEntry(3, (s == 1.0f)  ? "1.0x (*)" : "1.0x", MENU_SCALE_1);
+	glutChangeToMenuEntry(4, (s == 2.0f)  ? "2.0x (*)" : "2.0x", MENU_SCALE_2);
+	glutChangeToMenuEntry(5, (s == 5.0f)  ? "5.0x (*)" : "5.0x", MENU_SCALE_5);
+	glutChangeToMenuEntry(6, (s == 10.0f) ? "10.0x (*)" : "10.0x", MENU_SCALE_10);
+	glutChangeToMenuEntry(7, (s == 20.0f) ? "20.0x (*)" : "20.0x", MENU_SCALE_20);
+}
+
 static void OnMenu(int menu) {
 	if (menu >= MENU_LEVEL_FIRST && menu <= MENU_LEVEL_LAST) {
 		g_app.LoadLevel(menu);
@@ -380,6 +402,13 @@ static void OnMenu(int menu) {
 		g_app.ToggleShowHUD();
 		g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS;
 		break;
+	case MENU_SCALE_0_1: g_app.SetSelectedObjectScale(0.1f); g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS; break;
+	case MENU_SCALE_0_5: g_app.SetSelectedObjectScale(0.5f); g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS; break;
+	case MENU_SCALE_1:   g_app.SetSelectedObjectScale(1.0f); g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS; break;
+	case MENU_SCALE_2:   g_app.SetSelectedObjectScale(2.0f); g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS; break;
+	case MENU_SCALE_5:   g_app.SetSelectedObjectScale(5.0f); g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS; break;
+	case MENU_SCALE_10:  g_app.SetSelectedObjectScale(10.0f); g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS; break;
+	case MENU_SCALE_20:  g_app.SetSelectedObjectScale(20.0f); g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS; break;
 	case MENU_CLOSE:
 		glutLeaveMainLoop();
 		break;
@@ -442,7 +471,7 @@ int main(int argc, char **argv) {
 	int pos_y = (screen_cy - wnd_h) >> 1;
 	glutInitWindowPosition(pos_x, pos_y);
 	glutInitWindowSize(wnd_w, wnd_h);
-	glutCreateWindow("IGI Terrain Editor");
+	glutCreateWindow("IGI 3D Editor");
 
 	if (!GL_Init()) {
 		return 1;
@@ -512,12 +541,22 @@ int main(int argc, char **argv) {
 	glutAddMenuEntry("Save Changes", MENU_EDITOR_SAVE);
 	glutAddMenuEntry("", MENU_IGI_LIVE_DATA);
 
+	g_menu_object_scale = glutCreateMenu(OnMenu);
+	glutAddMenuEntry("0.1x", MENU_SCALE_0_1);
+	glutAddMenuEntry("0.5x", MENU_SCALE_0_5);
+	glutAddMenuEntry("1.0x", MENU_SCALE_1);
+	glutAddMenuEntry("2.0x", MENU_SCALE_2);
+	glutAddMenuEntry("5.0x", MENU_SCALE_5);
+	glutAddMenuEntry("10.0x", MENU_SCALE_10);
+	glutAddMenuEntry("20.0x", MENU_SCALE_20);
+
 	g_main_menu = glutCreateMenu(OnMenu);
 	glutAddMenuEntry("", MENU_OVERLAY_WIREFRAME);
 	glutAddSubMenu("Draw Parts", g_menu_draw_parts);
 	glutAddSubMenu("Terrain Draw Options", g_menu_terrain_draw_opts);
 	glutAddSubMenu("Terrain Mod Options", g_menu_terrain_modifier_opts);
 	glutAddSubMenu("Editor Tools", g_menu_editor_tools);
+	glutAddSubMenu("Object Scale", g_menu_object_scale);
 	glutAddSubMenu("Choose Level", g_menu_choose_level);
 	glutAddMenuEntry("Close", MENU_CLOSE);
 
@@ -531,6 +570,7 @@ int main(int argc, char **argv) {
 	UpdateTerrainModOptionsMenuText();
 	UpdateChooseLevelMenuText();
 	UpdateEditorToolsMenuText();
+	UpdateScaleMenuText();
 
 	try {
 		// enter main loop

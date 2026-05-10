@@ -8,6 +8,8 @@
 
 #include "pch.h"
 #include "logger.h"
+#include <glm/gtc/type_ptr.hpp>
+
 
 #include <freeglut.h>
 
@@ -146,7 +148,13 @@ render_chunk_s* Renderer::GetTerrainRenderChunckBuffer() {
 }
 
 void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
-        SetupUBOMats(*params.view_define_);
+    static bool logged_params = false;
+    if (!logged_params) {
+        Logger::Get().Log(LogLevel::INFO, "[Renderer] Draw Params: draw_parts=" + std::to_string(params.draw_parts_) + " level_objects=" + (params.level_objects_ ? "VALID" : "NULL"));
+        logged_params = true;
+    }
+    SetupUBOMats(*params.view_define_);
+
 
         // start draw
         glDepthMask(GL_TRUE);   // insure clear depth buffer
@@ -170,7 +178,7 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                 glLoadMatrixf(glm::value_ptr(mat_proj_));
                 glMatrixMode(GL_MODELVIEW);
                 glLoadMatrixf(glm::value_ptr(mat_view_));
-                objects_.Draw(ubo_mats_, params.overlay_wireframe_, params.level_objects_->GetObjects());
+                objects_.Draw(ubo_mats_, params.overlay_wireframe_, params.level_objects_->GetObjects(), params.selected_object_index_);
         }
 
 
@@ -289,6 +297,23 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                                 else if (it->level == LogLevel::WARNING) { r = 1.0f; g = 1.0f; b = 0.0f; }
 
                                 draw_text(10, startY - count * 15, it->message.c_str(), r, g, b);
+                        }
+
+                        // Display selected object info
+                        if (hud.selected_object_index_ >= 0 && hud.level_objects_) {
+                                const auto& objects = hud.level_objects_->GetObjects();
+                                if (hud.selected_object_index_ < (int)objects.size()) {
+                                        const auto& obj = objects[hud.selected_object_index_];
+                                        char buf[512];
+                                        snprintf(buf, sizeof(buf), "SELECTED: [%d] %s (%s)", hud.selected_object_index_, obj.name.c_str(), obj.modelId.c_str());
+                                        draw_text(10, 50, buf, 1.0f, 1.0f, 0.0f);
+                                        snprintf(buf, sizeof(buf), "Pos: (%.0f, %.0f, %.0f)", obj.pos.x, obj.pos.y, obj.pos.z);
+                                        draw_text(10, 35, buf, 1.0f, 1.0f, 1.0f);
+                                        snprintf(buf, sizeof(buf), "Rot (Alpha/Beta/Gamma): (%.2f, %.2f, %.2f)", obj.rot.x, obj.rot.y, obj.rot.z);
+                                        draw_text(10, 20, buf, 1.0f, 1.0f, 1.0f);
+                                        snprintf(buf, sizeof(buf), "Scale: %.2f", obj.scale);
+                                        draw_text(10, 5, buf, 1.0f, 1.0f, 1.0f);
+                                }
                         }
                 }
 
