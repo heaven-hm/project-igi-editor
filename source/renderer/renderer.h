@@ -34,11 +34,13 @@ public:
 		std::string status_msg_;
 		glm::vec3 raw_pos_;
 		glm::vec3 meters_pos_;
+		glm::vec3 native_pos_;
 		float ground_offset_;
 		uint32_t human_addr_;
 		int game_level_;
 		float view_h_, view_v_;
 		float cam_pitch_, cam_yaw_, cam_roll_, cam_fov_;
+		bool pause_mode_;
 	};
 
 	Renderer();

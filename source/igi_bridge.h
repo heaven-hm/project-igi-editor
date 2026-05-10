@@ -46,5 +46,5 @@ private:
     PositionData current_data_;
 
     GTLIBC::GTLibc gt_;
-    DWORD game_base_addr_ = 0;
+    uint32_t game_base_addr_ = 0;
 };

@@ -35,6 +35,8 @@ public:
 
 	void					ToggleEditMode();
 	bool					GetEditMode() const;
+	void					TogglePauseMenu();
+	bool					GetPauseMode() const;
 	void					SetEditBrush(int brush);
 	int						GetEditBrush() const;
 
@@ -95,8 +97,11 @@ private:
 
 	// editor
 	bool					edit_mode_;
+	bool					pause_mode_;
 	int						edit_brush_;
 	bool					show_hud_;
+	bool					sync_from_game_once_;
+	int						last_game_level_;
 
 	int64_t					prior_frame_time_;
 

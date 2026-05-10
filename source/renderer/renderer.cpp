@@ -208,12 +208,49 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                         draw_text(20, line_y, buf, 1.0f, 1.0f, 1.0f); line_y += 15;
                         sprintf(buf, "GROUND DIST: %.2fm", hud.ground_offset_ / 4096.0f);
                         draw_text(20, line_y, buf, 1.0f, 1.0f, 1.0f); line_y += 15;
+                        
+                        sprintf(buf, "NATIVE X: %.0f Y: %.0f Z: %.0f", hud.native_pos_.x, hud.native_pos_.y, hud.native_pos_.z);
+                        draw_text(20, line_y, buf, 1.0f, 0.3f, 0.3f); line_y += 15;
+
                         sprintf(buf, "HUMAN ADDR: 0x%08X | LVL: %d", hud.human_addr_, hud.game_level_);
                         draw_text(20, line_y, buf, 0.7f, 0.7f, 1.0f); line_y += 15;
                         sprintf(buf, "VIEW H: %.3f V: %.3f", hud.view_h_, hud.view_v_);
                         draw_text(20, line_y, buf, 1.0f, 0.5f, 0.0f); line_y += 15;
                         sprintf(buf, "CAM P: %.3f Y: %.3f R: %.3f FOV: %.3f", hud.cam_pitch_, hud.cam_yaw_, hud.cam_roll_, hud.cam_fov_);
                         draw_text(20, line_y, buf, 0.5f, 1.0f, 0.5f); line_y += 15;
+                }
+                
+                draw_text(20, line_y, "Checks: 0", 1.0f, 1.0f, 1.0f);
+
+
+                if (hud.pause_mode_) {
+                        int menu_w = 200;
+                        int menu_h = 100;
+                        int menu_x = (params.view_define_->viewport_width_ - menu_w) / 2;
+                        int menu_y = (params.view_define_->viewport_height_ - menu_h) / 2;
+
+                        // Draw background
+                        glColor4f(0.1f, 0.1f, 0.1f, 0.8f);
+                        glBegin(GL_QUADS);
+                        glVertex2i(menu_x, menu_y);
+                        glVertex2i(menu_x + menu_w, menu_y);
+                        glVertex2i(menu_x + menu_w, menu_y + menu_h);
+                        glVertex2i(menu_x, menu_y + menu_h);
+                        glEnd();
+
+                        // Draw border
+                        glColor3f(1.0f, 1.0f, 1.0f);
+                        glBegin(GL_LINE_LOOP);
+                        glVertex2i(menu_x, menu_y);
+                        glVertex2i(menu_x + menu_w, menu_y);
+                        glVertex2i(menu_x + menu_w, menu_y + menu_h);
+                        glVertex2i(menu_x, menu_y + menu_h);
+                        glEnd();
+
+                        draw_text(menu_x + 60, params.view_define_->viewport_height_ - (menu_y + 80), "PAUSE MENU", 1.0f, 1.0f, 0.0f);
+                        draw_text(menu_x + 30, params.view_define_->viewport_height_ - (menu_y + 50), "[ESC] RESUME", 1.0f, 1.0f, 1.0f);
+                        draw_text(menu_x + 30, params.view_define_->viewport_height_ - (menu_y + 30), "[S]   SAVE LEVEL", 1.0f, 1.0f, 1.0f);
+                        draw_text(menu_x + 30, params.view_define_->viewport_height_ - (menu_y + 10), "[Q]   EXIT", 1.0f, 0.5f, 0.5f);
                 }
 
                 glMatrixMode(GL_PROJECTION);
