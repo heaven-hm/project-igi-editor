@@ -51,7 +51,14 @@ target_precompile_headers(terrain PRIVATE source/pch.h)
 
 target_include_directories(terrain PRIVATE ${PROJECT_SOURCE_DIR}/third_party/glm-1.0.1)
 target_include_directories(terrain PRIVATE ${PROJECT_SOURCE_DIR}/third_party/GL/include)
+target_include_directories(terrain PRIVATE ${PROJECT_SOURCE_DIR}/third_party/gtlibcpp)
 target_include_directories(terrain PRIVATE ${PROJECT_SOURCE_DIR}/source)
+
+# Add GTLibCpp sources
+set(GTLIBCPP_SOURCES
+    ${PROJECT_SOURCE_DIR}/third_party/gtlibcpp/GTLibc.cpp
+)
+target_sources(terrain PRIVATE ${GTLIBCPP_SOURCES})
 
 if (WIN32)
   target_link_directories(terrain PRIVATE ${PROJECT_SOURCE_DIR}/third_party/GL/lib/x64)

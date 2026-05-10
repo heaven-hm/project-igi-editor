@@ -32,6 +32,10 @@
 #include <stdlib.h>
 #include <memory.h>
 
+#ifdef _WIN32
+#include "GTLibc.hpp"
+#endif
+
 #include "common.h"
 
 #include "level/level_common.h"
