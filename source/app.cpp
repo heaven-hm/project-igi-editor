@@ -137,8 +137,8 @@ void App::LoadLevel(int level_no) {
 	float start_yaw;
 	if (level_.Load(level_load_params_s, start_pos, start_yaw)) {
 		viewer_.pos_ = start_pos;
-		viewer_.yaw_ = glm::degrees(start_yaw);
-		viewer_.pitch_ = 0.0f;
+		viewer_.yaw_ = 13.0f; // Manually updated to requested start angle
+		viewer_.pitch_ = 10.0f; // Manually updated to requested start angle
 		viewer_.roll_ = 0.0f;
 
 		UpdateViewerVectors();
@@ -380,6 +380,23 @@ static constexpr movement_key_s MOVEMENT_KEYS[] = {
 };
 
 void App::Input_OnKeyboard(unsigned char key, int x, int y) {
+	if (key == 27) { // ESC
+		TogglePauseMenu();
+		return;
+	}
+
+	if (pause_mode_) {
+		if (key == 'q' || key == 'Q') {
+			exit(0);
+		}
+		if (key == 's' || key == 'S') {
+			level_.SaveChanges();
+			printf("Level changes saved.\n");
+			TogglePauseMenu(); // Close menu after save
+		}
+		return;
+	}
+
 	if ((key == 13) && (glutGetModifiers() & GLUT_ACTIVE_ALT)) { // ALT + ENTER toggle full screen mode
 		window_state_.full_screen_ = !window_state_.full_screen_;
 
@@ -443,6 +460,32 @@ void App::OnIdle() {
 }
 
 void App::Frame(float delta_seconds) {
+	if (pause_mode_) {
+		// Skip all updates when paused, just render
+		UpdateViewDefine();
+		float ground_z = 0.0f;
+		level_.GetTerrainZ(viewer_.pos_, ground_z);
+		Renderer::hud_params_s hud = {
+			.show_hud_ = true,
+			.status_msg_ = "IGI LINK: NATIVE MODE",
+			.raw_pos_ = viewer_.pos_,
+			.meters_pos_ = viewer_.pos_ / 4096.0f,
+			.ground_offset_ = viewer_.pos_.z - ground_z,
+			.human_addr_ = 0,
+			.game_level_ = level_.GetLevelNo(),
+			.view_h_ = viewer_.yaw_,
+			.view_v_ = viewer_.pitch_,
+			.cam_pitch_ = viewer_.pitch_,
+			.cam_yaw_ = viewer_.yaw_,
+			.cam_roll_ = viewer_.roll_,
+			.cam_fov_ = 60.0f,
+			.pause_mode_ = true
+		};
+		renderer_.Draw(draw_params_, hud);
+		glutSwapBuffers();
+		return;
+	}
+
 	frame_++;
 	frame_ %= 0xFFFFFFFF;	// reserve value 0xFFFFFFFF (-1) for INVALID_FRAME
 
@@ -490,27 +533,24 @@ void App::Frame(float delta_seconds) {
 	float ground_z = 0.0f;
 	bridge_.SetEnabled(show_hud_);
 	IGIBridge::PositionData data = bridge_.GetLatestData();
-	level_.GetTerrainZ(data.raw_pos, ground_z);
+	level_.GetTerrainZ(viewer_.pos_, ground_z);
 
 	Renderer::hud_params_s hud = {
 		.show_hud_ = show_hud_,
 		.status_msg_ = data.status_msg,
-		.raw_pos_ = data.raw_pos,
-		.meters_pos_ = data.meters_pos,
-		.ground_offset_ = data.raw_pos.z - ground_z,
-		.human_addr_ = data.human_addr,
-		.game_level_ = data.game_level,
-		.view_h_ = data.view_h,
-		.view_v_ = data.view_v,
-		.cam_pitch_ = data.cam_pitch,
-		.cam_yaw_ = data.cam_yaw,
-		.cam_roll_ = data.cam_roll,
-		.cam_fov_ = data.cam_fov
+		.raw_pos_ = viewer_.pos_,
+		.meters_pos_ = viewer_.pos_ / 4096.0f,
+		.ground_offset_ = viewer_.pos_.z - ground_z,
+		.human_addr_ = 0, // No longer reading memory
+		.game_level_ = level_.GetLevelNo(),
+		.view_h_ = viewer_.yaw_,
+		.view_v_ = viewer_.pitch_,
+		.cam_pitch_ = viewer_.pitch_,
+		.cam_yaw_ = viewer_.yaw_,
+		.cam_roll_ = viewer_.roll_,
+		.cam_fov_ = 60.0f, // Placeholder
+		.pause_mode_ = pause_mode_
 	};
-
-	if (show_hud_) {
-		bridge_.SyncFromEditor(viewer_.pos_, viewer_.yaw_, viewer_.pitch_, viewer_.roll_);
-	}
 
 	renderer_.Draw(draw_params_, hud);
 
@@ -754,6 +794,16 @@ void App::ToggleEditMode() {
 
 bool App::GetEditMode() const {
 	return edit_mode_;
+}
+
+void App::TogglePauseMenu() {
+	pause_mode_ = !pause_mode_;
+	window_state_.cursor_visible_ = pause_mode_;
+	glutSetCursor(window_state_.cursor_visible_ ? GLUT_CURSOR_LEFT_ARROW : GLUT_CURSOR_NONE);
+}
+
+bool App::GetPauseMode() const {
+	return pause_mode_;
 }
 
 void App::SetEditBrush(int brush) {

@@ -5,15 +5,13 @@
 #include <vector>
 #include <string>
 #include <glm/glm.hpp>
-#include "GTLibc.hpp"
-
 class IGIBridge {
 public:
     struct PositionData {
         glm::vec3 raw_pos;
         glm::vec3 meters_pos;
         bool connected = false;
-        std::string status_msg = "SEARCHING FOR IGI.EXE...";
+        std::string status_msg = "IGI LINK: NATIVE MODE";
         uint32_t human_addr = 0;
         int game_level = 0;
         float view_h = 0.0f; // Horizontal angle
@@ -44,7 +42,4 @@ private:
     std::atomic<bool> enabled_;
     std::mutex data_mutex_;
     PositionData current_data_;
-
-    GTLIBC::GTLibc gt_;
-    uint32_t game_base_addr_ = 0;
 };

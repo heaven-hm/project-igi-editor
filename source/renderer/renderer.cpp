@@ -200,25 +200,25 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                 if (hud.status_msg_.find("CONNECTED") != std::string::npos) { status_r = 0.0f; status_g = 1.0f; status_b = 0.0f; } // Green
                 draw_text(20, line_y, hud.status_msg_.c_str(), status_r, status_g, status_b); line_y += 15;
 
-                if (hud.status_msg_.find("CONNECTED") != std::string::npos) {
-                        char buf[256];
-                        sprintf(buf, "RAW X: %.2f Y: %.2f Z: %.2f", hud.raw_pos_.x, hud.raw_pos_.y, hud.raw_pos_.z);
-                        draw_text(20, line_y, buf, 1.0f, 1.0f, 1.0f); line_y += 15;
-                        sprintf(buf, "MTR X: %.2fm Y: %.2fm Z: %.2fm", hud.meters_pos_.x, hud.meters_pos_.y, hud.meters_pos_.z);
-                        draw_text(20, line_y, buf, 1.0f, 1.0f, 1.0f); line_y += 15;
-                        sprintf(buf, "GROUND DIST: %.2fm", hud.ground_offset_ / 4096.0f);
-                        draw_text(20, line_y, buf, 1.0f, 1.0f, 1.0f); line_y += 15;
-                        
-                        sprintf(buf, "NATIVE X: %.0f Y: %.0f Z: %.0f", hud.native_pos_.x, hud.native_pos_.y, hud.native_pos_.z);
-                        draw_text(20, line_y, buf, 1.0f, 0.3f, 0.3f); line_y += 15;
+                // Always show Editor Position in NATIVE MODE or CONNECTED mode
+                char buf[256];
+                sprintf(buf, "EDITOR X: %.2f Y: %.2f Z: %.2f", hud.raw_pos_.x, hud.raw_pos_.y, hud.raw_pos_.z);
+                draw_text(20, line_y, buf, 1.0f, 1.0f, 1.0f); line_y += 15;
+                
+                sprintf(buf, "POSITION X: %.3fm Y: %.3fm Z: %.3fm", hud.meters_pos_.x, hud.meters_pos_.y, hud.meters_pos_.z);
+                draw_text(20, line_y, buf, 1.0f, 1.0f, 1.0f); line_y += 15;
+                
+                sprintf(buf, "GROUND DIST: %.3fm", hud.ground_offset_ / 4096.0f);
+                draw_text(20, line_y, buf, 1.0f, 1.0f, 1.0f); line_y += 15;
+                
+                sprintf(buf, "YAW: %.3f PITCH: %.3f ROLL: %.3f", hud.cam_yaw_, hud.cam_pitch_, hud.cam_roll_);
+                draw_text(20, line_y, buf, 0.5f, 1.0f, 0.5f); line_y += 15;
+                
+                sprintf(buf, "ANGLE H: %.3f V: %.3f", hud.view_h_, hud.view_v_);
+                draw_text(20, line_y, buf, 1.0f, 0.5f, 0.0f); line_y += 15;
 
-                        sprintf(buf, "HUMAN ADDR: 0x%08X | LVL: %d", hud.human_addr_, hud.game_level_);
-                        draw_text(20, line_y, buf, 0.7f, 0.7f, 1.0f); line_y += 15;
-                        sprintf(buf, "VIEW H: %.3f V: %.3f", hud.view_h_, hud.view_v_);
-                        draw_text(20, line_y, buf, 1.0f, 0.5f, 0.0f); line_y += 15;
-                        sprintf(buf, "CAM P: %.3f Y: %.3f R: %.3f FOV: %.3f", hud.cam_pitch_, hud.cam_yaw_, hud.cam_roll_, hud.cam_fov_);
-                        draw_text(20, line_y, buf, 0.5f, 1.0f, 0.5f); line_y += 15;
-                }
+                sprintf(buf, "LEVEL: %d | FOV: %.1f", hud.game_level_, hud.cam_fov_);
+                draw_text(20, line_y, buf, 0.7f, 0.7f, 1.0f); line_y += 15;
                 
                 draw_text(20, line_y, "Checks: 0", 1.0f, 1.0f, 1.0f);
 
