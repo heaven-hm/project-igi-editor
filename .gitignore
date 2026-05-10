@@ -14,6 +14,7 @@
 # Compiled Dynamic libraries
 *.so
 *.dylib
+*.dll
 
 # Fortran module files
 *.mod
@@ -23,9 +24,79 @@
 *.lai
 *.la
 *.a
-#*.lib
+*.lib
 
 # Executables
 *.exe
 *.out
 *.app
+*.i86
+*.x86_64
+*.conf
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# Visual Studio
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.suo
+*.db
+*.opendb
+*.ncb
+*.user
+*.userosscache
+*.sln.docstates
+Debug/
+Release/
+x64/
+x86/
+build/
+vcbuild/
+bin/Debug/
+bin/Release/
+
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# OS Files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Others
+.cache
+.gemini
+.claude
+.log
+.tlog
+.env
+.env.*
+.env.example
+
+# Others
+.agent
+.claude
+.gemini
+.log
+.tlog
+.env
+.env.*
+.env.example
+vcbuild

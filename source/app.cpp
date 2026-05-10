@@ -708,6 +708,14 @@ void App::UpdateViewDefine() {
 	view_define_.mat_rot_[2][2] = view_define_.forward_.z;
 }
 
+void App::ToggleShowHUD() {
+	show_hud_ = !show_hud_;
+}
+
+bool App::GetShowHUD() const {
+	return show_hud_;
+}
+
 void App::ToggleEditMode() {
 	edit_mode_ = !edit_mode_;
 	

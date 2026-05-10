@@ -41,6 +41,7 @@ constexpr int MENU_EDITOR_TOGGLE = 71;
 constexpr int MENU_EDITOR_BRUSH_RAISE = 72;
 constexpr int MENU_EDITOR_BRUSH_LOWER = 73;
 constexpr int MENU_EDITOR_SAVE = 74;
+constexpr int MENU_IGI_LIVE_DATA = 75;
 
 constexpr int BRUSH_RAISE = 0;
 constexpr int BRUSH_LOWER = 1;
@@ -120,6 +121,7 @@ static void UpdateTerrainDrawOptionsMenuText();
 static void UpdateTerrainModOptionsMenuText();
 static void UpdateChooseLevelMenuText();
 static void UpdateEditorToolsMenuText();
+static void UpdateIGILiveDataMenuText();
 
 static void OnIdle() {
 	g_app.OnIdle();
@@ -144,6 +146,11 @@ static void OnIdle() {
 
 		if (g_update_menu_flags & UPDATE_MENU_CHOOSE_LEVEL) {
 			UpdateChooseLevelMenuText();
+		}
+
+		if (g_update_menu_flags & UPDATE_MENU_EDITOR_TOOLS) {
+			UpdateEditorToolsMenuText();
+			UpdateIGILiveDataMenuText();
 		}
 
 		// clear menu update flags
@@ -293,6 +300,17 @@ static void UpdateEditorToolsMenuText() {
 	}
 }
 
+static void UpdateIGILiveDataMenuText() {
+	glutSetMenu(g_menu_editor_tools);
+
+	if (g_app.GetShowHUD()) {
+		glutChangeToMenuEntry(5, "Show IGI Live Data [*]", MENU_IGI_LIVE_DATA);
+	}
+	else {
+		glutChangeToMenuEntry(5, "Show IGI Live Data [ ]", MENU_IGI_LIVE_DATA);
+	}
+}
+
 static void OnMenu(int menu) {
 	if (menu >= MENU_LEVEL_FIRST && menu <= MENU_LEVEL_LAST) {
 		g_app.LoadLevel(menu);
@@ -356,6 +374,10 @@ static void OnMenu(int menu) {
 		break;
 	case MENU_EDITOR_SAVE:
 		g_app.SaveCurrentLevel();
+		break;
+	case MENU_IGI_LIVE_DATA:
+		g_app.ToggleShowHUD();
+		g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS;
 		break;
 	case MENU_CLOSE:
 		glutLeaveMainLoop();
@@ -487,6 +509,7 @@ int main(int argc, char **argv) {
 	glutAddMenuEntry("", MENU_EDITOR_BRUSH_RAISE);
 	glutAddMenuEntry("", MENU_EDITOR_BRUSH_LOWER);
 	glutAddMenuEntry("Save Changes", MENU_EDITOR_SAVE);
+	glutAddMenuEntry("", MENU_IGI_LIVE_DATA);
 
 	g_main_menu = glutCreateMenu(OnMenu);
 	glutAddMenuEntry("", MENU_OVERLAY_WIREFRAME);

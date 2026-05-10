@@ -137,63 +137,78 @@ render_chunk_s* Renderer::GetTerrainRenderChunckBuffer() {
 }
 
 void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
-	SetupUBOMats(*params.view_define_);
+        SetupUBOMats(*params.view_define_);
 
-	// start draw
-	glDepthMask(GL_TRUE);	// insure clear depth buffer
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	glViewport(0, 0, params.view_define_->viewport_width_, params.view_define_->viewport_height_);
+        // start draw
+        glDepthMask(GL_TRUE);   // insure clear depth buffer
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glViewport(0, 0, params.view_define_->viewport_width_, params.view_define_->viewport_height_);
 
-	if (params.draw_parts_ & DRAW_SKYDOME) {
-		skydome_.Draw(ubo_mats_, params.overlay_wireframe_);
-	}
+        if (params.draw_parts_ & DRAW_SKYDOME) {
+                skydome_.Draw(ubo_mats_, params.overlay_wireframe_);
+        }
 
-	if ((params.draw_parts_ & DRAW_FLAT_SKY_LAYER) && params.flat_sky_layer_is_visible_) {
-		flat_sky_layers_.Draw(ubo_mats_, params.overlay_wireframe_);
-	}
+        if ((params.draw_parts_ & DRAW_FLAT_SKY_LAYER) && params.flat_sky_layer_is_visible_) {
+                flat_sky_layers_.Draw(ubo_mats_, params.overlay_wireframe_);
+        }
 
-	if (params.draw_parts_ & DRAW_TERRAIN) {
-		terrain_.Draw(ubo_mats_, ubo_fog_, params.overlay_wireframe_, params.draw_terrain_options_, params.num_terrain_render_chunk_);
-	}
+        if (params.draw_parts_ & DRAW_TERRAIN) {
+                terrain_.Draw(ubo_mats_, ubo_fog_, params.overlay_wireframe_, params.draw_terrain_options_, params.num_terrain_render_chunk_);      
+        }
 
-	if (hud.show_hud_) {
-		glMatrixMode(GL_PROJECTION);
-		glPushMatrix();
-		glLoadIdentity();
-		gluOrtho2D(0, params.view_define_->viewport_width_, 0, params.view_define_->viewport_height_);
-		glMatrixMode(GL_MODELVIEW);
-		glPushMatrix();
-		glLoadIdentity();
+        if (hud.show_hud_) {
+                static int log_count = 0;
+                if (++log_count % 60 == 0) {
+                        printf("HUD Drawing active: %s, RAW X: %.2f\n", hud.status_msg_.c_str(), hud.raw_pos_.x);
+                }
 
-		glColor3f(1.0f, 1.0f, 0.0f); // Yellow
-		if (hud.status_msg_.find("CONNECTED") != std::string::npos) glColor3f(0.0f, 1.0f, 0.0f); // Green
+                glDisable(GL_DEPTH_TEST);
+                glDisable(GL_CULL_FACE);
+                glDisable(GL_LIGHTING);
+                glDisable(GL_TEXTURE_2D);
+                glDisable(GL_BLEND);
 
-		auto draw_text = [&](int x, int y, const char* str) {
-			glRasterPos2i(x, params.view_define_->viewport_height_ - y);
-			for (const char* c = str; *c != '\0'; c++) {
-				glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, *c);
-			}
-		};
+                glMatrixMode(GL_PROJECTION);
+                glPushMatrix();
+                glLoadIdentity();
+                glOrtho(0, params.view_define_->viewport_width_, 0, params.view_define_->viewport_height_, -1, 1);
 
-		int line_y = 20;
-		draw_text(10, line_y, hud.status_msg_.c_str()); line_y += 15;
+                glMatrixMode(GL_MODELVIEW);
+                glPushMatrix();
+                glLoadIdentity();
 
-		if (hud.status_msg_.find("CONNECTED") != std::string::npos) {
-			char buf[128];
-			sprintf(buf, "RAW: %.0f, %.0f, %.0f", hud.raw_pos_.x, hud.raw_pos_.y, hud.raw_pos_.z);
-			draw_text(10, line_y, buf); line_y += 15;
-			sprintf(buf, "MTR: %.2fm, %.2fm, %.2fm", hud.meters_pos_.x, hud.meters_pos_.y, hud.meters_pos_.z);
-			draw_text(10, line_y, buf); line_y += 15;
-			sprintf(buf, "GND OFFSET: %.2fm", hud.ground_offset_ / 4096.0f);
-			draw_text(10, line_y, buf); line_y += 15;
-		}
-		draw_text(10, line_y, "Checks: 0");
+                glColor3f(1.0f, 1.0f, 0.0f); // Yellow
+                if (hud.status_msg_.find("CONNECTED") != std::string::npos) glColor3f(0.0f, 1.0f, 0.0f); // Green
 
-		glMatrixMode(GL_PROJECTION);
-		glPopMatrix();
-		glMatrixMode(GL_MODELVIEW);
-		glPopMatrix();
-	}
+                auto draw_text = [&](int x, int y, const char* str) {
+                        glRasterPos2i(x, params.view_define_->viewport_height_ - y);
+                        for (const char* c = str; *c != '\0'; c++) {
+                                glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, *c);
+                        }
+                };
+
+                int line_y = 30;
+                draw_text(20, line_y, hud.status_msg_.c_str()); line_y += 25;
+
+                if (hud.status_msg_.find("CONNECTED") != std::string::npos) {
+                        char buf[256];
+                        sprintf(buf, "RAW X: %.2f Y: %.2f Z: %.2f", hud.raw_pos_.x, hud.raw_pos_.y, hud.raw_pos_.z);
+                        draw_text(20, line_y, buf); line_y += 25;
+                        sprintf(buf, "MTR X: %.2fm Y: %.2fm Z: %.2fm", hud.meters_pos_.x, hud.meters_pos_.y, hud.meters_pos_.z);
+                        draw_text(20, line_y, buf); line_y += 25;
+                        sprintf(buf, "GROUND DIST: %.2fm", hud.ground_offset_ / 4096.0f);
+                        draw_text(20, line_y, buf); line_y += 25;
+                }
+                draw_text(20, line_y, "Checks: 0");
+
+                glMatrixMode(GL_PROJECTION);
+                glPopMatrix();
+                glMatrixMode(GL_MODELVIEW);
+                glPopMatrix();
+
+                glEnable(GL_DEPTH_TEST);
+                glEnable(GL_CULL_FACE);
+        }
 
 	GL_CHECK_ERROR;
 

@@ -37,6 +37,9 @@ public:
 	void					SetEditBrush(int brush);
 	int						GetEditBrush() const;
 
+	void					ToggleShowHUD();
+	bool					GetShowHUD() const;
+
 	bool					GetOverlayWireframe() const;
 	int						GetDrawParts() const;
 	int						GetTerrainDrawOptions() const;
