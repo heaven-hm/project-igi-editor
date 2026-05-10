@@ -106,8 +106,13 @@ bool App::Init(int argc, char** argv) {
 		UpdateViewerVectors();
 	}
 
+	int wnd_w = Arg_ReadInt(argc, argv, "-w", 800);
+	int wnd_h = Arg_ReadInt(argc, argv, "-h", 600);
+	OnWindowResize(wnd_w, wnd_h);
+
 	prior_frame_time_ = Sys_Milliseconds();
 
+	bridge_.SetEnabled(show_hud_);
 	bridge_.Start();
 
 	return true;
@@ -139,6 +144,10 @@ void App::LoadLevel(int level_no) {
 		UpdateViewerVectors();
 	}
 
+}
+
+void App::SetGameLevel(int level_no) {
+	bridge_.SetGameLevel(level_no);
 }
 
 void App::SaveCurrentLevel() {
@@ -203,6 +212,8 @@ void App::OnWindowResize(int width, int height) {
 
 	view_define_.viewport_width_ = window_state_.viewport_width_;
 	view_define_.viewport_height_ = window_state_.viewport_height_;
+
+	glViewport(0, 0, width, height);
 
 	// update fovx_
 	float h = std::tan(view_define_.fovy_ * 0.5f);
@@ -477,6 +488,7 @@ void App::Frame(float delta_seconds) {
 	draw_params_.num_terrain_render_chunk_ = update_params.num_terrain_render_chunk_;
 
 	float ground_z = 0.0f;
+	bridge_.SetEnabled(show_hud_);
 	IGIBridge::PositionData data = bridge_.GetLatestData();
 	level_.GetTerrainZ(data.raw_pos, ground_z);
 
@@ -485,8 +497,20 @@ void App::Frame(float delta_seconds) {
 		.status_msg_ = data.status_msg,
 		.raw_pos_ = data.raw_pos,
 		.meters_pos_ = data.meters_pos,
-		.ground_offset_ = data.raw_pos.z - ground_z
+		.ground_offset_ = data.raw_pos.z - ground_z,
+		.human_addr_ = data.human_addr,
+		.game_level_ = data.game_level,
+		.view_h_ = data.view_h,
+		.view_v_ = data.view_v,
+		.cam_pitch_ = data.cam_pitch,
+		.cam_yaw_ = data.cam_yaw,
+		.cam_roll_ = data.cam_roll,
+		.cam_fov_ = data.cam_fov
 	};
+
+	if (show_hud_) {
+		bridge_.SyncFromEditor(viewer_.pos_, viewer_.yaw_, viewer_.pitch_, viewer_.roll_);
+	}
 
 	renderer_.Draw(draw_params_, hud);
 

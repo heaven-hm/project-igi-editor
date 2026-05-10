@@ -79,6 +79,9 @@ bin/Release/
 Thumbs.db
 Desktop.ini
 .DS_Store
+*.dll
+bin/
+res/
 
 # Others
 .cache/
@@ -96,4 +99,4 @@ build/
 x64/
 x86/
 Debug/
-Release/
+Release/

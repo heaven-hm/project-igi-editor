@@ -23,6 +23,7 @@ public:
 
 	// level_no: 1 ~ 13
 	void					LoadLevel(int level_no);
+	void					SetGameLevel(int level_no);
 	void					SaveCurrentLevel();
 	int						GetCurLevelNo() const;
 

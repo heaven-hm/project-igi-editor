@@ -157,13 +157,17 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
         }
 
         if (hud.show_hud_) {
-                // printf("HUD Drawing active: %s, RAW X: %.2f\n", hud.status_msg_.c_str(), hud.raw_pos_.x);
+                glUseProgram(0); // Disable any active shaders for fixed-function HUD
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, 0);
+                GL_CHECK_ERROR;
 
                 glDisable(GL_DEPTH_TEST);
                 glDisable(GL_CULL_FACE);
                 glDisable(GL_LIGHTING);
                 glDisable(GL_TEXTURE_2D);
-                glDisable(GL_BLEND);
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
                 glMatrixMode(GL_PROJECTION);
                 glPushMatrix();
@@ -174,46 +178,55 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                 glPushMatrix();
                 glLoadIdentity();
 
-                // DRAW BACKGROUND BOX FOR VISIBILITY
-                glColor4f(0.0f, 0.0f, 0.0f, 0.8f);
-                glBegin(GL_QUADS);
-                glVertex2i(5, params.view_define_->viewport_height_ - 5);
-                glVertex2i(400, params.view_define_->viewport_height_ - 5);
-                glVertex2i(400, params.view_define_->viewport_height_ - 150);
-                glVertex2i(5, params.view_define_->viewport_height_ - 150);
-                glEnd();
-
-                glColor3f(1.0f, 1.0f, 0.0f); // Yellow
-                if (hud.status_msg_.find("CONNECTED") != std::string::npos) glColor3f(0.0f, 1.0f, 0.0f); // Green
-
-                auto draw_text = [&](int x, int y, const char* str) {
+                auto draw_text = [&](int x, int y, const char* str, float r, float g, float b) {
+                        // Draw shadow
+                        glColor3f(0.0f, 0.0f, 0.0f);
+                        glRasterPos2i(x + 1, params.view_define_->viewport_height_ - y - 1);
+                        for (const char* c = str; *c != '\0'; c++) {
+                                glutBitmapCharacter(GLUT_BITMAP_8_BY_13, *c);
+                        }
+                        // Draw main text
+                        glColor3f(r, g, b);
                         glRasterPos2i(x, params.view_define_->viewport_height_ - y);
                         for (const char* c = str; *c != '\0'; c++) {
-                                glutBitmapCharacter(GLUT_BITMAP_9_BY_15, *c);
+                                glutBitmapCharacter(GLUT_BITMAP_8_BY_13, *c);
                         }
                 };
 
                 int line_y = 30;
-                draw_text(20, line_y, hud.status_msg_.c_str()); line_y += 20;
+                draw_text(20, line_y, "--- IGI TERRAIN EDITOR ---", 1.0f, 1.0f, 1.0f); line_y += 15;
+                
+                float status_r = 1.0f, status_g = 1.0f, status_b = 0.0f; // Yellow
+                if (hud.status_msg_.find("CONNECTED") != std::string::npos) { status_r = 0.0f; status_g = 1.0f; status_b = 0.0f; } // Green
+                draw_text(20, line_y, hud.status_msg_.c_str(), status_r, status_g, status_b); line_y += 15;
 
                 if (hud.status_msg_.find("CONNECTED") != std::string::npos) {
                         char buf[256];
                         sprintf(buf, "RAW X: %.2f Y: %.2f Z: %.2f", hud.raw_pos_.x, hud.raw_pos_.y, hud.raw_pos_.z);
-                        draw_text(20, line_y, buf); line_y += 20;
+                        draw_text(20, line_y, buf, 1.0f, 1.0f, 1.0f); line_y += 15;
                         sprintf(buf, "MTR X: %.2fm Y: %.2fm Z: %.2fm", hud.meters_pos_.x, hud.meters_pos_.y, hud.meters_pos_.z);
-                        draw_text(20, line_y, buf); line_y += 20;
+                        draw_text(20, line_y, buf, 1.0f, 1.0f, 1.0f); line_y += 15;
                         sprintf(buf, "GROUND DIST: %.2fm", hud.ground_offset_ / 4096.0f);
-                        draw_text(20, line_y, buf); line_y += 20;
+                        draw_text(20, line_y, buf, 1.0f, 1.0f, 1.0f); line_y += 15;
+                        sprintf(buf, "HUMAN ADDR: 0x%08X | LVL: %d", hud.human_addr_, hud.game_level_);
+                        draw_text(20, line_y, buf, 0.7f, 0.7f, 1.0f); line_y += 15;
+                        sprintf(buf, "VIEW H: %.3f V: %.3f", hud.view_h_, hud.view_v_);
+                        draw_text(20, line_y, buf, 1.0f, 0.5f, 0.0f); line_y += 15;
+                        sprintf(buf, "CAM P: %.3f Y: %.3f R: %.3f FOV: %.3f", hud.cam_pitch_, hud.cam_yaw_, hud.cam_roll_, hud.cam_fov_);
+                        draw_text(20, line_y, buf, 0.5f, 1.0f, 0.5f); line_y += 15;
                 }
-                draw_text(20, line_y, "Checks: 0");
 
                 glMatrixMode(GL_PROJECTION);
                 glPopMatrix();
                 glMatrixMode(GL_MODELVIEW);
                 glPopMatrix();
 
+                // Restore all states
                 glEnable(GL_DEPTH_TEST);
                 glEnable(GL_CULL_FACE);
+                glEnable(GL_LIGHTING);
+                glEnable(GL_TEXTURE_2D);
+                glDisable(GL_BLEND);
         }
 
 	GL_CHECK_ERROR;

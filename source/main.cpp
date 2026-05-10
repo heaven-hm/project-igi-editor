@@ -314,6 +314,7 @@ static void UpdateIGILiveDataMenuText() {
 static void OnMenu(int menu) {
 	if (menu >= MENU_LEVEL_FIRST && menu <= MENU_LEVEL_LAST) {
 		g_app.LoadLevel(menu);
+		g_app.SetGameLevel(menu);
 
 		g_update_menu_flags |= UPDATE_MENU_CHOOSE_LEVEL;
 		return;
@@ -441,7 +442,7 @@ int main(int argc, char **argv) {
 	int pos_y = (screen_cy - wnd_h) >> 1;
 	glutInitWindowPosition(pos_x, pos_y);
 	glutInitWindowSize(wnd_w, wnd_h);
-	glutCreateWindow("Terrain Demo [right click to bring up the context menu]");
+	glutCreateWindow("IGI Terrain Editor");
 
 	if (!GL_Init()) {
 		return 1;
