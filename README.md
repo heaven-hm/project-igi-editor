@@ -1,11 +1,23 @@
 # Brief
 
+**IGI 3D Editor** - A modern 3D terrain and object editor for IGI game levels, inspired by the original IGI Editor.
+
 This project is the result of analysis decompiled IGI.exe c code from IDA Pro 7.9. <br>
 
 It use OpenGL as rendering API. <br>
 Use shaders to replace old Direct3D7 fixed function pipeline. <br>
 Use glut as application framework <br>
 and migrate from x86 to x64 platform.
+
+## Features
+
+- **3D Terrain Editing**: Modify terrain height maps with raise/lower brushes
+- **3D Object Loading**: Load and render OBJ 3D models in the editor
+- **Cube Transform Flags**: Apply 8 different transform flags (rotation/flip) to terrain cubes
+- **Real-time Rendering**: OpenGL-based shader rendering with wireframe overlay
+- **Level Navigation**: Load and navigate through all 13 IGI game levels
+- **Editor Mode**: Toggle edit mode for terrain modification
+- **Original IGI Compatibility**: Uses same coordinate system and file formats as original IGI
 
 # Folder structure
 
@@ -83,6 +95,30 @@ The output binary file will write to bin folder.
 | q         | Move straight up                                        |
 | z         | Move straight down                                      |
 | space key | Jump if clip mode turned on (F3 key)                    |
+
+## Editor Controls
+
+### 3D Object Loading
+
+The editor supports loading OBJ 3D models for visualization and placement:
+
+- Place OBJ files in the project directory  
+- Models are automatically loaded on startup
+- Press 'R' in edit mode to cycle through cube transform flags (0-7)
+- Click on terrain to apply transforms
+
+### Transform Flags
+
+| Flag | Description |
+|------|-------------|
+| 0 | No change |
+| 1 | Rotate 90° CCW around Z axis |
+| 2 | Rotate 180° CCW around Z axis |
+| 3 | Rotate -90° CCW around Z axis |
+| 4 | Flip along YOZ plane |
+| 5 | Flip YOZ + rotate 90° CCW |
+| 6 | Flip YOZ + rotate 180° CCW |
+| 7 | Flip YOZ + rotate -90° CCW |
 
 ## Context Menu
 
@@ -246,6 +282,12 @@ Feel free to report bugs to me. :)
 
 DirectX 7.0 Programmer's Reference. 1999. Microsoft Corporation. <br>
 Douglas Rogers. Implementing Fog in Direct3D. NVIDIA Corporation. <br>
+
+# Screenshots
+
+![IGI 3D Editor Screenshot](assets/igi-editor-screenshot.png)
+
+The editor in action showing terrain editing and 3D object loading capabilities.
 
 # Other github repositories
 
