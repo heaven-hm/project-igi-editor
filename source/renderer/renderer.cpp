@@ -307,9 +307,9 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                                         char buf[512];
                                         snprintf(buf, sizeof(buf), "SELECTED: [%d] %s (%s)", hud.selected_object_index_, obj.name.c_str(), obj.modelId.c_str());
                                         draw_text(10, 50, buf, 1.0f, 1.0f, 0.0f);
-                                        snprintf(buf, sizeof(buf), "Pos: (%.0f, %.0f, %.0f)", obj.pos.x, obj.pos.y, obj.pos.z);
+                                        snprintf(buf, sizeof(buf), "Pos: (%.0f, %.0f, %.0f)", (double)obj.pos.x, (double)obj.pos.y, (double)obj.pos.z);
                                         draw_text(10, 35, buf, 1.0f, 1.0f, 1.0f);
-                                        snprintf(buf, sizeof(buf), "Rot (Alpha/Beta/Gamma): (%.2f, %.2f, %.2f)", obj.rot.x, obj.rot.y, obj.rot.z);
+                                        snprintf(buf, sizeof(buf), "Rot (Alpha/Beta/Gamma): (%.2f, %.2f, %.2f)", (double)obj.rot.x, (double)obj.rot.y, (double)obj.rot.z);
                                         draw_text(10, 20, buf, 1.0f, 1.0f, 1.0f);
                                         snprintf(buf, sizeof(buf), "Scale: %.2f", obj.scale);
                                         draw_text(10, 5, buf, 1.0f, 1.0f, 1.0f);

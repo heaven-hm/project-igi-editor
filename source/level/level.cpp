@@ -52,8 +52,10 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 
 	char filename[1024];
 
-	Str_SPrintf(filename, 1024, "%s/missions/location0/level%d/objects.qsc",
-		g_folders.res_folder_, params.level_no_);
+	char appData[1024];
+	GetEnvironmentVariableA("APPDATA", appData, 1024);
+	Str_SPrintf(filename, 1024, "%s\\QEditor\\QFiles\\IGI_QSC\\missions\\location0\\level%d\\objects.qsc",
+		appData, params.level_no_);
 
 	qsc_path_ = filename;
 
@@ -139,7 +141,7 @@ void Level::DecompileObjects(int levelNo) {
 		Str_SPrintf(outputPath, 1024, "%s\\output\\objects.qsc", decompileDir);
 
 		char destPath[1024];
-		Str_SPrintf(destPath, 1024, "%s/missions/location0/level%d/objects.qsc", g_folders.res_folder_, levelNo);
+		Str_SPrintf(destPath, 1024, "%s\\QEditor\\QFiles\\IGI_QSC\\missions\\location0\\level%d\\objects.qsc", appData, levelNo);
 
 		std::filesystem::create_directories(std::filesystem::path(destPath).parent_path());
 		if (std::filesystem::exists(outputPath)) {

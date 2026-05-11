@@ -18,11 +18,9 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
 
     const QSC::func_s* qsc_funcs[1024];
 
-    
     // Parse Buildings
     int num_buildings = qsc_objects->FindFuncByStr("Building", qsc_funcs);
     for (int i = 0; i < num_buildings; ++i) {
-        // if (objects_.size() >= 3) break; // Load only 3 buildings for testing
         const QSC::func_s* f = qsc_funcs[i];
         const QSC::arg_s* a = f->args_;
 
@@ -34,12 +32,12 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
             switch (arg_idx) {
                 case 0: if (a->type_ == QSC::arg_s::type_t::STR) obj.taskId = a->str_; break;
                 case 2: if (a->type_ == QSC::arg_s::type_t::STR) obj.name = a->str_; break;
-                case 3: if (a->type_ == QSC::arg_s::type_t::DBL) obj.pos.x = (float)a->dbl_; break;
-                case 4: if (a->type_ == QSC::arg_s::type_t::DBL) obj.pos.y = (float)a->dbl_; break;
-                case 5: if (a->type_ == QSC::arg_s::type_t::DBL) obj.pos.z = (float)a->dbl_; break;
-                case 6: if (a->type_ == QSC::arg_s::type_t::DBL) obj.rot.x = (float)a->dbl_; break; // Alpha/Param 6 -> Roll  (Around X)
-                case 7: if (a->type_ == QSC::arg_s::type_t::DBL) obj.rot.y = (float)a->dbl_; break; // Beta /Param 7 -> Pitch (Around Y)
-                case 8: if (a->type_ == QSC::arg_s::type_t::DBL) obj.rot.z = (float)a->dbl_; break; // Gamma/Param 8 -> Yaw   (Around Z)
+                case 3: if (a->type_ == QSC::arg_s::type_t::DBL) obj.pos.x = a->dbl_; break;
+                case 4: if (a->type_ == QSC::arg_s::type_t::DBL) obj.pos.y = a->dbl_; break;
+                case 5: if (a->type_ == QSC::arg_s::type_t::DBL) obj.pos.z = a->dbl_; break;
+                case 6: if (a->type_ == QSC::arg_s::type_t::DBL) obj.rot.x = a->dbl_; break; // Alpha/Param 6 -> Roll  (Around X)
+                case 7: if (a->type_ == QSC::arg_s::type_t::DBL) obj.rot.y = a->dbl_; break; // Beta /Param 7 -> Pitch (Around Y)
+                case 8: if (a->type_ == QSC::arg_s::type_t::DBL) obj.rot.z = a->dbl_; break; // Gamma/Param 8 -> Yaw   (Around Z)
                 case 9: if (a->type_ == QSC::arg_s::type_t::STR) {
                     obj.modelId = a->str_;
                     std::string friendly = GetModelName(obj.modelId);
@@ -57,10 +55,8 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
     Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Found " + std::to_string(num_buildings) + " buildings. Total objects in vector: " + std::to_string(objects_.size()));
 
     // Parse EditRigidObjs
-
     int num_props = qsc_objects->FindFuncByStr("EditRigidObj", qsc_funcs);
     for (int i = 0; i < num_props; ++i) {
-        if (objects_.size() >= 10) break;
         const QSC::func_s* f = qsc_funcs[i];
         const QSC::arg_s* a = f->args_;
 
@@ -72,12 +68,12 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
             switch (arg_idx) {
                 case 0: if (a->type_ == QSC::arg_s::type_t::STR) obj.taskId = a->str_; break;
                 case 2: if (a->type_ == QSC::arg_s::type_t::STR) obj.name = a->str_; break;
-                case 3: if (a->type_ == QSC::arg_s::type_t::DBL) obj.pos.x = (float)a->dbl_; break;
-                case 4: if (a->type_ == QSC::arg_s::type_t::DBL) obj.pos.y = (float)a->dbl_; break;
-                case 5: if (a->type_ == QSC::arg_s::type_t::DBL) obj.pos.z = (float)a->dbl_; break;
-                case 6: if (a->type_ == QSC::arg_s::type_t::DBL) obj.rot.x = (float)a->dbl_; break; // Alpha -> Roll (Around X)
-                case 7: if (a->type_ == QSC::arg_s::type_t::DBL) obj.rot.y = (float)a->dbl_; break; // Beta  -> Pitch (Around Y)
-                case 8: if (a->type_ == QSC::arg_s::type_t::DBL) obj.rot.z = (float)a->dbl_; break; // Gamma -> Yaw (Around Z)
+                case 3: if (a->type_ == QSC::arg_s::type_t::DBL) obj.pos.x = a->dbl_; break;
+                case 4: if (a->type_ == QSC::arg_s::type_t::DBL) obj.pos.y = a->dbl_; break;
+                case 5: if (a->type_ == QSC::arg_s::type_t::DBL) obj.pos.z = a->dbl_; break;
+                case 6: if (a->type_ == QSC::arg_s::type_t::DBL) obj.rot.x = a->dbl_; break; // Alpha -> Roll (Around X)
+                case 7: if (a->type_ == QSC::arg_s::type_t::DBL) obj.rot.y = a->dbl_; break; // Beta  -> Pitch (Around Y)
+                case 8: if (a->type_ == QSC::arg_s::type_t::DBL) obj.rot.z = a->dbl_; break; // Gamma -> Yaw (Around Z)
                 case 9: if (a->type_ == QSC::arg_s::type_t::STR) {
                     obj.modelId = a->str_;
                     std::string friendly = GetModelName(obj.modelId);
@@ -94,10 +90,6 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
 
     Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Found " + std::to_string(num_props) + " props. Total objects: " + std::to_string(objects_.size()));
 
-    // Optional: Add to dynamic cubes for spatial partitioning/culling if needed
-
-    // For now we just keep them in the objects_ list.
-    
     Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Load COMPLETE. Final object count: " + std::to_string(objects_.size()));
 }
 

@@ -180,7 +180,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
 
     // OpenGL state
-    glEnable(GL_DEPTH_TEST);
+    glDisable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
     glDisable(GL_BLEND);
 
@@ -202,18 +202,22 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
 
         // ── Build model matrix ────────────────────────────────────────────────
-        // We use the native IGI positions here because u_mvp in the UBO 
-        // already contains the 0.001 scale (mat_scale).
+        // Use native IGI positions - u_mvp in UBO contains the 0.001 scale
+        // Cast dvec3 to vec3 for rendering
         glm::mat4 model = glm::mat4(1.0f);
-        model = glm::translate(model, obj.pos);
+        model = glm::translate(model, glm::vec3(obj.pos));
 
         // Rotate — IGI uses ZYX order (Yaw, Pitch, Roll) with Param 8=Yaw, 7=Pitch, 6=Roll
-        model = glm::rotate(model, obj.rot.z, glm::vec3(0.0f, 0.0f, 1.0f)); // Yaw (Around Z) - Param 8
-        model = glm::rotate(model, obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f)); // Pitch (Around Y) - Param 7
-        model = glm::rotate(model, obj.rot.x, glm::vec3(1.0f, 0.0f, 0.0f)); // Roll (Around X) - Param 6
+        model = glm::rotate(model, static_cast<float>(obj.rot.z), glm::vec3(0.0f, 0.0f, 1.0f)); // Yaw (Around Z) - Param 8
+        model = glm::rotate(model, static_cast<float>(obj.rot.y), glm::vec3(0.0f, 1.0f, 0.0f)); // Pitch (Around Y) - Param 7
+        model = glm::rotate(model, static_cast<float>(obj.rot.x), glm::vec3(1.0f, 0.0f, 0.0f)); // Roll (Around X) - Param 6
 
-        // Scale — Most models are in meters, world is in IGI units (4096 units = 1m)
-        model = glm::scale(model, glm::vec3(WORLD_UNITS_PER_METER * obj.scale));
+        // Scale — OBJ files are in centimeters. 100 cm = 1 meter = WORLD_UNITS_PER_METER (4096 IGI units).
+        // So scale factor = (4096 / 100) = 40.96
+        model = glm::scale(model, glm::vec3((WORLD_UNITS_PER_METER / 100.0f) * obj.scale));
+
+        // OBJ files are exported Y-up, but IGI is Z-up. Rotate 90 degrees around X to correct the model orientation.
+        model = glm::rotate(model, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
 
         // Upload model matrix
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
@@ -229,10 +233,10 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     // Always reset polygon mode after draw
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
-    // Draw selection box for selected object
-    if (selected_object_index >= 0 && selected_object_index < (int)objects.size()) {
-        DrawSelectionBox(objects[selected_object_index], ubo_mats);
-    }
+    // Draw selection box for selected object (DISABLED for now)
+    // if (selected_object_index >= 0 && selected_object_index < (int)objects.size()) {
+    //     DrawSelectionBox(objects[selected_object_index], ubo_mats);
+    // }
 
     // Unbind shader
     glUseProgram(0);
@@ -393,12 +397,13 @@ void main() {
     glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
     
     // Build model matrix for selection box (slightly larger than object)
+    // Cast dvec3 to vec3 for rendering
     glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, obj.pos);
-    model = glm::rotate(model, obj.rot.z, glm::vec3(0.0f, 0.0f, 1.0f));
-    model = glm::rotate(model, obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f));
-    model = glm::rotate(model, obj.rot.x, glm::vec3(1.0f, 0.0f, 0.0f));
-    model = glm::scale(model, glm::vec3(WORLD_UNITS_PER_METER * obj.scale * 1.2f)); // 20% larger
+    model = glm::translate(model, glm::vec3(obj.pos));
+    model = glm::rotate(model, static_cast<float>(obj.rot.z), glm::vec3(0.0f, 0.0f, 1.0f));
+    model = glm::rotate(model, static_cast<float>(obj.rot.y), glm::vec3(0.0f, 1.0f, 0.0f));
+    model = glm::rotate(model, static_cast<float>(obj.rot.x), glm::vec3(1.0f, 0.0f, 0.0f));
+    model = glm::scale(model, glm::vec3(obj.scale * 1.2f)); // 20% larger
     
     GLint loc_model = glGetUniformLocation(simple_shader, "u_model");
     glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));

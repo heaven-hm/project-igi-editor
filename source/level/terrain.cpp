@@ -174,9 +174,11 @@ bool Terrain::Load(load_params_s & params) {
 #endif
 
 	char filename[1024];
+	char appData[1024];
+	GetEnvironmentVariableA("APPDATA", appData, 1024);
 	Str_SPrintf(filename, 1024,
-		"%s/missions/location0/level%d/terrain/terrain.qsc",
-		g_folders.res_folder_, params.level_no_);
+		"%s\\QEditor\\QFiles\\IGI_QSC\\missions\\location0\\level%d\\terrain\\terrain.qsc",
+		appData, params.level_no_);
 
 	QSC* qsc_terrain = new QSC();
 	if (!qsc_terrain) {

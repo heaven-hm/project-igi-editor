@@ -523,17 +523,17 @@ void App::HandleMarkerInput(unsigned char key) {
 	else if (k == cfg.rotateRollRight) { obj.rot.x += rotStep; changed = true; }
 
 	else if (k == cfg.teleportToMarker) {
-		viewer_.pos_ = obj.pos;
+		viewer_.pos_ = glm::vec3(obj.pos);
 		UpdateViewerVectors();
 	}
 	else if (k == cfg.resetMarkerToPlayer) {
-		obj.pos = viewer_.pos_;
+		obj.pos = glm::dvec3(viewer_.pos_);
 		changed = true;
 	}
 
 	if (changed) {
 		printf("Marker [%d] Manipulated: Pos(%.0f, %.0f, %.0f) Rot(%.2f, %.2f, %.2f)\n",
-			selected_object_index_, obj.pos.x, obj.pos.y, obj.pos.z, obj.rot.x, obj.rot.y, obj.rot.z);
+			selected_object_index_, (double)obj.pos.x, (double)obj.pos.y, (double)obj.pos.z, (double)obj.rot.x, (double)obj.rot.y, (double)obj.rot.z);
 	}
 }
 
@@ -567,34 +567,13 @@ void App::ResetLevel() {
 }
 
 void App::ResetScript() {
-	char appData[1024];
-	GetEnvironmentVariableA("APPDATA", appData, 1024);
-
 	int levelNo = level_.GetLevelNo();
 
-	char srcPath[1024];
-	Str_SPrintf(srcPath, 1024, "%s\\QEditor\\QFiles\\IGI_QSC\\missions\\location0\\level%d\\objects.qsc", appData, levelNo);
+	printf("Resetting Script for Level %d - reloading from AppData IGI_QSC\n", levelNo);
 
-	char dstPath[1024];
-	Str_SPrintf(dstPath, 1024, "%s/missions/location0/level%d/objects.qsc", g_folders.res_folder_, levelNo);
-
-	printf("Resetting Script for Level %d from %s to %s\n", levelNo, srcPath, dstPath);
-
-	try {
-		if (std::filesystem::exists(srcPath)) {
-			std::filesystem::copy_file(srcPath, dstPath, std::filesystem::copy_options::overwrite_existing);
-			printf("Script reset successful.\n");
-
-			// Reload the level to apply changes
-			LoadLevel(levelNo);
-		}
-		else {
-			printf("Error: Source file %s does not exist.\n", srcPath);
-		}
-	}
-	catch (const std::exception& e) {
-		printf("ResetScript error: %s\n", e.what());
-	}
+	// Reload the level to apply changes
+	LoadLevel(levelNo);
+	printf("Script reloaded.\n");
 }
 
 
@@ -1071,8 +1050,8 @@ void App::EditorProcessClick() {
 		selected_object_index_ = closest_object;
 		const LevelObject& obj = objects[closest_object];
 		printf("SELECTED Object [%d]: %s (%s)\n", closest_object, obj.name.c_str(), obj.modelId.c_str());
-		printf("  Pos: (%.0f, %.0f, %.0f)\n", obj.pos.x, obj.pos.y, obj.pos.z);
-		printf("  Rot (Alpha/Beta/Gamma): (%.2f, %.2f, %.2f)\n", obj.rot.x, obj.rot.y, obj.rot.z);
+		printf("  Pos: (%.0f, %.0f, %.0f)\n", (double)obj.pos.x, (double)obj.pos.y, (double)obj.pos.z);
+		printf("  Rot (Alpha/Beta/Gamma): (%.2f, %.2f, %.2f)\n", (double)obj.rot.x, (double)obj.rot.y, (double)obj.rot.z);
 		printf("  Scale: %.2f\n", obj.scale);
 		return; // Don't do terrain editing if we selected an object
 	}

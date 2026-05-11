@@ -9,8 +9,8 @@ struct LevelObject {
     std::string name;
     std::string modelId;
     std::string taskId;  // Task ID from QSC for save support
-    glm::vec3 pos;
-    glm::vec3 rot;
+    glm::dvec3 pos;
+    glm::dvec3 rot;
     bool isBuilding;
 
     // Lighting

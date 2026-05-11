@@ -100,3 +100,8 @@ x64/
 x86/
 Debug/
 Release/
+*.txt
+*.jpg
+*.jpeg
+*.png
+*.webp
