@@ -21,10 +21,10 @@ Written and maintained by **Jones-HM (Heaven)**.
  
 ## 📸 Screenshots
  
-![IGI Editor Screenshot](assets/igi-editor-screenshot.png)
+![IGI Editor Screenshot](assets/igi-editor.png)
 *The editor in action showing terrain editing capabilities.*
  
-![IGI Models Screenshot](assets/igi-models.png)
+![IGI Level 1 Screenshot](assets/igi-level1.png)
 *3D Object Loading and Manipulation in the IGI Editor.*
  
 ---
