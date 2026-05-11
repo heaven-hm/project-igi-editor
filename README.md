@@ -16,6 +16,16 @@ Written and maintained by **Jones-HM (Heaven)**.
 - **Advanced Rendering**: OpenGL-based pipeline with full texture support, wireframe overlays, and skydome rendering.
 - **Level Navigation**: Full support for loading and exploring all 13 original IGI levels.
 - **Precision Snapping**: Instant ground-snapping logic to ensure objects sit perfectly on the terrain surface.
+ 
+---
+ 
+## 📸 Screenshots
+ 
+![IGI Editor Screenshot](assets/igi-editor-screenshot.png)
+*The editor in action showing terrain editing capabilities.*
+ 
+![IGI Models Screenshot](assets/igi-models.png)
+*3D Object Loading and Manipulation in the IGI Editor.*
 
 ## 🛠️ Future Roadmap
 
