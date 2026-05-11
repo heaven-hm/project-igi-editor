@@ -1,4 +1,4 @@
-﻿/******************************************************************************
+/******************************************************************************
  * @file    app.cpp
  * @brief   application class
  *****************************************************************************/
@@ -48,6 +48,7 @@ App::App():
 	frame_(0),
 	terrain_mod_options_(-1),
 	edit_mode_(false),
+	terrain_edit_enabled_(false),
 	edit_brush_(0), // 0: raise, 1: lower
 	selected_object_index_(0),
 	show_hud_(true),
@@ -339,20 +340,17 @@ void App::Input_OnMotion(int x, int y) {
 }
 
 void App::Input_OnSpecial(int key, int x, int y) {
-	if (key == GLUT_KEY_F3) {
+	if (key == GLUT_KEY_F2) {
+		terrain_edit_enabled_ = !terrain_edit_enabled_;
+		printf("Terrain Editing: %s\n", terrain_edit_enabled_ ? "ENABLED" : "DISABLED");
+		return;
+	}
+	else if (key == GLUT_KEY_F3) {
 		viewer_.clip_to_z_ = !viewer_.clip_to_z_;
 		return;
 	}
 	else if (key == GLUT_KEY_F4) {
-		window_state_.cursor_visible_ = !window_state_.cursor_visible_;
-
-		glutSetCursor(window_state_.cursor_visible_ ? GLUT_CURSOR_LEFT_ARROW : GLUT_CURSOR_NONE);
-
-		if (!window_state_.cursor_visible_) {
-			glutWarpPointer(window_state_.viewport_width_ >> 1, window_state_.viewport_height_ >> 1);
-			input_.mouse_delta_x_ = input_.mouse_delta_y_ = 0;
-		}
-
+		ToggleEditMode();
 		return;
 	}
 
@@ -651,7 +649,7 @@ void App::Frame(float delta_seconds) {
 
 	ProcessInput(delta_seconds);
 
-	if (edit_mode_ && mouse_state_.left_button_down_) {
+	if (edit_mode_ && terrain_edit_enabled_ && mouse_state_.left_button_down_) {
 		EditorProcessClick();
 	}
 
@@ -1073,12 +1071,20 @@ void App::EditorProcessClick() {
 		printf("  Pos: (%.0f, %.0f, %.0f)\n", (double)obj.pos.x, (double)obj.pos.y, (double)obj.pos.z);
 		printf("  Rot (Alpha/Beta/Gamma): (%.2f, %.2f, %.2f)\n", (double)obj.rot.x, (double)obj.rot.y, (double)obj.rot.z);
 		printf("  Scale: %.2f\n", obj.scale);
+		
+		// Record start state for manipulation if this is the initial click
+		marker_manip_.start_x_ = mouse_state_.prior_x_;
+		marker_manip_.start_y_ = mouse_state_.prior_y_;
+		marker_manip_.start_pos_ = obj.pos;
+		marker_manip_.start_rot_ = obj.rot;
+		
 		return; // Don't do terrain editing if we selected an object
 	}
 
-	printf("EditorClick: Mouse(%.0f, %.0f), RayDir(%.2f, %.2f, %.2f)\n", winX, winY, ray_dir.x, ray_dir.y, ray_dir.z);
-
-	level_.EditorRaycastAndModify(ray_origin, ray_dir, edit_brush_);
+	if (terrain_edit_enabled_) {
+		printf("EditorClick: Mouse(%.0f, %.0f), RayDir(%.2f, %.2f, %.2f)\n", winX, winY, ray_dir.x, ray_dir.y, ray_dir.z);
+		level_.EditorRaycastAndModify(ray_origin, ray_dir, edit_brush_);
+	}
 }
 
 bool App::CheckCollision(const glm::vec3& nextPos) {

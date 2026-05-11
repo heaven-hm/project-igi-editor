@@ -108,6 +108,7 @@ private:
 
 	// editor
 	bool					edit_mode_;
+	bool					terrain_edit_enabled_;
 	bool					pause_mode_;
 	int						edit_brush_;
 	int						selected_object_index_;
