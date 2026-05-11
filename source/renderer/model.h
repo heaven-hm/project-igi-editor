@@ -7,6 +7,7 @@ struct Mesh {
     unsigned int textureID; // Added texture support
     int vertexCount;
     float* vertexData; // For client-side array rendering
+    glm::vec3 halfExtents; // Half-size of the bounding box
 };
 
 Mesh  loadObjModel(const std::string& filepath);

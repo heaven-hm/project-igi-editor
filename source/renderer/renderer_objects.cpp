@@ -153,8 +153,13 @@ void Renderer_Objects::Shutdown() {
 
 // ─── Draw ─────────────────────────────────────────────────────────────────────
 void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
-                            const std::vector<LevelObject>& objects, int selected_object_index)
+                            const std::vector<LevelObject>& objects, int selected_object_index, int draw_parts)
 {
+    // Define the flags (must match renderer.h)
+    const int DRAW_OBJECTS = 4;
+    const int DRAW_BUILDINGS = 16;
+    const int DRAW_PROPS = 32;
+
     if (objects.empty()) {
         static bool logged_once = false;
         if (!logged_once) {
@@ -164,14 +169,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         return;
     }
     
-    static bool logged_count = false;
-    if (!logged_count) {
-        Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Draw called with " + std::to_string(objects.size()) + " objects.");
-        logged_count = true;
-    }
     if (!shader_program_) return;
-
-
 
     // Bind our object shader
     glUseProgram(shader_program_);
@@ -180,7 +178,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
 
     // OpenGL state
-    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
     glDisable(GL_BLEND);
 
@@ -196,40 +194,59 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     GLint loc_ambient  = glGetUniformLocation(shader_program_, "u_ambient");
 
     for (const auto& obj : objects) {
-        // Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Rendering object: " + obj.name + " (" + obj.modelId + ")");
+        // Selective rendering logic
+        bool shouldDraw = false;
+        if (draw_parts & DRAW_OBJECTS) {
+            shouldDraw = true; // Draw everything
+        } else {
+            if ((draw_parts & DRAW_BUILDINGS) && obj.isBuilding) shouldDraw = true;
+            if ((draw_parts & DRAW_PROPS) && !obj.isBuilding) shouldDraw = true;
+        }
+
+        if (!shouldDraw) continue;
+
         Mesh mesh = GetOrLoadMesh(obj.modelId);
         if (mesh.vertexCount == 0) continue;
 
 
         // ── Build model matrix ────────────────────────────────────────────────
-        // Order: Translate (World) * Rotate (IGI Z-up) * Scale * Rotate (OBJ Y-up to Z-up)
+        // Each mesh is centered around (0,0,0) during load.
+        // We now place it exactly at its world position (obj.pos) and apply its own rotation (obj.rot).
+
         glm::mat4 model = glm::mat4(1.0f);
         
         // 1. Translate to world position
-        // Standard IGI coordinates (Z-up, positive X/Y as per QSC)
         model = glm::translate(model, glm::vec3(obj.pos.x, obj.pos.y, obj.pos.z));
 
         // 2. Apply IGI rotations (Yaw, Pitch, Roll)
-        // Order: Yaw(Z) -> Pitch(Y) -> Roll(X)
-        model = glm::rotate(model, static_cast<float>(obj.rot.z), glm::vec3(0.0f, 0.0f, 1.0f)); // Yaw
-        model = glm::rotate(model, static_cast<float>(obj.rot.y),  glm::vec3(0.0f, 1.0f, 0.0f)); // Pitch
-        model = glm::rotate(model, static_cast<float>(obj.rot.x),  glm::vec3(1.0f, 0.0f, 0.0f)); // Roll
+        // IGI rotation order: Yaw (Z), then Pitch (X), then Roll (Y)
+        model = glm::rotate(model, (float)obj.rot.z, glm::vec3(0.0f, 0.0f, 1.0f)); // Yaw
+        model = glm::rotate(model, (float)obj.rot.x, glm::vec3(1.0f, 0.0f, 0.0f)); // Pitch
+        model = glm::rotate(model, (float)obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f)); // Roll
 
         // 3. Scale 
-        // Assuming OBJ units are centimeters (1 unit = 0.01m). 
-        // IGI units are 4096 per meter. So 1 OBJ unit = 40.96 IGI units.
         float base_scale = 40.96f; 
         model = glm::scale(model, glm::vec3(base_scale * obj.scale));
 
         // 4. Convert OBJ Y-up to IGI Z-up (90 degree X rotation)
-        model = glm::rotate(model, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+        model = glm::rotate(model, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f)); 
 
         // Upload model matrix
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
 
-        // Upload lighting
+        // ── Lighting and Color ────────────────────────────────────────────────
+        // Use a hash of the modelId to generate a unique but consistent color
+        // This helps visually distinguish different buildings without textures.
+        float r = 0.5f, g = 0.5f, b = 0.5f;
+        if (!obj.modelId.empty()) {
+            size_t hash = std::hash<std::string>{}(obj.modelId);
+            r = 0.4f + (float)(hash & 0xFF) / 255.0f * 0.4f;
+            g = 0.4f + (float)((hash >> 8) & 0xFF) / 255.0f * 0.4f;
+            b = 0.4f + (float)((hash >> 16) & 0xFF) / 255.0f * 0.4f;
+        }
+
         glUniform3f(loc_dirlight, 0.7f, 0.7f, 0.7f);
-        glUniform3f(loc_ambient,  0.3f, 0.3f, 0.3f);
+        glUniform3f(loc_ambient,  r * 0.4f, g * 0.4f, b * 0.4f);
 
         // Draw
         renderModel(mesh);
@@ -247,6 +264,11 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     glUseProgram(0);
 }
 
+glm::vec3 Renderer_Objects::GetMeshExtents(const std::string& modelId) {
+    Mesh mesh = GetOrLoadMesh(modelId);
+    return mesh.halfExtents;
+}
+
 // ─── GetOrLoadMesh ────────────────────────────────────────────────────────────
 Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId) {
     // Return cached mesh if already loaded
@@ -257,8 +279,8 @@ Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId) {
     // Find the file on disk
     std::string filepath = FindModelFile(modelId);
     if (filepath.empty()) {
-        Logger::Get().Log(LogLevel::WARNING, "[Renderer_Objects] Model search FAILED for ID: " + modelId + ". Checked objects/ and common/ folders.");
-        mesh_cache_[modelId] = {0, 0, 0}; // Mark as failed so we don't retry
+        Logger::Get().Log(LogLevel::WARNING, "[Renderer_Objects] Model search FAILED for ID: " + modelId + ". Using fallback cube.");
+        mesh_cache_[modelId] = CreateCubeMesh();
         return mesh_cache_[modelId];
     }
 
@@ -278,43 +300,75 @@ Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId) {
 
 }
 
-// ─── FindModelFile ────────────────────────────────────────────────────────────
-std::string Renderer_Objects::FindModelFile(const std::string& modelId) {
-    // Search priority:
-    // 1. objects/{modelId}.obj       (converted OBJ)
-    // 2. objects/{modelId}.mef       (raw MEF binary)
-    // 3. Fuzzy search inside objects/ folder by modelId substring
-
-    const std::vector<std::string> searchPaths = {
-        "objects/" + modelId + ".obj",
-        "objects/" + modelId + ".mef"
+Mesh Renderer_Objects::CreateCubeMesh() {
+    Mesh m;
+    std::vector<float> v = {
+        -500.0f,-500.0f,-500.0f, 0,0,-1, 0,0,  500.0f, 500.0f,-500.0f, 0,0,-1, 1,1,  500.0f,-500.0f,-500.0f, 0,0,-1, 1,0,
+        -500.0f,-500.0f,-500.0f, 0,0,-1, 0,0, -500.0f, 500.0f,-500.0f, 0,0,-1, 0,1,  500.0f, 500.0f,-500.0f, 0,0,-1, 1,1,
+        -500.0f,-500.0f, 500.0f, 0,0, 1, 0,0,  500.0f,-500.0f, 500.0f, 0,0, 1, 1,0,  500.0f, 500.0f, 500.0f, 0,0, 1, 1,1,
+        -500.0f,-500.0f, 500.0f, 0,0, 1, 0,0,  500.0f, 500.0f, 500.0f, 0,0, 1, 1,1, -500.0f, 500.0f, 500.0f, 0,0, 1, 0,1,
+        -500.0f, 500.0f, 500.0f,-1,0, 0, 1,0, -500.0f, 500.0f,-500.0f,-1,0, 0, 1,1, -500.0f,-500.0f,-500.0f,-1,0, 0, 0,1,
+        -500.0f, 500.0f, 500.0f,-1,0, 0, 1,0, -500.0f,-500.0f,-500.0f,-1,0, 0, 0,1, -500.0f,-500.0f, 500.0f,-1,0, 0, 0,0,
+         500.0f, 500.0f, 500.0f, 1,0, 0, 1,0,  500.0f,-500.0f,-500.0f, 1,0, 0, 0,1,  500.0f, 500.0f,-500.0f, 1,0, 0, 1,1,
+         500.0f, 500.0f, 500.0f, 1,0, 0, 1,0,  500.0f,-500.0f, 500.0f, 1,0, 0, 0,0,  500.0f,-500.0f,-500.0f, 1,0, 0, 0,1,
+        -500.0f,-500.0f,-500.0f, 0,-1,0, 0,1,  500.0f,-500.0f,-500.0f, 0,-1,0, 1,1,  500.0f,-500.0f, 500.0f, 0,-1,0, 1,0,
+        -500.0f,-500.0f,-500.0f, 0,-1,0, 0,1,  500.0f,-500.0f, 500.0f, 0,-1,0, 1,0, -500.0f,-500.0f, 500.0f, 0,-1,0, 0,0,
+        -500.0f, 500.0f,-500.0f, 0, 1,0, 0,1,  500.0f, 500.0f, 500.0f, 0, 1,0, 1,0,  500.0f, 500.0f,-500.0f, 0, 1,0, 1,1,
+        -500.0f, 500.0f,-500.0f, 0, 1,0, 0,1, -500.0f, 500.0f, 500.0f, 0, 1,0, 0,0,  500.0f, 500.0f, 500.0f, 0, 1,0, 1,0
     };
+    glGenVertexArrays(1, &m.VAO); glGenBuffers(1, &m.VBO);
+    glBindVertexArray(m.VAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m.VBO);
+    glBufferData(GL_ARRAY_BUFFER, v.size()*4, v.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 32, (void*)0); glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 32, (void*)12); glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 32, (void*)24); glEnableVertexAttribArray(2);
+    m.vertexCount = 36; m.textureID = 0; m.vertexData = nullptr;
+    glBindVertexArray(0); return m;
+}
 
-    for (const auto& path : searchPaths) {
-        Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Checking path: " + path);
-        if (std::filesystem::exists(path)) {
-            Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Found exact match: " + path);
-            return path;
-        }
-    }
-
-
-
-    // Fuzzy fallback — search objects/ folder for filename containing modelId
+std::string Renderer_Objects::FindModelFile(const std::string& modelId) {
+    const std::vector<std::string> searchPaths = { "objects/" + modelId + ".obj", "objects/" + modelId + ".mef" };
+    for (const auto& path : searchPaths) if (std::filesystem::exists(path)) return path;
+    
+    // 2. Try partial match (wildcard search in 'objects' folder)
     if (std::filesystem::exists("objects")) {
+        // Try BaseID (stripped of _1) if applicable
+        std::string baseId = modelId;
+        if (baseId.size() > 2 && baseId.substr(baseId.size() - 2) == "_1") {
+            baseId = baseId.substr(0, baseId.size() - 2);
+        }
+
+        std::string bestMatch = "";
         for (const auto& entry : std::filesystem::directory_iterator("objects")) {
             if (!entry.is_regular_file()) continue;
             std::string fname = entry.path().filename().string();
-            std::string ext   = entry.path().extension().string();
-            if (fname.find(modelId) != std::string::npos &&
-               (ext == ".obj" || ext == ".mef"))
-            {
-                Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Found fuzzy match: " + entry.path().string());
-                return entry.path().string();
+            std::string ext = entry.path().extension().string();
+            if (ext != ".obj" && ext != ".mef") continue;
+
+            // Exact match in filename
+            if (fname.find(modelId) != std::string::npos) return entry.path().string();
+            
+            // Fuzzy match: if specific variation missing, look for variation 01
+            // e.g. 300_03_1 -> 300_01_1
+            size_t firstUnderscore = modelId.find_first_of('_');
+            if (firstUnderscore != std::string::npos) {
+                std::string typeId = modelId.substr(0, firstUnderscore);
+                if (fname.find(typeId + "_01") != std::string::npos) {
+                    bestMatch = entry.path().string();
+                }
+            }
+            
+            // Last resort: any file containing the type prefix
+            if (bestMatch.empty() && fname.find(baseId) != std::string::npos) {
+                bestMatch = entry.path().string();
             }
         }
+        if (!bestMatch.empty()) {
+            Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Fuzzy match found for '" + modelId + "': " + bestMatch);
+            return bestMatch;
+        }
     }
-
     return "";
 }
 

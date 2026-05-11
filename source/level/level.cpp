@@ -50,17 +50,28 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 	root_dyn_cube_->children_mask_ = 0;
 	root_dyn_cube_->flags_ = 0;
 
+	ConfigData& cfg = Config::Get();
 	char filename[1024];
 
-	char appData[1024];
-	GetEnvironmentVariableA("APPDATA", appData, 1024);
-	Str_SPrintf(filename, 1024, "%s\\QEditor\\QFiles\\IGI_QSC\\missions\\location0\\level%d\\objects.qsc",
-		appData, params.level_no_);
+	// Priority 1: Editor Root
+	Str_SPrintf(filename, 1024, "objects.qsc");
+	
+	if (!File_Exists(filename)) {
+		// Priority 2: IGI Game Directory
+		Str_SPrintf(filename, 1024, "%s\\missions\\location0\\level%d\\objects.qsc", cfg.igiPath.c_str(), params.level_no_);
+		
+		if (!File_Exists(filename)) {
+			// Priority 3: Decompile into Editor Root
+			DecompileObjects(params.level_no_);
+			Str_SPrintf(filename, 1024, "objects.qsc");
+		}
+	}
 
 	qsc_path_ = filename;
 
 	if (!File_Exists(filename)) {
-		DecompileObjects(params.level_no_);
+		Logger::Get().Log(LogLevel::ERR, "[Level] FATAL: Could not find or decompile objects.qsc at: " + qsc_path_);
+		return false;
 	}
 
 	QSC* qsc_objects = new QSC();
@@ -141,12 +152,11 @@ void Level::DecompileObjects(int levelNo) {
 		Str_SPrintf(outputPath, 1024, "%s\\output\\objects.qsc", decompileDir);
 
 		char destPath[1024];
-		Str_SPrintf(destPath, 1024, "%s\\QEditor\\QFiles\\IGI_QSC\\missions\\location0\\level%d\\objects.qsc", appData, levelNo);
+		Str_SPrintf(destPath, 1024, "objects.qsc"); // Editor Root
 
-		std::filesystem::create_directories(std::filesystem::path(destPath).parent_path());
 		if (std::filesystem::exists(outputPath)) {
-			std::filesystem::rename(outputPath, destPath);
-			Logger::Get().Log(LogLevel::INFO, "[Decompile] Success! Saved to: " + std::string(destPath));
+			std::filesystem::copy_file(outputPath, destPath, std::filesystem::copy_options::overwrite_existing);
+			Logger::Get().Log(LogLevel::INFO, "[Decompile] Success! Saved to Editor Root: " + std::string(destPath));
 		} else {
 			Logger::Get().Log(LogLevel::ERR, "[Decompile] FAILED: Decompiler did not produce output at: " + std::string(outputPath));
 		}

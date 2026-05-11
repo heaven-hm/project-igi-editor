@@ -781,7 +781,15 @@ void App::ProcessInput(float delta_seconds) {
 		}
 
 		glm::vec3 move_delta = viewer_.velocity_ * delta_seconds;
-		viewer_.pos_ += move_delta;
+		glm::vec3 next_pos = viewer_.pos_ + move_delta;
+
+        if (!CheckCollision(next_pos)) {
+		    viewer_.pos_ = next_pos;
+        } else {
+            // Sliding logic (optional) - for now just stop
+            viewer_.velocity_.x = 0.0f;
+            viewer_.velocity_.y = 0.0f;
+        }
 
 		if (viewer_.velocity_.z <= 0.0f) {
 
@@ -1059,4 +1067,42 @@ void App::EditorProcessClick() {
 	printf("EditorClick: Mouse(%.0f, %.0f), RayDir(%.2f, %.2f, %.2f)\n", winX, winY, ray_dir.x, ray_dir.y, ray_dir.z);
 
 	level_.EditorRaycastAndModify(ray_origin, ray_dir, edit_brush_);
+}
+
+bool App::CheckCollision(const glm::vec3& next_pos) {
+    const auto& objects = level_.GetLevelObjects().GetObjects();
+    if (objects.empty()) return false;
+
+    // Player radius for collision
+    float playerRadius = 500.0f; // ~12cm
+
+    for (const auto& obj : objects) {
+        // Only check objects that are reasonably close
+        float dist = glm::distance(next_pos, glm::vec3(obj.pos));
+        if (dist > 100000.0f) continue; // 100k units = 24m
+
+        // Build the SAME model matrix as the renderer to get perfect alignment
+        glm::mat4 model = glm::mat4(1.0f);
+        model = glm::translate(model, glm::vec3(obj.pos.x, obj.pos.y, obj.pos.z));
+        model = glm::rotate(model, (float)obj.rot.z, glm::vec3(0.0f, 0.0f, 1.0f));
+        model = glm::rotate(model, (float)obj.rot.x, glm::vec3(1.0f, 0.0f, 0.0f));
+        model = glm::rotate(model, (float)obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f));
+        
+        float base_scale = 40.96f;
+        model = glm::scale(model, glm::vec3(base_scale * obj.scale));
+        model = glm::rotate(model, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+
+        // Transform player position to model local space
+        glm::vec4 localPos = glm::inverse(model) * glm::vec4(next_pos, 1.0f);
+        glm::vec3 extents = renderer_.GetMeshExtents(obj.modelId);
+
+        // AABB check in local space
+        if (std::abs(localPos.x) < (extents.x + playerRadius/base_scale) &&
+            std::abs(localPos.y) < (extents.y + playerRadius/base_scale) &&
+            std::abs(localPos.z) < (extents.z + playerRadius/base_scale)) 
+        {
+            return true; // Collision!
+        }
+    }
+    return false;
 }

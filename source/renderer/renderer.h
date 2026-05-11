@@ -22,6 +22,8 @@ public:
 	static constexpr int	DRAW_SKY = FLAG_BIT(1);            // 2
 	static constexpr int	DRAW_OBJECTS = FLAG_BIT(2);        // 4
 	static constexpr int	DRAW_FLAT_SKY_LAYER = FLAG_BIT(3); // 8
+    static constexpr int    DRAW_BUILDINGS = FLAG_BIT(4);      // 16
+    static constexpr int    DRAW_PROPS = FLAG_BIT(5);          // 32
     static constexpr int    DRAW_SKYDOME = FLAG_BIT(1);        // Alias for SKY
 
 
@@ -85,6 +87,7 @@ public:
 	render_chunk_s*			GetTerrainRenderChunckBuffer();
 
 	void					Draw(const draw_params_s& params, const hud_params_s& hud);
+	glm::vec3				GetMeshExtents(const std::string& modelId) { return objects_.GetMeshExtents(modelId); }
 
 private:
 

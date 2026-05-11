@@ -173,12 +173,12 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                 terrain_.Draw(ubo_mats_, ubo_fog_, params.overlay_wireframe_, params.draw_terrain_options_, params.num_terrain_render_chunk_);      
         }
 
-        if ((params.draw_parts_ & DRAW_OBJECTS) && params.level_objects_) {
+        if ((params.draw_parts_ & (DRAW_OBJECTS | DRAW_BUILDINGS | DRAW_PROPS)) && params.level_objects_) {
                 glMatrixMode(GL_PROJECTION);
                 glLoadMatrixf(glm::value_ptr(mat_proj_));
                 glMatrixMode(GL_MODELVIEW);
                 glLoadMatrixf(glm::value_ptr(mat_view_));
-                objects_.Draw(ubo_mats_, params.overlay_wireframe_, params.level_objects_->GetObjects(), params.selected_object_index_);
+                objects_.Draw(ubo_mats_, params.overlay_wireframe_, params.level_objects_->GetObjects(), params.selected_object_index_, params.draw_parts_);
         }
 
 

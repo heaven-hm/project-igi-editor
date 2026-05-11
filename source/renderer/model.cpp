@@ -32,13 +32,39 @@ Mesh loadObjModel(const std::string& filepath) {
     std::vector<float> vertices;
     vertices.reserve(shapes[0].mesh.indices.size() * 8);
 
+    // Compute Centroid
+    glm::vec3 centroid(0.0f);
+    int total_v = 0;
+    for (const auto& shape : shapes) {
+        for (const auto& idx : shape.mesh.indices) {
+            centroid.x += attrib.vertices[3 * idx.vertex_index + 0];
+            centroid.y += attrib.vertices[3 * idx.vertex_index + 1];
+            centroid.z += attrib.vertices[3 * idx.vertex_index + 2];
+            total_v++;
+        }
+    }
+    if (total_v > 0) centroid /= (float)total_v;
+
+    glm::vec3 min_p(1e10f), max_p(-1e10f);
     for (const auto& shape : shapes) {
         for (const auto& idx : shape.mesh.indices) {
 
             // --- Position ---
-            vertices.push_back(attrib.vertices[3 * idx.vertex_index + 0]);
-            vertices.push_back(attrib.vertices[3 * idx.vertex_index + 1]);
-            vertices.push_back(attrib.vertices[3 * idx.vertex_index + 2]);
+            float vx = attrib.vertices[3 * idx.vertex_index + 0] - centroid.x;
+            float vy = attrib.vertices[3 * idx.vertex_index + 1] - centroid.y;
+            float vz = attrib.vertices[3 * idx.vertex_index + 2] - centroid.z;
+            
+            vertices.push_back(vx);
+            vertices.push_back(vy);
+            vertices.push_back(vz);
+
+            min_p.x = std::min(min_p.x, vx);
+            min_p.y = std::min(min_p.y, vy);
+            min_p.z = std::min(min_p.z, vz);
+            max_p.x = std::max(max_p.x, vx);
+            max_p.y = std::max(max_p.y, vy);
+            max_p.z = std::max(max_p.z, vz);
+
 
             // --- Normal (fallback to UP if missing) ---
             if (idx.normal_index >= 0) {
@@ -65,6 +91,7 @@ Mesh loadObjModel(const std::string& filepath) {
     Mesh mesh;
     mesh.textureID = 0;
     mesh.vertexCount = static_cast<int>(vertices.size()) / 8;
+    mesh.halfExtents = (max_p - min_p) * 0.5f;
 
     // Store vertex data in the mesh for client-side rendering
     mesh.vertexData = new float[vertices.size()];
