@@ -339,10 +339,18 @@ void Level::MoveTerrainToGamePath(int level_no) {
 
 	try {
 		if (std::filesystem::exists(srcTerrain)) {
-			std::filesystem::create_directories(dstTerrain);
+			// Remove existing destination terrain folder first to ensure clean copy
+			if (std::filesystem::exists(dstTerrain)) {
+				std::filesystem::remove_all(dstTerrain);
+				Logger::Get().Log(LogLevel::INFO, "[Level] Removed old terrain at: " + std::string(dstTerrain));
+			}
+			std::filesystem::create_directories(std::filesystem::path(dstTerrain).parent_path());
 			std::filesystem::copy(srcTerrain, dstTerrain,
-				std::filesystem::copy_options::overwrite_existing | std::filesystem::copy_options::recursive);
+				std::filesystem::copy_options::recursive);
 			Logger::Get().Log(LogLevel::INFO, "[Level] Moved terrain from " + srcTerrain + " to game path: " + std::string(dstTerrain));
+		}
+		else {
+			Logger::Get().Log(LogLevel::ERR, "[Level] Cannot move terrain, source not found: " + srcTerrain);
 		}
 	}
 	catch (const std::exception& e) {

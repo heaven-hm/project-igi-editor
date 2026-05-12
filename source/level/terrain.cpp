@@ -6,6 +6,7 @@
 #include "pch.h"
 #include "terrain_files.h"
 #include <filesystem>
+#include "logger.h"
 
 static std::string GetExeDirectory() {
 	char exePath[MAX_PATH];
@@ -248,7 +249,10 @@ bool Terrain::Save(int level_no) {
 		"%s\\terrain.hmp",
 		terrainDir.c_str());
 
+	Logger::Get().Log(LogLevel::INFO, "[Terrain::Save] Saving terrain to: " + std::string(filename));
+
 	if (!hmp_) {
+		Logger::Get().Log(LogLevel::ERR, "[Terrain::Save] hmp_ is null, cannot save terrain");
 		return false;
 	}
 
@@ -266,10 +270,11 @@ bool Terrain::Save(int level_no) {
 	int32_t total_file_size = sizeof(hmp_item_s) * MAX_HMP + total_body_size;
 
 	if (File_SaveBinary(filename, hmp_, total_file_size)) {
-		printf("Successfully saved terrain modifications to %s\n", filename);
+		Logger::Get().Log(LogLevel::INFO, "[Terrain::Save] Successfully saved terrain to: " + std::string(filename));
 		return true;
 	}
 
+	Logger::Get().Log(LogLevel::ERR, "[Terrain::Save] Failed to save terrain to: " + std::string(filename));
 	return false;
 }
 
