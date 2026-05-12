@@ -108,6 +108,22 @@ This editor is focused on providing professional-grade tools for Project IGI mod
 
 ---
 
+## 🔄 How It Works
+
+### Editor Flow
+
+* Editor first copies terrain files from QEditor folder to the executable directory
+* Then it finds the latest objects file (QSC or QVM) by checking timestamps across multiple locations (editor, QEditor, IGI game)
+* If QVM is newest, it decompiles it to QSC; if QSC is newest, it copies and compiles to QVM to keep everything in sync
+* Editor loads the QSC file and parses level data including object positions, rotations, and model references
+* Then it loads the terrain heightmap, textures, and lightmaps for rendering and editing
+* Next, it loads all 3D models (buildings and props) with their textures and positions them according to QSC data
+* Objects are automatically snapped to the terrain surface to ensure correct placement
+* Camera is positioned at the level start coordinates and editor is ready for editing
+* When you save changes, the editor writes to objects.qsc, compiles it to objects.qvm, and copies it to the IGI game path
+
+---
+
 ## ⌨️ Controls
 
 ### Navigation
