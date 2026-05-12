@@ -36,6 +36,7 @@ public:
 	bool					GetTerrainZ(const glm::vec3 & pos, float & z);
 	void					EditorRaycastAndModify(const glm::vec3& ray_origin, const glm::vec3& ray_dir, int brush_type);
 	void					TeleportToHMP(glm::vec3& pos) const;
+	void					CompileCurrentQSC(int level_no);
 
 	const LevelObjects&		GetLevelObjects() const { return level_objects_; }
 	LevelObjects&			GetLevelObjects() { return level_objects_; }
@@ -66,7 +67,6 @@ private:
 	void					LoadFlatSkyLayersInfo(const QSC* qsc_objects, IRenderResLoader* render_res_loader);
 	void					DecompileObjects(int levelNo);
 	bool					FilesDiffer(const std::string& file1, const std::string& file2);
-	void					CompileCurrentQSC(int level_no);
 	void					CopyTerrainFromQEditor(int level_no);
 	void					MoveTerrainToGamePath(int level_no);
 

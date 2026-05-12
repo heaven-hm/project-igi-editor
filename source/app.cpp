@@ -622,31 +622,70 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 
 
 void App::ResetLevel() {
+	int levelNo = level_.GetLevelNo();
+
+	printf("Resetting Level %d - copy objects.qsc, compile to QVM, copy to IGIPath\n", levelNo);
+
 	char appData[1024];
 	GetEnvironmentVariableA("APPDATA", appData, 1024);
 
-	int levelNo = level_.GetLevelNo();
-	ConfigData& cfg = Config::Get();
+	// Step 1: Copy objects.qsc from QEditor to exe directory
+	char srcQsc[1024];
+	Str_SPrintf(srcQsc, 1024, "%s\\QEditor\\QFiles\\IGI_QSC\\missions\\location0\\level%d\\objects.qsc", appData, levelNo);
 
-	char srcDir[1024];
-	Str_SPrintf(srcDir, 1024, "%s\\QEditor\\QFiles\\IGI_QVM\\missions\\location0\\level%d", appData, levelNo);
+	char exePath[MAX_PATH];
+	GetModuleFileNameA(NULL, exePath, MAX_PATH);
+	std::string exeDir(exePath);
+	size_t lastSlash = exeDir.find_last_of("\\/");
+	if (lastSlash != std::string::npos) {
+		exeDir = exeDir.substr(0, lastSlash);
+	}
+	char dstQsc[1024];
+	Str_SPrintf(dstQsc, 1024, "%s\\objects.qsc", exeDir.c_str());
 
-	char dstDir[1024];
-	Str_SPrintf(dstDir, 1024, "%s\\missions\\location0\\level%d", cfg.igiPath.c_str(), levelNo);
-
-	printf("Resetting Level %d from %s to %s\n", levelNo, srcDir, dstDir);
+	printf("Step 1: Copying objects.qsc from %s to %s\n", srcQsc, dstQsc);
 
 	try {
-		if (std::filesystem::exists(srcDir)) {
-			std::filesystem::copy(srcDir, dstDir, std::filesystem::copy_options::overwrite_existing | std::filesystem::copy_options::recursive);
-			printf("Level reset successful.\n");
+		if (std::filesystem::exists(srcQsc)) {
+			std::filesystem::copy_file(srcQsc, dstQsc, std::filesystem::copy_options::overwrite_existing);
+			printf("Objects.qsc copied successfully.\n");
 		}
 		else {
-			printf("Error: Source directory %s does not exist.\n", srcDir);
+			printf("Error: Source file %s does not exist.\n", srcQsc);
+			return;
 		}
 	}
 	catch (const std::exception& e) {
-		printf("ResetLevel error: %s\n", e.what());
+		printf("ResetLevel step 1 error: %s\n", e.what());
+		return;
+	}
+
+	// Step 2: Compile to QVM
+	printf("Step 2: Compiling objects.qsc to objects.qvm\n");
+	level_.CompileCurrentQSC(levelNo);
+
+	// Step 3: Copy QVM to IGIPath
+	ConfigData& cfg = Config::Get();
+	char srcQvm[1024];
+	Str_SPrintf(srcQvm, 1024, "%s\\QEditor\\QCompiler\\Compile\\output\\objects.qvm", appData);
+
+	char dstQvm[1024];
+	Str_SPrintf(dstQvm, 1024, "%s\\missions\\location0\\level%d\\objects.qvm", cfg.igiPath.c_str(), levelNo);
+
+	printf("Step 3: Copying QVM from %s to %s\n", srcQvm, dstQvm);
+
+	try {
+		if (std::filesystem::exists(srcQvm)) {
+			std::filesystem::create_directories(std::filesystem::path(dstQvm).parent_path());
+			std::filesystem::copy_file(srcQvm, dstQvm, std::filesystem::copy_options::overwrite_existing);
+			printf("QVM copied successfully to game path.\n");
+		}
+		else {
+			printf("Error: Compiled QVM not found at %s\n", srcQvm);
+		}
+	}
+	catch (const std::exception& e) {
+		printf("ResetLevel step 3 error: %s\n", e.what());
 	}
 
 	// Reload level after reset
@@ -658,28 +697,35 @@ void App::ResetLevel() {
 void App::ResetScript() {
 	int levelNo = level_.GetLevelNo();
 
-	printf("Resetting Script for Level %d - resetting from QEditor/QFiles\n", levelNo);
+	printf("Resetting Script for Level %d - copy objects.qsc from QEditor to exe directory\n", levelNo);
 
 	char appData[1024];
 	GetEnvironmentVariableA("APPDATA", appData, 1024);
 
-	ConfigData& cfg = Config::Get();
+	// Source: QEditor IGI_QSC
+	char srcQsc[1024];
+	Str_SPrintf(srcQsc, 1024, "%s\\QEditor\\QFiles\\IGI_QSC\\missions\\location0\\level%d\\objects.qsc", appData, levelNo);
 
-	char srcDir[1024];
-	Str_SPrintf(srcDir, 1024, "%s\\QEditor\\QFiles\\IGI_QVM\\missions\\location0\\level%d", appData, levelNo);
+	// Destination: exe directory
+	char exePath[MAX_PATH];
+	GetModuleFileNameA(NULL, exePath, MAX_PATH);
+	std::string exeDir(exePath);
+	size_t lastSlash = exeDir.find_last_of("\\/");
+	if (lastSlash != std::string::npos) {
+		exeDir = exeDir.substr(0, lastSlash);
+	}
+	char dstQsc[1024];
+	Str_SPrintf(dstQsc, 1024, "%s\\objects.qsc", exeDir.c_str());
 
-	char dstDir[1024];
-	Str_SPrintf(dstDir, 1024, "%s\\missions\\location0\\level%d", cfg.igiPath.c_str(), levelNo);
-
-	printf("Resetting Level %d from %s to %s\n", levelNo, srcDir, dstDir);
+	printf("Resetting objects.qsc from %s to %s\n", srcQsc, dstQsc);
 
 	try {
-		if (std::filesystem::exists(srcDir)) {
-			std::filesystem::copy(srcDir, dstDir, std::filesystem::copy_options::overwrite_existing | std::filesystem::copy_options::recursive);
+		if (std::filesystem::exists(srcQsc)) {
+			std::filesystem::copy_file(srcQsc, dstQsc, std::filesystem::copy_options::overwrite_existing);
 			printf("Script reset successful.\n");
 		}
 		else {
-			printf("Error: Source directory %s does not exist.\n", srcDir);
+			printf("Error: Source file %s does not exist.\n", srcQsc);
 		}
 	}
 	catch (const std::exception& e) {
@@ -688,8 +734,6 @@ void App::ResetScript() {
 
 	// Reload the level to apply changes
 	LoadLevel(levelNo);
-	// Snap objects to terrain after script reset
-	SnapObjectsToTerrain();
 }
 
 
