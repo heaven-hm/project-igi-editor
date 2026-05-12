@@ -41,9 +41,6 @@ See the [CHANGELOGS.md](CHANGELOGS.md) for version history and detailed change l
  
 ![IGI Editor Screenshot](assets/igi-editor.png)
 *The editor in action showing terrain editing capabilities.*
- 
-![IGI Level 1 Screenshot](assets/igi-level1.png)
-*3D Object Loading and Manipulation in the IGI Editor.*
 
 ![IGI Editor BETA Screenshot](assets/igi-editor-beta.png)
 *Working BETA version - BETA 0.0.1*
