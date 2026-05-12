@@ -45,13 +45,13 @@ static std::string GetExeDirectory() {
 static void CleanDirectory(const std::string& dirPath) {
 	try {
 		if (std::filesystem::exists(dirPath)) {
-			for (const auto& entry : std::filesystem::directory_iterator(dirPath)) {
-				if (entry.is_regular_file()) {
-					std::filesystem::remove(entry.path());
-				}
-			}
-			Logger::Get().Log(LogLevel::INFO, "[Clean] Cleaned directory: " + dirPath);
+			// Completely remove the directory and all its contents
+			std::filesystem::remove_all(dirPath);
+			Logger::Get().Log(LogLevel::INFO, "[Clean] Removed directory: " + dirPath);
 		}
+		// Recreate it fresh
+		std::filesystem::create_directories(dirPath);
+		Logger::Get().Log(LogLevel::INFO, "[Clean] Created fresh directory: " + dirPath);
 	}
 	catch (const std::exception& e) {
 		Logger::Get().Log(LogLevel::WARNING, "[Clean] Could not clean directory " + dirPath + ": " + e.what());
@@ -206,7 +206,6 @@ void Level::DecompileObjects(int levelNo) {
 	CleanDirectory(decompileOutputDir);
 
 	try {
-		std::filesystem::create_directories(std::filesystem::path(inputPath).parent_path());
 		std::filesystem::copy_file(qvmPath, inputPath, std::filesystem::copy_options::overwrite_existing);
 
 		char cmd[2048];
@@ -268,8 +267,6 @@ void Level::CompileCurrentQSC(int level_no) {
 	CleanDirectory(outputPath);
 
 	try {
-		std::filesystem::create_directories(std::filesystem::path(inputPath).parent_path());
-
 		// Copy editor's objects.qsc to compiler input
 		std::string exeDir = GetExeDirectory();
 		std::string editorQSC = exeDir + "\\objects.qsc";
