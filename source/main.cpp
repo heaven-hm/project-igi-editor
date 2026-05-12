@@ -6,6 +6,9 @@
 #include "pch.h"
 #include <freeglut.h>
 
+// Icon resource ID from .rc file
+#define IDI_ICON1 101
+
 /*
 ================================================================================
  global variables & constants
@@ -538,6 +541,24 @@ int main(int argc, char **argv) {
 	glutInitWindowPosition(pos_x, pos_y);
 	glutInitWindowSize(wnd_w, wnd_h);
 	glutCreateWindow("IGI Editor");
+
+#if defined(_WIN32)
+	// Set window icon from resource
+	HWND hwnd = GetActiveWindow();
+	if (hwnd) {
+		HICON hIcon = (HICON)LoadImageA(
+			GetModuleHandleA(NULL),
+			MAKEINTRESOURCEA(IDI_ICON1),
+			IMAGE_ICON,
+			0, 0,
+			LR_DEFAULTSIZE | LR_SHARED
+		);
+		if (hIcon) {
+			SendMessageA(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIcon);
+			SendMessageA(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
+		}
+	}
+#endif
 
 	if (!GL_Init()) {
 		return 1;

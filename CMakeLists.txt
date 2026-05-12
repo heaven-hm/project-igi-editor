@@ -43,6 +43,11 @@ file(GLOB SHADERS_45 "shaders/45/*.*")
 # Explicitly add new source files (GLOB might not pick them up immediately)
 list(APPEND SOURCES "source/compiler.cpp" "source/decompiler.cpp")
 
+# Add Windows icon resource file
+if (WIN32)
+  list(APPEND SOURCES "assets/igi-editor-icon.rc")
+endif()
+
 source_group("level" FILES ${SOURCES_LEVEL})
 source_group("renderer" FILES ${SOURCES_RENDERER})
 source_group("shaders/41" FILES ${SHADERS_41})

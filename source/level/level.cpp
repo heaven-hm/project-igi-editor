@@ -233,13 +233,12 @@ void Level::DecompileObjects(int levelNo) {
 	char inputPath[1024];
 	Str_SPrintf(inputPath, 1024, "%s\\input\\objects.qvm", decompileDir);
 
-	// Clean input and output directories before decompiling
+	// Clean input directory before decompiling (remove old QVM)
 	char decompileInputDir[1024];
 	Str_SPrintf(decompileInputDir, 1024, "%s\\input", decompileDir);
-	char decompileOutputDir[1024];
-	Str_SPrintf(decompileOutputDir, 1024, "%s\\output", decompileDir);
 	CleanDirectory(decompileInputDir);
-	CleanDirectory(decompileOutputDir);
+	// Ensure input directory exists for fresh QVM copy
+	std::filesystem::create_directories(decompileInputDir);
 
 	try {
 		std::filesystem::copy_file(qvmPath, inputPath, std::filesystem::copy_options::overwrite_existing);
@@ -296,11 +295,12 @@ void Level::CompileCurrentQSC(int level_no) {
 	char outputPath[1024];
 	Str_SPrintf(outputPath, 1024, "%s\\output", compileDir);
 
-	// Clean input and output directories before compiling
+	// Clean output directory before compiling (remove old compiled QVM)
+	CleanDirectory(outputPath);
+	// Ensure input directory exists for fresh QSC copy
 	char compileInputDir[1024];
 	Str_SPrintf(compileInputDir, 1024, "%s\\input", compileDir);
-	CleanDirectory(compileInputDir);
-	CleanDirectory(outputPath);
+	std::filesystem::create_directories(compileInputDir);
 
 	try {
 		// Copy editor's objects.qsc to compiler input
