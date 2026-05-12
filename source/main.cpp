@@ -6,9 +6,6 @@
 #include "pch.h"
 #include <freeglut.h>
 
-// Icon resource ID from .rc file
-#define IDI_ICON1 101
-
 /*
 ================================================================================
  global variables & constants
@@ -543,19 +540,54 @@ int main(int argc, char **argv) {
 	glutCreateWindow("IGI Editor");
 
 #if defined(_WIN32)
-	// Set window icon from resource
-	HWND hwnd = GetActiveWindow();
-	if (hwnd) {
-		HICON hIcon = (HICON)LoadImageA(
+	// Load icon from file and set it
+	char iconPath[MAX_PATH];
+	GetModuleFileNameA(NULL, iconPath, MAX_PATH);
+	std::string exeDir(iconPath);
+	size_t lastSlash = exeDir.find_last_of("\\/");
+	if (lastSlash != std::string::npos) {
+		exeDir = exeDir.substr(0, lastSlash);
+	}
+	std::string iconFilePath = exeDir + "\\..\\..\\assets\\igi-editor-icon.ico";
+
+	HICON hIcon = (HICON)LoadImageA(
+		NULL,
+		iconFilePath.c_str(),
+		IMAGE_ICON,
+		GetSystemMetrics(SM_CXICON),
+		GetSystemMetrics(SM_CYICON),
+		LR_LOADFROMFILE | LR_DEFAULTSIZE
+	);
+
+	if (!hIcon) {
+		// Fallback to resource
+		hIcon = (HICON)LoadImageA(
 			GetModuleHandleA(NULL),
-			MAKEINTRESOURCEA(IDI_ICON1),
+			MAKEINTRESOURCEA(101),
 			IMAGE_ICON,
-			0, 0,
+			GetSystemMetrics(SM_CXICON),
+			GetSystemMetrics(SM_CYICON),
 			LR_DEFAULTSIZE | LR_SHARED
 		);
-		if (hIcon) {
+	}
+
+	if (hIcon) {
+		HWND hwnd = GetActiveWindow();
+		if (!hwnd) {
+			hwnd = FindWindowA(NULL, "IGI Editor");
+		}
+		if (!hwnd) {
+			int glutWindow = glutGetWindow();
+			if (glutWindow) {
+				hwnd = GetForegroundWindow();
+			}
+		}
+
+		if (hwnd) {
 			SendMessageA(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIcon);
 			SendMessageA(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
+			SetClassLongPtrA(hwnd, GCLP_HICON, (LONG_PTR)hIcon);
+			SetClassLongPtrA(hwnd, GCLP_HICONSM, (LONG_PTR)hIcon);
 		}
 	}
 #endif

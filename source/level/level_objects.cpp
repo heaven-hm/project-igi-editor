@@ -180,25 +180,46 @@ void LevelObjects::LoadModelNames() {
         File_FreeBuf(buf);
 
         size_t pos = 0;
-        while ((pos = content.find("\"ModelName\":", pos)) != std::string::npos) {
-            size_t nameStart = content.find("\"", pos + 12);
-            if (nameStart == std::string::npos) break;
-            nameStart++;
-            size_t nameEnd = content.find("\"", nameStart);
-            if (nameEnd == std::string::npos) break;
-            std::string name = content.substr(nameStart, nameEnd - nameStart);
+        while ((pos = content.find("{", pos)) != std::string::npos) {
+            size_t objStart = pos;
+            size_t objEnd = content.find("}", pos);
+            if (objEnd == std::string::npos) break;
 
-            size_t idPos = content.find("\"ModelId\":", nameEnd);
-            if (idPos == std::string::npos) break;
-            size_t idStart = content.find("\"", idPos + 10);
-            if (idStart == std::string::npos) break;
-            idStart++;
-            size_t idEnd = content.find("\"", idStart);
-            if (idEnd == std::string::npos) break;
-            std::string id = content.substr(idStart, idEnd - idStart);
+            std::string objContent = content.substr(objStart, objEnd - objStart + 1);
 
-            modelNames_[id] = name;
-            pos = idEnd;
+            // Extract ModelName
+            size_t namePos = objContent.find("\"ModelName\":");
+            std::string name;
+            if (namePos != std::string::npos) {
+                size_t nameStart = objContent.find("\"", namePos + 12);
+                if (nameStart != std::string::npos) {
+                    nameStart++;
+                    size_t nameEnd = objContent.find("\"", nameStart);
+                    if (nameEnd != std::string::npos) {
+                        name = objContent.substr(nameStart, nameEnd - nameStart);
+                    }
+                }
+            }
+
+            // Extract ModelId
+            size_t idPos = objContent.find("\"ModelId\":");
+            std::string id;
+            if (idPos != std::string::npos) {
+                size_t idStart = objContent.find("\"", idPos + 10);
+                if (idStart != std::string::npos) {
+                    idStart++;
+                    size_t idEnd = objContent.find("\"", idStart);
+                    if (idEnd != std::string::npos) {
+                        id = objContent.substr(idStart, idEnd - idStart);
+                    }
+                }
+            }
+
+            if (!name.empty() && !id.empty()) {
+                modelNames_[id] = name;
+            }
+
+            pos = objEnd + 1;
         }
         printf("Loaded %zu friendly model names from IGIModels.json\n", modelNames_.size());
     }
