@@ -225,7 +225,7 @@ bool Terrain::Load(load_params_s & params) {
 bool Terrain::Save(int level_no) {
 	char filename[1024];
 	Str_SPrintf(filename, 1024,
-		"%s/missions/location0/level%d/terrain/terrain.hmp",
+		"%s\\missions\\location0\\level%d\\terrain\\terrain.hmp",
 		g_folders.res_folder_, level_no);
 
 	if (!hmp_) {

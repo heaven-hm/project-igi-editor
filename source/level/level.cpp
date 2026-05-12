@@ -53,6 +53,9 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 	ConfigData& cfg = Config::Get();
 	char filename[1024];
 
+	// Copy terrain from QEditor to editor path on load
+	CopyTerrainFromQEditor(params.level_no_);
+
 	// Priority 1: Mission-specific folder in AppData/QFiles/IGI_QSC
 	Str_SPrintf(filename, 1024, "%s/missions/location0/level%d/objects.qsc", g_folders.res_folder_, params.level_no_);
 
@@ -72,6 +75,17 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 	if (!File_Exists(filename)) {
 		Logger::Get().Log(LogLevel::ERR, "[Level] FATAL: Could not find or decompile objects.qsc at: " + qsc_path_);
 		return false;
+	}
+
+	// Check if current objects.qsc differs from QEditor IGI_QSC version
+	char appData[1024];
+	GetEnvironmentVariableA("APPDATA", appData, 1024);
+	char qeditorQsc[1024];
+	Str_SPrintf(qeditorQsc, 1024, "%s\\QEditor\\QFiles\\IGI_QSC\\missions\\location0\\level%d\\objects.qsc", appData, params.level_no_);
+
+	if (File_Exists(qeditorQsc) && FilesDiffer(filename, qeditorQsc)) {
+		Logger::Get().Log(LogLevel::INFO, "[Level] objects.qsc has changes, compiling before loading...");
+		CompileCurrentQSC(params.level_no_);
 	}
 
 	QSC* qsc_objects = new QSC();
@@ -168,6 +182,105 @@ void Level::DecompileObjects(int levelNo) {
 
 }
 
+bool Level::FilesDiffer(const std::string& file1, const std::string& file2) {
+	if (!std::filesystem::exists(file1) || !std::filesystem::exists(file2)) {
+		return true; // If one doesn't exist, they differ
+	}
+
+	auto f1_time = std::filesystem::last_write_time(file1);
+	auto f2_time = std::filesystem::last_write_time(file2);
+	return f1_time != f2_time;
+}
+
+void Level::CompileCurrentQSC(int level_no) {
+	char appData[1024];
+	GetEnvironmentVariableA("APPDATA", appData, 1024);
+
+	char compileDir[1024];
+	Str_SPrintf(compileDir, 1024, "%s\\QEditor\\QCompiler\\Compile", appData);
+
+	char inputPath[1024];
+	Str_SPrintf(inputPath, 1024, "%s\\input\\objects.qsc", compileDir);
+
+	char outputPath[1024];
+	Str_SPrintf(outputPath, 1024, "%s\\output", compileDir);
+
+	try {
+		std::filesystem::create_directories(std::filesystem::path(inputPath).parent_path());
+
+		// Copy editor's objects.qsc to compiler input
+		std::string editorQSC = std::filesystem::current_path().string() + "\\objects.qsc";
+		if (std::filesystem::exists(editorQSC)) {
+			std::filesystem::copy_file(editorQSC, inputPath, std::filesystem::copy_options::overwrite_existing);
+			Logger::Get().Log(LogLevel::INFO, "[Level] Copied objects.qsc to compiler input: " + std::string(inputPath));
+		}
+
+		char cmd[2048];
+		Str_SPrintf(cmd, 2048, "cd /d \"%s\" && compile_v5.bat", compileDir);
+
+		Logger::Get().Log(LogLevel::INFO, "[Level] Running compiler: " + std::string(cmd));
+		system(cmd);
+
+		// Deploy compiled QVM to IGI game path
+		ConfigData& cfg = Config::Get();
+		char qvmDest[1024];
+		Str_SPrintf(qvmDest, 1024, "%s\\missions\\location0\\level%d", cfg.igiPath.c_str(), level_no);
+
+		if (std::filesystem::exists(outputPath)) {
+			std::filesystem::copy(outputPath, qvmDest,
+				std::filesystem::copy_options::overwrite_existing | std::filesystem::copy_options::recursive);
+			Logger::Get().Log(LogLevel::INFO, "[Level] Compiled QVM deployed to: " + std::string(qvmDest));
+		}
+	}
+	catch (const std::exception& e) {
+		Logger::Get().Log(LogLevel::ERR, "[Level] Compile exception: " + std::string(e.what()));
+	}
+}
+
+void Level::CopyTerrainFromQEditor(int level_no) {
+	char appData[1024];
+	GetEnvironmentVariableA("APPDATA", appData, 1024);
+
+	char srcTerrain[1024];
+	Str_SPrintf(srcTerrain, 1024, "%s\\QEditor\\QFiles\\IGI_QSC\\missions\\location0\\level%d\\terrain", appData, level_no);
+
+	char dstTerrain[1024];
+	Str_SPrintf(dstTerrain, 1024, "%s\\missions\\location0\\level%d\\terrain", g_folders.res_folder_, level_no);
+
+	try {
+		if (std::filesystem::exists(srcTerrain)) {
+			std::filesystem::create_directories(dstTerrain);
+			std::filesystem::copy(srcTerrain, dstTerrain,
+				std::filesystem::copy_options::overwrite_existing | std::filesystem::copy_options::recursive);
+			Logger::Get().Log(LogLevel::INFO, "[Level] Copied terrain from QEditor to editor path: " + std::string(dstTerrain));
+		}
+	}
+	catch (const std::exception& e) {
+		Logger::Get().Log(LogLevel::ERR, "[Level] Terrain copy exception: " + std::string(e.what()));
+	}
+}
+
+void Level::MoveTerrainToGamePath(int level_no) {
+	char srcTerrain[1024];
+	Str_SPrintf(srcTerrain, 1024, "%s\\missions\\location0\\level%d\\terrain", g_folders.res_folder_, level_no);
+
+	ConfigData& cfg = Config::Get();
+	char dstTerrain[1024];
+	Str_SPrintf(dstTerrain, 1024, "%s\\missions\\location0\\level%d\\terrain", cfg.igiPath.c_str(), level_no);
+
+	try {
+		if (std::filesystem::exists(srcTerrain)) {
+			std::filesystem::create_directories(dstTerrain);
+			std::filesystem::copy(srcTerrain, dstTerrain,
+				std::filesystem::copy_options::overwrite_existing | std::filesystem::copy_options::recursive);
+			Logger::Get().Log(LogLevel::INFO, "[Level] Moved terrain from editor path to game path: " + std::string(dstTerrain));
+		}
+	}
+	catch (const std::exception& e) {
+		Logger::Get().Log(LogLevel::ERR, "[Level] Terrain move exception: " + std::string(e.what()));
+	}
+}
+
 
 void Level::Unload() {
 	terrain_.Unload();
@@ -215,7 +328,7 @@ void Level::Update(update_params_s& params) {
 
 void Level::SaveChanges() {
 	terrain_.Save(cur_level_no_);
-	
+
 	// Get the .exe directory (same as App uses)
 	char exePath[MAX_PATH];
 	GetModuleFileNameA(NULL, exePath, MAX_PATH);
@@ -224,11 +337,14 @@ void Level::SaveChanges() {
 	if (lastSlash != std::string::npos) {
 		exeDir = exeDir.substr(0, lastSlash);
 	}
-	
+
 	std::string localQsc = exeDir + "\\objects.qsc";
 	Logger::Get().Log(LogLevel::INFO, "[Level] Saving QSC to .exe path: " + localQsc);
 	level_objects_.SaveToQSC(localQsc);
 	Logger::Get().Log(LogLevel::INFO, "[Level] Saved QSC to: " + localQsc);
+
+	// Move terrain from editor path to IGI game path
+	MoveTerrainToGamePath(cur_level_no_);
 }
 
 bool Level::GetTerrainZ(const glm::vec3& pos, float& z) {

@@ -65,6 +65,10 @@ private:
 	void					LoadSkydomeInfo(const QSC* qsc_objects, IRenderResLoader* render_res_loader);
 	void					LoadFlatSkyLayersInfo(const QSC* qsc_objects, IRenderResLoader* render_res_loader);
 	void					DecompileObjects(int levelNo);
+	bool					FilesDiffer(const std::string& file1, const std::string& file2);
+	void					CompileCurrentQSC(int level_no);
+	void					CopyTerrainFromQEditor(int level_no);
+	void					MoveTerrainToGamePath(int level_no);
 
 	// pos range: [-2^30, 2^30]
 	dyn_cube_s *			GetDynCube(const double pos[3], int cube_lod_level, glm::ivec3& cube_ctr) override;

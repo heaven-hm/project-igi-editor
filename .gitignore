@@ -107,3 +107,9 @@ Release/
 *.webp
 *.py
 *.qsc
+docs/
+
+# Dont Ignore
+!assets
+!bin/
+!build/
