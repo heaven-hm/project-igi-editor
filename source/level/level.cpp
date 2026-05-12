@@ -86,8 +86,7 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 		CopyTerrainFromQEditor(params.level_no_);
 
 		// Check if terrain folder exists in executable directory
-		char terrainPath[1024];
-		Str_SPrintf(terrainPath, 1024, "%s\\missions\\location0\\level%d\\terrain", exeDir.c_str(), params.level_no_);
+		std::string terrainPath = exeDir + "\\terrains\\level" + std::to_string(params.level_no_) + "\\terrain";
 		if (!std::filesystem::exists(terrainPath)) {
 			Logger::Get().Log(LogLevel::ERR, "[Level] FATAL: ERROR Missing terrain folder at: " + std::string(terrainPath));
 			return false;
@@ -308,10 +307,9 @@ void Level::CopyTerrainFromQEditor(int level_no) {
 	char srcTerrain[1024];
 	Str_SPrintf(srcTerrain, 1024, "%s\\QEditor\\QFiles\\IGI_QSC\\missions\\location0\\level%d\\terrain", appData, level_no);
 
-	// Copy to executable directory where igi-editor.exe is
+	// Copy to executable directory terrains\levelX\terrain
 	std::string exeDir = GetExeDirectory();
-	char dstTerrain[1024];
-	Str_SPrintf(dstTerrain, 1024, "%s\\missions\\location0\\level%d\\terrain", exeDir.c_str(), level_no);
+	std::string dstTerrain = exeDir + "\\terrains\\level" + std::to_string(level_no) + "\\terrain";
 
 	try {
 		if (!std::filesystem::exists(srcTerrain)) {
@@ -322,7 +320,7 @@ void Level::CopyTerrainFromQEditor(int level_no) {
 		std::filesystem::create_directories(dstTerrain);
 		std::filesystem::copy(srcTerrain, dstTerrain,
 			std::filesystem::copy_options::overwrite_existing | std::filesystem::copy_options::recursive);
-		Logger::Get().Log(LogLevel::INFO, "[Level] Copied terrain from QEditor to executable directory: " + std::string(dstTerrain));
+		Logger::Get().Log(LogLevel::INFO, "[Level] Copied terrain from QEditor to: " + dstTerrain);
 	}
 	catch (const std::exception& e) {
 		Logger::Get().Log(LogLevel::ERR, "[Level] Terrain copy exception: " + std::string(e.what()));
@@ -331,10 +329,9 @@ void Level::CopyTerrainFromQEditor(int level_no) {
 }
 
 void Level::MoveTerrainToGamePath(int level_no) {
-	// Source is executable directory
+	// Source is executable directory terrains\levelX\terrain
 	std::string exeDir = GetExeDirectory();
-	char srcTerrain[1024];
-	Str_SPrintf(srcTerrain, 1024, "%s\\missions\\location0\\level%d\\terrain", exeDir.c_str(), level_no);
+	std::string srcTerrain = exeDir + "\\terrains\\level" + std::to_string(level_no) + "\\terrain";
 
 	ConfigData& cfg = Config::Get();
 	char dstTerrain[1024];
@@ -345,7 +342,7 @@ void Level::MoveTerrainToGamePath(int level_no) {
 			std::filesystem::create_directories(dstTerrain);
 			std::filesystem::copy(srcTerrain, dstTerrain,
 				std::filesystem::copy_options::overwrite_existing | std::filesystem::copy_options::recursive);
-			Logger::Get().Log(LogLevel::INFO, "[Level] Moved terrain from executable directory to game path: " + std::string(dstTerrain));
+			Logger::Get().Log(LogLevel::INFO, "[Level] Moved terrain from " + srcTerrain + " to game path: " + std::string(dstTerrain));
 		}
 	}
 	catch (const std::exception& e) {

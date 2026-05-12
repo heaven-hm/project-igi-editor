@@ -5,6 +5,22 @@
 
 #include "pch.h"
 #include "terrain_files.h"
+#include <filesystem>
+
+static std::string GetExeDirectory() {
+	char exePath[MAX_PATH];
+	GetModuleFileNameA(NULL, exePath, MAX_PATH);
+	std::string exeDir(exePath);
+	size_t lastSlash = exeDir.find_last_of("\\/");
+	if (lastSlash != std::string::npos) {
+		exeDir = exeDir.substr(0, lastSlash);
+	}
+	return exeDir;
+}
+
+static std::string GetTerrainDir(int level_no) {
+	return GetExeDirectory() + "\\terrains\\level" + std::to_string(level_no) + "\\terrain";
+}
 
 /*
 ================================================================================
@@ -174,9 +190,10 @@ bool Terrain::Load(load_params_s & params) {
 #endif
 
 	char filename[1024];
+	std::string terrainDir = GetTerrainDir(params.level_no_);
 	Str_SPrintf(filename, 1024,
-		"%s/missions/location0/level%d/terrain/terrain.qsc",
-		g_folders.res_folder_, params.level_no_);
+		"%s/terrain.qsc",
+		terrainDir.c_str());
 
 	QSC* qsc_terrain = new QSC();
 	if (!qsc_terrain) {
@@ -224,9 +241,12 @@ bool Terrain::Load(load_params_s & params) {
 
 bool Terrain::Save(int level_no) {
 	char filename[1024];
+	// Save to executable directory terrains\levelX\terrain
+	std::string terrainDir = GetTerrainDir(level_no);
+	std::filesystem::create_directories(terrainDir);
 	Str_SPrintf(filename, 1024,
-		"%s\\missions\\location0\\level%d\\terrain\\terrain.hmp",
-		g_folders.res_folder_, level_no);
+		"%s\\terrain.hmp",
+		terrainDir.c_str());
 
 	if (!hmp_) {
 		return false;
@@ -375,18 +395,20 @@ void Terrain::LoadTileMapInfo(const QSC* qsc_terrain) {
 
 bool Terrain::LoadCMDFile(load_params_s & params) {
 	char filename[1024];
-	Str_SPrintf(filename, 1024, 
-		"%s/missions/location0/level%d/terrain/terrain.cmd", 
-		g_folders.res_folder_, params.level_no_);
+	std::string terrainDir = GetTerrainDir(params.level_no_);
+	Str_SPrintf(filename, 1024,
+		"%s/terrain.cmd",
+		terrainDir.c_str());
 
 	return File_LoadBinary(filename, cmd_, cmd_sz_);
 }
 
 bool Terrain::LoadCTRFile(load_params_s & params) {
 	char filename[1024];
+	std::string terrainDir = GetTerrainDir(params.level_no_);
 	Str_SPrintf(filename, 1024,
-		"%s/missions/location0/level%d/terrain/terrain.ctr",
-		g_folders.res_folder_, params.level_no_);
+		"%s/terrain.ctr",
+		terrainDir.c_str());
 
 	ctr_s ctr_file_contents = {};
 	if (!CTR_Load(filename, ctr_file_contents)) {
@@ -418,9 +440,10 @@ bool Terrain::LoadCTRFile(load_params_s & params) {
 
 bool Terrain::LoadTEXFile(load_params_s & params) {
 	char filename[1024];
+	std::string terrainDir = GetTerrainDir(params.level_no_);
 	Str_SPrintf(filename, 1024,
-		"%s/missions/location0/level%d/terrain/terrain.tex",
-		g_folders.res_folder_, params.level_no_);
+		"%s/terrain.tex",
+		terrainDir.c_str());
 
 	pics_s pics = {};
 	if (!Tex_Load(filename, pics)) {
@@ -444,9 +467,10 @@ bool Terrain::LoadTEXFile(load_params_s & params) {
 
 bool Terrain::LoadLMPFile(load_params_s & params) {
 	char filename[1024];
+	std::string terrainDir = GetTerrainDir(params.level_no_);
 	Str_SPrintf(filename, 1024,
-		"%s/missions/location0/level%d/terrain/terrain.lmp",
-		g_folders.res_folder_, params.level_no_);
+		"%s/terrain.lmp",
+		terrainDir.c_str());
 
 	pics_s pics = {};
 	if (!LMP_Load(filename, pics)) {
@@ -475,9 +499,10 @@ bool Terrain::LoadLMPFile(load_params_s & params) {
 
 bool Terrain::LoadBITFile(load_params_s & params) {
 	char filename[1024];
+	std::string terrainDir = GetTerrainDir(params.level_no_);
 	Str_SPrintf(filename, 1024,
-		"%s/missions/location0/level%d/terrain/terrain.bit",
-		g_folders.res_folder_, params.level_no_);
+		"%s/terrain.bit",
+		terrainDir.c_str());
 
 	int32_t bit_sz = 0;
 	if (!File_LoadBinary(filename, bit_, bit_sz)) {
@@ -510,9 +535,10 @@ bool Terrain::LoadBITFile(load_params_s & params) {
 
 bool Terrain::LoadHMPFile(load_params_s & params) {
 	char filename[1024];
+	std::string terrainDir = GetTerrainDir(params.level_no_);
 	Str_SPrintf(filename, 1024,
-		"%s/missions/location0/level%d/terrain/terrain.hmp",
-		g_folders.res_folder_, params.level_no_);
+		"%s/terrain.hmp",
+		terrainDir.c_str());
 
 	if (!File_Exists(filename)) {
 		return true;	// not an error, hmp file can be omitted
