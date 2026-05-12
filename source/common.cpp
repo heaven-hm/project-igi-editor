@@ -861,15 +861,17 @@ void Folders_Init() {
 
 	Str_ExtractFileDirSelf(buf);
 
-#if defined(_WIN32)
-	Str_Cat(buf, 1024, "/../..");
-#endif
+	// For portable mode, use exe directory for shaders
+	// Don't go up directories - keep shaders in exe directory
+	// #if defined(_WIN32)
+	// 	Str_Cat(buf, 1024, "/../..");
+	// #endif
 
-#if defined(__linux__)
-	Str_Cat(buf, 1024, "/..");
-#endif
+	// #if defined(__linux__)
+	// 	Str_Cat(buf, 1024, "/..");
+	// #endif
 
-	Str_EraseDoubleDotsInPath(buf);
+	// Str_EraseDoubleDotsInPath(buf);
 
 	// Always use AppData path for QFiles
 	if (appdata_buf[0] != 0) {

@@ -36,6 +36,7 @@
 *.ps1
 *.zip
 *.rc
+bin/*/shaders
 
 # CMake
 CMakeCache.txt
