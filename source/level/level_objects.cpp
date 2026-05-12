@@ -248,6 +248,9 @@ void LevelObjects::SaveToQSC(const std::string& qscPath) {
 
     Logger::Get().Log(LogLevel::INFO, "[LevelObjects::SaveToQSC] Processing " + std::to_string(objects_.size()) + " objects for save");
 
+    // Track if any changes were made
+    bool anyChanges = false;
+
     // Format double: enough precision for both large coords and small rotations.
     // Use %.10g to avoid scientific notation truncation and preserve rotation accuracy.
     auto fmt = [](double v) -> std::string {
@@ -274,6 +277,9 @@ void LevelObjects::SaveToQSC(const std::string& qscPath) {
             Logger::Get().Log(LogLevel::INFO, "[LevelObjects::SaveToQSC] SKIP (unchanged): " + obj.name + " / " + obj.modelId);
             continue;
         }
+
+        anyChanges = true;
+        Logger::Get().Log(LogLevel::INFO, "[LevelObjects::SaveToQSC] CHANGE DETECTED: " + obj.name + " / " + obj.modelId);
 
         std::string modelIdToken = "\"" + obj.modelId + "\"";
         std::string typeBuilding = "\"Building\"";
@@ -401,6 +407,12 @@ void LevelObjects::SaveToQSC(const std::string& qscPath) {
         Logger::Get().Log(LogLevel::INFO, "[LevelObjects::SaveToQSC]   NEW: " + newLine);
 
         content.replace(lineStart, lineEnd - lineStart, newLine);
+    }
+
+    // Only write the file if there were any changes
+    if (!anyChanges) {
+        Logger::Get().Log(LogLevel::INFO, "[LevelObjects::SaveToQSC] No changes detected, skipping save to: " + qscPath);
+        return;
     }
 
     // Write the modified content back to the file

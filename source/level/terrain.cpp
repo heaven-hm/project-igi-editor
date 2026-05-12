@@ -269,6 +269,20 @@ bool Terrain::Save(int level_no) {
 
 	int32_t total_file_size = sizeof(hmp_item_s) * MAX_HMP + total_body_size;
 
+	// Check if file already exists and compare content
+	if (File_Exists(filename)) {
+		void* existingBuf = nullptr;
+		int32_t existingSize = 0;
+		if (File_LoadBinary(filename, existingBuf, existingSize)) {
+			if (existingSize == total_file_size && memcmp(existingBuf, hmp_, total_file_size) == 0) {
+				Logger::Get().Log(LogLevel::INFO, "[Terrain::Save] No changes detected in terrain, skipping save to: " + std::string(filename));
+				File_FreeBuf(existingBuf);
+				return true;
+			}
+			File_FreeBuf(existingBuf);
+		}
+	}
+
 	if (File_SaveBinary(filename, hmp_, total_file_size)) {
 		Logger::Get().Log(LogLevel::INFO, "[Terrain::Save] Successfully saved terrain to: " + std::string(filename));
 		return true;

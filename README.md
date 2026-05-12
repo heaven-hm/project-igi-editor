@@ -2,7 +2,7 @@
 
 **IGI Editor** is a professional 3D world and object manipulation toolkit for Project IGI. Inspired by the original IGI and IGI 2 editors, it provides a modern interface for level research, object placement, and terrain modification.
 
-**Current Status: ALPHA 0.0.1** - Early development stage with core object manipulation and QSC save functionality.
+**Current Status: BETA 0.0.2** - MVP Demo completed in just 3 days! Features full QSC/QVM compilation pipeline with proper IGIPath resolution and automated compiler folder cleaning.
 
 This project is built upon the foundational work of the [Project-IGI-Terrain](https://github.com/hjcminus/Project-IGI-Terrain) repository. Special thanks to [hjcminus](https://github.com/hjcminus) for their research and for bringing this codebase to light. It is built using C++17 and OpenGL, and it is cross-platform, but it is mainly tested on Windows.
 
@@ -10,7 +10,7 @@ Written and maintained by **Jones-HM (Heaven)**.
 
 ---
 
-## � [Changelogs](CHANGELOGS.md)
+## 📋 [Changelogs](CHANGELOGS.md)
 
 See the [CHANGELOGS.md](CHANGELOGS.md) for version history and detailed change logs.
 
@@ -45,12 +45,15 @@ See the [CHANGELOGS.md](CHANGELOGS.md) for version history and detailed change l
 ![IGI Level 1 Screenshot](assets/igi-level1.png)
 *3D Object Loading and Manipulation in the IGI Editor.*
 
-![IGI Editor Beta Screenshot](assets/igi-editor-beta.png)
-*Working BETA version - ALPHA 0.0.1*
+![IGI Editor BETA Screenshot](assets/igi-editor-beta.png)
+*Working BETA version - BETA 0.0.1*
+
+![IGI Editor Debug Screenshot](assets/igi-editor-debug.png)
+*Debug Console showing IGIPath resolution and QVM compilation pipeline - BETA 0.0.2*
  
 ---
  
-## 📂 Folder Structure
+## Folder Structure
 
 ### QEditor AppData Structure (`%APPDATA%/QEditor/`)
 
