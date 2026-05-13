@@ -51,19 +51,24 @@ uniform int u_useTexture;
 out vec4 fragColor;
 
 void main() {
-    vec3 lightDir  = normalize(vec3(0.5, 1.0, 0.5));
-    float diff     = max(dot(normalize(v_normal), lightDir), 0.0);
-    vec3 light     = u_ambient + u_dirlight * diff;
-    
+    vec3 N = normalize(v_normal);
+    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5));
+    float diff = max(dot(N, lightDir), 0.0);
+
+    vec3 viewDir = normalize(vec3(0.0, 1.0, 1.0));
+    vec3 halfVec = normalize(lightDir + viewDir);
+    float spec = pow(max(dot(N, halfVec), 0.0), 32.0) * 0.25;
+
+    vec3 light = u_ambient + u_dirlight * (diff + spec);
+
     vec4 texColor = (u_useTexture != 0) ? texture(u_texture, v_uv) : vec4(1.0, 1.0, 1.0, 1.0);
-    
-    // Mix building hash color with texture if no texture
+
     if (u_useTexture == 0) {
         fragColor = vec4(light * texColor.rgb, 1.0);
     } else {
         fragColor = vec4(light * texColor.rgb, texColor.a);
     }
-    
+
     if (fragColor.a < 0.1) discard;
 }
 )";
@@ -261,7 +266,9 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             b = 0.4f + (float)((hash >> 16) & 0xFF) / 255.0f * 0.4f;
         }
 
-        if (mesh.textureID > 0) {
+        bool hasTexture = (mesh.textureID > 0) ||
+                          (!mesh.subMeshes.empty() && mesh.subMeshes[0].textureID > 0);
+        if (hasTexture) {
             glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
             glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
         } else {
@@ -269,18 +276,33 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             glUniform3f(loc_ambient,  r * 0.4f, g * 0.4f, b * 0.4f);
         }
 
-        // Texture binding
-        if (mesh.textureID > 0) {
-            glUniform1i(loc_useTex, 1);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, mesh.textureID);
-            glUniform1i(loc_tex, 0);
+        // Draw each submesh with its own texture
+        if (!mesh.subMeshes.empty()) {
+            for (const auto& sub : mesh.subMeshes) {
+                if (sub.VAO == 0 || sub.vertexCount == 0) continue;
+                if (sub.textureID > 0) {
+                    glUniform1i(loc_useTex, 1);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, sub.textureID);
+                    glUniform1i(loc_tex, 0);
+                } else {
+                    glUniform1i(loc_useTex, 0);
+                }
+                glBindVertexArray(sub.VAO);
+                glDrawArrays(GL_TRIANGLES, 0, sub.vertexCount);
+            }
+            glBindVertexArray(0);
         } else {
-            glUniform1i(loc_useTex, 0);
+            if (mesh.textureID > 0) {
+                glUniform1i(loc_useTex, 1);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, mesh.textureID);
+                glUniform1i(loc_tex, 0);
+            } else {
+                glUniform1i(loc_useTex, 0);
+            }
+            renderModel(mesh);
         }
-
-        // Draw
-        renderModel(mesh);
     }
 
     // Always reset polygon mode after draw
@@ -326,22 +348,20 @@ Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding
 
     // Load and cache
     try {
-        std::string levelDir = "level" + std::to_string(current_level_);
-        std::string texturesBase = g_folders.textures_folder_;
-        
-        // Try to find matching texture in textures/levelX
-        std::string texPath = texturesBase + "/" + levelDir + "/" + modelId + ".png";
-        if (!std::filesystem::exists(texPath)) {
-            texPath = texturesBase + "/" + levelDir + "/" + modelId + "_argb8888.png";
-        }
-        
-        // Fallback to textures/ (non-level specific)
-        if (!std::filesystem::exists(texPath)) {
-             texPath = texturesBase + "/" + modelId + ".png";
-        }
-        
-        if (!std::filesystem::exists(texPath)) {
-            texPath = ""; // Fallback to no texture (default)
+        std::string texPath = "";
+        std::string ext = std::filesystem::path(filepath).extension().string();
+
+        // Only search disk for texture if NOT a GLB (GLB has embedded textures)
+        if (ext != ".glb") {
+            std::string levelDir = "level" + std::to_string(current_level_);
+            std::string texturesBase = g_folders.textures_folder_;
+            texPath = texturesBase + "/" + levelDir + "/" + modelId + ".png";
+            if (!std::filesystem::exists(texPath))
+                texPath = texturesBase + "/" + levelDir + "/" + modelId + "_argb8888.png";
+            if (!std::filesystem::exists(texPath))
+                texPath = texturesBase + "/" + modelId + ".png";
+            if (!std::filesystem::exists(texPath))
+                texPath = "";
         }
 
         Mesh mesh = loadObjModel(filepath, texPath);
@@ -550,9 +570,10 @@ std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isB
     std::filesystem::path basePath(objectsBase);
     std::filesystem::path levelPath = basePath / levelDir;
     
-    // 1. Try exact match in level-specific folder
+    // 1. Try exact match in level-specific folder (.glb first, then .obj fallback)
     std::vector<std::filesystem::path> searchPaths = { 
-        levelPath / (modelId + ".glb")
+        levelPath / (modelId + ".glb"),
+        levelPath / (modelId + ".obj")
     };
     for (const auto& path : searchPaths) {
         std::string pathStr = path.string();
@@ -574,7 +595,7 @@ std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isB
             if (!entry.is_regular_file()) continue;
             std::string fname = entry.path().filename().string();
             std::string ext = entry.path().extension().string();
-            if (ext != ".glb") continue;
+            if (ext != ".glb" && ext != ".obj") continue;
 
             // Exact match in filename
             if (fname.find(modelId) != std::string::npos) return entry.path().string();

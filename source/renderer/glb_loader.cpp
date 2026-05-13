@@ -128,8 +128,10 @@ static void traverse_nodes(const tinygltf::Model& model, int node_idx, const glm
                                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
                                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
                                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, img.width, img.height, 0,
-                                    img.component == 4 ? GL_RGBA : GL_RGB, GL_UNSIGNED_BYTE, img.image.data());
+                                GLenum internal_fmt = (img.component == 4) ? GL_RGBA8 : GL_RGB8;
+                                GLenum pixel_fmt    = (img.component == 4) ? GL_RGBA  : GL_RGB;
+                                glTexImage2D(GL_TEXTURE_2D, 0, internal_fmt, img.width, img.height, 0,
+                                    pixel_fmt, GL_UNSIGNED_BYTE, img.image.data());
                                 glGenerateMipmap(GL_TEXTURE_2D);
                             }
                         }
