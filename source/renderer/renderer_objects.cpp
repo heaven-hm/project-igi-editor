@@ -261,8 +261,13 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             b = 0.4f + (float)((hash >> 16) & 0xFF) / 255.0f * 0.4f;
         }
 
-        glUniform3f(loc_dirlight, 0.7f, 0.7f, 0.7f);
-        glUniform3f(loc_ambient,  r * 0.4f, g * 0.4f, b * 0.4f);
+        if (mesh.textureID > 0) {
+            glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
+            glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+        } else {
+            glUniform3f(loc_dirlight, 0.7f, 0.7f, 0.7f);
+            glUniform3f(loc_ambient,  r * 0.4f, g * 0.4f, b * 0.4f);
+        }
 
         // Texture binding
         if (mesh.textureID > 0) {
