@@ -547,8 +547,7 @@ std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isB
     
     // 1. Try exact match in level-specific folder
     std::vector<std::filesystem::path> searchPaths = { 
-        levelPath / (modelId + ".obj"), 
-        levelPath / (modelId + ".mef")
+        levelPath / (modelId + ".glb")
     };
     for (const auto& path : searchPaths) {
         std::string pathStr = path.string();
@@ -570,7 +569,7 @@ std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isB
             if (!entry.is_regular_file()) continue;
             std::string fname = entry.path().filename().string();
             std::string ext = entry.path().extension().string();
-            if (ext != ".obj" && ext != ".mef") continue;
+            if (ext != ".glb") continue;
 
             // Exact match in filename
             if (fname.find(modelId) != std::string::npos) return entry.path().string();

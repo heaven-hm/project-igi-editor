@@ -1,8 +1,5 @@
-#define TINYOBJLOADER_IMPLEMENTATION
-#define TINYOBJLOADER_DISABLE_FAST_FLOAT
-#include "../../third_party/tiny_obj_loader.h"
 #include "model.h"
-#include "wic_loader.h"
+#include "glb_loader.h"
 #include "../pch.h"
 #include <glm/gtc/type_ptr.hpp>
 #include <vector>
@@ -10,51 +7,79 @@
 #include <iostream>
 
 Mesh loadObjModel(const std::string& filepath, const std::string& texturePath) {
-    tinyobj::attrib_t attrib;
-    std::vector<tinyobj::shape_t>    shapes;
-    std::vector<tinyobj::material_t> materials;
-    std::string warn, err;
+    glb_model_s glb = GLB_Load(filepath.c_str());
 
-    bool ok = tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, filepath.c_str());
-
-    if (!warn.empty()) {
-		std::cerr << "[OBJ WARN] " << warn << "\n";
-	}
-
-    if (!err.empty()) {
-		std::cerr << "[OBJ ERR]  " << err  << "\n";
-	}
-    
-	if (!ok) {
-		throw std::runtime_error("Failed to load OBJ: " + filepath);
-	}
-
-    // Layout: position(3) + normal(3) + uv(2) = 8 floats per vertex
     std::vector<float> vertices;
-    vertices.reserve(shapes[0].mesh.indices.size() * 8);
-
-    // Compute Centroid
-    glm::vec3 centroid(0.0f);
-    int total_v = 0;
-    for (const auto& shape : shapes) {
-        for (const auto& idx : shape.mesh.indices) {
-            centroid.x += attrib.vertices[3 * idx.vertex_index + 0];
-            centroid.y += attrib.vertices[3 * idx.vertex_index + 1];
-            centroid.z += attrib.vertices[3 * idx.vertex_index + 2];
-            total_v++;
-        }
-    }
-    if (total_v > 0) centroid /= (float)total_v;
-
     glm::vec3 min_p(1e10f), max_p(-1e10f);
-    for (const auto& shape : shapes) {
-        for (const auto& idx : shape.mesh.indices) {
+    GLuint first_texture = 0;
 
-            // --- Position ---
-            float vx = attrib.vertices[3 * idx.vertex_index + 0] - centroid.x;
-            float vy = attrib.vertices[3 * idx.vertex_index + 1] - centroid.y;
-            float vz = attrib.vertices[3 * idx.vertex_index + 2] - centroid.z;
-            
+    for (const auto& prim : glb.primitives) {
+        if (first_texture == 0 && prim.texture_id != 0)
+            first_texture = prim.texture_id;
+    }
+
+    for (const auto& prim : glb.primitives) {
+        if (prim.VAO == 0 || prim.index_count == 0) continue;
+
+        glBindVertexArray(prim.VAO);
+
+        GLint pos_vbo = 0, norm_vbo = 0, uv_vbo = 0;
+        GLint pos_size = 0, norm_size = 0, uv_size = 0;
+
+        GLint bound_vbo = 0;
+        glGetVertexAttribiv(0, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &bound_vbo);
+        if (bound_vbo) {
+            glBindBuffer(GL_ARRAY_BUFFER, bound_vbo);
+            glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &pos_size);
+            pos_vbo = bound_vbo;
+        }
+
+        glGetVertexAttribiv(1, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &bound_vbo);
+        if (bound_vbo) {
+            glBindBuffer(GL_ARRAY_BUFFER, bound_vbo);
+            glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &norm_size);
+            norm_vbo = bound_vbo;
+        }
+
+        glGetVertexAttribiv(2, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &bound_vbo);
+        if (bound_vbo) {
+            glBindBuffer(GL_ARRAY_BUFFER, bound_vbo);
+            glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &uv_size);
+            uv_vbo = bound_vbo;
+        }
+
+        int vertex_count = pos_size / (3 * (int)sizeof(float));
+        if (vertex_count == 0) {
+            glBindVertexArray(0);
+            continue;
+        }
+
+        std::vector<float> pos_data(vertex_count * 3);
+        glBindBuffer(GL_ARRAY_BUFFER, pos_vbo);
+        glGetBufferSubData(GL_ARRAY_BUFFER, 0, pos_size, pos_data.data());
+
+        std::vector<float> norm_data(vertex_count * 3);
+        glBindBuffer(GL_ARRAY_BUFFER, norm_vbo);
+        glGetBufferSubData(GL_ARRAY_BUFFER, 0, norm_size, norm_data.data());
+
+        std::vector<float> uv_data(vertex_count * 2);
+        glBindBuffer(GL_ARRAY_BUFFER, uv_vbo);
+        glGetBufferSubData(GL_ARRAY_BUFFER, 0, uv_size, uv_data.data());
+
+        std::vector<unsigned int> idx_data(prim.index_count);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, prim.EBO);
+        glGetBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, prim.index_count * sizeof(unsigned int), idx_data.data());
+
+        glBindVertexArray(0);
+
+        for (int i = 0; i < prim.index_count; i++) {
+            unsigned int idx = idx_data[i];
+            if (idx >= (unsigned int)vertex_count) continue;
+
+            float vx = pos_data[idx * 3 + 0];
+            float vy = pos_data[idx * 3 + 1];
+            float vz = pos_data[idx * 3 + 2];
+
             vertices.push_back(vx);
             vertices.push_back(vy);
             vertices.push_back(vz);
@@ -66,74 +91,52 @@ Mesh loadObjModel(const std::string& filepath, const std::string& texturePath) {
             max_p.y = std::max(max_p.y, vy);
             max_p.z = std::max(max_p.z, vz);
 
+            vertices.push_back(norm_data[idx * 3 + 0]);
+            vertices.push_back(norm_data[idx * 3 + 1]);
+            vertices.push_back(norm_data[idx * 3 + 2]);
 
-            // --- Normal (fallback to UP if missing) ---
-            if (idx.normal_index >= 0) {
-                vertices.push_back(attrib.normals[3 * idx.normal_index + 0]);
-                vertices.push_back(attrib.normals[3 * idx.normal_index + 1]);
-                vertices.push_back(attrib.normals[3 * idx.normal_index + 2]);
-            } else {
-                vertices.push_back(0.0f);
-                vertices.push_back(1.0f);
-                vertices.push_back(0.0f);
-            }
-
-            // --- UV (fallback to 0,0 if missing) ---
-            if (idx.texcoord_index >= 0) {
-                vertices.push_back(attrib.texcoords[2 * idx.texcoord_index + 0]);
-                vertices.push_back(attrib.texcoords[2 * idx.texcoord_index + 1]);
-            } else {
-                vertices.push_back(0.0f);
-                vertices.push_back(0.0f);
-            }
+            vertices.push_back(uv_data[idx * 2 + 0]);
+            vertices.push_back(uv_data[idx * 2 + 1]);
         }
+    }
+
+    for (auto& prim : glb.primitives) {
+        prim.texture_id = 0;
+    }
+    GLB_Free(glb);
+
+    if (vertices.empty()) {
+        throw std::runtime_error("GLB file contains no geometry: " + filepath);
     }
 
     Mesh mesh;
-    mesh.textureID = 0;
-
-    // Load texture if path provided
-    if (!texturePath.empty()) {
-        pic_s pic = {0};
-        if (WIC_LoadImage(texturePath.c_str(), pic)) {
-            mesh.textureID = GL_RegisterTexture(&pic, GL_REPEAT, GL_LINEAR_MIPMAP_LINEAR, GL_LINEAR, true);
-            MEM_FREE_(pic.pixels_);
-            std::cout << "[OBJ] Loaded texture: " << texturePath << " (ID: " << mesh.textureID << ")\n";
-        } else {
-            std::cerr << "[OBJ] Failed to load texture: " << texturePath << "\n";
-        }
-    }
-
+    mesh.textureID = first_texture;
     mesh.vertexCount = static_cast<int>(vertices.size()) / 8;
     mesh.halfExtents = (max_p - min_p) * 0.5f;
-    mesh.zOffset = -min_p.y; // Y-up models rotated 90deg, so Y becomes Z in world space
+    mesh.zOffset = -min_p.y;
 
-    // Store vertex data in the mesh for client-side rendering
     mesh.vertexData = new float[vertices.size()];
     memcpy(mesh.vertexData, vertices.data(), vertices.size() * sizeof(float));
 
     glGenVertexArrays(1, &mesh.VAO);
-    glGenBuffers(1,     &mesh.VBO);
+    glGenBuffers(1, &mesh.VBO);
 
     glBindVertexArray(mesh.VAO);
     glBindBuffer(GL_ARRAY_BUFFER, mesh.VBO);
     glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
 
-    // attrib 0 = position
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
-    // attrib 1 = normal
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
-    // attrib 2 = uv
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
     glEnableVertexAttribArray(2);
 
     glBindVertexArray(0);
 
-    std::cout << "[OBJ] Loaded: " << filepath << " | Vertices: " << mesh.vertexCount << "\n";
+    std::cout << "[GLB] Loaded: " << filepath << " | Vertices: " << mesh.vertexCount << "\n";
     return mesh;
 }
 
