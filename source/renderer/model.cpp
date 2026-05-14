@@ -12,6 +12,8 @@ Mesh loadObjModel(const std::string& filepath, const std::string& texturePath) {
 
     Mesh mesh;
     glm::vec3 min_p(1e10f), max_p(-1e10f);
+    glm::vec3 min_p_tex(1e10f); // min of textured submeshes only
+    bool has_textured = false;
     int total_verts = 0;
 
     for (auto& prim : glb.primitives) {
@@ -58,6 +60,12 @@ Mesh loadObjModel(const std::string& filepath, const std::string& texturePath) {
             verts.push_back(vx); verts.push_back(vy); verts.push_back(vz);
             min_p.x = std::min(min_p.x, vx); min_p.y = std::min(min_p.y, vy); min_p.z = std::min(min_p.z, vz);
             max_p.x = std::max(max_p.x, vx); max_p.y = std::max(max_p.y, vy); max_p.z = std::max(max_p.z, vz);
+            if (prim.texture_id > 0) {
+                min_p_tex.x = std::min(min_p_tex.x, vx);
+                min_p_tex.y = std::min(min_p_tex.y, vy);
+                min_p_tex.z = std::min(min_p_tex.z, vz);
+                has_textured = true;
+            }
             verts.push_back(norm_data[idx*3+0]); verts.push_back(norm_data[idx*3+1]); verts.push_back(norm_data[idx*3+2]);
             verts.push_back(uv_data[idx*2+0]);   verts.push_back(uv_data[idx*2+1]);
         }
@@ -67,6 +75,7 @@ Mesh loadObjModel(const std::string& filepath, const std::string& texturePath) {
         sub.textureID   = prim.texture_id;
         sub.alphaMode   = prim.alpha_mode;
         sub.vertexCount = (int)verts.size() / 8;
+        sub.baseColorFactor = prim.baseColorFactor;
         prim.texture_id = 0; // Mesh now owns the texture
 
         Logger::Get().Log(LogLevel::INFO, "[Model] SubMesh texID=" + std::to_string(sub.textureID) +
@@ -99,6 +108,7 @@ Mesh loadObjModel(const std::string& filepath, const std::string& texturePath) {
     mesh.vertexCount = total_verts;
     mesh.halfExtents = (max_p - min_p) * 0.5f;
     mesh.zOffset     = -min_p.y;
+    mesh.mainZOffset = has_textured ? -min_p_tex.y : mesh.zOffset;
     mesh.vertexData  = nullptr;
 
     std::cout << "[GLB] Loaded: " << filepath << " | SubMeshes: " << mesh.subMeshes.size() << " | Vertices: " << total_verts << "\n";

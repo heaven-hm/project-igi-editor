@@ -112,12 +112,17 @@ static void traverse_nodes(const tinygltf::Model& model, int node_idx, const glm
                 }
             }
 
-            // --- Read material alpha mode ---
+            // --- Read material alpha mode and baseColorFactor ---
             gp.alpha_mode = 0; // OPAQUE
+            gp.baseColorFactor = glm::vec4(1.0f);
             if (prim.material >= 0 && prim.material < (int)model.materials.size()) {
                 const tinygltf::Material& mat = model.materials[prim.material];
                 if (mat.alphaMode == "MASK") gp.alpha_mode = 1;
                 else if (mat.alphaMode == "BLEND") gp.alpha_mode = 2;
+                const auto& bcf = mat.pbrMetallicRoughness.baseColorFactor;
+                if (bcf.size() >= 4) {
+                    gp.baseColorFactor = glm::vec4((float)bcf[0], (float)bcf[1], (float)bcf[2], (float)bcf[3]);
+                }
             }
 
             // --- Load texture ---

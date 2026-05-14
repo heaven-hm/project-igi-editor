@@ -236,16 +236,14 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
         glm::mat4 model = glm::mat4(1.0f);
 
-        // 3. Scale (compute early for zOffset adjustment)
+        // 3. Scale
         float base_scale = 40.96f;
         float total_scale = base_scale * obj.scale;
 
         // 1. Translate to world position
-        // Apply zOffset so the mesh bottom sits at the placement point.
-        // Only apply when zOffset < 0 (mesh floats above origin) to avoid
-        // lifting buildings with basements (min_p.y <= 0) out of the ground.
-        float z_adjustment = (mesh.zOffset < 0.0f) ? (mesh.zOffset * total_scale) : 0.0f;
-        model = glm::translate(model, glm::vec3(obj.pos.x, obj.pos.y, obj.pos.z + z_adjustment));
+        // obj.pos.z already includes the terrain snap offset from app.cpp,
+        // so we use it directly without adding zOffset again.
+        model = glm::translate(model, glm::vec3(obj.pos.x, obj.pos.y, obj.pos.z));
 
         // 2. Apply IGI rotations (Yaw, Pitch, Roll)
         // IGI rotation order: Yaw (Z), then Pitch (X), then Roll (Y)
@@ -263,8 +261,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
 
         // ── Lighting and Color ────────────────────────────────────────────────
-        // Use a hash of the modelId to generate a unique but consistent color
-        // This helps visually distinguish different buildings without textures.
+        // Compute a hash-based fallback color for models/submeshes without textures.
         float r = 0.5f, g = 0.5f, b = 0.5f;
         if (!obj.modelId.empty()) {
             size_t hash = std::hash<std::string>{}(obj.modelId);
@@ -273,30 +270,50 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             b = 0.4f + (float)((hash >> 16) & 0xFF) / 255.0f * 0.4f;
         }
 
-        bool hasTexture = (mesh.textureID > 0);
-        for (const auto& sub : mesh.subMeshes) {
-            if (sub.textureID > 0) { hasTexture = true; break; }
-        }
-        if (hasTexture) {
-            glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-            glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
-        } else {
-            glUniform3f(loc_dirlight, 0.7f, 0.7f, 0.7f);
-            glUniform3f(loc_ambient,  r * 0.4f, g * 0.4f, b * 0.4f);
-        }
-
-        // Draw each submesh with its own texture
+        // Draw each submesh with its own texture and lighting
         if (!mesh.subMeshes.empty()) {
+            // For mixed textured/untextured meshes, skip large untextured
+            // submeshes that are likely foundations (they should be underground).
+            int maxTexturedVerts = 0;
+            bool hasTextured = false, hasUntextured = false;
+            for (const auto& sub : mesh.subMeshes) {
+                if (sub.textureID > 0) {
+                    hasTextured = true;
+                    maxTexturedVerts = std::max(maxTexturedVerts, sub.vertexCount);
+                } else {
+                    hasUntextured = true;
+                }
+            }
+            bool mixedMesh = hasTextured && hasUntextured;
+
             for (const auto& sub : mesh.subMeshes) {
                 if (sub.VAO == 0 || sub.vertexCount == 0) continue;
+
+                // Skip large untextured foundations in mixed meshes
+                if (mixedMesh && sub.textureID == 0 && sub.vertexCount > maxTexturedVerts) {
+                    continue;
+                }
+
                 if (sub.textureID > 0) {
+                    // Textured submesh: neutral lighting so texture looks natural
+                    glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
+                    glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
                     glUniform1i(loc_useTex, 1);
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, sub.textureID);
                     glUniform1i(loc_tex, 0);
                 } else {
+                    // Untextured submesh: use material baseColorFactor if available,
+                    // otherwise fall back to the hash-based color.
+                    glm::vec3 color(sub.baseColorFactor.r, sub.baseColorFactor.g, sub.baseColorFactor.b);
+                    if (color.r >= 0.99f && color.g >= 0.99f && color.b >= 0.99f) {
+                        color = glm::vec3(r, g, b);
+                    }
+                    glUniform3f(loc_dirlight, color.r * 0.6f, color.g * 0.6f, color.b * 0.6f);
+                    glUniform3f(loc_ambient,  color.r * 0.4f, color.g * 0.4f, color.b * 0.4f);
                     glUniform1i(loc_useTex, 0);
                 }
+
                 // Enable blending for alpha BLEND materials
                 bool blendEnabled = false;
                 if (sub.alphaMode == 2) { // BLEND
@@ -312,6 +329,15 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             }
             glBindVertexArray(0);
         } else {
+            // Legacy single-texture path (e.g. old OBJ models)
+            bool hasTexture = (mesh.textureID > 0);
+            if (hasTexture) {
+                glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
+                glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+            } else {
+                glUniform3f(loc_dirlight, 0.7f, 0.7f, 0.7f);
+                glUniform3f(loc_ambient,  r * 0.4f, g * 0.4f, b * 0.4f);
+            }
             if (mesh.textureID > 0) {
                 glUniform1i(loc_useTex, 1);
                 glActiveTexture(GL_TEXTURE0);
@@ -335,9 +361,9 @@ float Renderer_Objects::GetMeshZOffset(const std::string& modelId, bool isBuildi
     std::string cacheKey = std::to_string(current_level_) + ":" + (isBuilding ? "building:" : "object:") + modelId;
     auto it = mesh_cache_.find(cacheKey);
     if (it != mesh_cache_.end()) {
-        return it->second.zOffset;
+        return it->second.mainZOffset;
     }
-    return GetOrLoadMesh(modelId, isBuilding).zOffset;
+    return GetOrLoadMesh(modelId, isBuilding).mainZOffset;
 }
 
 glm::vec3 Renderer_Objects::GetMeshExtents(const std::string& modelId, bool isBuilding) {
