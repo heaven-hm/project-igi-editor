@@ -269,7 +269,17 @@ void App::Shutdown() {
 
 void App::LoadLevel(int level_no) {
 	try {
-		Logger::Get().Log(LogLevel::INFO, "[App] Loading level " + std::to_string(level_no));
+		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
+		Logger::Get().Log(LogLevel::INFO, "[App] LoadLevel() START for level " + std::to_string(level_no));
+		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
+		
+		// Verify level number is valid
+		if (level_no < MIN_LEVEL_NO || level_no > MAX_LEVEL_NO) {
+			Logger::Get().Log(LogLevel::ERR, "[App] Invalid level number: " + std::to_string(level_no) + 
+				" (valid range: " + std::to_string(MIN_LEVEL_NO) + "-" + std::to_string(MAX_LEVEL_NO) + ")");
+			return;
+		}
+		
 		renderer_.SetLevel(level_no);
 		renderer_.BeginLoadLevel();
 
@@ -296,10 +306,16 @@ void App::LoadLevel(int level_no) {
 		}
 
 		// Load QSC file for this level
+		Logger::Get().Log(LogLevel::INFO, "[App] Step 2: Loading QSC file for level " + std::to_string(level_no));
 		LoadQSCForLevel(level_no);
 
 		// Always snap objects to terrain after any level load
+		Logger::Get().Log(LogLevel::INFO, "[App] Step 3: Snapping objects to terrain...");
 		SnapObjectsToTerrain();
+		
+		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
+		Logger::Get().Log(LogLevel::INFO, "[App] LoadLevel() COMPLETE for level " + std::to_string(level_no));
+		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
 	}
 	catch (const std::exception& e) {
 		std::string errorMsg = "Error loading level " + std::to_string(level_no) + ":\n" + std::string(e.what());
@@ -1153,6 +1169,14 @@ void App::Frame(float delta_seconds) {
 }
 
 void App::ProcessInput(float delta_seconds) {
+	// Safety check: ensure level is loaded before processing movement
+	if (level_.GetLevelNo() == 0) {
+		// Level not loaded, skip input processing
+		input_.mouse_delta_x_ = 0;
+		input_.mouse_delta_y_ = 0;
+		return;
+	}
+	
 	if (!edit_mode_) {
 		viewer_.yaw_ += -input_.mouse_delta_x_ * MOUSE_SENSITIVE;
 		viewer_.pitch_ += -input_.mouse_delta_y_ * MOUSE_SENSITIVE;
@@ -1510,6 +1534,11 @@ void App::EditorProcessClick() {
 }
 
 bool App::CheckCollision(const glm::vec3& nextPos) {
+    // Safety check: ensure level is loaded
+    if (level_.GetLevelNo() == 0) {
+        return false; // No collision when level not loaded
+    }
+    
     auto& objects = level_.GetLevelObjects().GetObjects();
     
     float playerRadius = 400.0f; 
@@ -1820,6 +1849,9 @@ void App::LoadQSCForLevel(int level_no) {
 		std::string qsc_source = GetLevelQSCPath(level_no);
 		std::string cwd = GetCurrentWorkingDirectory();
 		std::string qsc_dest = cwd + "\\objects.qsc";
+		
+		Logger::Get().Log(LogLevel::INFO, "[App] [LoadQSCForLevel] Source: " + qsc_source);
+		Logger::Get().Log(LogLevel::INFO, "[App] [LoadQSCForLevel] Destination: " + qsc_dest);
 
 		// Set up compiler output callback
 		compiler_.SetOutputCallback([](const std::string& msg) {
@@ -1829,16 +1861,17 @@ void App::LoadQSCForLevel(int level_no) {
 
 		// Check if source exists
 		if (!fs::exists(qsc_source)) {
-			Logger::Get().Log(LogLevel::WARNING, "[App] QSC file not found at: " + qsc_source);
-			Logger::Get().Log(LogLevel::INFO, "[App] Attempting to decompile from game QVM...");
+			Logger::Get().Log(LogLevel::WARNING, "[App] [LoadQSCForLevel] QSC file not found at: " + qsc_source);
+			Logger::Get().Log(LogLevel::INFO, "[App] [LoadQSCForLevel] Attempting to decompile from game QVM...");
 			DecompileFromGame(level_no);
 			return;
 		}
 
 		// Copy to current directory
+		Logger::Get().Log(LogLevel::INFO, "[App] [LoadQSCForLevel] Copying QSC to exe directory...");
 		if (fs::exists(qsc_dest)) fs::remove(qsc_dest);
 		fs::copy_file(qsc_source, qsc_dest, fs::copy_options::overwrite_existing);
-		Logger::Get().Log(LogLevel::INFO, "[App] Loaded QSC from: " + qsc_source + " to: " + qsc_dest);
+		Logger::Get().Log(LogLevel::INFO, "[App] [LoadQSCForLevel] SUCCESS: Loaded QSC from: " + qsc_source + " to: " + qsc_dest);
 	}
 	catch (const std::exception& e) {
 		std::string errorMsg = "Error loading QSC file for level " + std::to_string(level_no) + ":\n" + std::string(e.what());

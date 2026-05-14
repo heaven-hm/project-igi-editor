@@ -452,15 +452,16 @@ static void OnMenu(int menu) {
 	case MENU_SCALE_10:  g_app.SetSelectedObjectScale(10.0f); g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS; break;
 	case MENU_SCALE_20:  g_app.SetSelectedObjectScale(20.0f); g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS; break;
 	case MENU_SHOW_ALL:
-		g_app.SetDrawParts(Renderer::DRAW_OBJECTS | Renderer::DRAW_BUILDINGS);
+		g_app.ToggleDrawParts(Renderer::DRAW_OBJECTS);
+		g_app.ToggleDrawParts(Renderer::DRAW_BUILDINGS);
 		g_update_menu_flags |= UPDATE_MENU_SHOW_OPTIONS;
 		break;
 	case MENU_SHOW_OBJECTS_ONLY:
-		g_app.SetDrawParts(Renderer::DRAW_OBJECTS);
+		g_app.ToggleDrawParts(Renderer::DRAW_OBJECTS);
 		g_update_menu_flags |= UPDATE_MENU_SHOW_OPTIONS;
 		break;
 	case MENU_SHOW_BUILDINGS_ONLY:
-		g_app.SetDrawParts(Renderer::DRAW_BUILDINGS);
+		g_app.ToggleDrawParts(Renderer::DRAW_BUILDINGS);
 		g_update_menu_flags |= UPDATE_MENU_SHOW_OPTIONS;
 		break;
 	case MENU_CLOSE:

@@ -38,7 +38,7 @@ constexpr int		MAX_FLAT_SKY_LAYERS = 2;
 constexpr int		NUM_VERTEX_PER_FLAT_SKY_LAYER = 108;
 
 constexpr int		MIN_LEVEL_NO = 1;
-constexpr int		MAX_LEVEL_NO = 13;
+constexpr int		MAX_LEVEL_NO = 14;
 
 // renderer
 constexpr float		RENDER_Z_NEAR = 0.4096f;
