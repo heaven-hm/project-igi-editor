@@ -111,6 +111,14 @@ static void traverse_nodes(const tinygltf::Model& model, int node_idx, const glm
                 }
             }
 
+            // --- Read material alpha mode ---
+            gp.alpha_mode = 0; // OPAQUE
+            if (prim.material >= 0 && prim.material < (int)model.materials.size()) {
+                const tinygltf::Material& mat = model.materials[prim.material];
+                if (mat.alphaMode == "MASK") gp.alpha_mode = 1;
+                else if (mat.alphaMode == "BLEND") gp.alpha_mode = 2;
+            }
+
             // --- Load texture ---
             gp.texture_id = 0;
             if (prim.material >= 0 && prim.material < (int)model.materials.size()) {
@@ -128,10 +136,106 @@ static void traverse_nodes(const tinygltf::Model& model, int node_idx, const glm
                                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
                                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
                                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                                GLenum internal_fmt = (img.component == 4) ? GL_RGBA8 : GL_RGB8;
-                                GLenum pixel_fmt    = (img.component == 4) ? GL_RGBA  : GL_RGB;
-                                glTexImage2D(GL_TEXTURE_2D, 0, internal_fmt, img.width, img.height, 0,
-                                    pixel_fmt, GL_UNSIGNED_BYTE, img.image.data());
+
+                                const unsigned char* tex_data = img.image.data();
+                                int tex_width = img.width;
+                                int tex_height = img.height;
+                                std::vector<unsigned char> rgba_data;
+                                bool has_alpha = (img.component == 4);
+
+                                // For RGB textures, try to detect a transparent background color
+                                // (common for paletted textures converted to RGB where index 0 = transparent)
+                                if (img.component == 3 && tex_width > 1 && tex_height > 1) {
+                                    // Check if all four corners have the same color - likely transparent color
+                                    int tl = 0;                           // top-left
+                                    int tr = (tex_width - 1) * 3;         // top-right
+                                    int bl = (tex_height - 1) * tex_width * 3; // bottom-left
+                                    int br = bl + (tex_width - 1) * 3;    // bottom-right
+
+                                    unsigned char r = tex_data[tl];
+                                    unsigned char g = tex_data[tl + 1];
+                                    unsigned char b = tex_data[tl + 2];
+
+                                    bool corners_match = (tex_data[tr] == r && tex_data[tr + 1] == g && tex_data[tr + 2] == b) &&
+                                                           (tex_data[bl] == r && tex_data[bl + 1] == g && tex_data[bl + 2] == b) &&
+                                                           (tex_data[br] == r && tex_data[br + 1] == g && tex_data[br + 2] == b);
+
+                                    // Also check if a dominant color covers >35% of the texture
+                                    int pixel_count = tex_width * tex_height;
+                                    int dominant_count = 0;
+                                    for (int p = 0; p < pixel_count; p++) {
+                                        if (tex_data[p * 3] == r && tex_data[p * 3 + 1] == g && tex_data[p * 3 + 2] == b) {
+                                            dominant_count++;
+                                        }
+                                    }
+                                    bool is_dominant = (float)dominant_count / pixel_count > 0.35f;
+
+                                    if (corners_match && is_dominant) {
+                                        // Convert RGB to RGBA with alpha channel
+                                        has_alpha = true;
+                                        rgba_data.resize(pixel_count * 4);
+                                        for (int p = 0; p < pixel_count; p++) {
+                                            rgba_data[p * 4]     = tex_data[p * 3];
+                                            rgba_data[p * 4 + 1] = tex_data[p * 3 + 1];
+                                            rgba_data[p * 4 + 2] = tex_data[p * 3 + 2];
+                                            // Alpha = 0 for background color, 255 for everything else
+                                            bool is_bg = (tex_data[p * 3] == r && tex_data[p * 3 + 1] == g && tex_data[p * 3 + 2] == b);
+                                            rgba_data[p * 4 + 3] = is_bg ? 0 : 255;
+                                        }
+                                        tex_data = rgba_data.data();
+                                    }
+                                    // Fallback for BLEND/MASK materials without a flat background
+                                    // (photo textures like chain-link fences on grass/dirt)
+                                    else if (gp.alpha_mode > 0) {
+                                        // Build a quantized color histogram (4 bits per channel = 16 levels)
+                                        int bins[4096] = {0};
+                                        int total_pixels = pixel_count;
+                                        for (int p = 0; p < total_pixels; p++) {
+                                            int br = tex_data[p * 3] >> 4;
+                                            int bg = tex_data[p * 3 + 1] >> 4;
+                                            int bb = tex_data[p * 3 + 2] >> 4;
+                                            bins[(br << 8) | (bg << 4) | bb]++;
+                                        }
+                                        // Find the most common dark bin (brightness < 120)
+                                        int best_bin = -1;
+                                        int best_count = 0;
+                                        for (int b = 0; b < 4096; b++) {
+                                            int br = (b >> 8) & 0xF;
+                                            int bg = (b >> 4) & 0xF;
+                                            int bb = b & 0xF;
+                                            int brightness = (br + bg + bb) * 255 / 48; // approximate
+                                            if (brightness < 140 && bins[b] > best_count) {
+                                                best_count = bins[b];
+                                                best_bin = b;
+                                            }
+                                        }
+                                        // If we found a significant dark cluster (>3% of pixels), use it as background
+                                        if (best_bin >= 0 && (float)best_count / total_pixels > 0.03f) {
+                                            int br = ((best_bin >> 8) & 0xF) << 4;
+                                            int bg = ((best_bin >> 4) & 0xF) << 4;
+                                            int bb = (best_bin & 0xF) << 4;
+                                            has_alpha = true;
+                                            rgba_data.resize(pixel_count * 4);
+                                            for (int p = 0; p < pixel_count; p++) {
+                                                int pr = tex_data[p * 3];
+                                                int pg = tex_data[p * 3 + 1];
+                                                int pb = tex_data[p * 3 + 2];
+                                                rgba_data[p * 4]     = pr;
+                                                rgba_data[p * 4 + 1] = pg;
+                                                rgba_data[p * 4 + 2] = pb;
+                                                // Alpha based on distance to the dark background cluster
+                                                int dist = abs(pr - br) + abs(pg - bg) + abs(pb - bb);
+                                                rgba_data[p * 4 + 3] = (dist < 48) ? 0 : 255;
+                                            }
+                                            tex_data = rgba_data.data();
+                                        }
+                                    }
+                                }
+
+                                GLenum internal_fmt = has_alpha ? GL_RGBA8 : GL_RGB8;
+                                GLenum pixel_fmt    = has_alpha ? GL_RGBA  : GL_RGB;
+                                glTexImage2D(GL_TEXTURE_2D, 0, internal_fmt, tex_width, tex_height, 0,
+                                    pixel_fmt, GL_UNSIGNED_BYTE, tex_data);
                                 glGenerateMipmap(GL_TEXTURE_2D);
                             }
                         }

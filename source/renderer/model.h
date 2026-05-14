@@ -8,6 +8,7 @@ struct SubMesh {
     GLuint VBO = 0;
     int    vertexCount = 0;
     GLuint textureID   = 0;
+    int    alphaMode   = 0; // 0=OPAQUE, 1=MASK, 2=BLEND
 };
 
 struct Mesh {

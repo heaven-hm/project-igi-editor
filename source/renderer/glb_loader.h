@@ -8,8 +8,9 @@ struct glb_primitive_s {
     int index_count;
     glm::mat4 local_transform;
     std::vector<GLuint> extra_vbos;
+    int alpha_mode; // 0=OPAQUE, 1=MASK, 2=BLEND
 
-    glb_primitive_s() : VAO(0), VBO(0), EBO(0), texture_id(0), index_count(0), local_transform(1.0f) {}
+    glb_primitive_s() : VAO(0), VBO(0), EBO(0), texture_id(0), index_count(0), local_transform(1.0f), alpha_mode(0) {}
 };
 
 struct glb_model_s {

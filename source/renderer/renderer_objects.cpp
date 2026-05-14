@@ -288,8 +288,18 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 } else {
                     glUniform1i(loc_useTex, 0);
                 }
+                // Enable blending for alpha BLEND materials
+                bool blendEnabled = false;
+                if (sub.alphaMode == 2) { // BLEND
+                    glEnable(GL_BLEND);
+                    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                    blendEnabled = true;
+                }
                 glBindVertexArray(sub.VAO);
                 glDrawArrays(GL_TRIANGLES, 0, sub.vertexCount);
+                if (blendEnabled) {
+                    glDisable(GL_BLEND);
+                }
             }
             glBindVertexArray(0);
         } else {

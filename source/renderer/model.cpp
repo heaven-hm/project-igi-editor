@@ -64,6 +64,7 @@ Mesh loadObjModel(const std::string& filepath, const std::string& texturePath) {
 
         SubMesh sub;
         sub.textureID   = prim.texture_id;
+        sub.alphaMode   = prim.alpha_mode;
         sub.vertexCount = (int)verts.size() / 8;
         prim.texture_id = 0; // Mesh now owns the texture
 
