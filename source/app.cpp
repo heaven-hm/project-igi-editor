@@ -1594,7 +1594,9 @@ static bool IsUndergroundModel(const std::string& name) {
            upper.find("METAL_DOOR_BASE") != std::string::npos ||
            upper.find("ELEVATORROOM") != std::string::npos ||
            upper.find("GUARDROOM") != std::string::npos ||
-           upper.find("STRAIGHTUPWARDS") != std::string::npos;
+           upper.find("STRAIGHTUPWARDS") != std::string::npos ||
+           upper.find("JOINT_FIXER") != std::string::npos ||
+           upper.find("JOINTFIXER") != std::string::npos;
 }
 
 void App::SnapObjectsToTerrain() {
