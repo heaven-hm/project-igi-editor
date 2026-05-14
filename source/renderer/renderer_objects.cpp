@@ -7,6 +7,19 @@
 #include "logger.h"
 
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+static bool IsFenceModel(const std::string& modelIdOrName) {
+    std::string upper = modelIdOrName;
+    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    return upper.find("FENCE") != std::string::npos ||
+           upper.find("GATE") != std::string::npos ||
+           upper.find("WIRE") != std::string::npos ||
+           upper.find("STOP") != std::string::npos ||
+           upper.find("BARRIER") != std::string::npos ||
+           upper.find("CHAINLINK") != std::string::npos;
+}
+
+
 // ─── Shader Sources ───────────────────────────────────────────────────────────
 static const char* OBJ_VERT_SRC = R"(
 #version 330 core
@@ -286,11 +299,12 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             }
             bool mixedMesh = hasTextured && hasUntextured;
 
+            bool isFence = IsFenceModel(obj.modelId) || IsFenceModel(obj.name);
             for (const auto& sub : mesh.subMeshes) {
                 if (sub.VAO == 0 || sub.vertexCount == 0) continue;
 
-                // Skip large untextured foundations in mixed meshes
-                if (mixedMesh && sub.textureID == 0 && sub.vertexCount > maxTexturedVerts) {
+                // Skip large untextured foundations in mixed meshes (but NOT fences/gates)
+                if (!isFence && mixedMesh && sub.textureID == 0 && sub.vertexCount > maxTexturedVerts) {
                     continue;
                 }
 
@@ -360,10 +374,22 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 float Renderer_Objects::GetMeshZOffset(const std::string& modelId, bool isBuilding) {
     std::string cacheKey = std::to_string(current_level_) + ":" + (isBuilding ? "building:" : "object:") + modelId;
     auto it = mesh_cache_.find(cacheKey);
+    float zOff = 0.0f;
     if (it != mesh_cache_.end()) {
-        return it->second.mainZOffset;
+        zOff = it->second.mainZOffset;
+    } else {
+        zOff = GetOrLoadMesh(modelId, isBuilding).mainZOffset;
     }
-    return GetOrLoadMesh(modelId, isBuilding).mainZOffset;
+    // Fences/gates need the global zOffset (all vertices) because their untextured
+    // posts reach the ground while the textured wire mesh is above it.
+    if (IsFenceModel(modelId)) {
+        if (it != mesh_cache_.end()) {
+            zOff = it->second.zOffset;
+        } else {
+            zOff = GetOrLoadMesh(modelId, isBuilding).zOffset;
+        }
+    }
+    return zOff;
 }
 
 glm::vec3 Renderer_Objects::GetMeshExtents(const std::string& modelId, bool isBuilding) {
