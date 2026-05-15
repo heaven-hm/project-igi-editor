@@ -182,6 +182,9 @@ public:
 	int						FindFuncByStr(const char* s, const func_s* funcs[1024]) const;
 	int						FindFuncByName(const char* name, const func_s* funcs[1024]) const;
 
+	int						GetRootFuncCount() const { return root_func_count_; }
+	const func_s*			GetRootFunc(int idx) const { return root_funcs_[idx]; }
+
 	// debug
 	void					Print() const;
 

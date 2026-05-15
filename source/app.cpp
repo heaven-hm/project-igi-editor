@@ -1902,29 +1902,34 @@ void App::SnapObjectsToTerrain() {
     int skipped = 0;
     int failed = 0;
     for (auto& obj : objects) {
-        // Skip snapping for AI Soldiers and objects explicitly marked as "Underground"
-        if (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale" || obj.type == "Underground") {
-            Logger::Get().Log(LogLevel::INFO, "[App] Skipping snap for " + obj.type + ": " + obj.modelId);
+        // Skip snapping for AI Soldiers (they maintain original QSC height)
+        if (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale") {
+            Logger::Get().Log(LogLevel::INFO, "[App] Skipping snap for AI: " + obj.modelId);
             obj.snap_z_offset = 0.0;
             skipped++;
             continue;
         }
         float terrainZ = 0.0f;
-        bool isUnderground = Utils::IsUndergroundModel(obj.name, obj.modelId);
+        bool isUnderground = Utils::IsUndergroundModel(obj.name, obj.modelId) || (obj.type == "Underground");
         if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ, isUnderground)) {
             float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
-            // Snap object bottom to terrain surface
-            // Models are Y-up and rotated 90deg, so the bottom is at -min_y
-            // After rotation, this becomes the Z offset in world space
-            obj.snap_z_offset = (double)(zOffset * 40.96f * obj.scale);
+            
+            // For regular objects, snap bottom to terrain surface (offset by min_y)
+            // For underground objects (tunnels, etc), keep origin at terrain surface (offset = 0)
+            if (isUnderground) {
+                obj.snap_z_offset = 0.0;
+            } else {
+                obj.snap_z_offset = (double)(zOffset * 40.96f * obj.scale);
+            }
+            
             obj.pos.z = (double)terrainZ + obj.snap_z_offset;
             
             // Critical debug for user-reported issues
-            if (obj.modelId.find("471_") == 0 || obj.modelId.find("491_") == 0) {
+            if (obj.modelId.find("471_") == 0 || obj.modelId.find("491_") == 0 || isUnderground) {
                 Logger::Get().Log(LogLevel::INFO, "[SnapDebug] Model: " + obj.modelId + 
-                    " | TerrainZ: " + std::to_string(terrainZ) + 
+                    " (" + obj.type + ") | TerrainZ: " + std::to_string(terrainZ) + 
                     " | MeshZOffset: " + std::to_string(zOffset) + 
-                    " | Scale: " + std::to_string(obj.scale) + 
+                    " | SnapOffset: " + std::to_string(obj.snap_z_offset) +
                     " | FinalZ: " + std::to_string(obj.pos.z));
             } else {
                 Logger::Get().Log(LogLevel::INFO, "[App] Snapped " + obj.modelId + " to Z=" + std::to_string(obj.pos.z));
@@ -1938,112 +1943,76 @@ void App::SnapObjectsToTerrain() {
     Logger::Get().Log(LogLevel::INFO, "[App] Snap complete. snapped=" + std::to_string(snapped) + " skipped=" + std::to_string(skipped) + " failed=" + std::to_string(failed));
 }
 void App::UpdateMarkerManipulation() {
-
 	if (selected_object_index_ < 0) return;
-
 	auto& objects = level_.GetLevelObjects().GetObjects();
-
 	if (selected_object_index_ >= (int)objects.size()) return;
-
 	LevelObject& obj = objects[selected_object_index_];
 
-
-
 	int mods = glutGetModifiers();
-
 	bool shift = (mods & GLUT_ACTIVE_SHIFT);
-
 	bool ctrl = (mods & GLUT_ACTIVE_CTRL);
 
-
-
-	// Delta in screen space from start of drag
-
 	int dx = mouse_state_.prior_x_ - marker_manip_.start_x_;
-
 	int dy = mouse_state_.prior_y_ - marker_manip_.start_y_;
 
-
-
-	// Mode selection logic (matches IGI 2 editor behavior)
-
 	if (shift && ctrl) marker_manip_.mode_ = ManipulationMode::MoveXZ;
-
 	else if (shift) marker_manip_.mode_ = ManipulationMode::MoveXY;
-
 	else if (ctrl) marker_manip_.mode_ = ManipulationMode::MoveXZ;
-
 	else if (input_.keys_ & MK_MANIP_A) marker_manip_.mode_ = ManipulationMode::RotateAlpha;
-
 	else if (input_.keys_ & MK_MANIP_B) marker_manip_.mode_ = ManipulationMode::RotateBeta;
-
 	else if (input_.keys_ & MK_MANIP_G) marker_manip_.mode_ = ManipulationMode::RotateGamma;
+	else marker_manip_.mode_ = ManipulationMode::MoveXY;
 
-	else marker_manip_.mode_ = ManipulationMode::MoveXY; // Default to XY movement
+	const float moveSensitivity = 200.0f;
+	const float rotSensitivity = 0.01f;
 
-
-
-	// Sensitivity constants
-
-	const float moveSensitivity = 200.0f; // World units per pixel drag
-
-	const float rotSensitivity = 0.01f;   // Radians per pixel drag
-
-
+	glm::dvec3 oldPos = obj.pos;
+	glm::dvec3 oldRot = obj.rot;
 
 	if (marker_manip_.mode_ == ManipulationMode::MoveXY) {
-
-		// Move on XY plane relative to camera view
-
 		glm::vec3 right = viewer_.right_;
-
 		glm::vec3 forward = glm::normalize(glm::vec3(viewer_.forward_.x, viewer_.forward_.y, 0.0f));
-
 		obj.pos = marker_manip_.start_pos_ + glm::dvec3(right * (float)dx * moveSensitivity + forward * (float)-dy * moveSensitivity);
-
 	}
-
 	else if (marker_manip_.mode_ == ManipulationMode::MoveXZ) {
-
-		// Move on Screen-Right and Screen-Up (approximates XZ plane relative to camera)
-
 		glm::vec3 right = viewer_.right_;
-
 		glm::vec3 up = glm::vec3(0, 0, 1);
-
 		obj.pos = marker_manip_.start_pos_ + glm::dvec3(right * (float)dx * moveSensitivity + up * (float)-dy * moveSensitivity);
-
 	}
-
 	else if (marker_manip_.mode_ == ManipulationMode::RotateAlpha) {
-
 		obj.rot.x = marker_manip_.start_rot_.x + (float)dx * rotSensitivity;
-
 	}
-
 	else if (marker_manip_.mode_ == ManipulationMode::RotateBeta) {
-
 		obj.rot.y = marker_manip_.start_rot_.y + (float)dx * rotSensitivity;
-
 	}
-
 	else if (marker_manip_.mode_ == ManipulationMode::RotateGamma) {
-
 		obj.rot.z = marker_manip_.start_rot_.z + (float)dx * rotSensitivity;
-
 	}
 
+	// Propagate transform to children
+	glm::dvec3 deltaPos = obj.pos - oldPos;
+	glm::dvec3 deltaRot = obj.rot - oldRot;
+	
+	bool changed = (std::abs(deltaPos.x) > 1e-6 || std::abs(deltaPos.y) > 1e-6 || std::abs(deltaPos.z) > 1e-6 ||
+	                std::abs(deltaRot.x) > 1e-6 || std::abs(deltaRot.y) > 1e-6 || std::abs(deltaRot.z) > 1e-6);
 
+	if (changed) {
+		PropagateTransformToChildren(selected_object_index_, deltaPos, deltaRot, oldPos);
+		obj.modified = true;
+	}
 
-	// Instantaneous actions (one-off checks while dragging)
 	if (input_.keys_ & MK_MANIP_S) {
-		if (!Utils::IsUndergroundModel(obj.name, obj.modelId)) {
-			float terrainZ = 0.0f;
-			if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ)) {
-				float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
-				obj.pos.z = (double)terrainZ + (double)(zOffset * 40.96f * obj.scale);
-				obj.modified = true;
+		bool isUnderground = Utils::IsUndergroundModel(obj.name, obj.modelId) || (obj.type == "Underground");
+		float terrainZ = 0.0f;
+		if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ, isUnderground)) {
+			float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
+			if (isUnderground) {
+				obj.snap_z_offset = 0.0;
+			} else {
+				obj.snap_z_offset = (double)(zOffset * 40.96f * obj.scale);
 			}
+			obj.pos.z = (double)terrainZ + obj.snap_z_offset;
+			obj.modified = true;
 		}
 	}
 
@@ -2054,6 +2023,44 @@ void App::UpdateMarkerManipulation() {
 
 	if (dx != 0 || dy != 0) {
 		obj.modified = true;
+	}
+}
+
+void App::PropagateTransformToChildren(int parentIdx, const glm::dvec3& deltaPos, const glm::dvec3& deltaRot, const glm::dvec3& pivot) {
+	auto& objects = level_.GetLevelObjects().GetObjects();
+	std::vector<int> children = objects[parentIdx].childrenIndices;
+
+	for (int childIdx : children) {
+		LevelObject& child = objects[childIdx];
+		child.pos += deltaPos;
+		// Apply rotation delta (if any)
+		bool hasRot = (std::abs(deltaRot.x) > 0.0001 || std::abs(deltaRot.y) > 0.0001 || std::abs(deltaRot.z) > 0.0001);
+		if (hasRot) {
+			// Position change due to rotation around pivot (parent's old position)
+			glm::dvec3 relativePos = child.pos - pivot;
+			if (std::abs(deltaRot.z) > 0.0001) {
+				double cosZ = cos(deltaRot.z), sinZ = sin(deltaRot.z);
+				double nx = relativePos.x * cosZ - relativePos.y * sinZ;
+				double ny = relativePos.x * sinZ + relativePos.y * cosZ;
+				relativePos.x = nx; relativePos.y = ny;
+			}
+			if (std::abs(deltaRot.x) > 0.0001) {
+				double cosX = cos(deltaRot.x), sinX = sin(deltaRot.x);
+				double ny = relativePos.y * cosX - relativePos.z * sinX;
+				double nz = relativePos.y * sinX + relativePos.z * cosX;
+				relativePos.y = ny; relativePos.z = nz;
+			}
+			if (std::abs(deltaRot.y) > 0.0001) {
+				double cosY = cos(deltaRot.y), sinY = sin(deltaRot.y);
+				double nx = relativePos.x * cosY + relativePos.z * sinY;
+				double nz = -relativePos.x * sinY + relativePos.z * cosY;
+				relativePos.x = nx; relativePos.z = nz;
+			}
+			child.pos = pivot + relativePos;
+			child.rot += deltaRot;
+		}
+		child.modified = true;
+		PropagateTransformToChildren(childIdx, deltaPos, deltaRot, pivot);
 	}
 }
 
@@ -2082,13 +2089,10 @@ int App::PickObjectAtScreenPos(int screen_x, int screen_y) {
 	for (size_t i = 0; i < objects.size(); ++i) {
 		const auto& obj = objects[i];
 
-		// Allow hover/tooltip for ALL objects regardless of draw filter
-		// so background objects inside buildings can still be inspected
-
 		glm::vec3 he = renderer_.GetMeshExtents(obj.modelId, obj.isBuilding);
 		float max_he = glm::max(he.x, glm::max(he.y, he.z));
 		if (max_he < 1.0f) {
-			he = glm::vec3(200.0f); // fallback for missing meshes
+			he = glm::vec3(200.0f);
 		}
 
 		glm::mat4 model = glm::mat4(1.0f);
@@ -2131,19 +2135,13 @@ int App::PickObjectAtScreenPos(int screen_x, int screen_y) {
 			(float)screen_y >= min_py - margin && (float)screen_y <= max_py + margin) {
 			if (closest_index == -1 || min_depth < closest_depth) {
 				closest_depth = min_depth;
-			closest_index = (int)i;
+				closest_index = (int)i;
 			}
 		}
 	}
 
 	return closest_index;
 }
-
-// ─── QSC/QVM Workflow ─────────────────────────────────────────────────────────────
-
-
-
-
 
 void App::LoadQSCForLevel(int level_no) {
 	try {

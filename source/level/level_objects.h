@@ -29,6 +29,9 @@ struct LevelObject {
     bool has_original_name = false; // To distinguish between empty name and new object
     double snap_z_offset = 0.0;  // Z offset added by SnapObjectsToTerrain, subtracted when saving to QSC
 
+    int parentIndex = -1; // Index in LevelObjects::objects_
+    std::vector<int> childrenIndices;
+
     // Lighting
     float dirlightR = 1.0f, dirlightG = 1.0f, dirlightB = 1.0f;
     float ambientR = 0.3f, ambientG = 0.3f, ambientB = 0.3f;
@@ -62,4 +65,6 @@ private:
     std::vector<LevelObject> objects_;
     std::vector<qtask_object_s> qtasks_;
     std::map<std::string, std::string> modelNames_;
+
+    void LoadRecursive(const QSC::func_s* func, int parentIdx);
 };

@@ -22,197 +22,120 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
     objects_.clear();
     qtasks_.clear();
     
-    Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Starting Load...");
+    Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Starting recursive Load...");
 
-    const QSC::func_s* qsc_funcs[1024];
+    for (int i = 0; i < qsc_objects->GetRootFuncCount(); ++i) {
+        LoadRecursive(qsc_objects->GetRootFunc(i), -1);
+    }
 
-    // Parse Buildings
-    int num_buildings = qsc_objects->FindFuncByStr("Building", qsc_funcs);
-    for (int i = 0; i < num_buildings; ++i) {
-        const QSC::func_s* f = qsc_funcs[i];
-        const QSC::arg_s* a = f->args_;
+    Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Load complete. Total objects: " + std::to_string(objects_.size()));
+}
 
+void LevelObjects::LoadRecursive(const QSC::func_s* func, int parentIdx) {
+    if (!func) return;
+
+    const QSC::arg_s* a = func->args_;
+    if (!a) return;
+
+    std::string funcName = func->func_name_;
+    std::string typeStr;
+
+    // Check if it's a Task_New call (common wrapper)
+    if (funcName == "Task_New") {
+        if (a->next_ && a->next_->type_ == QSC::arg_s::type_t::STR) {
+            typeStr = a->next_->str_;
+        }
+    } else {
+        // Direct call (less common in modern IGI QSC but possible)
+        typeStr = funcName;
+    }
+
+    bool isBuilding = (typeStr == "Building");
+    bool isRigid = (typeStr == "EditRigidObj");
+    bool isSoldier = (typeStr == "HumanSoldier" || typeStr == "HumanSoldierFemale");
+    bool isDoor = (typeStr == "Door");
+
+    int currentObjIdx = -1;
+
+    if (isBuilding || isRigid || isSoldier || isDoor) {
         LevelObject obj;
-        obj.isBuilding = true;
-        obj.type = "Building";
+        obj.type = typeStr;
+        obj.isBuilding = isBuilding;
+        obj.parentIndex = parentIdx;
 
         int arg_idx = 0;
-        while (a) {
-            switch (arg_idx) {
-                case 0: obj.taskId = TaskIdFromArg(a); break;
-                case 2: if (a->type_ == QSC::arg_s::type_t::STR) { obj.name = a->str_; obj.original_name = a->str_; obj.has_original_name = true; } break;
-                case 3:
-                    if (a->type_ == QSC::arg_s::type_t::DBL) {
-                        obj.pos.x = a->dbl_;
-                        obj.original_pos.x = a->dbl_;
-                    }
-                    break;
-                case 4:
-                    if (a->type_ == QSC::arg_s::type_t::DBL) {
-                        obj.pos.y = a->dbl_;
-                        obj.original_pos.y = a->dbl_;
-                    }
-                    break;
-                case 5:
-                    if (a->type_ == QSC::arg_s::type_t::DBL) {
-                        obj.pos.z = a->dbl_;
-                        obj.original_pos.z = a->dbl_;
-                    }
-                    break;
-                case 6: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = a->dbl_; obj.original_rot.x = a->dbl_; } break;
-                case 7: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = a->dbl_; obj.original_rot.y = a->dbl_; } break;
-                case 8: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = a->dbl_; obj.original_rot.z = a->dbl_; } break;
-                case 9: if (a->type_ == QSC::arg_s::type_t::STR) obj.modelId = a->str_; break;
+        const QSC::arg_s* cur_a = a;
+        while (cur_a) {
+            if (isBuilding || isRigid) {
+                switch (arg_idx) {
+                    case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                    case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                    case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                    case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                    case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                    case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break;
+                    case 7: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
+                    case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
+                    case 9: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = cur_a->str_; break;
+                }
+            } else if (isSoldier) {
+                switch (arg_idx) {
+                    case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                    case 1: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.type = cur_a->str_; break;
+                    case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                    case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                    case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                    case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                    case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
+                    case 7: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = cur_a->str_; break;
+                }
+            } else if (isDoor) {
+                switch (arg_idx) {
+                    case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                    case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                    case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                    case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                    case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                    case 9: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break;
+                    case 10: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
+                    case 11: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
+                    case 12: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = cur_a->str_; break;
+                }
             }
-            a = a->next_;
+            cur_a = cur_a->next_;
             arg_idx++;
         }
 
-        // Extract numeric ID from taskId if it contains Task_New pattern
-        // Example: "Task_New(90, ...)" -> extract "90"
+        // Clean up taskId
         if (!obj.taskId.empty() && obj.taskId.find("Task_New(") == 0) {
             size_t parenStart = obj.taskId.find('(');
             size_t parenEnd = obj.taskId.find(',', parenStart);
             if (parenStart != std::string::npos && parenEnd != std::string::npos) {
-                std::string idStr = obj.taskId.substr(parenStart + 1, parenEnd - parenStart - 1);
-                // Trim whitespace
-                size_t start = idStr.find_first_not_of(" \t");
-                size_t end = idStr.find_last_not_of(" \t");
-                if (start != std::string::npos && end != std::string::npos) {
-                    obj.taskId = idStr.substr(start, end - start + 1);
-                } else {
-                    obj.taskId = idStr;
-                }
+                obj.taskId = obj.taskId.substr(parenStart + 1, parenEnd - parenStart - 1);
             }
-        }
-        objects_.push_back(obj);
-        Logger::Get().Log(LogLevel::INFO, "[LevelObjects]   -> Building: " + obj.modelId + 
-            " at (" + std::to_string(obj.pos.x) + ", " + std::to_string(obj.pos.y) + ", " + std::to_string(obj.pos.z) + ") " +
-            "rot (" + std::to_string(obj.rot.x) + ", " + std::to_string(obj.rot.y) + ", " + std::to_string(obj.rot.z) + ")");
-    }
-
-    // Parse EditRigidObjs
-    int num_props = qsc_objects->FindFuncByStr("EditRigidObj", qsc_funcs);
-    for (int i = 0; i < num_props; ++i) {
-        const QSC::func_s* f = qsc_funcs[i];
-        const QSC::arg_s* a = f->args_;
-
-        LevelObject obj;
-        obj.isBuilding = false;
-        obj.type = "EditRigidObj";
-
-        int arg_idx = 0;
-        while (a) {
-            switch (arg_idx) {
-                case 0: obj.taskId = TaskIdFromArg(a); break;
-                case 2: if (a->type_ == QSC::arg_s::type_t::STR) { obj.name = a->str_; obj.original_name = a->str_; obj.has_original_name = true; } break;
-                case 3:
-                    if (a->type_ == QSC::arg_s::type_t::DBL) {
-                        obj.pos.x = a->dbl_;
-                        obj.original_pos.x = a->dbl_;
-                    }
-                    break;
-                case 4:
-                    if (a->type_ == QSC::arg_s::type_t::DBL) {
-                        obj.pos.y = a->dbl_;
-                        obj.original_pos.y = a->dbl_;
-                    }
-                    break;
-                case 5:
-                    if (a->type_ == QSC::arg_s::type_t::DBL) {
-                        obj.pos.z = a->dbl_;
-                        obj.original_pos.z = a->dbl_;
-                    }
-                    break;
-                case 6: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = a->dbl_; obj.original_rot.x = a->dbl_; } break;
-                case 7: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = a->dbl_; obj.original_rot.y = a->dbl_; } break;
-                case 8: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = a->dbl_; obj.original_rot.z = a->dbl_; } break;
-                case 9: if (a->type_ == QSC::arg_s::type_t::STR) obj.modelId = a->str_; break;
-            }
-            a = a->next_;
-            arg_idx++;
         }
 
         objects_.push_back(obj);
-        Logger::Get().Log(LogLevel::INFO, "[LevelObjects]   -> Rigid: " + obj.modelId + 
-            " at (" + std::to_string(obj.pos.x) + ", " + std::to_string(obj.pos.y) + ", " + std::to_string(obj.pos.z) + ") " +
-            "rot (" + std::to_string(obj.rot.x) + ", " + std::to_string(obj.rot.y) + ", " + std::to_string(obj.rot.z) + ")");
-    }
-
-    // Parse HumanSoldiers (Male and Female)
-    const char* soldierTypes[] = { "HumanSoldier", "HumanSoldierFemale" };
-    for (const char* sType : soldierTypes) {
-        int num_soldiers = qsc_objects->FindFuncByStr(sType, qsc_funcs);
-        for (int i = 0; i < num_soldiers; ++i) {
-            const QSC::func_s* f = qsc_funcs[i];
-            const QSC::arg_s* a = f->args_;
-
-            LevelObject obj;
-            obj.isBuilding = false;
-            obj.type = sType; // Default to sType, but can be overridden by arg 1
-
-            int arg_idx = 0;
-            while (a) {
-                switch (arg_idx) {
-                    case 0: obj.taskId = TaskIdFromArg(a); break;
-                    case 1: if (a->type_ == QSC::arg_s::type_t::STR) obj.type = a->str_; break;
-                    case 2: if (a->type_ == QSC::arg_s::type_t::STR) { obj.name = a->str_; obj.original_name = a->str_; obj.has_original_name = true; } break;
-                    case 3: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = a->dbl_; obj.original_pos.x = a->dbl_; } break;
-                    case 4: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = a->dbl_; obj.original_pos.y = a->dbl_; } break;
-                    case 5: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = a->dbl_; obj.original_pos.z = a->dbl_; } break;
-                    case 6: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = a->dbl_; obj.original_rot.z = a->dbl_; } break;
-                    case 7: if (a->type_ == QSC::arg_s::type_t::STR) obj.modelId = a->str_; break;
-                }
-                a = a->next_;
-                arg_idx++;
-            }
-
-            // Extract numeric ID from taskId if it contains Task_New pattern
-            if (!obj.taskId.empty() && obj.taskId.find("Task_New(") == 0) {
-                size_t parenStart = obj.taskId.find('(');
-                size_t parenEnd = obj.taskId.find(',', parenStart);
-                if (parenStart != std::string::npos && parenEnd != std::string::npos) {
-                    std::string idStr = obj.taskId.substr(parenStart + 1, parenEnd - parenStart - 1);
-                    obj.taskId = idStr; // Simplified trim
-                }
-            }
-            objects_.push_back(obj);
-            Logger::Get().Log(LogLevel::INFO, "[LevelObjects]   -> Soldier (" + std::string(sType) + "): " + obj.modelId + " taskId=" + obj.taskId);
+        currentObjIdx = (int)objects_.size() - 1;
+        if (parentIdx != -1) {
+            objects_[parentIdx].childrenIndices.push_back(currentObjIdx);
         }
+        
+        Logger::Get().Log(LogLevel::INFO, "[LevelObjects]   -> " + typeStr + ": " + obj.modelId + 
+            " (parent: " + std::to_string(parentIdx) + ")");
+    } else {
+        // Non-object task (Container, etc.), propagate current parent index to nested calls
+        currentObjIdx = parentIdx;
     }
 
-    // Parse Doors
-    int num_doors = qsc_objects->FindFuncByStr("Door", qsc_funcs);
-    for (int i = 0; i < num_doors; ++i) {
-        const QSC::func_s* f = qsc_funcs[i];
-        const QSC::arg_s* a = f->args_;
-
-        LevelObject obj;
-        obj.isBuilding = false;
-        obj.type = "Door";
-
-        int arg_idx = 0;
-        while (a) {
-            switch (arg_idx) {
-                case 0: obj.taskId = TaskIdFromArg(a); break;
-                case 2: if (a->type_ == QSC::arg_s::type_t::STR) { obj.name = a->str_; obj.original_name = a->str_; obj.has_original_name = true; } break;
-                case 3: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = a->dbl_; obj.original_pos.x = a->dbl_; } break;
-                case 4: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = a->dbl_; obj.original_pos.y = a->dbl_; } break;
-                case 5: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = a->dbl_; obj.original_pos.z = a->dbl_; } break;
-                case 9: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = a->dbl_; obj.original_rot.x = a->dbl_; } break;
-                case 10: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = a->dbl_; obj.original_rot.y = a->dbl_; } break;
-                case 11: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = a->dbl_; obj.original_rot.z = a->dbl_; } break;
-                case 12: if (a->type_ == QSC::arg_s::type_t::STR) obj.modelId = a->str_; break;
-            }
-            a = a->next_;
-            arg_idx++;
+    // Always recurse into FUNC arguments
+    const QSC::arg_s* arg = func->args_;
+    while (arg) {
+        if (arg->type_ == QSC::arg_s::type_t::FUNC) {
+            LoadRecursive(arg->func_, currentObjIdx);
         }
-        objects_.push_back(obj);
-        Logger::Get().Log(LogLevel::INFO, "[LevelObjects]   -> Door: " + obj.modelId + " at (" + std::to_string(obj.pos.x) + ", " + std::to_string(obj.pos.y) + ", " + std::to_string(obj.pos.z) + ")");
+        arg = arg->next_;
     }
-
-
-    Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Load complete. Total objects: " + std::to_string(objects_.size()));
 }
 
 void LevelObjects::Unload() {

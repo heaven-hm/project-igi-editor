@@ -192,6 +192,7 @@ private:
 	void					UpdateViewDefine();
 	void					EditorProcessClick();
 	void					UpdateMarkerManipulation();
+	void					PropagateTransformToChildren(int parentIdx, const glm::dvec3& deltaPos, const glm::dvec3& deltaRot, const glm::dvec3& pivot);
 
 	// QSC/QVM workflow
 	void					LoadQSCForLevel(int level_no);
