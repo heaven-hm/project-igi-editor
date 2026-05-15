@@ -711,9 +711,22 @@ std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isB
         levelPath / (modelId + ".obj")
     };
     for (const auto& path : searchPaths) {
-        std::string pathStr = path.string();
-        if (std::filesystem::exists(pathStr)) {
-            return pathStr;
+        if (std::filesystem::exists(path)) return path.string();
+    }
+    
+    // 1b. Fallback to OTHER folder (buildings <-> objects)
+    std::string otherBase = isBuilding ? g_folders.objects_folder_ : g_folders.buildings_folder_;
+    for (char& c : otherBase) if (c == '/') c = '\\';
+    std::filesystem::path otherLevelPath = std::filesystem::path(otherBase) / levelDir;
+    
+    std::vector<std::filesystem::path> otherSearchPaths = { 
+        otherLevelPath / (modelId + ".glb"),
+        otherLevelPath / (modelId + ".obj")
+    };
+    for (const auto& path : otherSearchPaths) {
+        if (std::filesystem::exists(path)) {
+            Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Found " + modelId + " in ALTERNATE folder: " + path.string());
+            return path.string();
         }
     }
     

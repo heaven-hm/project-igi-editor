@@ -292,7 +292,7 @@ void App::LoadLevel(int level_no) {
 		SnapObjectsToTerrain();
 
 		// Level-specific rotation overrides for model 615 (Missile)
-		if (level_no == 9 || level_no == 12) {
+		if (level_no == 9 || level_no == 12 || level_no == 13) {
 			auto& objects = level_.GetLevelObjects().GetObjects();
 			for (auto& obj : objects) {
 				if (obj.modelId.find("615") == 0) {
@@ -303,6 +303,10 @@ void App::LoadLevel(int level_no) {
 					} else if (level_no == 9) {
 						obj.rot.x = 0.0;       // PITCH
 						obj.rot.y = -1.58;     // ROLL
+						obj.rot.z = 0.0;       // YAW
+					} else if (level_no == 13) {
+						obj.rot.x = 0.0;       // PITCH
+						obj.rot.y = -1.57;     // ROLL
 						obj.rot.z = 0.0;       // YAW
 					}
 					Logger::Get().Log(LogLevel::INFO, "[App] Applied missile rotation override for model " + obj.modelId + " in level " + std::to_string(level_no));
@@ -1159,7 +1163,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 				auto& obj = objects[selected_object_index_];
 				if (!Utils::IsUndergroundModel(obj.name, obj.modelId)) {
 					float terrainZ = 0.0f;
-					if (level_.GetTerrainZ(glm::vec3(obj.pos), terrainZ)) {
+					if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ)) {
 						float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
 						// Snap object bottom to terrain surface
 						obj.pos.z = (double)terrainZ + (double)(zOffset * 40.96f * obj.scale);
@@ -1356,7 +1360,7 @@ void App::Frame(float delta_seconds) {
 		UpdateViewDefine();
 		hover_object_index_ = PickObjectAtScreenPos(mouse_state_.prior_x_, mouse_state_.prior_y_);
 		float ground_z = 0.0f;
-		level_.GetTerrainZ(viewer_.pos_, ground_z);
+		level_.GetTerrainZ(viewer_.pos_.x, viewer_.pos_.y, ground_z);
 		Renderer::hud_params_s hud = {
 			.show_hud_ = true,
 			.status_msg_ = "IGI LINK: NATIVE MODE",
@@ -1441,7 +1445,7 @@ void App::Frame(float delta_seconds) {
 	float ground_z = 0.0f;
 	bridge_.SetEnabled(show_hud_);
 	IGIBridge::PositionData data = bridge_.GetLatestData();
-	level_.GetTerrainZ(viewer_.pos_, ground_z);
+	level_.GetTerrainZ(viewer_.pos_.x, viewer_.pos_.y, ground_z);
 
 	Renderer::hud_params_s hud = {
 		.show_hud_ = show_hud_,
@@ -1565,9 +1569,7 @@ void App::ProcessInput(float delta_seconds) {
 		if (viewer_.velocity_.z <= 0.0f) {
 
 			float ret_z = 0.0f;
-			glm::vec3 get_z_pos = viewer_.pos_;
-			get_z_pos.z = viewer_.pos_.z - VIEW_HEIGHT;
-			bool ok = level_.GetTerrainZ(get_z_pos, ret_z);
+			bool ok = level_.GetTerrainZ(viewer_.pos_.x, viewer_.pos_.y, ret_z);
 
 			if (ok) {
 				float view_z = ret_z + VIEW_HEIGHT;
@@ -1900,23 +1902,36 @@ void App::SnapObjectsToTerrain() {
     int skipped = 0;
     int failed = 0;
     for (auto& obj : objects) {
-        // Underground models (tunnels, junctions, etc.) keep their original Z
-        if (Utils::IsUndergroundModel(obj.name, obj.modelId)) {
-            Logger::Get().Log(LogLevel::INFO, "[App] Skipping snap for underground model: " + obj.modelId + " (" + obj.name + ")");
+        // Skip snapping for AI Soldiers and objects explicitly marked as "Underground"
+        if (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale" || obj.type == "Underground") {
+            Logger::Get().Log(LogLevel::INFO, "[App] Skipping snap for " + obj.type + ": " + obj.modelId);
             obj.snap_z_offset = 0.0;
             skipped++;
             continue;
         }
         float terrainZ = 0.0f;
-        if (level_.GetTerrainZ(glm::vec3(obj.pos.x, obj.pos.y, 0.0f), terrainZ)) {
+        bool isUnderground = Utils::IsUndergroundModel(obj.name, obj.modelId);
+        if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ, isUnderground)) {
             float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
             // Snap object bottom to terrain surface
             // Models are Y-up and rotated 90deg, so the bottom is at -min_y
             // After rotation, this becomes the Z offset in world space
             obj.snap_z_offset = (double)(zOffset * 40.96f * obj.scale);
             obj.pos.z = (double)terrainZ + obj.snap_z_offset;
+            
+            // Critical debug for user-reported issues
+            if (obj.modelId.find("471_") == 0 || obj.modelId.find("491_") == 0) {
+                Logger::Get().Log(LogLevel::INFO, "[SnapDebug] Model: " + obj.modelId + 
+                    " | TerrainZ: " + std::to_string(terrainZ) + 
+                    " | MeshZOffset: " + std::to_string(zOffset) + 
+                    " | Scale: " + std::to_string(obj.scale) + 
+                    " | FinalZ: " + std::to_string(obj.pos.z));
+            } else {
+                Logger::Get().Log(LogLevel::INFO, "[App] Snapped " + obj.modelId + " to Z=" + std::to_string(obj.pos.z));
+            }
             snapped++;
         } else {
+            Logger::Get().Log(LogLevel::WARNING, "[App] Snap FAILED for " + obj.modelId + " at (" + std::to_string(obj.pos.x) + ", " + std::to_string(obj.pos.y) + "). Outside terrain?");
             failed++;
         }
     }
@@ -2024,7 +2039,7 @@ void App::UpdateMarkerManipulation() {
 	if (input_.keys_ & MK_MANIP_S) {
 		if (!Utils::IsUndergroundModel(obj.name, obj.modelId)) {
 			float terrainZ = 0.0f;
-			if (level_.GetTerrainZ(glm::vec3(obj.pos), terrainZ)) {
+			if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ)) {
 				float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
 				obj.pos.z = (double)terrainZ + (double)(zOffset * 40.96f * obj.scale);
 				obj.modified = true;

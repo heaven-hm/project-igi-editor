@@ -139,43 +139,46 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
             "rot (" + std::to_string(obj.rot.x) + ", " + std::to_string(obj.rot.y) + ", " + std::to_string(obj.rot.z) + ")");
     }
 
-    // Parse HumanSoldiers
-    int num_soldiers = qsc_objects->FindFuncByStr("HumanSoldier", qsc_funcs);
-    for (int i = 0; i < num_soldiers; ++i) {
-        const QSC::func_s* f = qsc_funcs[i];
-        const QSC::arg_s* a = f->args_;
+    // Parse HumanSoldiers (Male and Female)
+    const char* soldierTypes[] = { "HumanSoldier", "HumanSoldierFemale" };
+    for (const char* sType : soldierTypes) {
+        int num_soldiers = qsc_objects->FindFuncByStr(sType, qsc_funcs);
+        for (int i = 0; i < num_soldiers; ++i) {
+            const QSC::func_s* f = qsc_funcs[i];
+            const QSC::arg_s* a = f->args_;
 
-        LevelObject obj;
-        obj.isBuilding = false;
-        obj.type = "HumanSoldier";
+            LevelObject obj;
+            obj.isBuilding = false;
+            obj.type = sType; // Default to sType, but can be overridden by arg 1
 
-        int arg_idx = 0;
-        while (a) {
-            switch (arg_idx) {
-                case 0: obj.taskId = TaskIdFromArg(a); break;
-                case 1: if (a->type_ == QSC::arg_s::type_t::STR) obj.type = a->str_; break;
-                case 2: if (a->type_ == QSC::arg_s::type_t::STR) { obj.name = a->str_; obj.original_name = a->str_; obj.has_original_name = true; } break;
-                case 3: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = a->dbl_; obj.original_pos.x = a->dbl_; } break;
-                case 4: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = a->dbl_; obj.original_pos.y = a->dbl_; } break;
-                case 5: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = a->dbl_; obj.original_pos.z = a->dbl_; } break;
-                case 6: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = a->dbl_; obj.original_rot.z = a->dbl_; } break;
-                case 7: if (a->type_ == QSC::arg_s::type_t::STR) obj.modelId = a->str_; break;
+            int arg_idx = 0;
+            while (a) {
+                switch (arg_idx) {
+                    case 0: obj.taskId = TaskIdFromArg(a); break;
+                    case 1: if (a->type_ == QSC::arg_s::type_t::STR) obj.type = a->str_; break;
+                    case 2: if (a->type_ == QSC::arg_s::type_t::STR) { obj.name = a->str_; obj.original_name = a->str_; obj.has_original_name = true; } break;
+                    case 3: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = a->dbl_; obj.original_pos.x = a->dbl_; } break;
+                    case 4: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = a->dbl_; obj.original_pos.y = a->dbl_; } break;
+                    case 5: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = a->dbl_; obj.original_pos.z = a->dbl_; } break;
+                    case 6: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = a->dbl_; obj.original_rot.z = a->dbl_; } break;
+                    case 7: if (a->type_ == QSC::arg_s::type_t::STR) obj.modelId = a->str_; break;
+                }
+                a = a->next_;
+                arg_idx++;
             }
-            a = a->next_;
-            arg_idx++;
-        }
 
-        // Extract numeric ID from taskId if it contains Task_New pattern
-        if (!obj.taskId.empty() && obj.taskId.find("Task_New(") == 0) {
-            size_t parenStart = obj.taskId.find('(');
-            size_t parenEnd = obj.taskId.find(',', parenStart);
-            if (parenStart != std::string::npos && parenEnd != std::string::npos) {
-                std::string idStr = obj.taskId.substr(parenStart + 1, parenEnd - parenStart - 1);
-                obj.taskId = idStr; // Simplified trim
+            // Extract numeric ID from taskId if it contains Task_New pattern
+            if (!obj.taskId.empty() && obj.taskId.find("Task_New(") == 0) {
+                size_t parenStart = obj.taskId.find('(');
+                size_t parenEnd = obj.taskId.find(',', parenStart);
+                if (parenStart != std::string::npos && parenEnd != std::string::npos) {
+                    std::string idStr = obj.taskId.substr(parenStart + 1, parenEnd - parenStart - 1);
+                    obj.taskId = idStr; // Simplified trim
+                }
             }
+            objects_.push_back(obj);
+            Logger::Get().Log(LogLevel::INFO, "[LevelObjects]   -> Soldier (" + std::string(sType) + "): " + obj.modelId + " taskId=" + obj.taskId);
         }
-        objects_.push_back(obj);
-        Logger::Get().Log(LogLevel::INFO, "[LevelObjects]   -> Soldier: " + obj.modelId + " taskId=" + obj.taskId);
     }
 
     // Parse Doors
@@ -193,12 +196,12 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
             switch (arg_idx) {
                 case 0: obj.taskId = TaskIdFromArg(a); break;
                 case 2: if (a->type_ == QSC::arg_s::type_t::STR) { obj.name = a->str_; obj.original_name = a->str_; obj.has_original_name = true; } break;
-                case 3: if (a->type_ == QSC::arg_s::type_t::DBL) obj.pos.x = a->dbl_; break;
-                case 4: if (a->type_ == QSC::arg_s::type_t::DBL) obj.pos.y = a->dbl_; break;
-                case 5: if (a->type_ == QSC::arg_s::type_t::DBL) obj.pos.z = a->dbl_; break;
-                case 9: if (a->type_ == QSC::arg_s::type_t::DBL) obj.rot.x = a->dbl_; break;
-                case 10: if (a->type_ == QSC::arg_s::type_t::DBL) obj.rot.y = a->dbl_; break;
-                case 11: if (a->type_ == QSC::arg_s::type_t::DBL) obj.rot.z = a->dbl_; break;
+                case 3: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = a->dbl_; obj.original_pos.x = a->dbl_; } break;
+                case 4: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = a->dbl_; obj.original_pos.y = a->dbl_; } break;
+                case 5: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = a->dbl_; obj.original_pos.z = a->dbl_; } break;
+                case 9: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = a->dbl_; obj.original_rot.x = a->dbl_; } break;
+                case 10: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = a->dbl_; obj.original_rot.y = a->dbl_; } break;
+                case 11: if (a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = a->dbl_; obj.original_rot.z = a->dbl_; } break;
                 case 12: if (a->type_ == QSC::arg_s::type_t::STR) obj.modelId = a->str_; break;
             }
             a = a->next_;
@@ -418,43 +421,53 @@ void LevelObjects::SaveToQSC(const std::string& qscPath) {
         }
 
         // Extract extra arguments and tail from the old line
-        size_t modelIdPosInLine = oldLine.find(modelIdToken);
+        // Determine which comma the model ID appears after, based on task type
+        int modelIdCommaIndex = 9; // Default for Building/EditRigidObj
+        if (taskTypeStr == "HumanSoldier" || taskTypeStr == "HumanSoldierFemale") modelIdCommaIndex = 7;
+        else if (taskTypeStr == "Door") modelIdCommaIndex = 12;
+
+        // Find the position in the old line where the model ID and extra args begin
+        size_t modelIdPosInLine = std::string::npos;
+        size_t currentPos = 0;
+        for (int c = 0; c < modelIdCommaIndex; ++c) {
+            currentPos = oldLine.find(',', currentPos);
+            if (currentPos == std::string::npos) break;
+            currentPos++;
+        }
+        
         std::string extraArgs;
-        std::string tail = ");"; // Default
-
-        if (modelIdPosInLine != std::string::npos) {
-            size_t argsStart = modelIdPosInLine + modelIdToken.length();
-            
-            // Find the point where the actual arguments end (comma or paren)
-            size_t lastParen = oldLine.find_last_of(')');
-            size_t lastComma = oldLine.find_last_of(',');
-            
-            size_t tailPos = std::string::npos;
-            if (lastParen != std::string::npos) {
-                tailPos = lastParen;
-                // Backtrack to find all consecutive parens
-                while (tailPos > argsStart && oldLine[tailPos - 1] == ')') {
-                    tailPos--;
-                }
-            } else if (lastComma != std::string::npos && lastComma >= argsStart) {
-                tailPos = lastComma;
+        std::string tail = ");";
+        
+        if (currentPos != std::string::npos) {
+            // Found the comma before model ID. Skip the old model ID to find extra args.
+            size_t oldModelIdEnd = oldLine.find(',', currentPos);
+            if (oldModelIdEnd == std::string::npos) {
+                // No more commas, check for closing paren
+                oldModelIdEnd = oldLine.find_last_of(')');
             }
-
-            if (tailPos != std::string::npos) {
-                extraArgs = oldLine.substr(argsStart, tailPos - argsStart);
-                tail = oldLine.substr(tailPos);
-            } else {
-                extraArgs = oldLine.substr(argsStart);
-                tail = "";
+            
+            if (oldModelIdEnd != std::string::npos) {
+                size_t tailPos = oldLine.find_last_of(')');
+                if (tailPos != std::string::npos) {
+                    // Backtrack to find all consecutive parens
+                    while (tailPos > oldModelIdEnd && oldLine[tailPos - 1] == ')') {
+                        tailPos--;
+                    }
+                    extraArgs = oldLine.substr(oldModelIdEnd, tailPos - oldModelIdEnd);
+                    tail = oldLine.substr(tailPos);
+                } else {
+                    extraArgs = oldLine.substr(oldModelIdEnd);
+                    tail = "";
+                }
             }
         }
-
         // Build new line with unified logic for extra arguments
         std::stringstream ss;
+        // modelIdToken already defined at line 355
         ss << indent << "Task_New(" << obj.taskId << ", " << quotedType << ", \"" << correctName << "\", ";
         ss << fmt(obj.pos.x) << ", " << fmt(obj.pos.y) << ", " << fmt(saveZ) << ", ";
         
-        if (taskTypeStr == "HumanSoldier") {
+        if (taskTypeStr == "HumanSoldier" || taskTypeStr == "HumanSoldierFemale") {
             // HumanSoldier only has one rotation (Yaw)
             ss << fmt(obj.rot.z) << ", ";
         } else if (taskTypeStr == "Door") {

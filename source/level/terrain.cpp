@@ -1148,7 +1148,7 @@ bool Terrain::GetFirstHMPCenter(glm::vec3& out_pos) const {
 	return false;
 }
 
-bool Terrain::GetZ(const dyn_cube_s* root_dyn_cube, const glm::vec3& pos, float & ret_z) {
+bool Terrain::GetZ(const dyn_cube_s* root_dyn_cube, double x, double y, float & ret_z, bool ignore_discard) {
 	// Safety check: ensure terrain data is loaded
 	if (!root_dyn_cube) {
 		Logger::Get().Log(LogLevel::WARNING, "[Terrain] GetZ called with null root_dyn_cube");
@@ -1159,10 +1159,12 @@ bool Terrain::GetZ(const dyn_cube_s* root_dyn_cube, const glm::vec3& pos, float 
 		return false;
 	}
 	
-	get_z_pos_ = pos;
+	get_z_pos_.x = x;
+	get_z_pos_.y = y;
+	get_z_pos_.z = 0.0;
 
 	glm::ivec3 cube_pos(0);
-	return RecursiveGetZ(root_dyn_cube, ctr_ + 1, cube_pos, 0, ROOT_CUBE_HALF_SIZE, 0, ret_z);
+	return RecursiveGetZ(root_dyn_cube, ctr_ + 1, cube_pos, 0, ROOT_CUBE_HALF_SIZE, 0, ret_z, ignore_discard);
 }
 
 void Terrain::ClearCubeDataHash() {
@@ -2646,7 +2648,7 @@ double Terrain::CalcHMPDeltaZ(const height_map_s* height_map, double vert_x, dou
 }
 
 bool Terrain::RecursiveGetZ(const dyn_cube_s* dyn_cube, const ctr_node_s* cube_node,
-	glm::ivec3 & cube_pos, int cube_level, int cube_dim, uint8_t trans_flag, float & ret_z)
+	glm::ivec3 & cube_pos, int cube_level, int cube_dim, uint8_t trans_flag, float & ret_z, bool ignore_discard)
 {
 	if (dyn_cube) {
 		DynCube_RunQTaskPushFunc(dyn_cube);
@@ -2859,7 +2861,7 @@ bool Terrain::RecursiveGetZ(const dyn_cube_s* dyn_cube, const ctr_node_s* cube_n
 							sub_dyn_cube = dyn_cube->children_[child_idx];
 						}
 
-						if (!sub_dyn_cube || !(cur_mod_options_ & TERRAIN_DISCARD_MOD) || !(sub_dyn_cube->flags_ & CUBE_FLAG_DISCARD_TERRAIN)) {
+						if (!sub_dyn_cube || ignore_discard || !(cur_mod_options_ & TERRAIN_DISCARD_MOD) || !(sub_dyn_cube->flags_ & CUBE_FLAG_DISCARD_TERRAIN)) {
 
 							found = RecursiveGetZ(
 								sub_dyn_cube,
@@ -2868,7 +2870,8 @@ bool Terrain::RecursiveGetZ(const dyn_cube_s* dyn_cube, const ctr_node_s* cube_n
 								sub_cube_level,
 								sub_cube_dim,
 								trans_lines[cube_node->cmd_transform_[child_idx]],
-								ret_z
+								ret_z,
+								ignore_discard
 							);
 
 							if (found) {
@@ -2912,7 +2915,7 @@ void Terrain::EditorRaycastAndModify(const dyn_cube_s* root_dyn_cube, const glm:
 		current_pos += ray_dir * step_size;
 		
 		float terrain_z = 0.0f;
-		if (GetZ(root_dyn_cube, current_pos, terrain_z)) {
+		if (GetZ(root_dyn_cube, current_pos.x, current_pos.y, terrain_z)) {
 			if (current_pos.z <= terrain_z + 100.0f) { // Added a tiny tolerance to prevent slipping through cracks
 				hit = true;
 				break;

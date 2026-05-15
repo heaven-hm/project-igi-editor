@@ -313,7 +313,9 @@ bool IsUndergroundModel(const std::string& name, const std::string& modelId) {
 		matches("JOINT") ||
 		matches("FIXER") ||
 		matches("JNT") ||
-		matches("FIX");
+		matches("FIX") ||
+		matches("471_") ||
+		matches("491_");
 }
 
 } // namespace Utils

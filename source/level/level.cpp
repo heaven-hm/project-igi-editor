@@ -499,9 +499,9 @@ void Level::SaveChanges() {
 	MoveTerrainToGamePath(cur_level_no_);
 }
 
-bool Level::GetTerrainZ(const glm::vec3& pos, float& z) {
+bool Level::GetTerrainZ(double x, double y, float& z, bool ignore_discard) {
 	if (root_dyn_cube_) {
-		return terrain_.GetZ(root_dyn_cube_, pos, z);
+		return terrain_.GetZ(root_dyn_cube_, x, y, z, ignore_discard);
 	}
 	else {
 		return false;
