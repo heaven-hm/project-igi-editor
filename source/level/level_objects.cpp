@@ -26,13 +26,13 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
     Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Starting recursive Load...");
 
     for (int i = 0; i < qsc_objects->GetRootFuncCount(); ++i) {
-        LoadRecursive(qsc_objects->GetRootFunc(i), -1);
+        LoadRecursive(qsc_objects, qsc_objects->GetRootFunc(i), -1);
     }
 
     Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Load complete. Total objects: " + std::to_string(objects_.size()));
 }
 
-void LevelObjects::LoadRecursive(const QSC::func_s* func, int parentIdx) {
+void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int parentIdx) {
     if (!func) return;
 
     const QSC::arg_s* a = func->args_;
@@ -64,153 +64,191 @@ void LevelObjects::LoadRecursive(const QSC::func_s* func, int parentIdx) {
     bool isSplineContainer = (typeStr == "SplineObj");
     bool isWire = (typeStr == "Wire");
 
+    bool isDecl = (typeStr == "Task_DeclareParameters");
+    bool isGrouping = (typeStr == "Container" || typeStr == "Static" || typeStr == "Game" || typeStr == "Level" || typeStr == "Flow" || typeStr == "Task" || typeStr == "Folder" ||
+                       typeStr == "container" || typeStr == "static" || typeStr == "game" || typeStr == "level" || typeStr == "flow" || typeStr == "task" || typeStr == "folder" || typeStr == "dynamic" || typeStr == "Dynamic");
+
     int currentObjIdx = -1;
 
-    if (isBuilding || isRigid || isSoldier || isDoor || isTerminal || isCamera || isHeli || isCar || isSpline || isSwitch || isSplineContainer || isWire) {
-        LevelObject obj;
-        obj.type = typeStr;
-        obj.isWire = isWire;
-        obj.isSplineContainer = isSplineContainer;
-        obj.isBuilding = isBuilding;
-        obj.parentIndex = parentIdx;
-
-        int arg_idx = 0;
-        const QSC::arg_s* cur_a = a;
-        while (cur_a) {
-            if (isBuilding || isRigid || isTerminal) {
-                switch (arg_idx) {
-                    case 0: obj.taskId = TaskIdFromArg(cur_a); break;
-                    case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
-                    case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
-                    case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
-                    case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
-                    case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break;
-                    case 7: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
-                    case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
-                    case 9: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
-                }
-            } else if (isSplineContainer) {
-                switch (arg_idx) {
-                    case 0: obj.taskId = TaskIdFromArg(cur_a); break;
-                    case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) obj.linearSegments = (cur_a->dbl_ != 0); break;
-                    case 7: if (cur_a->type_ == QSC::arg_s::type_t::DBL) obj.splineSegmentCount = (int)cur_a->dbl_; break;
-                    case 9: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
-                    case 10: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
-                    case 11: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
-                }
-            } else if (isSoldier) {
-                switch (arg_idx) {
-                    case 0: obj.taskId = TaskIdFromArg(cur_a); break;
-                    case 1: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.type = cur_a->str_; break;
-                    case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
-                    case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
-                    case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
-                    case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
-                    case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
-                    case 7: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
-                }
-            } else if (isDoor) {
-                switch (arg_idx) {
-                    case 0: obj.taskId = TaskIdFromArg(cur_a); break;
-                    case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
-                    case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
-                    case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
-                    case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
-                    case 9: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break;
-                    case 10: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
-                    case 11: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
-                    case 12: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
-                }
-            } else if (isCamera) {
-                switch (arg_idx) {
-                    case 0: obj.taskId = TaskIdFromArg(cur_a); break;
-                    case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
-                    case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
-                    case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
-                    case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
-                    case 10: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
-                }
-            } else if (isHeli || isCar) {
-                switch (arg_idx) {
-                    case 0: obj.taskId = TaskIdFromArg(cur_a); break;
-                    case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
-                    case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
-                    case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
-                    case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
-                    case 19: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
-                }
-            } else if (isWire) {
-                switch (arg_idx) {
-                    case 0: obj.taskId = TaskIdFromArg(cur_a); break;
-                    case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
-                    case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
-                    case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
-                    case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
-                    case 9: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
-                }
-            } else if (isSpline) {
-                obj.isSplineWaypoint = true;
-                switch (arg_idx) {
-                    case 0: obj.taskId = TaskIdFromArg(cur_a); break;
-                    case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
-                    case 3: case 4: case 5:
-                        if (cur_a->type_ == QSC::arg_s::type_t::DBL) {
-                            int matIdx = arg_idx - 3;
-                            if (matIdx < 3) obj.orientationMatrix[0][matIdx] = cur_a->dbl_; // Store as first row for Euler fallback
-                        }
-                        break;
-                    case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
-                    case 7: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
-                    case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
-                    case 9: 
-                        if (cur_a->type_ == QSC::arg_s::type_t::STR) {
-                            obj.modelId = cur_a->str_; 
-                            if (obj.modelId == "waypoint") obj.modelId = "";
-                        }
-                        break;
-                    case 10: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.segmentModelId = cur_a->str_; break;
-                }
-            } else if (isSwitch) {
-                switch (arg_idx) {
-                    case 0: obj.taskId = TaskIdFromArg(cur_a); break;
-                    case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
-                    case 12: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
-                    case 13: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
-                    case 14: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
-                    case 15: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = cur_a->str_; break;
-                }
+    // Extract raw line from QSC buffer if available
+    std::string rawLine;
+    if (qsc && func->line_ > 0) {
+        const char* scripts = qsc->GetScripts();
+        if (scripts) {
+            // Traverse scripts to find the start of the line
+            int currentLine = 1;
+            const char* p = scripts;
+            while (*p && currentLine < func->line_) {
+                if (*p == '\n') currentLine++;
+                p++;
             }
-            cur_a = cur_a->next_;
-            arg_idx++;
+            // Now p points to the start of the line
+            const char* lineStart = p;
+            while (*p && *p != '\n') p++;
+            rawLine = std::string(lineStart, p - lineStart);
         }
-
-        // Clean up taskId
-        if (!obj.taskId.empty() && obj.taskId.find("Task_New(") == 0) {
-            size_t parenStart = obj.taskId.find('(');
-            size_t parenEnd = obj.taskId.find(',', parenStart);
-            if (parenStart != std::string::npos && parenEnd != std::string::npos) {
-                obj.taskId = obj.taskId.substr(parenStart + 1, parenEnd - parenStart - 1);
-            }
-        }
-
-        objects_.push_back(obj);
-        currentObjIdx = (int)objects_.size() - 1;
-        if (parentIdx != -1) {
-            objects_[parentIdx].childrenIndices.push_back(currentObjIdx);
-        }
-        
-        Logger::Get().Log(LogLevel::INFO, "[LevelObjects]   -> " + typeStr + ": " + obj.modelId + 
-            " (parent: " + std::to_string(parentIdx) + ")");
-    } else {
-        // Non-object task (Container, etc.), propagate current parent index to nested calls
-        currentObjIdx = parentIdx;
     }
+
+    // Always create an object entry for the tree view
+    LevelObject obj;
+    obj.type = typeStr;
+    obj.isWire = isWire;
+    obj.isSplineContainer = isSplineContainer;
+    obj.isBuilding = isBuilding;
+    bool hasTerminator = (rawLine.find(';') != std::string::npos);
+    
+    // Core logic: If it doesn't have a semicolon, it's a tree/container.
+    // Exceptions: Declarations (isDecl) are never containers.
+    obj.isContainer = !hasTerminator && !isDecl;
+    
+    // Fallback: Even if it HAS a terminator, some types are explicitly groupings (though rare)
+    if (isGrouping) obj.isContainer = true;
+    
+    obj.parentIndex = parentIdx;
+    obj.expanded = false; // Closed by default as requested
+    obj.qscLine = rawLine;
+
+    int arg_idx = 0;
+    const QSC::arg_s* cur_a = a;
+    while (cur_a) {
+        if (isBuilding || isRigid || isTerminal) {
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break;
+                case 7: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
+                case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
+                case 9: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
+            }
+        } else if (isGrouping) {
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+            }
+        } else if (isSplineContainer) {
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) obj.linearSegments = (cur_a->dbl_ != 0); break;
+                case 7: if (cur_a->type_ == QSC::arg_s::type_t::DBL) obj.splineSegmentCount = (int)cur_a->dbl_; break;
+                case 9: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                case 10: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                case 11: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+            }
+        } else if (isSoldier) {
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 1: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.type = cur_a->str_; break;
+                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
+                case 7: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
+            }
+        } else if (isDoor) {
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                case 9: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break;
+                case 10: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
+                case 11: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
+                case 12: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
+            }
+        } else if (isCamera) {
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                case 10: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
+            }
+        } else if (isHeli || isCar) {
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                case 19: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
+            }
+        } else if (isWire) {
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                case 9: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
+            }
+        } else if (isSpline) {
+            obj.isSplineWaypoint = true;
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                case 3: case 4: case 5:
+                    if (cur_a->type_ == QSC::arg_s::type_t::DBL) {
+                        int matIdx = arg_idx - 3;
+                        if (matIdx < 3) obj.orientationMatrix[0][matIdx] = cur_a->dbl_; // Store as first row for Euler fallback
+                    }
+                    break;
+                case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                case 7: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                case 9: 
+                    if (cur_a->type_ == QSC::arg_s::type_t::STR) {
+                        obj.modelId = cur_a->str_; 
+                        if (obj.modelId == "waypoint") obj.modelId = "";
+                    }
+                    break;
+                case 10: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.segmentModelId = cur_a->str_; break;
+            }
+        } else if (isSwitch) {
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                case 12: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                case 13: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                case 14: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                case 15: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = cur_a->str_; break;
+            }
+        } else {
+            // Default: just try to get taskId from first arg
+            if (arg_idx == 0) obj.taskId = TaskIdFromArg(cur_a);
+        }
+        cur_a = cur_a->next_;
+        arg_idx++;
+    }
+
+    // Clean up taskId
+    if (!obj.taskId.empty() && obj.taskId.find("Task_New(") == 0) {
+        size_t parenStart = obj.taskId.find('(');
+        size_t parenEnd = obj.taskId.find(',', parenStart);
+        if (parenStart != std::string::npos && parenEnd != std::string::npos) {
+            obj.taskId = obj.taskId.substr(parenStart + 1, parenEnd - parenStart - 1);
+        }
+    }
+
+    objects_.push_back(obj);
+    currentObjIdx = (int)objects_.size() - 1;
+    if (parentIdx != -1) {
+        objects_[parentIdx].childrenIndices.push_back(currentObjIdx);
+    }
+    
+    Logger::Get().Log(LogLevel::INFO, "[LevelObjects]   -> " + typeStr + ": " + obj.modelId + 
+        " (parent: " + std::to_string(parentIdx) + ")");
 
     // Always recurse into FUNC arguments
     const QSC::arg_s* arg = func->args_;
     while (arg) {
         if (arg->type_ == QSC::arg_s::type_t::FUNC) {
-            LoadRecursive(arg->func_, currentObjIdx);
+            LoadRecursive(qsc, arg->func_, currentObjIdx);
         }
         arg = arg->next_;
     }
@@ -450,6 +488,7 @@ void LevelObjects::SaveToQSC(const std::string& qscPath) {
         
         std::string extraArgs;
         std::string tail = ");";
+        if (obj.childrenIndices.size() > 0) tail = ")"; // No semicolon for tree parents
         
         if (currentPos != std::string::npos) {
             // Found the comma before model ID. Skip the old model ID to find extra args.
@@ -474,43 +513,48 @@ void LevelObjects::SaveToQSC(const std::string& qscPath) {
                 }
             }
         }
-        // Build new line with unified logic for extra arguments
-        std::stringstream ss;
-        ss << indent << "Task_New(" << obj.taskId << ", " << quotedType << ", \"" << correctName << "\", ";
-        
-        if (taskTypeStr == "SplineObjWaypoint") {
-            // Special case for Spline: 3 rot args before Pos (based on latest snippet)
-            // Extract the 3 rotation arguments (args 3, 4, 5) from old line
-            size_t rotStart = 0;
-            for(int i=0; i<3; ++i) { rotStart = oldLine.find(',', rotStart); if(rotStart != std::string::npos) rotStart++; }
-            size_t rotEnd = rotStart;
-            for(int i=0; i<3; ++i) { rotEnd = oldLine.find(',', rotEnd); if(rotEnd != std::string::npos) rotEnd++; }
-            std::string rotBlock = "0, 0, 0, ";
-            if(rotStart != std::string::npos && rotEnd != std::string::npos) rotBlock = oldLine.substr(rotStart, rotEnd - rotStart);
-            
-            ss << rotBlock << fmt(saveX) << ", " << fmt(saveY) << ", " << fmt(saveZ) << ", \"" << obj.modelId << "\", ";
+        std::string newLine = oldLine;
+        if (!obj.qscLine.empty()) {
+            newLine = obj.qscLine;
         } else {
-            ss << fmt(saveX) << ", " << fmt(saveY) << ", " << fmt(saveZ) << ", ";
+            // Build new line with unified logic for extra arguments (fallback for new objects)
+            std::stringstream ss;
+            ss << indent << "Task_New(" << obj.taskId << ", " << quotedType << ", \"" << correctName << "\", ";
             
-            if (taskTypeStr == "HumanSoldier" || taskTypeStr == "HumanSoldierFemale") {
-                ss << fmt(obj.rot.z) << ", ";
-            } else if (taskTypeStr == "Door") {
-                ss << "0, 0, 0, "; // StopX, StopY, Slider (fallback)
-                ss << fmt(obj.rot.x) << ", " << fmt(obj.rot.y) << ", " << fmt(obj.rot.z) << ", ";
-            } else if (taskTypeStr == "SCamera") {
-                ss << fmt(obj.rot.z) << ", \"313_01_1\", -0.1, 0, "; // HolderGamma, HolderModel, CameraAlpha, CameraGamma (placeholders)
-            } else if (taskTypeStr == "Heli" || taskTypeStr == "Car") {
-                ss << "1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, "; // Orient, Thrust, Speed (placeholders)
-            } else if (taskTypeStr == "Switch") {
-                ss << "1, 0, 0, 0, 1, 0, 0, 0, 1, \"\", 0, "; // Orient, On, InitialOn (placeholders)
+            if (taskTypeStr == "SplineObjWaypoint") {
+                // Special case for Spline: 3 rot args before Pos (based on latest snippet)
+                // Extract the 3 rotation arguments (args 3, 4, 5) from old line
+                size_t rotStart = 0;
+                for(int i=0; i<3; ++i) { rotStart = oldLine.find(',', rotStart); if(rotStart != std::string::npos) rotStart++; }
+                size_t rotEnd = rotStart;
+                for(int i=0; i<3; ++i) { rotEnd = oldLine.find(',', rotEnd); if(rotEnd != std::string::npos) rotEnd++; }
+                std::string rotBlock = "0, 0, 0, ";
+                if(rotStart != std::string::npos && rotEnd != std::string::npos) rotBlock = oldLine.substr(rotStart, rotEnd - rotStart);
+                
+                ss << rotBlock << fmt(saveX) << ", " << fmt(saveY) << ", " << fmt(saveZ) << ", \"" << obj.modelId << "\", ";
             } else {
-                // Buildings, RigidObjs, Terminals
-                ss << fmt(obj.rot.x) << ", " << fmt(obj.rot.y) << ", " << fmt(obj.rot.z) << ", ";
+                ss << fmt(saveX) << ", " << fmt(saveY) << ", " << fmt(saveZ) << ", ";
+                
+                if (taskTypeStr == "HumanSoldier" || taskTypeStr == "HumanSoldierFemale") {
+                    ss << fmt(obj.rot.z) << ", ";
+                } else if (taskTypeStr == "Door") {
+                    ss << "0, 0, 0, "; // StopX, StopY, Slider (fallback)
+                    ss << fmt(obj.rot.x) << ", " << fmt(obj.rot.y) << ", " << fmt(obj.rot.z) << ", ";
+                } else if (taskTypeStr == "SCamera") {
+                    ss << fmt(obj.rot.z) << ", \"313_01_1\", -0.1, 0, "; // HolderGamma, HolderModel, CameraAlpha, CameraGamma (placeholders)
+                } else if (taskTypeStr == "Heli" || taskTypeStr == "Car") {
+                    ss << "1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, "; // Orient, Thrust, Speed (placeholders)
+                } else if (taskTypeStr == "Switch") {
+                    ss << "1, 0, 0, 0, 1, 0, 0, 0, 1, \"\", 0, "; // Orient, On, InitialOn (placeholders)
+                } else {
+                    // Buildings, RigidObjs, Terminals
+                    ss << fmt(obj.rot.x) << ", " << fmt(obj.rot.y) << ", " << fmt(obj.rot.z) << ", ";
+                }
             }
+            
+            ss << modelIdToken << extraArgs << tail;
+            newLine = ss.str();
         }
-        
-        ss << modelIdToken << extraArgs << tail;
-        std::string newLine = ss.str();
 
         content.replace(lineStart, lineEnd - lineStart, newLine);
     }
@@ -542,3 +586,193 @@ void LevelObjects::SaveToQSC(const std::string& qscPath) {
     Logger::Get().Log(LogLevel::INFO, "[LevelObjects::SaveToQSC] Successfully saved changes to: " + qscPath);
 }
 
+void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
+    if (line.empty()) return;
+    obj.modified = true;
+    
+    // Rudimentary parser for the Task Editor "Notepad" edits
+    // It looks for patterns like Task_New(ID, "Type", "Name", X, Y, Z, RX, RY, RZ, "Model", ...)
+    
+    // Extract taskId
+    size_t p1 = line.find('(');
+    size_t p2 = line.find(',', p1);
+    if (p1 != std::string::npos && p2 != std::string::npos) {
+        obj.taskId = Utils::Trim(line.substr(p1 + 1, p2 - p1 - 1));
+    }
+    
+    // Extract Type and Name
+    size_t quote1 = line.find('"', p2);
+    size_t quote2 = line.find('"', quote1 + 1);
+    if (quote1 != std::string::npos && quote2 != std::string::npos) {
+        obj.type = line.substr(quote1 + 1, quote2 - quote1 - 1);
+        
+        size_t quote3 = line.find('"', quote2 + 1);
+        size_t quote4 = line.find('"', quote3 + 1);
+        if (quote3 != std::string::npos && quote4 != std::string::npos) {
+            obj.name = line.substr(quote3 + 1, quote4 - quote3 - 1);
+        }
+    }
+    
+    // Extract numeric arguments (Pos and Rot)
+    // We split by comma and try to find where X,Y,Z are based on type
+    std::vector<std::string> args;
+    std::string currentArg;
+    bool inQuote = false;
+    for (size_t i = (p1 != std::string::npos ? p1 + 1 : 0); i < line.size(); ++i) {
+        if (line[i] == '"') inQuote = !inQuote;
+        if (line[i] == ',' && !inQuote) {
+            args.push_back(Utils::Trim(currentArg));
+            currentArg = "";
+        } else if (line[i] == ')' && !inQuote) {
+            break;
+        } else {
+            currentArg += line[i];
+        }
+    }
+    args.push_back(Utils::Trim(currentArg));
+    
+    // Args indices for Task_New:
+    // 0: taskId, 1: type, 2: name, 3: X, 4: Y, 5: Z, 6: RX, 7: RY, 8: RZ, 9: modelId
+    if (args.size() > 5) {
+        try {
+            if (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale") {
+                obj.pos.x = std::stod(args[3]);
+                obj.pos.y = std::stod(args[4]);
+                obj.pos.z = std::stod(args[5]);
+                if (args.size() > 6) obj.rot.z = std::stod(args[6]);
+                if (args.size() > 7) obj.modelId = Utils::Trim(args[7]);
+            } else if (obj.type == "Door") {
+                obj.pos.x = std::stod(args[3]);
+                obj.pos.y = std::stod(args[4]);
+                obj.pos.z = std::stod(args[5]);
+                // RX, RY, RZ are later in Door (after 3 sliding args)
+                if (args.size() > 11) {
+                    obj.rot.x = std::stod(args[9]);
+                    obj.rot.y = std::stod(args[10]);
+                    obj.rot.z = std::stod(args[11]);
+                }
+                if (args.size() > 12) obj.modelId = Utils::Trim(args[12]);
+            } else {
+                // Buildings, RigidObjs, etc.
+                obj.pos.x = std::stod(args[3]);
+                obj.pos.y = std::stod(args[4]);
+                obj.pos.z = std::stod(args[5]);
+                if (args.size() > 8) {
+                    obj.rot.x = std::stod(args[6]);
+                    obj.rot.y = std::stod(args[7]);
+                    obj.rot.z = std::stod(args[8]);
+                }
+                if (args.size() > 9) obj.modelId = Utils::Trim(args[9]);
+            }
+        } catch (...) {
+            // Ignore parse errors from user typos
+        }
+    }
+    
+    obj.modified = true;
+}
+
+void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
+    if (obj.qscLine.empty()) return;
+    
+    // We update the numbers in the qscLine based on the current obj.pos/rot
+    // Since manually parsing and replacing numbers in a string is error-prone,
+    // we use a simplified regeneration for the "core" part of the task.
+    
+    std::string typeToken = "\"" + obj.type + "\"";
+    std::string nameToken = "\"" + obj.name + "\"";
+    
+    auto fmt = [](double v) {
+        char buf[64];
+        sprintf(buf, "%.1f", v);
+        std::string s = buf;
+        if (s.find('.') != std::string::npos) {
+            while (s.size() > 1 && s.back() == '0') s.pop_back();
+            if (s.back() == '.') s.pop_back();
+        }
+        return s;
+    };
+    
+    // Find the args start
+    size_t p3 = obj.qscLine.find(nameToken);
+    if (p3 == std::string::npos) return;
+    p3 = obj.qscLine.find(',', p3 + nameToken.size());
+    if (p3 == std::string::npos) return;
+    p3++; // Start of X arg
+    
+    // Find the end of RX,RY,RZ or ModelID block
+    // We basically want to replace the numbers between p3 and the modelId or end.
+    // To be safe, we reconstruct the line head and preserve the tail.
+    
+    size_t headEnd = p3;
+    // ... complex logic ...
+    // For now, let's just mark it as modified and SaveToQSC will handle it using the obj.pos/rot.
+    // BUT the user wants the Notepad to show the live data if they move it.
+    
+    // Let's do a simple replacement for the first 3 numbers (X, Y, Z)
+    std::stringstream ss;
+    ss << " " << fmt(obj.pos.x) << ", " << fmt(obj.pos.y) << ", " << fmt(obj.pos.z - obj.snap_z_offset) << ", ";
+    
+    // Find the 3rd comma after p3
+    size_t pEnd = p3;
+    for(int i=0; i<3; ++i) {
+        pEnd = obj.qscLine.find(',', pEnd);
+        if (pEnd == std::string::npos) break;
+        pEnd++;
+    }
+    
+    if (pEnd != std::string::npos) {
+        obj.qscLine.replace(p3, pEnd - p3, ss.str());
+    }
+}
+
+std::string LevelObjects::GenerateTaskLine(const LevelObject& obj) {
+    if (!obj.qscLine.empty()) {
+        return obj.qscLine;
+    }
+    
+    // Fallback if not populated
+    std::string correctName = obj.name;
+    if (correctName.empty() && !obj.has_original_name) {
+        correctName = GetModelName(obj.modelId);
+    }
+    
+    auto fmt = [](double v) {
+        char buf[64];
+        sprintf(buf, "%.1f", v);
+        std::string s = buf;
+        if (s.find('.') != std::string::npos) {
+            while (s.size() > 1 && s.back() == '0') s.pop_back();
+            if (s.back() == '.') s.pop_back();
+        }
+        return s;
+    };
+
+    std::stringstream ss;
+    ss << "Task_New(" << obj.taskId << ", \"" << obj.type << "\", \"" << correctName << "\", ";
+    
+    if (obj.type == "SplineObjWaypoint") {
+        ss << "0, 0, 0, " << fmt(obj.pos.x) << ", " << fmt(obj.pos.y) << ", " << fmt(obj.pos.z) << ", \"" << obj.modelId << "\", );";
+    } else {
+        ss << fmt(obj.pos.x) << ", " << fmt(obj.pos.y) << ", " << fmt(obj.pos.z) << ", ";
+        
+        if (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale") {
+            ss << fmt(obj.rot.z) << ", \"" << obj.modelId << "\", );";
+        } else if (obj.type == "Door") {
+            ss << "0, 0, 0, " << fmt(obj.rot.x) << ", " << fmt(obj.rot.y) << ", " << fmt(obj.rot.z) << ", \"" << obj.modelId << "\", );";
+        } else if (obj.type == "SCamera") {
+            ss << fmt(obj.rot.z) << ", \"313_01_1\", -0.1, 0, \"" << obj.modelId << "\", );";
+        } else if (obj.type == "Heli" || obj.type == "Car") {
+            ss << "1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, \"" << obj.modelId << "\", );";
+        } else if (obj.type == "Switch") {
+            ss << "1, 0, 0, 0, 1, 0, 0, 0, 1, \"\", 0, \"" << obj.modelId << "\", );";
+        } else if (obj.isContainer) {
+            ss << ");";
+        } else {
+            // Buildings, RigidObjs, Terminals
+            ss << fmt(obj.rot.x) << ", " << fmt(obj.rot.y) << ", " << fmt(obj.rot.z) << ", \"" << obj.modelId << "\", );";
+        }
+    }
+    
+    return ss.str();
+}

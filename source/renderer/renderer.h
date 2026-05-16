@@ -63,7 +63,15 @@ public:
 		int hover_object_index_;
 		int mouse_x_;
 		int mouse_y_;
+		int tree_scroll_offset = 0; // For scrolling the object tree
+		bool tree_decl_expanded = false;
 		const class LevelObjects* level_objects_;
+		bool task_editor_open_;
+		std::string edit_string_;
+		int edit_box_w_;
+		int edit_box_h_;
+		int edit_cursor_pos_;
+		bool enable_camera_mode_;
 	};
 
 

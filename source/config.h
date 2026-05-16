@@ -31,14 +31,14 @@ struct ConfigData {
     char keyResetOri;
 
     // [Marker] - Shortcuts
-    char teleportToMarker;
-    char resetMarkerToPlayer;
+    int teleportToMarker; // Changed to int for VK codes
+    int resetMarkerToPlayer;
 
     // Movement Keys
-    char keyMoveForward;
-    char keyMoveBackward;
-    char keyMoveLeft;
-    char keyMoveRight;
+    int keyMoveForward;
+    int keyMoveBackward;
+    int keyMoveLeft;
+    int keyMoveRight;
 
     // [UI] - Font and UI settings
     float fontSize;
@@ -53,6 +53,33 @@ struct ConfigData {
     KeyBinding keyQuit;
     KeyBinding keyHelp;
     KeyBinding keyResetScript;
+
+    // NEW: Camera Controls
+    KeyBinding keyEnableCamera;
+    KeyBinding keyMoveCameraForward;
+    KeyBinding keyMoveCameraBackward;
+    KeyBinding keyAdjustCameraRadius;
+    KeyBinding keyLookDown;
+    KeyBinding keySnapToObject;
+    KeyBinding keySnapToGround;
+    KeyBinding keyClipMode;
+
+    // NEW: Task Controls
+    KeyBinding keyCreateNewTask;
+    KeyBinding keyCopyTask;
+    KeyBinding keyPasteTask;
+    KeyBinding keyDeleteTask;
+    KeyBinding keyAssignTaskID;
+
+    // NEW: Animation Tasks
+    KeyBinding keyStartRecording;
+    KeyBinding keyGoToCursor;
+    KeyBinding keySyncPlayback;
+
+    // NEW: Miscellaneous
+    KeyBinding keyUndo;
+    KeyBinding keyRedo;
+    KeyBinding keyReloadSettings;
 };
 
 class Config {

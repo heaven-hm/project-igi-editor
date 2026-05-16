@@ -108,6 +108,10 @@ static void OnMouse(int button, int state, int x, int y) {
 	g_app.Input_OnMouse(button, state, x, y);
 }
 
+static void OnMouseWheel(int wheel, int direction, int x, int y) {
+	g_app.Input_OnMouseWheel(wheel, direction, x, y);
+}
+
 static void OnMotion(int x, int y) {
 	g_app.Input_OnMotion(x, y);
 }
@@ -587,7 +591,7 @@ int main(int argc, char **argv) {
 	int pos_y = (screen_cy - wnd_h) >> 1;
 	glutInitWindowPosition(pos_x, pos_y);
 	glutInitWindowSize(wnd_w, wnd_h);
-	glutCreateWindow("IGI Editor v 0.0.2 BETA - Jones - HM");
+	glutCreateWindow("IGI 1 Editor v0.0.5 - JonesHM");
 
 #if defined(_WIN32)
 	// Load icon from file and set it
@@ -684,6 +688,7 @@ int main(int argc, char **argv) {
 	// setup glut callbacks
 	glutReshapeFunc(OnReshape);
 	glutMouseFunc(OnMouse);
+	glutMouseWheelFunc(OnMouseWheel);
 	glutMotionFunc(OnMotion);
 	glutPassiveMotionFunc(OnMotion); // trace cursor movement even cursor outside the viewport
 	glutSpecialFunc(OnSpecial);

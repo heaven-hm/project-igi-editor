@@ -273,6 +273,8 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     GLint loc_tex      = glGetUniformLocation(shader_program_, "u_texture");
 
     for (const auto& obj : objects) {
+        if (obj.deleted) continue;
+        
         // Selective rendering logic
         bool shouldDraw = false;
         if (draw_parts & DRAW_OBJECTS) {

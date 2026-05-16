@@ -184,6 +184,7 @@ public:
 
 	int						GetRootFuncCount() const { return root_func_count_; }
 	const func_s*			GetRootFunc(int idx) const { return root_funcs_[idx]; }
+	const char*				GetScripts() const { return scripts_; }
 
 	// debug
 	void					Print() const;

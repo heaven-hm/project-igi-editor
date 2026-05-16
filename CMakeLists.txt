@@ -56,7 +56,10 @@ source_group("shaders/45" FILES ${SHADERS_45})
 add_executable(igi-editor ${SOURCES} ${SOURCES_LEVEL} ${SOURCES_RENDERER} ${SHADERS_41} ${SHADERS_45})
 
 if (WIN32)
-  set_target_properties(igi-editor PROPERTIES ICON ${PROJECT_SOURCE_DIR}/assets/igi-editor-icon.ico)
+  set_target_properties(igi-editor PROPERTIES 
+    ICON ${PROJECT_SOURCE_DIR}/assets/igi-editor-icon.ico
+    OUTPUT_NAME "igi1ed"
+  )
 endif()
 
 target_precompile_headers(igi-editor PRIVATE source/pch.h)

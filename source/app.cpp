@@ -47,16 +47,18 @@ constexpr int MK_MANIP_SPACE	= FLAG_BIT(15);
 App::App():
 	frame_(0),
 	terrain_mod_options_(-1),
-	edit_mode_(false),
+	edit_mode_(true), // Enable by default as requested
 	terrain_edit_enabled_(false),
+	pause_mode_(false),
 	edit_brush_(0), // 0: raise, 1: lower
 	selected_object_index_(0),
 	hover_object_index_(-1),
 	show_hud_(true),
 	show_debug_(false),
 	show_help_(false),
-
-
+	tree_scroll_offset_(0),
+	tree_decl_expanded_(false),
+	noclip_mode_(true), // By default true as requested by user
 	prior_frame_time_(0),
 	skip_input_on_motion_once_(false)
 {
@@ -88,9 +90,10 @@ App::App():
 	window_state_.cursor_visible_ = true;
 
 	memset(&viewer_, 0, sizeof(viewer_));
-	viewer_.clip_to_z_ = true;
+	viewer_.clip_to_z_ = false;
 	viewer_.move_speed_ = MIN_MOVE_SPEED;
 	viewer_.jump_speed_ = MIN_JUMP_SPEED;
+	window_state_.cursor_visible_ = true;
 }
 
 App::~App() {
@@ -234,6 +237,9 @@ bool App::Init(int argc, char** argv) {
 	bridge_.Start();
 
 
+	// Set initial cursor state
+	glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
+	
 	return true;
 }
 
@@ -759,6 +765,17 @@ void App::OnDisplay() {
 }
 
 // input
+void App::Input_OnMouseWheel(int wheel, int direction, int x, int y) {
+	if (show_hud_ && x < 350) { // Over TreeView
+		if (direction > 0) {
+			if (tree_scroll_offset_ > 0) tree_scroll_offset_--;
+		} else {
+			tree_scroll_offset_++;
+		}
+		Logger::Get().Log(LogLevel::INFO, "[App] Tree scroll offset: " + std::to_string(tree_scroll_offset_));
+	}
+}
+
 void App::Input_OnMouse(int button, int state, int x, int y) {
 	// Update mouse position first so EditorProcessClick uses correct coords
 	mouse_state_.prior_x_ = x;
@@ -768,7 +785,37 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 		if (GLUT_DOWN == state) {
 			mouse_state_.left_button_down_ = true;
 			
-			if (edit_mode_) {
+			if (pause_mode_) {
+				// *** MUST match renderer.cpp pause menu constants exactly ***
+				const int menu_w = 380;
+				const int menu_h = 280;
+				const int menu_x = (window_state_.viewport_width_  - menu_w) / 2;
+				const int screen_menu_top = (window_state_.viewport_height_ - menu_h) / 2;
+
+				// Buttons start at screen_menu_top + 80, spaced 35px
+				auto btn_hit = [&](int idx, int mouse_y) -> bool {
+					int btn_y = screen_menu_top + 80 + idx * 35;
+					return (mouse_y >= btn_y - 15 && mouse_y <= btn_y + 15);
+				};
+
+				if (x >= menu_x && x <= menu_x + menu_w &&
+				    y >= screen_menu_top && y <= screen_menu_top + menu_h) {
+					mouse_state_.left_button_down_ = false;
+					if      (btn_hit(0, y)) { TogglePauseMenu(); }                    // Resume
+					else if (btn_hit(1, y)) { show_debug_ = !show_debug_; }           // Debug
+					else if (btn_hit(2, y)) { ResetLevel(); TogglePauseMenu(); }      // Reset Level
+					else if (btn_hit(3, y)) { SaveCurrentLevel(); }                   // Save Level
+					else if (btn_hit(4, y)) { exit(0); }                              // Quit
+				}
+				return; // Block all other interactions while paused
+			}
+
+			// Priority: TreeView HUD interaction
+			if (show_hud_ && x < 350) { // Tree is on the left
+				ProcessTreeViewClick(x, y);
+
+			}
+			else if (edit_mode_) {
 				EditorProcessClick(); 
 				// Update manipulation data AFTER selection, so we get the newly selected object
 				marker_manip_.start_x_ = x;
@@ -792,17 +839,41 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 }
 
 void App::Input_OnMotion(int x, int y) {
-	// Always update hover detection
-	hover_object_index_ = PickObjectAtScreenPos(x, y);
+	int dx = x - mouse_state_.prior_x_;
+	int dy = y - mouse_state_.prior_y_;
 
-	// Always update mouse coordinates for hover tooltip
+	bool enableCameraMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
+
+	// Always update mouse coordinates for hover tooltip/interaction
 	mouse_state_.prior_x_ = x;
 	mouse_state_.prior_y_ = y;
 
+	// Priority 1: TreeView Hover
+	if (show_hud_ && x < 350 && !enableCameraMode) {
+		ProcessTreeViewHover(x, y);
+	} else {
+		// Priority 2: 3D Object Hover
+		if (enableCameraMode) {
+			int cx = window_state_.viewport_width_ >> 1;
+			int cy = window_state_.viewport_height_ >> 1;
+			hover_object_index_ = PickObjectAtScreenPos(cx, cy);
+		} else {
+			hover_object_index_ = PickObjectAtScreenPos(x, y);
+		}
+	}
+
 	if (window_state_.cursor_visible_) {
+		if (enableCameraMode) {
+			glutSetCursor(GLUT_CURSOR_NONE);
+		} else {
+			glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
+		}
+	}
+
+	if (window_state_.cursor_visible_ && !enableCameraMode) {
 		if (mouse_state_.left_button_down_) {
-			input_.mouse_delta_x_ = x - mouse_state_.prior_x_;
-			input_.mouse_delta_y_ = y - mouse_state_.prior_y_;
+			input_.mouse_delta_x_ = dx;
+			input_.mouse_delta_y_ = dy;
 
 			if (edit_mode_ && selected_object_index_ >= 0 && !terrain_edit_enabled_) {
 				UpdateMarkerManipulation();
@@ -832,6 +903,17 @@ void App::Input_OnMotion(int x, int y) {
 void App::Input_OnSpecial(int key, int x, int y) {
 	auto& config = Config::Get();
 
+	if (task_editor_open_) {
+		// Task editor handles its own input or blocks others
+		if (key == GLUT_KEY_LEFT) {
+			edit_cursor_pos_ = std::max(0, edit_cursor_pos_ - 1);
+		}
+		if (key == GLUT_KEY_RIGHT) {
+			edit_cursor_pos_ = std::min((int)edit_string_.size(), edit_cursor_pos_ + 1);
+		}
+		return;
+	}
+
 	// Check configurable keybindings for special keys (F-keys, etc.)
 	// Save
 	if (Utils::IsKeyBindingPressed(config.keySave)) {
@@ -854,6 +936,14 @@ void App::Input_OnSpecial(int key, int x, int y) {
 	// Quit
 	if (Utils::IsKeyBindingPressed(config.keyQuit)) {
 		exit(0);
+		return;
+	}
+
+	// Clip Mode
+	if (Utils::IsKeyBindingPressed(config.keyClipMode)) {
+		noclip_mode_ = !noclip_mode_;
+		Logger::Get().Log(LogLevel::INFO, std::string("[App] Clip Mode (NoCollision) set to ") + (noclip_mode_ ? "ENABLED" : "DISABLED"));
+		printf("Clip Mode (NoCollision): %s\n", noclip_mode_ ? "ENABLED" : "DISABLED");
 		return;
 	}
 
@@ -889,15 +979,13 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		printf("Terrain Editing: %s\n", terrain_edit_enabled_ ? "ENABLED" : "DISABLED");
 		return;
 	}
-	else if (key == GLUT_KEY_F3) {
-		viewer_.clip_to_z_ = !viewer_.clip_to_z_;
-		return;
-	}
-	else if (key == GLUT_KEY_F4) {
-		ToggleEditMode();
-		return;
-	}
 
+	// Reload Settings
+	if (Utils::IsKeyBindingPressed(config.keyReloadSettings)) {
+		Config::Init(); // Re-read config.ini
+		Logger::Get().Log(LogLevel::INFO, "[App] Settings reloaded from config.ini");
+		return;
+	}
 	if (key == GLUT_KEY_PAGE_UP) {
 		viewer_.move_speed_ *= 2.0f;
 		viewer_.jump_speed_ *= 2.0f;
@@ -953,6 +1041,16 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		}
 		return;
 	}
+
+	// Task Controls for special keys (INSERT, DELETE)
+	if (Utils::IsKeyBindingPressed(config.keyCreateNewTask)) {
+		CreateNewTask();
+		return;
+	}
+	if (Utils::IsKeyBindingPressed(config.keyDeleteTask)) {
+		DeleteSelectedTask();
+		return;
+	}
 }
 
 void App::Input_OnSpecialUp(int key, int x, int y) {
@@ -997,21 +1095,73 @@ struct movement_key_s {
 
 static constexpr movement_key_s MOVEMENT_KEYS[] = {
 	'q', 'Q', MK_STRAIGHT_UP,
-	'z', 'Z', MK_STRAIGHT_DOWN,
-	' ', ' ', MK_JUMP
+	'z', 'Z', MK_STRAIGHT_DOWN
 };
 
-static constexpr movement_key_s MANIP_KEYS[] = {
-	'a', 'A', MK_MANIP_A,
-	'b', 'B', MK_MANIP_B,
-	'g', 'G', MK_MANIP_G,
-	's', 'S', MK_MANIP_S,
-	'o', 'O', MK_MANIP_O,
-	' ', ' ', MK_MANIP_SPACE
-};
+// Manip keys are now handled directly in Input_OnKeyboard using config values
 
 void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	auto& config = Config::Get();
+
+	// Task Controls (CTRL+C, CTRL+V, CTRL+I, etc.)
+	if (Utils::IsKeyBindingPressed(config.keyCreateNewTask)) {
+		CreateNewTask();
+		return;
+	}
+	if (Utils::IsKeyBindingPressed(config.keyCopyTask)) {
+		CopySelectedTask(true);
+		return;
+	}
+	if (Utils::IsKeyBindingPressed(config.keyPasteTask)) {
+		PasteTask();
+		return;
+	}
+	if (Utils::IsKeyBindingPressed(config.keyDeleteTask)) {
+		DeleteSelectedTask();
+		return;
+	}
+	if (Utils::IsKeyBindingPressed(config.keyAssignTaskID)) {
+		AssignTaskID();
+		return;
+	}
+
+	if (task_editor_open_) {
+		if (key == 27) { // ESC - Save and close
+			if (selected_object_index_ >= 0) {
+				auto& obj = level_.GetLevelObjects().GetObjects()[selected_object_index_];
+				obj.qscLine = edit_string_;
+				level_.GetLevelObjects().ParseTaskLine(obj.qscLine, obj);
+				Logger::Get().Log(LogLevel::INFO, "[App] Saved and parsed task QSC line from Notepad.");
+			}
+			task_editor_open_ = false;
+			edit_cursor_pos_ = 0;
+			// Clear stale drag state so mouse is not stuck after closing editor
+			input_.mouse_delta_x_ = 0;
+			input_.mouse_delta_y_ = 0;
+			mouse_state_.left_button_down_ = false;
+			return;
+		}
+		if (key == 8) { // Backspace
+			if (edit_cursor_pos_ > 0 && !edit_string_.empty()) {
+				edit_string_.erase(edit_cursor_pos_ - 1, 1);
+				edit_cursor_pos_--;
+			}
+			return;
+		}
+		if (key == 13) { // Enter - Multi-line
+			edit_string_.insert(edit_cursor_pos_, 1, '\n');
+			edit_cursor_pos_++;
+			return;
+		}
+		if (key >= 32 && key <= 126) { // Printable characters
+			edit_string_.insert(edit_cursor_pos_, 1, key);
+			edit_cursor_pos_++;
+			return;
+		}
+		
+		// Resizing with Alt + Arrows (Handled in Input_OnSpecial for Arrows, but if GLUT sends them here...)
+		return; // Consume all other keys while editor is open
+	}
 
 	// Check for modifier keys - if pressed, skip movement key checks
 	int modifiers = glutGetModifiers();
@@ -1082,6 +1232,28 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		}
 	}
 
+	// Task Controls (CTRL+C, CTRL+V, CTRL+I, etc.)
+	if (Utils::IsKeyBindingPressed(config.keyCreateNewTask)) {
+		CreateNewTask();
+		return;
+	}
+	if (Utils::IsKeyBindingPressed(config.keyCopyTask)) {
+		CopySelectedTask(true);
+		return;
+	}
+	if (Utils::IsKeyBindingPressed(config.keyPasteTask)) {
+		PasteTask();
+		return;
+	}
+	if (Utils::IsKeyBindingPressed(config.keyDeleteTask)) {
+		DeleteSelectedTask();
+		return;
+	}
+	if (Utils::IsKeyBindingPressed(config.keyAssignTaskID)) {
+		AssignTaskID();
+		return;
+	}
+
 	if (pause_mode_) {
 		// Reset Script (pause menu only)
 		if (Utils::IsKeyBindingPressed(config.keyResetScript)) {
@@ -1118,13 +1290,13 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		}
 	}
 
-	for (int i = 0; i < count_of(MANIP_KEYS); ++i) {
-		const movement_key_s& mk = MANIP_KEYS[i];
-		if (key == mk.lower_case_ || key == mk.upper_case_) {
-			input_.keys_ |= mk.key_flag_;
-			return;
-		}
-	}
+	// Object Manipulation from config.ini
+	if (toupper(key) == toupper(config.keyRotateAlpha)) { input_.keys_ |= MK_MANIP_A; return; }
+	if (toupper(key) == toupper(config.keyRotateBeta))  { input_.keys_ |= MK_MANIP_B; return; }
+	if (toupper(key) == toupper(config.keyRotateGamma)) { input_.keys_ |= MK_MANIP_G; return; }
+	if (toupper(key) == toupper(config.keySnapGround))  { input_.keys_ |= MK_MANIP_S; return; }
+	if (toupper(key) == toupper(config.keySnapObject))  { input_.keys_ |= MK_MANIP_O; return; }
+	if (key == ' ') { input_.keys_ |= MK_MANIP_SPACE; return; }
 
 	if (key == 't' || key == 'T') {
 		level_.TeleportToHMP(viewer_.pos_);
@@ -1134,10 +1306,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		return;
 	}
 
-	if (key == 'l' || key == 'L') {
-		show_hud_ = !show_hud_;
-		return;
-	}
+	// HUD toggle removed as per request
 
 	if (key == 'h' || key == 'H') {
 		int modifiers = glutGetModifiers();
@@ -1330,12 +1499,13 @@ void App::Input_OnKeyboardUp(unsigned char key, int x, int y) {
 			// Don't return, check manip keys too
 		}
 	}
-	for (int i = 0; i < count_of(MANIP_KEYS); ++i) {
-		const movement_key_s& mk = MANIP_KEYS[i];
-		if (key == mk.lower_case_ || key == mk.upper_case_) {
-			input_.keys_ &= ~mk.key_flag_;
-		}
-	}
+	// Object Manipulation from config.ini
+	if (toupper(key) == toupper(config.keyRotateAlpha)) { input_.keys_ &= ~MK_MANIP_A; }
+	if (toupper(key) == toupper(config.keyRotateBeta))  { input_.keys_ &= ~MK_MANIP_B; }
+	if (toupper(key) == toupper(config.keyRotateGamma)) { input_.keys_ &= ~MK_MANIP_G; }
+	if (toupper(key) == toupper(config.keySnapGround))  { input_.keys_ &= ~MK_MANIP_S; }
+	if (toupper(key) == toupper(config.keySnapObject))  { input_.keys_ &= ~MK_MANIP_O; }
+	if (key == ' ') { input_.keys_ &= ~MK_MANIP_SPACE; }
 }
 
 // idle
@@ -1360,7 +1530,7 @@ void App::Frame(float delta_seconds) {
 		level_.GetTerrainZ(viewer_.pos_.x, viewer_.pos_.y, ground_z);
 		Renderer::hud_params_s hud = {
 			.show_hud_ = true,
-			.status_msg_ = "IGI LINK: NATIVE MODE",
+			.status_msg_ = "",
 			.raw_pos_ = viewer_.pos_,
 			.meters_pos_ = viewer_.pos_ / 4096.0f,
 			.ground_offset_ = viewer_.pos_.z - ground_z,
@@ -1381,7 +1551,15 @@ void App::Frame(float delta_seconds) {
 			.hover_object_index_ = hover_object_index_,
 			.mouse_x_ = mouse_state_.prior_x_,
 			.mouse_y_ = mouse_state_.prior_y_,
-			.level_objects_ = &level_.GetLevelObjects()
+			.tree_scroll_offset = tree_scroll_offset_,
+			.tree_decl_expanded = tree_decl_expanded_,
+			.level_objects_ = &level_.GetLevelObjects(),
+			.task_editor_open_ = task_editor_open_,
+			.edit_string_ = edit_string_,
+			.edit_box_w_ = edit_box_w_,
+			.edit_box_h_ = edit_box_h_,
+			.edit_cursor_pos_ = edit_cursor_pos_,
+			.enable_camera_mode_ = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera)
 		};
 		draw_params_.level_objects_ = &level_.GetLevelObjects();
 		draw_params_.selected_object_index_ = selected_object_index_;
@@ -1467,7 +1645,15 @@ void App::Frame(float delta_seconds) {
 		.hover_object_index_ = hover_object_index_,
 		.mouse_x_ = mouse_state_.prior_x_,
 		.mouse_y_ = mouse_state_.prior_y_,
-		.level_objects_ = &level_.GetLevelObjects()
+		.tree_scroll_offset = tree_scroll_offset_,
+		.tree_decl_expanded = tree_decl_expanded_,
+		.level_objects_ = &level_.GetLevelObjects(),
+		.task_editor_open_ = task_editor_open_,
+		.edit_string_ = edit_string_,
+		.edit_box_w_ = edit_box_w_,
+		.edit_box_h_ = edit_box_h_,
+		.edit_cursor_pos_ = edit_cursor_pos_,
+		.enable_camera_mode_ = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera)
 	};
 
 
@@ -1486,7 +1672,16 @@ void App::ProcessInput(float delta_seconds) {
 		return;
 	}
 	
-	if (!edit_mode_) {
+	bool enableCameraMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
+	
+	// Update cursor based on mode
+	if (pause_mode_) {
+		glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
+	} else {
+		glutSetCursor(enableCameraMode ? GLUT_CURSOR_NONE : GLUT_CURSOR_LEFT_ARROW);
+	}
+
+	if (!edit_mode_ || enableCameraMode) {
 		viewer_.yaw_ += -input_.mouse_delta_x_ * MOUSE_SENSITIVE;
 		viewer_.pitch_ += -input_.mouse_delta_y_ * MOUSE_SENSITIVE;
 	}
@@ -1496,28 +1691,34 @@ void App::ProcessInput(float delta_seconds) {
 
 	UpdateViewerVectors();
 
-	if (viewer_.clip_to_z_) {
+	if (viewer_.clip_to_z_ && !enableCameraMode) {
 
 		float z0 = viewer_.pos_.z - VIEW_HEIGHT;
 		float friction = viewer_.move_speed_ * 2.0f;
 
+		// Check configured bindings for camera movement (which override standard keys if pressed)
+		bool is_fwd = (input_.keys_ & MK_FORWARD) || Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraForward);
+		bool is_bwd = (input_.keys_ & MK_BACKWARD) || Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraBackward);
+		bool is_left = (input_.keys_ & MK_LEFT);
+		bool is_right = (input_.keys_ & MK_RIGHT);
+
 		// check movement
-		if (input_.keys_ & MK_FORWARD) {
+		if (is_fwd) {
 			viewer_.velocity_.x = viewer_.forward_.x * viewer_.move_speed_;
 			viewer_.velocity_.y = viewer_.forward_.y * viewer_.move_speed_;
 		}
 
-		if (input_.keys_ & MK_BACKWARD) {
+		if (is_bwd) {
 			viewer_.velocity_.x = viewer_.forward_.x * -viewer_.move_speed_;
 			viewer_.velocity_.y = viewer_.forward_.y * -viewer_.move_speed_;
 		}
 
-		if (input_.keys_ & MK_LEFT) {
+		if (is_left) {
 			viewer_.velocity_.x = viewer_.right_.x * -viewer_.move_speed_;
 			viewer_.velocity_.y = viewer_.right_.y * -viewer_.move_speed_;
 		}
 
-		if (input_.keys_ & MK_RIGHT) {
+		if (is_right) {
 			viewer_.velocity_.x = viewer_.right_.x * viewer_.move_speed_;
 			viewer_.velocity_.y = viewer_.right_.y * viewer_.move_speed_;
 		}
@@ -1597,17 +1798,22 @@ void App::ProcessInput(float delta_seconds) {
 	}
 	else {
 
+		bool is_fwd = (input_.keys_ & MK_FORWARD) || Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraForward);
+		bool is_bwd = (input_.keys_ & MK_BACKWARD) || Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraBackward);
+		bool is_left = (input_.keys_ & MK_LEFT);
+		bool is_right = (input_.keys_ & MK_RIGHT);
+
 		// check movement - direct position update for free mode (NO collision)
-		if (input_.keys_ & MK_FORWARD) {
+		if (is_fwd) {
 			viewer_.pos_ += viewer_.forward_ * viewer_.move_speed_ * delta_seconds;
 		}
-		if (input_.keys_ & MK_BACKWARD) {
+		if (is_bwd) {
 			viewer_.pos_ -= viewer_.forward_ * viewer_.move_speed_ * delta_seconds;
 		}
-		if (input_.keys_ & MK_LEFT) {
+		if (is_left) {
 			viewer_.pos_ -= viewer_.right_ * viewer_.move_speed_ * delta_seconds;
 		}
-		if (input_.keys_ & MK_RIGHT) {
+		if (is_right) {
 			viewer_.pos_ += viewer_.right_ * viewer_.move_speed_ * delta_seconds;
 		}
 		if (input_.keys_ & MK_STRAIGHT_UP && !viewer_.clip_to_z_) {
@@ -1715,8 +1921,7 @@ void App::ToggleEditMode() {
 
 	// Update cursor based on mode
 	if (edit_mode_) {
-		glutSetCursor(GLUT_CURSOR_CROSSHAIR);
-		glutSetCursor(GLUT_CURSOR_INHERIT); // Show system cursor for better visibility
+		glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
 	} else {
 		glutSetCursor(GLUT_CURSOR_NONE);
 	}
@@ -1733,7 +1938,7 @@ void App::SetEditMode(bool enabled) {
 	
 	// Update cursor based on mode
 	if (edit_mode_) {
-		glutSetCursor(GLUT_CURSOR_CROSSHAIR);
+		glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
 	} else {
 		glutSetCursor(GLUT_CURSOR_NONE);
 	}
@@ -1750,8 +1955,21 @@ bool App::GetTerrainEditEnabled() const {
 
 void App::TogglePauseMenu() {
 	pause_mode_ = !pause_mode_;
-	window_state_.cursor_visible_ = pause_mode_;
-	glutSetCursor(window_state_.cursor_visible_ ? GLUT_CURSOR_LEFT_ARROW : GLUT_CURSOR_NONE);
+	// cursor_visible_ stays TRUE always — camera lock is handled dynamically in Input_OnMotion.
+	// Hiding the cursor permanently caused the "mouse stuck" bug after resuming.
+	window_state_.cursor_visible_ = true;
+	if (pause_mode_) {
+		// Opening pause menu: show arrow cursor and clear any accumulated deltas
+		glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
+	} else {
+		// Closing pause menu: reset mouse state so no stale drag occurs
+		input_.mouse_delta_x_ = 0;
+		input_.mouse_delta_y_ = 0;
+		mouse_state_.left_button_down_ = false;
+		skip_input_on_motion_once_ = false;
+		// Cursor type will be set correctly on next Input_OnMotion call
+		glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
+	}
 }
 
 bool App::GetPauseMode() const {
@@ -1824,7 +2042,8 @@ void App::EditorProcessClick() {
 		selected_object_index_ = pickedObject;
 		const LevelObject& obj = objects[pickedObject];
 		Logger::Get().Log(LogLevel::INFO, "[App] Selected object index=" + std::to_string(pickedObject) + " model=" + obj.modelId + " type=" + (obj.isBuilding ? "building" : "object"));
-		printf("SELECTED Object [%d]: %s (%s)\n", pickedObject, obj.name.c_str(), obj.modelId.c_str());
+		printf("Selected Object [%d]: %s (%s)\n", selected_object_index_, 
+			objects[selected_object_index_].name.c_str(), objects[selected_object_index_].modelId.c_str());
 		printf("  Pos: (%.0f, %.0f, %.0f)\n", (double)obj.pos.x, (double)obj.pos.y, (double)obj.pos.z);
 		printf("  Rot (Alpha/Beta/Gamma): (%.2f, %.2f, %.2f)\n", (double)obj.rot.x, (double)obj.rot.y, (double)obj.rot.z);
 		printf("  Scale: %.2f\n", obj.scale);
@@ -1841,6 +2060,8 @@ void App::EditorProcessClick() {
 }
 
 bool App::CheckCollision(const glm::vec3& nextPos) {
+    if (noclip_mode_) return false; // Bypass collision
+
     // Safety check: ensure level is loaded
     if (level_.GetLevelNo() == 0) {
         return false; // No collision when level not loaded
@@ -1967,43 +2188,60 @@ void App::UpdateMarkerManipulation() {
 
 	int mods = glutGetModifiers();
 	bool shift = (mods & GLUT_ACTIVE_SHIFT);
-	bool ctrl = (mods & GLUT_ACTIVE_CTRL);
+	bool ctrl  = (mods & GLUT_ACTIVE_CTRL);
 
+	// Cumulative displacement from mouse-down origin (for translation)
 	int dx = mouse_state_.prior_x_ - marker_manip_.start_x_;
 	int dy = mouse_state_.prior_y_ - marker_manip_.start_y_;
 
+	// Per-frame delta (for rotation, so it accumulates smoothly each frame)
+	int fdx = input_.mouse_delta_x_;
+	int fdy = input_.mouse_delta_y_;
+
 	if (shift && ctrl) marker_manip_.mode_ = ManipulationMode::MoveXZ;
-	else if (shift) marker_manip_.mode_ = ManipulationMode::MoveXY;
-	else if (ctrl) marker_manip_.mode_ = ManipulationMode::MoveXZ;
+	else if (shift)    marker_manip_.mode_ = ManipulationMode::MoveXY;
+	else if (ctrl)     marker_manip_.mode_ = ManipulationMode::MoveXZ;
 	else if (input_.keys_ & MK_MANIP_A) marker_manip_.mode_ = ManipulationMode::RotateAlpha;
 	else if (input_.keys_ & MK_MANIP_B) marker_manip_.mode_ = ManipulationMode::RotateBeta;
 	else if (input_.keys_ & MK_MANIP_G) marker_manip_.mode_ = ManipulationMode::RotateGamma;
-	else marker_manip_.mode_ = ManipulationMode::MoveXY;
+	else {
+		// No modifier pressed, don't move building
+		marker_manip_.mode_ = ManipulationMode::None;
+		return;
+	}
 
 	const float moveSensitivity = 200.0f;
-	const float rotSensitivity = 0.01f;
+	const float rotSensitivity  = 0.008f; // radians per pixel
 
 	glm::dvec3 oldPos = obj.pos;
 	glm::dvec3 oldRot = obj.rot;
 
 	if (marker_manip_.mode_ == ManipulationMode::MoveXY) {
-		glm::vec3 right = viewer_.right_;
+		glm::vec3 right   = viewer_.right_;
 		glm::vec3 forward = glm::normalize(glm::vec3(viewer_.forward_.x, viewer_.forward_.y, 0.0f));
-		obj.pos = marker_manip_.start_pos_ + glm::dvec3(right * (float)dx * moveSensitivity + forward * (float)-dy * moveSensitivity);
+		obj.pos = marker_manip_.start_pos_ +
+		          glm::dvec3(right   * (float)dx * moveSensitivity +
+		                     forward * (float)-dy * moveSensitivity);
 	}
 	else if (marker_manip_.mode_ == ManipulationMode::MoveXZ) {
 		glm::vec3 right = viewer_.right_;
-		glm::vec3 up = glm::vec3(0, 0, 1);
-		obj.pos = marker_manip_.start_pos_ + glm::dvec3(right * (float)dx * moveSensitivity + up * (float)-dy * moveSensitivity);
+		glm::vec3 up    = glm::vec3(0, 0, 1);
+		obj.pos = marker_manip_.start_pos_ +
+		          glm::dvec3(right * (float)dx  * moveSensitivity +
+		                     up   * (float)-dy  * moveSensitivity);
 	}
+	// Rotation modes use per-frame delta so they accumulate correctly on obj.rot
 	else if (marker_manip_.mode_ == ManipulationMode::RotateAlpha) {
-		obj.rot.x = marker_manip_.start_rot_.x + (float)dx * rotSensitivity;
+		obj.rot.x += (float)fdx * rotSensitivity;
+		marker_manip_.start_rot_.x = obj.rot.x; // keep start_rot in sync
 	}
 	else if (marker_manip_.mode_ == ManipulationMode::RotateBeta) {
-		obj.rot.y = marker_manip_.start_rot_.y + (float)dx * rotSensitivity;
+		obj.rot.y += (float)fdx * rotSensitivity;
+		marker_manip_.start_rot_.y = obj.rot.y;
 	}
 	else if (marker_manip_.mode_ == ManipulationMode::RotateGamma) {
-		obj.rot.z = marker_manip_.start_rot_.z + (float)dx * rotSensitivity;
+		obj.rot.z += (float)fdx * rotSensitivity;
+		marker_manip_.start_rot_.z = obj.rot.z;
 	}
 
 	// Propagate transform to children
@@ -2040,6 +2278,10 @@ void App::UpdateMarkerManipulation() {
 
 	if (dx != 0 || dy != 0) {
 		obj.modified = true;
+	}
+
+	if (obj.modified) {
+		level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
 	}
 }
 
@@ -2298,4 +2540,275 @@ void App::SetInitialStickToGround(bool stick) {
 	}
 }
 
+void App::ProcessTreeViewClick(int mx, int my) {
+    if (!level_.GetLevelObjects().GetObjects().empty()) {
+        auto& objects = level_.GetLevelObjects().GetObjects();
+        int tree_x = 20;
+        int row_h = 16;
+        int start_y = 30;
+        int current_row = 0;
+
+        std::function<void(int, int)> check_node = [&](int idx, int depth) {
+            if (idx < 0 || idx >= (int)objects.size()) return;
+            auto& obj = objects[idx];
+            if (obj.deleted) return;
+            
+            int x = tree_x + (depth * 18);
+            int y = start_y + (current_row - tree_scroll_offset_) * row_h;
+            current_row++;
+
+            if (y >= start_y && y < window_state_.viewport_height_ - 50) {
+                // Check if interaction was on the node area (including [+] and label)
+                if (mx >= x - 20 && mx <= x + 300 && my >= y && my <= y + row_h) {
+                    if (mx <= x + 5) { // Clicked on toggle area
+                        if (obj.isContainer && !obj.childrenIndices.empty()) {
+                            obj.expanded = !obj.expanded;
+                            Logger::Get().Log(LogLevel::INFO, "[App] Toggled tree node: " + obj.type);
+                        }
+                    } else { // Clicked on label area
+                        selected_object_index_ = idx;
+                        task_editor_open_ = true;
+                        edit_string_ = level_.GetLevelObjects().GenerateTaskLine(obj);
+                        edit_cursor_pos_ = (int)edit_string_.size();
+                        Logger::Get().Log(LogLevel::INFO, "[App] Selected object from tree: " + obj.type + " and opened Task Editor Notepad.");
+                    }
+                }
+            }
+
+            if (obj.expanded) {
+                for (int childIdx : obj.childrenIndices) {
+                    check_node(childIdx, depth + 1);
+                }
+            }
+        };
+
+        std::vector<int> root_decls;
+        std::vector<int> root_others;
+        for (int i = 0; i < (int)objects.size(); ++i) {
+            if (objects[i].parentIndex == -1 && !objects[i].deleted) {
+                if (objects[i].type == "Task_DeclareParameters") root_decls.push_back(i);
+                else root_others.push_back(i);
+            }
+        }
+
+        if (!root_decls.empty()) {
+            int y = start_y + (current_row - tree_scroll_offset_) * row_h;
+            current_row++;
+            if (y >= start_y && y < window_state_.viewport_height_ - 50) {
+                if (mx >= tree_x - 20 && mx <= tree_x + 300 && my >= y && my <= y + row_h) {
+                    if (mx <= tree_x + 5) {
+                        tree_decl_expanded_ = !tree_decl_expanded_;
+                        Logger::Get().Log(LogLevel::INFO, "[App] Toggled Mission Declarations");
+                    } else {
+                        selected_object_index_ = -1;
+                    }
+                }
+            }
+            if (tree_decl_expanded_) {
+                for (int idx : root_decls) check_node(idx, 1);
+            }
+        }
+
+        for (int idx : root_others) {
+            check_node(idx, 0);
+        }
+    }
+}
+
+void App::ProcessTreeViewHover(int mx, int my) {
+    if (!level_.GetLevelObjects().GetObjects().empty()) {
+        auto& objects = level_.GetLevelObjects().GetObjects();
+        int tree_x = 20;
+        int row_h = 16;
+        int start_y = 30;
+        int current_row = 0;
+        int found_hover = -1;
+
+        std::function<void(int, int)> check_hover = [&](int idx, int depth) {
+            if (idx < 0 || idx >= (int)objects.size()) return;
+            auto& obj = objects[idx];
+            if (obj.deleted) return;
+            
+            int x = tree_x + (depth * 18);
+            int y = start_y + (current_row - tree_scroll_offset_) * row_h;
+            current_row++;
+
+            if (y >= start_y && y < window_state_.viewport_height_ - 50) {
+                // Check if hover was on the label area
+                if (mx >= x - 20 && mx <= x + 300 && my >= y && my <= y + row_h) {
+                    found_hover = idx;
+                }
+            }
+
+            if (obj.expanded) {
+                for (int childIdx : obj.childrenIndices) {
+                    check_hover(childIdx, depth + 1);
+                }
+            }
+        };
+
+        std::vector<int> root_decls;
+        std::vector<int> root_others;
+        for (int i = 0; i < (int)objects.size(); ++i) {
+            if (objects[i].parentIndex == -1 && !objects[i].deleted) {
+                if (objects[i].type == "Task_DeclareParameters") root_decls.push_back(i);
+                else root_others.push_back(i);
+            }
+        }
+
+        if (!root_decls.empty()) {
+            int y = start_y + (current_row - tree_scroll_offset_) * row_h;
+            current_row++;
+            if (y >= start_y && y < window_state_.viewport_height_ - 50) {
+                if (mx >= tree_x - 20 && mx <= tree_x + 300 && my >= y && my <= y + row_h) {
+                    found_hover = -2; // Special value for virtual folder
+                }
+            }
+            if (tree_decl_expanded_) {
+                for (int idx : root_decls) check_hover(idx, 1);
+            }
+        }
+
+        for (int idx : root_others) {
+            check_hover(idx, 0);
+        }
+
+        hover_object_index_ = found_hover;
+    }
+}
+
+void App::CreateNewTask() {
+    auto& objects = level_.GetLevelObjects().GetObjects();
+    LevelObject newObj;
+    newObj.type = "Container";
+    newObj.name = "NewTask_" + std::to_string(objects.size());
+    newObj.pos = glm::dvec3(viewer_.pos_);
+    newObj.rot = glm::vec3(0.0f);
+    newObj.scale = 1.0f;
+    newObj.isContainer = true;
+    newObj.expanded = true;
+    newObj.modified = true;
+    newObj.taskId = -1; // Auto-assign or manual
+    
+    // Add to current selection as parent if applicable
+    if (selected_object_index_ >= 0 && selected_object_index_ < (int)objects.size()) {
+        if (objects[selected_object_index_].isContainer) {
+            newObj.parentIndex = selected_object_index_;
+            objects[selected_object_index_].childrenIndices.push_back((int)objects.size());
+        }
+    }
+    
+    objects.push_back(newObj);
+    selected_object_index_ = (int)objects.size() - 1;
+    level_.GetLevelObjects().UpdateCoordinatesInLine(objects.back());
+    
+    Logger::Get().Log(LogLevel::INFO, "[App] Created new task at viewer position");
+    printf("[App] Created new task at viewer position\n");
+}
+
+void App::DeleteSelectedTask() {
+    if (selected_object_index_ < 0) return;
+    auto& objects = level_.GetLevelObjects().GetObjects();
+    if (selected_object_index_ >= (int)objects.size()) return;
+
+    std::function<void(int)> delete_recurse = [&](int idx) {
+        if (idx < 0 || idx >= (int)objects.size()) return;
+        objects[idx].deleted = true;
+        for (int childIdx : objects[idx].childrenIndices) {
+            delete_recurse(childIdx);
+        }
+    };
+
+    delete_recurse(selected_object_index_);
+    Logger::Get().Log(LogLevel::INFO, "[App] Deleted task and its subtree");
+}
+
+void App::CopySelectedTask(bool includeSubtree) {
+    if (selected_object_index_ < 0) return;
+    auto& objects = level_.GetLevelObjects().GetObjects();
+    clipboard_.clear();
+
+    std::function<void(int, int)> copy_recurse = [&](int idx, int newParentInClipboard) {
+        if (idx < 0 || idx >= (int)objects.size()) return;
+        
+        LevelObject copy = objects[idx];
+        copy.childrenIndices.clear();
+        copy.parentIndex = newParentInClipboard;
+        
+        int clipboardIdx = (int)clipboard_.size();
+        clipboard_.push_back(copy);
+        
+        if (newParentInClipboard != -1) {
+            clipboard_[newParentInClipboard].childrenIndices.push_back(clipboardIdx);
+        }
+
+        if (includeSubtree) {
+            for (int childIdx : objects[idx].childrenIndices) {
+                copy_recurse(childIdx, clipboardIdx);
+            }
+        }
+    };
+
+    copy_recurse(selected_object_index_, -1);
+    Logger::Get().Log(LogLevel::INFO, "[App] Copied task to clipboard (subtree: " + std::string(includeSubtree ? "yes" : "no") + ")");
+}
+
+void App::PasteTask() {
+    if (clipboard_.empty()) return;
+    int targetParent = selected_object_index_;
+    auto& objects = level_.GetLevelObjects().GetObjects();
+
+    int startIdxInObjects = (int)objects.size();
+    
+    // Copy all from clipboard to objects
+    for (size_t i = 0; i < clipboard_.size(); ++i) {
+        LevelObject pasted = clipboard_[i];
+        
+        // Update indices to point into objects_ vector
+        if (pasted.parentIndex == -1) {
+            pasted.parentIndex = targetParent;
+            if (targetParent != -1) {
+                objects[targetParent].childrenIndices.push_back((int)objects.size());
+            }
+        } else {
+            pasted.parentIndex += startIdxInObjects;
+        }
+
+        for (size_t j = 0; j < pasted.childrenIndices.size(); ++j) {
+            pasted.childrenIndices[j] += startIdxInObjects;
+        }
+
+        pasted.modified = true;
+        objects.push_back(pasted);
+    }
+    
+    Logger::Get().Log(LogLevel::INFO, "[App] Pasted task(s) from clipboard");
+}
+
+void App::AssignTaskID() {
+    if (selected_object_index_ < 0) return;
+    auto& objects = level_.GetLevelObjects().GetObjects();
+    
+    // Find max task ID
+    int maxId = 0;
+    for (const auto& obj : objects) {
+        if (!obj.taskId.empty()) {
+            try {
+                int id = std::stoi(obj.taskId);
+                if (id > maxId) maxId = id;
+            } catch (...) {}
+        }
+    }
+    
+    objects[selected_object_index_].taskId = std::to_string(maxId + 1);
+    objects[selected_object_index_].modified = true;
+    level_.GetLevelObjects().UpdateCoordinatesInLine(objects[selected_object_index_]);
+    
+    Logger::Get().Log(LogLevel::INFO, "[App] Assigned new Task ID: " + std::to_string(maxId + 1));
+    printf("[App] Assigned new Task ID: %d\n", maxId + 1);
+}
+
+void App::ModifyTaskParameters() {
+    Logger::Get().Log(LogLevel::INFO, "[App] ModifyTaskParameters (Stub - parameter UI needed)");
+}
 
