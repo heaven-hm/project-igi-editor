@@ -58,6 +58,7 @@ App::App():
 	show_help_(false),
 	tree_scroll_offset_(0),
 	tree_decl_expanded_(false),
+	status_message_(),
 	noclip_mode_(true), // By default true as requested by user
 	prior_frame_time_(0),
 	skip_input_on_motion_once_(false)
@@ -785,6 +786,22 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 		if (GLUT_DOWN == state) {
 			mouse_state_.left_button_down_ = true;
 			
+			if (task_editor_open_) {
+				int box_x = (window_state_.viewport_width_ - edit_box_w_) / 2;
+				int box_y = (window_state_.viewport_height_ - edit_box_h_) / 2;
+				if (x >= box_x && x <= box_x + edit_box_w_ && y >= box_y && y <= box_y + edit_box_h_) {
+					int rel_x = x - (box_x + 20);
+					int char_w = 9;
+					edit_cursor_pos_ = std::max(0, std::min((int)edit_string_.size(), edit_scroll_x_ + std::max(0, rel_x) / char_w));
+					if (!(glutGetModifiers() & GLUT_ACTIVE_SHIFT)) {
+						edit_selection_start_ = edit_cursor_pos_;
+					}
+					edit_selection_end_ = edit_cursor_pos_;
+					edit_dragging_ = true;
+					return;
+				}
+			}
+
 			if (pause_mode_) {
 				// *** MUST match renderer.cpp pause menu constants exactly ***
 				const int menu_w = 380;
@@ -829,6 +846,7 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 		}
 		else if (GLUT_UP == state) {
 			mouse_state_.left_button_down_ = false;
+			edit_dragging_ = false;
 
 			if (window_state_.cursor_visible_) {
 				input_.mouse_delta_x_ = 0;
@@ -850,8 +868,11 @@ void App::Input_OnMotion(int x, int y) {
 
 	// Priority 1: TreeView Hover
 	if (show_hud_ && x < 350 && !enableCameraMode) {
+		hover_tree_index_ = -1; // Reset before check
 		ProcessTreeViewHover(x, y);
+		hover_object_index_ = -1; // Suppress 3D tooltips while over UI
 	} else {
+		hover_tree_index_ = -1;
 		// Priority 2: 3D Object Hover
 		if (enableCameraMode) {
 			int cx = window_state_.viewport_width_ >> 1;
@@ -898,6 +919,14 @@ void App::Input_OnMotion(int x, int y) {
 		glutWarpPointer(center_x, center_y); // move cursor to view center
 		skip_input_on_motion_once_ = true;   // skip next cursor motion event caused by glutWarpPointer
 	}
+
+	if (edit_dragging_) {
+		int box_x = (window_state_.viewport_width_ - edit_box_w_) / 2;
+		int rel_x = x - (box_x + 20);
+		int char_w = 9;
+		edit_cursor_pos_ = std::max(0, std::min((int)edit_string_.size(), edit_scroll_x_ + (rel_x / char_w)));
+		edit_selection_end_ = edit_cursor_pos_;
+	}
 }
 
 void App::Input_OnSpecial(int key, int x, int y) {
@@ -910,6 +939,19 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		}
 		if (key == GLUT_KEY_RIGHT) {
 			edit_cursor_pos_ = std::min((int)edit_string_.size(), edit_cursor_pos_ + 1);
+		}
+		if (key == GLUT_KEY_HOME) {
+			edit_cursor_pos_ = 0;
+		}
+		if (key == GLUT_KEY_END) {
+			edit_cursor_pos_ = (int)edit_string_.size();
+		}
+
+		int visibleChars = std::max(1, (edit_box_w_ - 40) / 9);
+		if (edit_cursor_pos_ < edit_scroll_x_) {
+			edit_scroll_x_ = edit_cursor_pos_;
+		} else if (edit_cursor_pos_ > edit_scroll_x_ + visibleChars) {
+			edit_scroll_x_ = edit_cursor_pos_ - visibleChars;
 		}
 		return;
 	}
@@ -1103,6 +1145,125 @@ static constexpr movement_key_s MOVEMENT_KEYS[] = {
 void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	auto& config = Config::Get();
 
+	if (task_editor_open_) {
+		if (key == 27) { // ESC - Save and close
+			if (selected_object_index_ >= 0) {
+				auto& obj = level_.GetLevelObjects().GetObjects()[selected_object_index_];
+				
+				// Strip any newlines the user might have managed to paste/enter
+				std::string finalStr = edit_string_;
+				finalStr.erase(std::remove(finalStr.begin(), finalStr.end(), '\r'), finalStr.end());
+				finalStr.erase(std::remove(finalStr.begin(), finalStr.end(), '\n'), finalStr.end());
+				
+				obj.qscLine = finalStr;
+				level_.GetLevelObjects().ParseTaskLine(obj.qscLine, obj);
+				
+				// Live Editor: Save to file and reload everything
+				int savedIndex = selected_object_index_;
+				level_.SaveAndReloadObjects();
+				auto& objects = level_.GetLevelObjects().GetObjects();
+				if (objects.empty()) selected_object_index_ = -1;
+				else selected_object_index_ = std::min(savedIndex, (int)objects.size() - 1);
+				
+				Logger::Get().Log(LogLevel::INFO, "[App] Live Editor: Saved, Synchronized and Reloaded task.");
+			}
+			task_editor_open_ = false;
+			edit_cursor_pos_ = 0;
+			edit_scroll_x_ = 0;
+			return;
+		}
+		if (key == 8) { // Backspace
+			int s = std::min(edit_selection_start_, edit_selection_end_);
+			int e = std::max(edit_selection_start_, edit_selection_end_);
+			if (s != e && s != -1) {
+				edit_string_.erase(s, e - s);
+				edit_cursor_pos_ = s;
+				edit_selection_start_ = edit_selection_end_ = -1;
+			} else if (edit_cursor_pos_ > 0 && !edit_string_.empty()) {
+				edit_string_.erase(edit_cursor_pos_ - 1, 1);
+				edit_cursor_pos_--;
+			}
+			return;
+		}
+		if (key == 13) { // Enter - Multi-line
+			edit_string_.insert(edit_cursor_pos_, 1, '\n');
+			edit_cursor_pos_++;
+			return;
+		}
+		if (key == 1) { // Ctrl+A - Select All
+			edit_selection_start_ = 0;
+			edit_selection_end_ = (int)edit_string_.size();
+			edit_cursor_pos_ = (int)edit_string_.size();
+			return;
+		}
+		if (key == 3) { // Ctrl+C - Copy
+			int s = std::min(edit_selection_start_, edit_selection_end_);
+			int e = std::max(edit_selection_start_, edit_selection_end_);
+			if (s != e && s != -1) {
+				Utils::SetClipboardText(edit_string_.substr(s, e - s));
+			} else if (!edit_string_.empty()) {
+				Utils::SetClipboardText(edit_string_);
+			}
+			return;
+		}
+		if (key == 24) { // Ctrl+X - Cut
+			int s = std::min(edit_selection_start_, edit_selection_end_);
+			int e = std::max(edit_selection_start_, edit_selection_end_);
+			if (s != e && s != -1) {
+				Utils::SetClipboardText(edit_string_.substr(s, e - s));
+				edit_string_.erase(s, e - s);
+				edit_cursor_pos_ = s;
+				edit_selection_start_ = edit_selection_end_ = -1;
+			}
+			return;
+		}
+		if (key == 22) { // Ctrl+V - Paste
+			std::string pasteData = Utils::GetClipboardText();
+			if (!pasteData.empty()) {
+				int s = std::min(edit_selection_start_, edit_selection_end_);
+				int e = std::max(edit_selection_start_, edit_selection_end_);
+				if (s != e && s != -1) {
+					edit_string_.erase(s, e - s);
+					edit_cursor_pos_ = s;
+				}
+				edit_string_.insert(edit_cursor_pos_, pasteData);
+				edit_cursor_pos_ += (int)pasteData.size();
+				edit_selection_start_ = edit_selection_end_ = -1;
+			}
+			return;
+		}
+		if (key >= 32 && key <= 126) { // Printable characters
+			int s = std::min(edit_selection_start_, edit_selection_end_);
+			int e = std::max(edit_selection_start_, edit_selection_end_);
+			if (s != e && s != -1) {
+				edit_string_.erase(s, e - s);
+				edit_cursor_pos_ = s;
+				edit_selection_start_ = edit_selection_end_ = -1;
+			}
+			edit_string_.insert(edit_cursor_pos_, 1, key);
+			edit_cursor_pos_++;
+
+			// Live update from Task Editor to Object
+			if (selected_object_index_ >= 0) {
+				auto& obj = level_.GetLevelObjects().GetObjects()[selected_object_index_];
+				obj.qscLine = edit_string_;
+				level_.GetLevelObjects().ParseTaskLine(obj.qscLine, obj);
+				obj.modified = true;
+			}
+			return;
+		}
+
+		// Update scroll to keep cursor visible - use 9px for mono font
+		int visibleChars = std::max(1, (edit_box_w_ - 40) / 9);
+		if (edit_cursor_pos_ < edit_scroll_x_) {
+			edit_scroll_x_ = edit_cursor_pos_;
+		} else if (edit_cursor_pos_ > edit_scroll_x_ + visibleChars) {
+			edit_scroll_x_ = edit_cursor_pos_ - visibleChars;
+		}
+
+		return; // Consume all other keys while editor is open
+	}
+
 	// Task Controls (CTRL+C, CTRL+V, CTRL+I, etc.)
 	if (Utils::IsKeyBindingPressed(config.keyCreateNewTask)) {
 		CreateNewTask();
@@ -1123,44 +1284,6 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	if (Utils::IsKeyBindingPressed(config.keyAssignTaskID)) {
 		AssignTaskID();
 		return;
-	}
-
-	if (task_editor_open_) {
-		if (key == 27) { // ESC - Save and close
-			if (selected_object_index_ >= 0) {
-				auto& obj = level_.GetLevelObjects().GetObjects()[selected_object_index_];
-				obj.qscLine = edit_string_;
-				level_.GetLevelObjects().ParseTaskLine(obj.qscLine, obj);
-				Logger::Get().Log(LogLevel::INFO, "[App] Saved and parsed task QSC line from Notepad.");
-			}
-			task_editor_open_ = false;
-			edit_cursor_pos_ = 0;
-			// Clear stale drag state so mouse is not stuck after closing editor
-			input_.mouse_delta_x_ = 0;
-			input_.mouse_delta_y_ = 0;
-			mouse_state_.left_button_down_ = false;
-			return;
-		}
-		if (key == 8) { // Backspace
-			if (edit_cursor_pos_ > 0 && !edit_string_.empty()) {
-				edit_string_.erase(edit_cursor_pos_ - 1, 1);
-				edit_cursor_pos_--;
-			}
-			return;
-		}
-		if (key == 13) { // Enter - Multi-line
-			edit_string_.insert(edit_cursor_pos_, 1, '\n');
-			edit_cursor_pos_++;
-			return;
-		}
-		if (key >= 32 && key <= 126) { // Printable characters
-			edit_string_.insert(edit_cursor_pos_, 1, key);
-			edit_cursor_pos_++;
-			return;
-		}
-		
-		// Resizing with Alt + Arrows (Handled in Input_OnSpecial for Arrows, but if GLUT sends them here...)
-		return; // Consume all other keys while editor is open
 	}
 
 	// Check for modifier keys - if pressed, skip movement key checks
@@ -1294,8 +1417,18 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	if (toupper(key) == toupper(config.keyRotateAlpha)) { input_.keys_ |= MK_MANIP_A; return; }
 	if (toupper(key) == toupper(config.keyRotateBeta))  { input_.keys_ |= MK_MANIP_B; return; }
 	if (toupper(key) == toupper(config.keyRotateGamma)) { input_.keys_ |= MK_MANIP_G; return; }
-	if (toupper(key) == toupper(config.keySnapGround))  { input_.keys_ |= MK_MANIP_S; return; }
-	if (toupper(key) == toupper(config.keySnapObject))  { input_.keys_ |= MK_MANIP_O; return; }
+	if (toupper(key) == toupper(config.keySnapGround))  { 
+        input_.keys_ |= MK_MANIP_S; 
+        if (selected_object_index_ >= 0) UpdateMarkerManipulation();
+        input_.keys_ &= ~MK_MANIP_S; 
+        return; 
+    }
+	if (toupper(key) == toupper(config.keySnapObject))  { 
+        input_.keys_ |= MK_MANIP_O; 
+        if (selected_object_index_ >= 0) UpdateMarkerManipulation();
+        input_.keys_ &= ~MK_MANIP_O; 
+        return; 
+    }
 	if (key == ' ') { input_.keys_ |= MK_MANIP_SPACE; return; }
 
 	if (key == 't' || key == 'T') {
@@ -1530,7 +1663,7 @@ void App::Frame(float delta_seconds) {
 		level_.GetTerrainZ(viewer_.pos_.x, viewer_.pos_.y, ground_z);
 		Renderer::hud_params_s hud = {
 			.show_hud_ = true,
-			.status_msg_ = "",
+			.status_msg_ = status_message_,
 			.raw_pos_ = viewer_.pos_,
 			.meters_pos_ = viewer_.pos_ / 4096.0f,
 			.ground_offset_ = viewer_.pos_.z - ground_z,
@@ -1549,6 +1682,7 @@ void App::Frame(float delta_seconds) {
 			.terrain_edit_enabled_ = terrain_edit_enabled_,
 			.selected_object_index_ = selected_object_index_,
 			.hover_object_index_ = hover_object_index_,
+			.hover_tree_index_ = hover_tree_index_,
 			.mouse_x_ = mouse_state_.prior_x_,
 			.mouse_y_ = mouse_state_.prior_y_,
 			.tree_scroll_offset = tree_scroll_offset_,
@@ -1556,9 +1690,11 @@ void App::Frame(float delta_seconds) {
 			.level_objects_ = &level_.GetLevelObjects(),
 			.task_editor_open_ = task_editor_open_,
 			.edit_string_ = edit_string_,
+			.edit_cursor_pos_ = edit_cursor_pos_,
+			.edit_selection_start_ = edit_selection_start_,
+			.edit_selection_end_ = edit_selection_end_,
 			.edit_box_w_ = edit_box_w_,
 			.edit_box_h_ = edit_box_h_,
-			.edit_cursor_pos_ = edit_cursor_pos_,
 			.enable_camera_mode_ = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera)
 		};
 		draw_params_.level_objects_ = &level_.GetLevelObjects();
@@ -1624,7 +1760,6 @@ void App::Frame(float delta_seconds) {
 
 	Renderer::hud_params_s hud = {
 		.show_hud_ = show_hud_,
-		.status_msg_ = data.status_msg,
 		.raw_pos_ = viewer_.pos_,
 		.meters_pos_ = viewer_.pos_ / 4096.0f,
 		.ground_offset_ = viewer_.pos_.z - ground_z,
@@ -1643,6 +1778,7 @@ void App::Frame(float delta_seconds) {
 		.terrain_edit_enabled_ = terrain_edit_enabled_,
 		.selected_object_index_ = selected_object_index_,
 		.hover_object_index_ = hover_object_index_,
+		.hover_tree_index_ = hover_tree_index_,
 		.mouse_x_ = mouse_state_.prior_x_,
 		.mouse_y_ = mouse_state_.prior_y_,
 		.tree_scroll_offset = tree_scroll_offset_,
@@ -1650,9 +1786,12 @@ void App::Frame(float delta_seconds) {
 		.level_objects_ = &level_.GetLevelObjects(),
 		.task_editor_open_ = task_editor_open_,
 		.edit_string_ = edit_string_,
+		.edit_cursor_pos_ = edit_cursor_pos_,
+		.edit_selection_start_ = edit_selection_start_,
+		.edit_selection_end_ = edit_selection_end_,
 		.edit_box_w_ = edit_box_w_,
 		.edit_box_h_ = edit_box_h_,
-		.edit_cursor_pos_ = edit_cursor_pos_,
+		.edit_scroll_x_ = edit_scroll_x_,
 		.enable_camera_mode_ = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera)
 	};
 
@@ -1907,42 +2046,27 @@ void App::UpdateViewDefine() {
 }
 
 void App::ToggleShowHUD() {
-	show_hud_ = !show_hud_;
+	show_hud_ = true;
 }
 
 bool App::GetShowHUD() const {
 	return show_hud_;
 }
 
+void App::SetShowHUD(bool show) {
+	show_hud_ = true;
+}
+
 void App::ToggleEditMode() {
-	edit_mode_ = !edit_mode_;
-
-	window_state_.cursor_visible_ = edit_mode_;
-
-	// Update cursor based on mode
-	if (edit_mode_) {
-		glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
-	} else {
-		glutSetCursor(GLUT_CURSOR_NONE);
-	}
-	Logger::Get().Log(LogLevel::INFO, std::string("[App] Edit mode ") + (edit_mode_ ? "enabled" : "disabled"));
+    // Logic removed as requested
 }
 
 bool App::GetEditMode() const {
-	return edit_mode_;
+	return true; // Always true
 }
 
 void App::SetEditMode(bool enabled) {
-	edit_mode_ = enabled;
-	window_state_.cursor_visible_ = enabled;
-	
-	// Update cursor based on mode
-	if (edit_mode_) {
-		glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
-	} else {
-		glutSetCursor(GLUT_CURSOR_NONE);
-	}
-	Logger::Get().Log(LogLevel::INFO, std::string("[App] Edit mode set to ") + (edit_mode_ ? "enabled" : "disabled"));
+    // Logic removed as requested
 }
 
 void App::SetTerrainEditEnabled(bool enabled) {
@@ -2041,6 +2165,17 @@ void App::EditorProcessClick() {
 	if (pickedObject >= 0 && pickedObject < (int)objects.size()) {
 		selected_object_index_ = pickedObject;
 		const LevelObject& obj = objects[pickedObject];
+		
+		// Auto-expand tree for the selected object
+		int currentIdx = pickedObject;
+		while (currentIdx != -1) {
+			int parentIdx = objects[currentIdx].parentIndex;
+			if (parentIdx != -1) {
+				objects[parentIdx].expanded = true;
+			}
+			currentIdx = parentIdx;
+		}
+
 		Logger::Get().Log(LogLevel::INFO, "[App] Selected object index=" + std::to_string(pickedObject) + " model=" + obj.modelId + " type=" + (obj.isBuilding ? "building" : "object"));
 		printf("Selected Object [%d]: %s (%s)\n", selected_object_index_, 
 			objects[selected_object_index_].name.c_str(), objects[selected_object_index_].modelId.c_str());
@@ -2204,11 +2339,7 @@ void App::UpdateMarkerManipulation() {
 	else if (input_.keys_ & MK_MANIP_A) marker_manip_.mode_ = ManipulationMode::RotateAlpha;
 	else if (input_.keys_ & MK_MANIP_B) marker_manip_.mode_ = ManipulationMode::RotateBeta;
 	else if (input_.keys_ & MK_MANIP_G) marker_manip_.mode_ = ManipulationMode::RotateGamma;
-	else {
-		// No modifier pressed, don't move building
-		marker_manip_.mode_ = ManipulationMode::None;
-		return;
-	}
+	else               marker_manip_.mode_ = ManipulationMode::None;
 
 	const float moveSensitivity = 200.0f;
 	const float rotSensitivity  = 0.008f; // radians per pixel
@@ -2251,9 +2382,15 @@ void App::UpdateMarkerManipulation() {
 	bool changed = (std::abs(deltaPos.x) > 1e-6 || std::abs(deltaPos.y) > 1e-6 || std::abs(deltaPos.z) > 1e-6 ||
 	                std::abs(deltaRot.x) > 1e-6 || std::abs(deltaRot.y) > 1e-6 || std::abs(deltaRot.z) > 1e-6);
 
-	if (changed) {
+	if (changed || (input_.keys_ & MK_MANIP_S) || (input_.keys_ & MK_MANIP_O)) {
 		PropagateTransformToChildren(selected_object_index_, deltaPos, deltaRot, oldPos);
 		obj.modified = true;
+
+		// Live update from Object to Task Editor
+		level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+		if (task_editor_open_) {
+			edit_string_ = obj.qscLine;
+		}
 	}
 
 	if (input_.keys_ & MK_MANIP_S) {
@@ -2268,6 +2405,26 @@ void App::UpdateMarkerManipulation() {
 			}
 			obj.pos.z = (double)terrainZ + obj.snap_z_offset;
 			obj.modified = true;
+		}
+	}
+
+	if (input_.keys_ & MK_MANIP_O) {
+		// Snap to nearest object
+		int nearestIdx = -1;
+		double minDist = 1e10;
+		const auto& objects = level_.GetLevelObjects().GetObjects();
+		for (int i = 0; i < (int)objects.size(); ++i) {
+			if (i == selected_object_index_ || objects[i].deleted) continue;
+			double d = glm::distance(obj.pos, objects[i].pos);
+			if (d < minDist) {
+				minDist = d;
+				nearestIdx = i;
+			}
+		}
+		if (nearestIdx >= 0) {
+			obj.pos = objects[nearestIdx].pos;
+			obj.modified = true;
+			Logger::Get().Log(LogLevel::INFO, "[App] Snapped object to nearest object: " + objects[nearestIdx].type);
 		}
 	}
 
@@ -2358,11 +2515,12 @@ int App::PickObjectAtScreenPos(int screen_x, int screen_y) {
 
 	for (size_t i = 0; i < objects.size(); ++i) {
 		const auto& obj = objects[i];
+		if (obj.deleted || obj.modelId.empty()) continue;
 
 		glm::vec3 he = renderer_.GetMeshExtents(obj.modelId, obj.isBuilding);
 		float max_he = glm::max(he.x, glm::max(he.y, he.z));
 		if (max_he < 1.0f) {
-			he = glm::vec3(200.0f);
+			he = glm::vec3(60.0f);
 		}
 
 		glm::mat4 model = glm::mat4(1.0f);
@@ -2400,7 +2558,7 @@ int App::PickObjectAtScreenPos(int screen_x, int screen_y) {
 
 		if (!any_front) continue;
 
-		float margin = 2.0f;
+		float margin = 6.0f;
 		if ((float)screen_x >= min_px - margin && (float)screen_x <= max_px + margin &&
 			(float)screen_y >= min_py - margin && (float)screen_y <= max_py + margin) {
 			if (closest_index == -1 || min_depth < closest_depth) {
@@ -2548,9 +2706,10 @@ void App::ProcessTreeViewClick(int mx, int my) {
         int start_y = 30;
         int current_row = 0;
 
+        bool found = false;
         std::function<void(int, int)> check_node = [&](int idx, int depth) {
-            if (idx < 0 || idx >= (int)objects.size()) return;
-            auto& obj = objects[idx];
+            if (found || idx < 0 || idx >= (int)objects.size()) return;
+            const auto& obj = objects[idx];
             if (obj.deleted) return;
             
             int x = tree_x + (depth * 18);
@@ -2560,22 +2719,32 @@ void App::ProcessTreeViewClick(int mx, int my) {
             if (y >= start_y && y < window_state_.viewport_height_ - 50) {
                 // Check if interaction was on the node area (including [+] and label)
                 if (mx >= x - 20 && mx <= x + 300 && my >= y && my <= y + row_h) {
+                    found = true;
                     if (mx <= x + 5) { // Clicked on toggle area
                         if (obj.isContainer && !obj.childrenIndices.empty()) {
-                            obj.expanded = !obj.expanded;
+                            auto& nonConstObj = const_cast<LevelObject&>(obj);
+                            nonConstObj.expanded = !nonConstObj.expanded;
                             Logger::Get().Log(LogLevel::INFO, "[App] Toggled tree node: " + obj.type);
                         }
                     } else { // Clicked on label area
                         selected_object_index_ = idx;
                         task_editor_open_ = true;
-                        edit_string_ = level_.GetLevelObjects().GenerateTaskLine(obj);
+                        std::string line = obj.qscLine.empty() ? level_.GetLevelObjects().GenerateTaskLine(obj) : obj.qscLine;
+                        
+                        // Strip any newlines from the loaded line
+                        line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
+                        line.erase(std::remove(line.begin(), line.end(), '\n'), line.end());
+                        
+                        edit_string_ = line;
                         edit_cursor_pos_ = (int)edit_string_.size();
-                        Logger::Get().Log(LogLevel::INFO, "[App] Selected object from tree: " + obj.type + " and opened Task Editor Notepad.");
+                        edit_selection_start_ = edit_selection_end_ = -1;
+                        edit_scroll_x_ = 0;
+                        Logger::Get().Log(LogLevel::INFO, "[App] Selected object from tree and opened Task Editor.");
                     }
                 }
             }
 
-            if (obj.expanded) {
+            if (!found && obj.expanded) {
                 for (int childIdx : obj.childrenIndices) {
                     check_node(childIdx, depth + 1);
                 }
@@ -2591,11 +2760,12 @@ void App::ProcessTreeViewClick(int mx, int my) {
             }
         }
 
-        if (!root_decls.empty()) {
+        if (!found && !root_decls.empty()) {
             int y = start_y + (current_row - tree_scroll_offset_) * row_h;
             current_row++;
             if (y >= start_y && y < window_state_.viewport_height_ - 50) {
                 if (mx >= tree_x - 20 && mx <= tree_x + 300 && my >= y && my <= y + row_h) {
+                    found = true;
                     if (mx <= tree_x + 5) {
                         tree_decl_expanded_ = !tree_decl_expanded_;
                         Logger::Get().Log(LogLevel::INFO, "[App] Toggled Mission Declarations");
@@ -2604,82 +2774,87 @@ void App::ProcessTreeViewClick(int mx, int my) {
                     }
                 }
             }
-            if (tree_decl_expanded_) {
+            if (!found && tree_decl_expanded_) {
                 for (int idx : root_decls) check_node(idx, 1);
             }
         }
 
-        for (int idx : root_others) {
-            check_node(idx, 0);
+        if (!found) {
+            for (int idx : root_others) {
+                if (found) break;
+                check_node(idx, 0);
+            }
         }
     }
 }
 
 void App::ProcessTreeViewHover(int mx, int my) {
-    if (!level_.GetLevelObjects().GetObjects().empty()) {
-        auto& objects = level_.GetLevelObjects().GetObjects();
-        int tree_x = 20;
-        int row_h = 16;
-        int start_y = 30;
-        int current_row = 0;
-        int found_hover = -1;
+    int tree_x = 20;
+    int start_y = 30;
+    int row_h = 16;
+    int current_row = 0;
+    
+    auto& objects = level_.GetLevelObjects().GetObjects();
+    
+    bool found = false;
+    std::function<void(int, int)> check_node = [&](int idx, int depth) {
+        if (found || idx < 0 || idx >= (int)objects.size()) return;
+        auto& obj = objects[idx];
+        if (obj.deleted) return;
+        
+        int x = tree_x + (depth * 18);
+        int y = start_y + (current_row - tree_scroll_offset_) * row_h;
+        current_row++;
 
-        std::function<void(int, int)> check_hover = [&](int idx, int depth) {
-            if (idx < 0 || idx >= (int)objects.size()) return;
-            auto& obj = objects[idx];
-            if (obj.deleted) return;
-            
-            int x = tree_x + (depth * 18);
-            int y = start_y + (current_row - tree_scroll_offset_) * row_h;
-            current_row++;
-
-            if (y >= start_y && y < window_state_.viewport_height_ - 50) {
-                // Check if hover was on the label area
-                if (mx >= x - 20 && mx <= x + 300 && my >= y && my <= y + row_h) {
-                    found_hover = idx;
-                }
-            }
-
-            if (obj.expanded) {
-                for (int childIdx : obj.childrenIndices) {
-                    check_hover(childIdx, depth + 1);
-                }
-            }
-        };
-
-        std::vector<int> root_decls;
-        std::vector<int> root_others;
-        for (int i = 0; i < (int)objects.size(); ++i) {
-            if (objects[i].parentIndex == -1 && !objects[i].deleted) {
-                if (objects[i].type == "Task_DeclareParameters") root_decls.push_back(i);
-                else root_others.push_back(i);
+        if (y >= start_y && y < window_state_.viewport_height_ - 50) {
+            if (mx >= x - 20 && mx <= x + 300 && my >= y && my <= y + row_h) {
+                hover_tree_index_ = idx;
+                found = true;
             }
         }
 
-        if (!root_decls.empty()) {
-            int y = start_y + (current_row - tree_scroll_offset_) * row_h;
-            current_row++;
-            if (y >= start_y && y < window_state_.viewport_height_ - 50) {
-                if (mx >= tree_x - 20 && mx <= tree_x + 300 && my >= y && my <= y + row_h) {
-                    found_hover = -2; // Special value for virtual folder
-                }
-            }
-            if (tree_decl_expanded_) {
-                for (int idx : root_decls) check_hover(idx, 1);
+        if (!found && obj.expanded) {
+            for (int childIdx : obj.childrenIndices) {
+                check_node(childIdx, depth + 1);
             }
         }
+    };
 
+    std::vector<int> root_decls;
+    std::vector<int> root_others;
+    for (int i = 0; i < (int)objects.size(); ++i) {
+        if (objects[i].parentIndex == -1 && !objects[i].deleted) {
+            if (objects[i].type == "Task_DeclareParameters") root_decls.push_back(i);
+            else root_others.push_back(i);
+        }
+    }
+
+    if (!found && !root_decls.empty()) {
+        int y = start_y + (current_row - tree_scroll_offset_) * row_h;
+        current_row++;
+        if (y >= start_y && y < window_state_.viewport_height_ - 50) {
+            if (mx >= tree_x - 20 && mx <= tree_x + 300 && my >= y && my <= y + row_h) {
+                found = true;
+                hover_tree_index_ = -1;
+            }
+        }
+        if (!found && tree_decl_expanded_) {
+            for (int idx : root_decls) check_node(idx, 1);
+        }
+    }
+
+    if (!found) {
         for (int idx : root_others) {
-            check_hover(idx, 0);
+            if (found) break;
+            check_node(idx, 0);
         }
-
-        hover_object_index_ = found_hover;
     }
 }
 
 void App::CreateNewTask() {
     auto& objects = level_.GetLevelObjects().GetObjects();
     LevelObject newObj;
+    newObj.qscFuncName = "Task_New";
     newObj.type = "Container";
     newObj.name = "NewTask_" + std::to_string(objects.size());
     newObj.pos = glm::dvec3(viewer_.pos_);
@@ -2688,7 +2863,7 @@ void App::CreateNewTask() {
     newObj.isContainer = true;
     newObj.expanded = true;
     newObj.modified = true;
-    newObj.taskId = -1; // Auto-assign or manual
+    newObj.taskId = "-1"; // Auto-assign or manual
     
     // Add to current selection as parent if applicable
     if (selected_object_index_ >= 0 && selected_object_index_ < (int)objects.size()) {
@@ -2701,6 +2876,9 @@ void App::CreateNewTask() {
     objects.push_back(newObj);
     selected_object_index_ = (int)objects.size() - 1;
     level_.GetLevelObjects().UpdateCoordinatesInLine(objects.back());
+    level_.SaveAndReloadObjects();
+    auto& reloaded = level_.GetLevelObjects().GetObjects();
+    if (!reloaded.empty()) selected_object_index_ = std::min(selected_object_index_, (int)reloaded.size() - 1);
     
     Logger::Get().Log(LogLevel::INFO, "[App] Created new task at viewer position");
     printf("[App] Created new task at viewer position\n");
@@ -2710,6 +2888,7 @@ void App::DeleteSelectedTask() {
     if (selected_object_index_ < 0) return;
     auto& objects = level_.GetLevelObjects().GetObjects();
     if (selected_object_index_ >= (int)objects.size()) return;
+    int parentIndex = objects[selected_object_index_].parentIndex;
 
     std::function<void(int)> delete_recurse = [&](int idx) {
         if (idx < 0 || idx >= (int)objects.size()) return;
@@ -2720,6 +2899,11 @@ void App::DeleteSelectedTask() {
     };
 
     delete_recurse(selected_object_index_);
+    level_.SaveAndReloadObjects();
+    auto& reloaded = level_.GetLevelObjects().GetObjects();
+    if (reloaded.empty()) selected_object_index_ = -1;
+    else if (parentIndex >= 0 && parentIndex < (int)reloaded.size()) selected_object_index_ = parentIndex;
+    else selected_object_index_ = std::min(selected_object_index_, (int)reloaded.size() - 1);
     Logger::Get().Log(LogLevel::INFO, "[App] Deleted task and its subtree");
 }
 
@@ -2781,6 +2965,11 @@ void App::PasteTask() {
         pasted.modified = true;
         objects.push_back(pasted);
     }
+
+    selected_object_index_ = startIdxInObjects;
+    level_.SaveAndReloadObjects();
+    auto& reloaded = level_.GetLevelObjects().GetObjects();
+    if (!reloaded.empty()) selected_object_index_ = std::min(selected_object_index_, (int)reloaded.size() - 1);
     
     Logger::Get().Log(LogLevel::INFO, "[App] Pasted task(s) from clipboard");
 }
@@ -2803,12 +2992,126 @@ void App::AssignTaskID() {
     objects[selected_object_index_].taskId = std::to_string(maxId + 1);
     objects[selected_object_index_].modified = true;
     level_.GetLevelObjects().UpdateCoordinatesInLine(objects[selected_object_index_]);
+    level_.SaveAndReloadObjects();
+    auto& reloaded = level_.GetLevelObjects().GetObjects();
+    if (!reloaded.empty()) selected_object_index_ = std::min(selected_object_index_, (int)reloaded.size() - 1);
     
     Logger::Get().Log(LogLevel::INFO, "[App] Assigned new Task ID: " + std::to_string(maxId + 1));
     printf("[App] Assigned new Task ID: %d\n", maxId + 1);
 }
 
 void App::ModifyTaskParameters() {
-    Logger::Get().Log(LogLevel::INFO, "[App] ModifyTaskParameters (Stub - parameter UI needed)");
+	Logger::Get().Log(LogLevel::INFO, "[App] ModifyTaskParameters (Stub - parameter UI needed)");
 }
+
+void App::ClearStatusMessage() {
+	status_message_.clear();
+}
+
+static int GetLookupObjectIndex(int hoverIdx, int selectedIdx) {
+	if (hoverIdx >= 0) return hoverIdx;
+	if (selectedIdx >= 0) return selectedIdx;
+	return -1;
+}
+
+static void SetLookupStatus(std::string& status_message, const std::string& msg) {
+	status_message = msg;
+	Logger::Get().Log(LogLevel::INFO, msg);
+	printf("%s\n", msg.c_str());
+}
+
+void App::LookupSelectedModelName() {
+	auto& objects = level_.GetLevelObjects().GetObjects();
+	int idx = GetLookupObjectIndex(hover_object_index_, selected_object_index_);
+	if (idx < 0 || idx >= (int)objects.size()) {
+		SetLookupStatus(status_message_, "[App] Model lookup: no hovered/selected object");
+		return;
+	}
+
+	const auto& obj = objects[idx];
+	std::string name = level_.GetLevelObjects().GetModelName(obj.modelId);
+	if (name.empty()) {
+		SetLookupStatus(status_message_, "[App] Model lookup: no friendly name for model ID " + obj.modelId);
+		return;
+	}
+
+	SetLookupStatus(status_message_, "[App] Model lookup: " + obj.modelId + " -> " + name);
+}
+
+void App::LookupSelectedModelId() {
+	auto& objects = level_.GetLevelObjects().GetObjects();
+	int idx = GetLookupObjectIndex(hover_object_index_, selected_object_index_);
+	if (idx < 0 || idx >= (int)objects.size()) {
+		SetLookupStatus(status_message_, "[App] Model lookup: no hovered/selected object");
+		return;
+	}
+
+	const auto& obj = objects[idx];
+	std::string name = level_.GetLevelObjects().GetModelName(obj.modelId);
+	if (name.empty()) {
+		name = obj.name;
+	}
+	if (name.empty()) {
+		SetLookupStatus(status_message_, "[App] Model lookup: object has no readable model name");
+		return;
+	}
+
+	std::string modelId = level_.GetLevelObjects().GetModelId(name);
+	if (modelId.empty()) {
+		SetLookupStatus(status_message_, "[App] Model lookup: no model id for name \"" + name + "\"");
+		return;
+	}
+
+	SetLookupStatus(status_message_, "[App] Model lookup: " + name + " -> " + modelId);
+}
+
+void App::CopySelectedModelName() {
+	auto& objects = level_.GetLevelObjects().GetObjects();
+	int idx = GetLookupObjectIndex(hover_object_index_, selected_object_index_);
+	if (idx < 0 || idx >= (int)objects.size()) {
+		SetLookupStatus(status_message_, "[App] Model copy: no hovered/selected object");
+		return;
+	}
+
+	const auto& obj = objects[idx];
+	std::string name = level_.GetLevelObjects().GetModelName(obj.modelId);
+	if (name.empty()) {
+		SetLookupStatus(status_message_, "[App] Model copy: no friendly name for model ID " + obj.modelId);
+		return;
+	}
+
+	Utils::SetClipboardText(name);
+	SetLookupStatus(status_message_, "[App] Copied model name: " + name);
+}
+
+void App::CopySelectedModelId() {
+	auto& objects = level_.GetLevelObjects().GetObjects();
+	int idx = GetLookupObjectIndex(hover_object_index_, selected_object_index_);
+	if (idx < 0 || idx >= (int)objects.size()) {
+		SetLookupStatus(status_message_, "[App] Model copy: no hovered/selected object");
+		return;
+	}
+
+	const auto& obj = objects[idx];
+	std::string name = level_.GetLevelObjects().GetModelName(obj.modelId);
+	if (name.empty()) {
+		name = obj.name;
+	}
+	if (name.empty()) {
+		SetLookupStatus(status_message_, "[App] Model copy: object has no readable model name");
+		return;
+	}
+
+	std::string modelId = level_.GetLevelObjects().GetModelId(name);
+	if (modelId.empty()) {
+		SetLookupStatus(status_message_, "[App] Model copy: no model id for name \"" + name + "\"");
+		return;
+	}
+
+	Utils::SetClipboardText(modelId);
+	SetLookupStatus(status_message_, "[App] Copied model id: " + modelId);
+}
+
+void App::LookupHoveredModelName() { LookupSelectedModelName(); }
+void App::LookupHoveredModelId() { LookupSelectedModelId(); }
 

@@ -592,6 +592,17 @@ bool File_Exists(const char* filename) {
 }
 
 FILE* File_Open(const char* filename, const char* mod) {
+	// SECURITY: Strictly prohibit WRITING to the QFiles directory
+	bool isWriteMode = (strpbrk(mod, "wa+") != nullptr);
+	if (isWriteMode && filename) {
+		std::string lowerPath = filename;
+		std::transform(lowerPath.begin(), lowerPath.end(), lowerPath.begin(), ::tolower);
+		if (lowerPath.find("qfiles") != std::string::npos) {
+			Logger::Get().Log(LogLevel::ERR, "[File_Open] CRITICAL ERROR: Blocked attempt to WRITE to READ-ONLY QFiles: " + std::string(filename));
+			return nullptr;
+		}
+	}
+
 #if defined(_MSC_VER)
 	char16_t char16_filename[1024], char16_mod[64];
 	Str_UTF8ToUTF16(filename, char16_filename, 1024);

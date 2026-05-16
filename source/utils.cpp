@@ -318,4 +318,35 @@ bool IsUndergroundModel(const std::string& name, const std::string& modelId) {
 		matches("491_");
 }
 
+void SetClipboardText(const std::string& text) {
+	if (!OpenClipboard(NULL)) return;
+	EmptyClipboard();
+	HGLOBAL hGlob = GlobalAlloc(GMEM_MOVEABLE, text.size() + 1);
+	if (!hGlob) {
+		CloseClipboard();
+		return;
+	}
+	char* pBuf = (char*)GlobalLock(hGlob);
+	if (pBuf) {
+		memcpy(pBuf, text.c_str(), text.size() + 1);
+		GlobalUnlock(hGlob);
+		SetClipboardData(CF_TEXT, hGlob);
+	}
+	CloseClipboard();
+}
+
+std::string GetClipboardText() {
+	if (!OpenClipboard(NULL)) return "";
+	HANDLE hData = GetClipboardData(CF_TEXT);
+	if (!hData) {
+		CloseClipboard();
+		return "";
+	}
+	char* pszText = static_cast<char*>(GlobalLock(hData));
+	std::string text = pszText ? std::string(pszText) : "";
+	GlobalUnlock(hData);
+	CloseClipboard();
+	return text;
+}
+
 } // namespace Utils

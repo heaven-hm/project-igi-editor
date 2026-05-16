@@ -61,6 +61,7 @@ public:
 		bool terrain_edit_enabled_;
 		int selected_object_index_;
 		int hover_object_index_;
+		int hover_tree_index_;
 		int mouse_x_;
 		int mouse_y_;
 		int tree_scroll_offset = 0; // For scrolling the object tree
@@ -68,9 +69,12 @@ public:
 		const class LevelObjects* level_objects_;
 		bool task_editor_open_;
 		std::string edit_string_;
+		int edit_cursor_pos_;
+		int edit_selection_start_;
+		int edit_selection_end_;
 		int edit_box_w_;
 		int edit_box_h_;
-		int edit_cursor_pos_;
+		int edit_scroll_x_;
 		bool enable_camera_mode_;
 	};
 

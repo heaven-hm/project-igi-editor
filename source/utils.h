@@ -58,4 +58,8 @@ bool ValidateAndSetupQEditor();
 // Game specific utilities
 bool IsUndergroundModel(const std::string& name, const std::string& modelId);
 
+// Clipboard utilities
+void SetClipboardText(const std::string& text);
+std::string GetClipboardText();
+
 } // namespace Utils

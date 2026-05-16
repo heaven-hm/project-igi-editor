@@ -502,6 +502,23 @@ void Level::SaveChanges() {
 	MoveTerrainToGamePath(cur_level_no_);
 }
 
+void Level::SaveAndReloadObjects() {
+	std::string exeDir = GetExeDirectory();
+	std::string localQsc = exeDir + "\\objects.qsc";
+
+	// 1. Save changes to local QSC file
+	level_objects_.SaveToQSC(localQsc);
+
+	// 2. Reload objects from the saved file to ensure live synchronization
+	QSC* qsc = new QSC();
+	if (qsc) {
+		qsc->Load(localQsc.c_str());
+		level_objects_.Load(this, qsc);
+		delete qsc; // LevelObjects::Load copies everything, so we can free the temp QSC
+		Logger::Get().Log(LogLevel::INFO, "[Level] SaveAndReloadObjects: Synchronized with " + localQsc);
+	}
+}
+
 bool Level::GetTerrainZ(double x, double y, float& z, bool ignore_discard) {
 	if (root_dyn_cube_) {
 		return terrain_.GetZ(root_dyn_cube_, x, y, z, ignore_discard);

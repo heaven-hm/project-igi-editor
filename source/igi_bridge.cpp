@@ -24,7 +24,6 @@ void IGIBridge::ThreadLoop() {
 
 void IGIBridge::UpdateData() {
     std::lock_guard<std::mutex> lock(data_mutex_);
-    current_data_.status_msg = "IGI LINK: NATIVE MODE";
     current_data_.connected = false; // Disconnected from real game memory
 }
 

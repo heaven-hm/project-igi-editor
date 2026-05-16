@@ -356,6 +356,7 @@ bool Tex_Load(const char* filename, pics_s& pics) {
 */
 QSC::QSC() :
 	scripts_(nullptr),
+	pristine_scripts_(nullptr),
 	pc_(nullptr),
 	line_(0),
 	root_func_count_(0),
@@ -379,6 +380,13 @@ void QSC::Load(const char* filename) {
 		return;
 	}
 
+	// Make a pristine copy for raw line extraction because Parse() is destructive
+	size_t len = strlen(scripts_);
+	pristine_scripts_ = (char*)MEM_ALLOC(len + 1);
+	if (pristine_scripts_) {
+		memcpy(pristine_scripts_, scripts_, len + 1);
+	}
+
 
 	pc_ = scripts_;
 
@@ -394,6 +402,10 @@ void QSC::Unload() {
 	if (scripts_) {
 		File_FreeBuf(scripts_);
 		scripts_ = nullptr;
+	}
+	if (pristine_scripts_) {
+		MEM_FREE_(pristine_scripts_);
+		pristine_scripts_ = nullptr;
 	}
 
 	pc_ = nullptr;

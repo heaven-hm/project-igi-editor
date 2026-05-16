@@ -184,7 +184,8 @@ public:
 
 	int						GetRootFuncCount() const { return root_func_count_; }
 	const func_s*			GetRootFunc(int idx) const { return root_funcs_[idx]; }
-	const char*				GetScripts() const { return scripts_; }
+	const char*				GetScripts() const { return pristine_scripts_ ? pristine_scripts_ : scripts_; }
+	const char*				GetParsedScripts() const { return scripts_; }
 
 	// debug
 	void					Print() const;
@@ -195,6 +196,7 @@ private:
 	static constexpr int	MAX_QSC_ARGS = 65536;
 
 	char*					scripts_;
+	char*					pristine_scripts_;
 	char*					pc_;
 	int						line_;
 

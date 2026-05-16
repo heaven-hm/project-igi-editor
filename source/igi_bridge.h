@@ -11,7 +11,6 @@ public:
         glm::vec3 raw_pos;
         glm::vec3 meters_pos;
         bool connected = false;
-        std::string status_msg = "IGI LINK: NATIVE MODE";
         uint32_t human_addr = 0;
         int game_level = 0;
         float view_h = 0.0f; // Horizontal angle

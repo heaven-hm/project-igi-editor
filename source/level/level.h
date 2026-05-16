@@ -32,6 +32,7 @@ public:
 
 	void					Update(update_params_s & params);
 	void					SaveChanges();
+	void					SaveAndReloadObjects();
 
 	bool					GetTerrainZ(double x, double y, float & z, bool ignore_discard = false);
 	void					EditorRaycastAndModify(const glm::vec3& ray_origin, const glm::vec3& ray_dir, int brush_type);

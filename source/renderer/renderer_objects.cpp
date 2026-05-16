@@ -24,7 +24,10 @@ bool Renderer_Objects::IsSkippedModelId(const std::string& modelId) {
         "320", "338", "355", "307", "308", "312", "203",
 
         // ── Holders / Brackets ──
-        "373", "615", "252"
+        "373", "615", "252",
+
+        // ── Collision / Invisible Objects ──
+        "colbox", "colbox2", "colbox66"
     };
 
     if (skippedIds.count(modelId) > 0) return true;
@@ -292,7 +295,9 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         // colbox66 is a collision box model that should not be rendered.
         // GitHub issue to be created for tracking this fix.
         if (IsFenceModelId(obj.modelId) || IsFenceModel(obj.name) || IsFenceModel(obj.modelId) ||
-            obj.modelId == "colbox" || obj.name == "colbox" || obj.modelId == "colbox66" || obj.name == "colbox66") {
+            obj.modelId == "colbox" || obj.name == "colbox" || 
+            obj.modelId == "colbox2" || obj.name == "colbox2" ||
+            obj.modelId == "colbox66" || obj.name == "colbox66") {
             continue;
         }
 

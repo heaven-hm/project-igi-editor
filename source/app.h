@@ -57,6 +57,7 @@ public:
 	int						GetEditBrush() const;
 	void					ToggleShowHUD();
 	bool					GetShowHUD() const;
+	void					SetShowHUD(bool show);
 
 	bool					GetOverlayWireframe() const;
 	int						GetDrawParts() const;
@@ -136,12 +137,18 @@ private:
 	bool					show_help_;
 	int						tree_scroll_offset_;
 	bool					tree_decl_expanded_;
+	std::string				status_message_;
 
 	bool					task_editor_open_ = false;
 	std::string				edit_string_;
 	int						edit_cursor_pos_ = 0;
+	int						edit_selection_start_ = -1;
+	int						edit_selection_end_ = -1;
+	bool					edit_dragging_ = false;
 	int						edit_box_w_ = 900;
 	int						edit_box_h_ = 150;
+	int						hover_tree_index_ = -1;
+	int						edit_scroll_x_ = 0;
 
 	bool					sync_from_game_once_;
 	int						last_game_level_;
@@ -205,6 +212,7 @@ private:
 	void					UpdateMarkerManipulation();
 	void					PropagateTransformToChildren(int parentIdx, const glm::dvec3& deltaPos, const glm::dvec3& deltaRot, const glm::dvec3& pivot);
 
+public:
 	// QSC/QVM workflow
 	void					LoadQSCForLevel(int level_no);
 	void					SaveAndCompile();
@@ -217,5 +225,12 @@ private:
 	void					PasteTask();
 	void					AssignTaskID();
 	void					ModifyTaskParameters();
+	void					LookupSelectedModelName();
+	void					LookupSelectedModelId();
+	void					CopySelectedModelName();
+	void					CopySelectedModelId();
+	void					LookupHoveredModelName();
+	void					LookupHoveredModelId();
+	void					ClearStatusMessage();
 
 };

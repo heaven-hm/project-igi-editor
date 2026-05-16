@@ -34,11 +34,11 @@ Renderer::~Renderer() {
 void Renderer::LoadBuildingNames() {
 	char appDataPath[1024];
 	GetEnvironmentVariableA("APPDATA", appDataPath, 1024);
-	std::string jsonPath = std::string(appDataPath) + "\\QEditor\\IGIModelsLevel.json";
+	std::string jsonPath = std::string(appDataPath) + "\\QEditor\\IGIModelsAllLevel.json";
 
 	FILE* f = fopen(jsonPath.c_str(), "rb");
 	if (!f) {
-		std::cerr << "[Renderer] Failed to open IGIModelsLevel.json at: " << jsonPath << std::endl;
+		std::cerr << "[Renderer] Failed to open IGIModelsAllLevel.json at: " << jsonPath << std::endl;
 		return;
 	}
 
@@ -54,7 +54,7 @@ void Renderer::LoadBuildingNames() {
 	std::string content(buf);
 	delete[] buf;
 
-	// Parse IGIModelsLevel.json structure
+	// Parse IGIModelsAllLevel.json structure
 	// Format: { "Level 1": { "Objects": [...], "Buildings": [...] }, ... }
 	size_t pos = 0;
 	while ((pos = content.find("\"Level ", pos)) != std::string::npos) {
@@ -88,7 +88,7 @@ void Renderer::LoadBuildingNames() {
 		pos = levelEnd + 1;
 	}
 
-	Logger::Get().Log(LogLevel::INFO, "[Renderer] Loaded " + std::to_string(building_names_.size()) + " building names and " + std::to_string(task_ids_.size()) + " task IDs from IGIModelsLevel.json");
+	Logger::Get().Log(LogLevel::INFO, "[Renderer] Loaded " + std::to_string(building_names_.size()) + " building names and " + std::to_string(task_ids_.size()) + " task IDs from IGIModelsAllLevel.json");
 }
 
 void Renderer::ParseLevelObjects(const std::string& arrayContent, int levelNum, bool isBuilding) {
@@ -354,6 +354,25 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                         }
                 };
 
+                auto draw_text_mono = [&](int x, int y, const char* str, float r, float g, float b) {
+                        std::stringstream ss(str);
+                        std::string line;
+                        int line_y = y;
+                        while (std::getline(ss, line)) {
+                            // Draw shadow
+                            glColor3f(0.0f, 0.0f, 0.0f);
+                            glRasterPos2i(x + 1, params.view_define_->viewport_height_ - line_y - 1);
+                            for (char c : line) glutBitmapCharacter(GLUT_BITMAP_9_BY_15, c);
+                            
+                            // Draw main text
+                            glColor3f(r, g, b);
+                            glRasterPos2i(x, params.view_define_->viewport_height_ - line_y);
+                            for (char c : line) glutBitmapCharacter(GLUT_BITMAP_9_BY_15, c);
+                            
+                            line_y += 18; // Vertical spacing for 9x15
+                        }
+                };
+
                 // Helper to convert KeyBinding to display string
                 auto keybinding_to_string = [&](const KeyBinding& kb) -> std::string {
                         std::string result;
@@ -396,17 +415,37 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                     int viewport_h = params.view_define_->viewport_height_;
 
                     // Recursive helper to draw tree nodes
-                    std::function<void(int, int)> draw_node = [&](int idx, int depth) {
+                current_row = 0;
+                std::function<void(int, int)> draw_node = [&](int idx, int depth) {
                         if (idx < 0 || idx >= (int)objects.size()) return;
                         const auto& obj = objects[idx];
                         if (obj.deleted) return;
 
-                        // Calculate if this node should be visible based on scroll
-                        int y = start_y + (current_row - scroll_offset) * row_h;
+                        int x = tree_x + (depth * 18);
+                        int y = start_y + (current_row - hud.tree_scroll_offset) * row_h;
                         current_row++;
 
-                        if (y >= start_y && y < viewport_h - 50) {
-                            int x = tree_x + (depth * 18);
+                        if (y >= start_y && y < params.view_define_->viewport_height_ - 50) {
+                                // Highlight if selected or hovered
+                                if (idx == hud.selected_object_index_) {
+                                        glEnable(GL_BLEND);
+                                        glColor4f(0.0f, 0.5f, 0.0f, 0.4f);
+                                        glBegin(GL_QUADS);
+                                        glVertex2i(tree_x - 5, params.view_define_->viewport_height_ - (y - 2));
+                                        glVertex2i(tree_x + 300, params.view_define_->viewport_height_ - (y - 2));
+                                        glVertex2i(tree_x + 300, params.view_define_->viewport_height_ - (y + row_h - 2));
+                                        glVertex2i(tree_x - 5, params.view_define_->viewport_height_ - (y + row_h - 2));
+                                        glEnd();
+                                } else if (idx == hud.hover_tree_index_) {
+                                        glEnable(GL_BLEND);
+                                        glColor4f(0.3f, 0.3f, 0.3f, 0.3f);
+                                        glBegin(GL_QUADS);
+                                        glVertex2i(tree_x - 5, params.view_define_->viewport_height_ - (y - 2));
+                                        glVertex2i(tree_x + 300, params.view_define_->viewport_height_ - (y - 2));
+                                        glVertex2i(tree_x + 300, params.view_define_->viewport_height_ - (y + row_h - 2));
+                                        glVertex2i(tree_x - 5, params.view_define_->viewport_height_ - (y + row_h - 2));
+                                        glEnd();
+                                }
                             
                             // Draw Hierarchy Line (dotted vertical)
                             if (depth > 0) {
@@ -580,7 +619,7 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                 // Removed live info as requested
 
                 // Display object info at mouse position
-                int info_object_index = hud.edit_mode_ ? hud.selected_object_index_ : hud.hover_object_index_;
+                int info_object_index = hud.hover_object_index_;
                 if (info_object_index >= 0 && hud.level_objects_) {
                         const auto& objects = hud.level_objects_->GetObjects();
                         if (info_object_index < (int)objects.size()) {
@@ -685,6 +724,12 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                         }
                 }
 
+                if (!hud.status_msg_.empty()) {
+                        int status_x = 20;
+                        int status_y = 18;
+                        draw_text(status_x, status_y, hud.status_msg_.c_str(), 0.85f, 1.0f, 0.6f);
+                }
+
                 // Watermark
                 int w_width = glutBitmapLength(GLUT_BITMAP_HELVETICA_12, (const unsigned char*)"IGI Editor Copyright - JonesHM");
                 int w_x = (params.view_define_->viewport_width_ - w_width) / 2;
@@ -717,8 +762,9 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                         glEnd();
                         glLineWidth(1.0f);
 
-                        draw_text(box_x + 10, box_y + box_h - 20, "Task Editor (ESC: Close, Arrows: Resize)", 1.0f, 1.0f, 1.0f);
-                        draw_text(box_x + 10, box_y + box_h - 40, "Raw QSC Task Content:", 0.6f, 0.6f, 0.6f);
+                        int viewport_h = params.view_define_->viewport_height_;
+                        draw_text(box_x + 10, viewport_h - (box_y + box_h - 20), "Task Editor (ESC: Save, Arrows: Resize)", 1.0f, 1.0f, 1.0f);
+                        draw_text(box_x + 10, viewport_h - (box_y + box_h - 40), "Contents:", 0.6f, 0.6f, 0.6f);
                         
                         // Input field bg
                         glColor4f(0.15f, 0.15f, 0.15f, 1.0f);
@@ -729,26 +775,49 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                         glVertex2i(box_x + 10, box_y + box_h - 50);
                         glEnd();
 
-                        // Clipping region for text (rudimentary)
-                        draw_text(box_x + 15, box_y + box_h - 65, hud.edit_string_.c_str(), 0.9f, 0.9f, 0.9f);
-                        
-                        // Blinking cursor at edit_cursor_pos_
-                        if ((GetTickCount() / 500) % 2 == 0) {
-                                // Calculate cursor line and column
-                                int cursor_line = 0;
-                                int last_newline_pos = -1;
-                                for (int i = 0; i < hud.edit_cursor_pos_ && i < (int)hud.edit_string_.size(); ++i) {
-                                    if (hud.edit_string_[i] == '\n') {
-                                        cursor_line++;
-                                        last_newline_pos = i;
-                                    }
-                                }
+                        // Use Scissor Test for clipping
+                        glEnable(GL_SCISSOR_TEST);
+                        glScissor(box_x + 10, box_y + 10, box_w - 20, box_h - 60);
+
+                        int scroll_offset_px = hud.edit_scroll_x_ * 9;
+
+                        // Selection Highlight
+                        if (hud.edit_selection_start_ != -1 && hud.edit_selection_end_ != -1 && hud.edit_selection_start_ != hud.edit_selection_end_) {
+                                int s = std::min(hud.edit_selection_start_, hud.edit_selection_end_);
+                                int e = std::max(hud.edit_selection_start_, hud.edit_selection_end_);
+                                int sel_x1 = box_x + 20 + (s * 9) - scroll_offset_px;
+                                int sel_x2 = box_x + 20 + (e * 9) - scroll_offset_px;
                                 
-                                std::string current_line_to_cursor = hud.edit_string_.substr(last_newline_pos + 1, hud.edit_cursor_pos_ - (last_newline_pos + 1));
-                                int cursor_x_px = glutBitmapLength(GLUT_BITMAP_HELVETICA_12, (const unsigned char*)current_line_to_cursor.c_str());
-                                
-                                draw_text(box_x + 15 + cursor_x_px, box_y + box_h - 65 + cursor_line * 15, "|", 1.0f, 1.0f, 0.0f);
+                                glEnable(GL_BLEND);
+                                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                                glColor4f(0.0f, 0.5f, 1.0f, 0.4f); // Semi-transparent blue
+                                glBegin(GL_QUADS);
+                                glVertex2i(sel_x1, box_y + 25);
+                                glVertex2i(sel_x2, box_y + 25);
+                                glVertex2i(sel_x2, box_y + 45);
+                                glVertex2i(sel_x1, box_y + 45);
+                                glEnd();
+                                glDisable(GL_BLEND);
                         }
+
+                        // Cursor (Scrolled) - 9px width
+                        int cursor_x = box_x + 20 + (hud.edit_cursor_pos_ * 9) - scroll_offset_px;
+                        glColor3f(1.0f, 1.0f, 1.0f); // White cursor
+                        glLineWidth(2.0f);
+                        glBegin(GL_LINES);
+                        glVertex2i(cursor_x, box_y + 28);
+                        glVertex2i(cursor_x, box_y + 42);
+                        glEnd();
+                        glLineWidth(1.0f);
+
+                        // Draw text (Scrolled)
+                        std::string displayString = hud.edit_string_;
+                        displayString.erase(std::remove(displayString.begin(), displayString.end(), '\r'), displayString.end());
+                        displayString.erase(std::remove(displayString.begin(), displayString.end(), '\n'), displayString.end());
+
+                        draw_text_mono(box_x + 20 - scroll_offset_px, viewport_h - (box_y + 35), displayString.c_str(), 1.0f, 1.0f, 1.0f);
+                        
+                        glDisable(GL_SCISSOR_TEST);
                 }
 
                 if (hud.edit_mode_) {
@@ -1005,7 +1074,7 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                         draw_text(menu_x + 30, line_y, "[W/A/S/D] Movement", font_r, font_g, font_b); line_y -= 20;
                         draw_text(menu_x + 30, line_y, "[F2] Terrain Edit Toggle", font_r, font_g, font_b); line_y -= 20;
                         draw_text(menu_x + 30, line_y, "[F3] Clip Toggle", font_r, font_g, font_b); line_y -= 20;
-                        draw_text(menu_x + 30, line_y, "[F4] Edit Mode Toggle", font_r, font_g, font_b); line_y -= 20;
+                        // Edit Mode toggle removed as requested
                         draw_text(menu_x + 30, line_y, "[PageUp/Down] Move Speed", font_r, font_g, font_b); line_y -= 20;
                         draw_text(menu_x + 30, line_y, "[Left/Right] Roll", font_r, font_g, font_b); line_y -= 20;
                         draw_text(menu_x + 30, line_y, "[TAB] Select Next Object", font_r, font_g, font_b); line_y -= 20;

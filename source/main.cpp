@@ -45,7 +45,12 @@ constexpr int MENU_EDIT_TERRAIN = 73;
 constexpr int MENU_TERRAIN_BRUSH_RAISE = 74;
 constexpr int MENU_TERRAIN_BRUSH_LOWER = 75;
 constexpr int MENU_EDITOR_SAVE = 76;
-constexpr int MENU_IGI_LIVE_DATA = 77;
+constexpr int MENU_TOGGLE_TASK_TREE = 77;
+constexpr int MENU_IGI_LIVE_DATA = 78;
+constexpr int MENU_LOOKUP_MODEL_NAME = 95;
+constexpr int MENU_LOOKUP_MODEL_ID = 96;
+constexpr int MENU_COPY_MODEL_NAME = 97;
+constexpr int MENU_COPY_MODEL_ID = 98;
 constexpr int MENU_SCALE_0_1 = 81;
 constexpr int MENU_SCALE_0_5 = 82;
 constexpr int MENU_SCALE_1 = 83;
@@ -75,6 +80,7 @@ static int g_menu_terrain_draw_opts;
 static int g_menu_terrain_modifier_opts;
 static int g_menu_choose_level;
 static int g_menu_editor_tools;
+static int g_menu_model_lookup;
 static int g_menu_object_scale;
 static int g_menu_load_options;
 static int g_menu_terrain_brush;
@@ -317,12 +323,7 @@ static void UpdateChooseLevelMenuText() {
 static void UpdateEditorToolsMenuText() {
 	glutSetMenu(g_menu_editor_tools);
 
-	if (g_app.GetEditMode()) {
-		glutChangeToMenuEntry(1, "Toggle Edit Mode [+]", MENU_EDITOR_TOGGLE);
-	}
-	else {
-		glutChangeToMenuEntry(1, "Toggle Edit Mode [-]", MENU_EDITOR_TOGGLE);
-	}
+	glutChangeToMenuEntry(1, "Task Tree Always On", MENU_TOGGLE_TASK_TREE);
 
 	if (g_app.GetTerrainEditEnabled()) {
 		glutChangeToMenuEntry(2, "Edit Objects [ ]", MENU_EDIT_OBJECTS);
@@ -425,17 +426,15 @@ static void OnMenu(int menu) {
 		g_app.ToggleTerrainModOption(TERRAIN_DISCARD_MOD);
 		g_update_menu_flags |= UPDATE_MENU_TERRAIN_MODIFIER_OPTS;
 		break;
-	case MENU_EDITOR_TOGGLE:
-		g_app.ToggleEditMode();
+	case MENU_TOGGLE_TASK_TREE:
+		g_app.SetShowHUD(true);
 		g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS;
 		break;
 	case MENU_EDIT_OBJECTS:
-		g_app.SetEditMode(true);
 		g_app.SetTerrainEditEnabled(false);
 		g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS;
 		break;
 	case MENU_EDIT_TERRAIN:
-		g_app.SetEditMode(true);
 		g_app.SetTerrainEditEnabled(true);
 		g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS;
 		break;
@@ -449,6 +448,18 @@ static void OnMenu(int menu) {
 		break;
 	case MENU_EDITOR_SAVE:
 		g_app.SaveCurrentLevel();
+		break;
+	case MENU_LOOKUP_MODEL_NAME:
+		g_app.LookupSelectedModelName();
+		break;
+	case MENU_LOOKUP_MODEL_ID:
+		g_app.LookupSelectedModelId();
+		break;
+	case MENU_COPY_MODEL_NAME:
+		g_app.CopySelectedModelName();
+		break;
+	case MENU_COPY_MODEL_ID:
+		g_app.CopySelectedModelId();
 		break;
 	case MENU_IGI_LIVE_DATA:
 		g_app.ToggleShowHUD();
@@ -725,9 +736,15 @@ int main(int argc, char **argv) {
 	glutAddMenuEntry("Brush: Lower Terrain", MENU_TERRAIN_BRUSH_LOWER);
 
 	g_menu_editor_tools = glutCreateMenu(OnMenu);
-	glutAddMenuEntry("Toggle Edit Mode", MENU_EDITOR_TOGGLE);
+	glutAddMenuEntry("Task Tree Always On", MENU_TOGGLE_TASK_TREE);
 	glutAddMenuEntry("Edit Objects", MENU_EDIT_OBJECTS);
 	glutAddMenuEntry("Edit Terrain", MENU_EDIT_TERRAIN);
+	g_menu_model_lookup = glutCreateMenu(OnMenu);
+	glutAddMenuEntry("Lookup Model Name", MENU_LOOKUP_MODEL_NAME);
+	glutAddMenuEntry("Lookup Model ID", MENU_LOOKUP_MODEL_ID);
+	glutAddMenuEntry("Copy Model Name", MENU_COPY_MODEL_NAME);
+	glutAddMenuEntry("Copy Model ID", MENU_COPY_MODEL_ID);
+	glutAddSubMenu("Model Lookup", g_menu_model_lookup);
 	glutAddSubMenu("Terrain Brush", g_menu_terrain_brush);
 	glutAddMenuEntry("Save Changes", MENU_EDITOR_SAVE);
 
