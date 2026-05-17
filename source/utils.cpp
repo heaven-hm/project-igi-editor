@@ -52,6 +52,145 @@ void ShowInfo(const std::string& message, const std::string& title) {
 	MessageBoxA(NULL, message.c_str(), title.c_str(), MB_OK | MB_ICONINFORMATION);
 }
 
+struct PromptDialogState {
+	std::string title;
+	std::string label;
+	std::string initial;
+	std::string result;
+	bool accepted = false;
+	bool done = false;
+	HWND edit = NULL;
+};
+
+static LRESULT CALLBACK PromptDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+	switch (msg) {
+	case WM_NCCREATE: {
+		const CREATESTRUCTA* create = reinterpret_cast<const CREATESTRUCTA*>(lParam);
+		SetWindowLongPtrA(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+		return TRUE;
+	}
+	case WM_CREATE: {
+		auto* state = reinterpret_cast<PromptDialogState*>(GetWindowLongPtrA(hwnd, GWLP_USERDATA));
+		if (!state) return -1;
+
+		CreateWindowExA(0, "STATIC", state->label.c_str(),
+			WS_CHILD | WS_VISIBLE,
+			12, 12, 356, 20,
+			hwnd, NULL, GetModuleHandleA(NULL), NULL);
+
+		state->edit = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", state->initial.c_str(),
+			WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+			12, 36, 356, 24,
+			hwnd, reinterpret_cast<HMENU>(1001), GetModuleHandleA(NULL), NULL);
+
+		CreateWindowExA(0, "BUTTON", "OK",
+			WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+			212, 72, 74, 26,
+			hwnd, reinterpret_cast<HMENU>(IDOK), GetModuleHandleA(NULL), NULL);
+
+		CreateWindowExA(0, "BUTTON", "Cancel",
+			WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+			294, 72, 74, 26,
+			hwnd, reinterpret_cast<HMENU>(IDCANCEL), GetModuleHandleA(NULL), NULL);
+
+		SendMessageA(state->edit, EM_SETSEL, 0, -1);
+		SetFocus(state->edit);
+		return 0;
+	}
+	case WM_COMMAND: {
+		auto* state = reinterpret_cast<PromptDialogState*>(GetWindowLongPtrA(hwnd, GWLP_USERDATA));
+		if (!state) break;
+
+		const int command = LOWORD(wParam);
+		if (command == IDOK) {
+			char buffer[1024] = {};
+			GetWindowTextA(state->edit, buffer, sizeof(buffer));
+			state->result = Trim(buffer);
+			state->accepted = true;
+			state->done = true;
+			DestroyWindow(hwnd);
+			return 0;
+		}
+		if (command == IDCANCEL) {
+			state->accepted = false;
+			state->done = true;
+			DestroyWindow(hwnd);
+			return 0;
+		}
+		break;
+	}
+	case WM_CLOSE: {
+		auto* state = reinterpret_cast<PromptDialogState*>(GetWindowLongPtrA(hwnd, GWLP_USERDATA));
+		if (state) {
+			state->accepted = false;
+			state->done = true;
+		}
+		DestroyWindow(hwnd);
+		return 0;
+	}
+	}
+
+	return DefWindowProcA(hwnd, msg, wParam, lParam);
+}
+
+std::optional<std::string> PromptForText(const std::string& title, const std::string& label, const std::string& initial) {
+	static bool registered = false;
+	static const char* kClassName = "IGIEditorPromptDialog";
+
+	if (!registered) {
+		WNDCLASSA wc = {};
+		wc.lpfnWndProc = PromptDialogProc;
+		wc.hInstance = GetModuleHandleA(NULL);
+		wc.lpszClassName = kClassName;
+		wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+		wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+		RegisterClassA(&wc);
+		registered = true;
+	}
+
+	PromptDialogState state;
+	state.title = title;
+	state.label = label;
+	state.initial = initial;
+
+	HWND owner = GetActiveWindow();
+	if (owner) EnableWindow(owner, FALSE);
+
+	const int width = 392;
+	const int height = 146;
+	const int screenW = GetSystemMetrics(SM_CXSCREEN);
+	const int screenH = GetSystemMetrics(SM_CYSCREEN);
+	HWND hwnd = CreateWindowExA(
+		WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
+		kClassName,
+		title.c_str(),
+		WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_VISIBLE,
+		(screenW - width) / 2, (screenH - height) / 2,
+		width, height,
+		owner, NULL, GetModuleHandleA(NULL), &state);
+
+	if (!hwnd) {
+		if (owner) EnableWindow(owner, TRUE);
+		return std::nullopt;
+	}
+
+	MSG msg;
+	while (!state.done && GetMessageA(&msg, NULL, 0, 0) > 0) {
+		if (!IsDialogMessageA(hwnd, &msg)) {
+			TranslateMessage(&msg);
+			DispatchMessageA(&msg);
+		}
+	}
+
+	if (owner) {
+		EnableWindow(owner, TRUE);
+		SetForegroundWindow(owner);
+	}
+
+	if (!state.accepted) return std::nullopt;
+	return state.result;
+}
+
 // Combined log + message box functions
 void LogAndShowError(const std::string& message, const std::string& title) {
 	LogError(message);
@@ -186,6 +325,18 @@ std::string GetExeDirectory() {
 		exeDir = exeDir.substr(0, lastSlash);
 	}
 	return exeDir;
+}
+
+std::string GetVersionString() {
+	std::string exeDir = GetExeDirectory();
+	std::string versionPath = exeDir + "\\version";
+	std::ifstream file(versionPath);
+	if (file.is_open()) {
+		std::string version;
+		std::getline(file, version);
+		return version;
+	}
+	return "0.0.7"; // Fallback
 }
 
 std::string GetLevelQSCPath(int level_no) {

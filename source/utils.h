@@ -24,6 +24,7 @@ void SetLogEnabled(bool enabled);
 void ShowError(const std::string& message, const std::string& title = "Error");
 void ShowWarning(const std::string& message, const std::string& title = "Warning");
 void ShowInfo(const std::string& message, const std::string& title = "Information");
+std::optional<std::string> PromptForText(const std::string& title, const std::string& label, const std::string& initial = "");
 
 // Combined log + message box functions
 void LogAndShowError(const std::string& message, const std::string& title = "Error");
@@ -51,6 +52,7 @@ bool IsKeyBindingPressed(const KeyBinding& kb);
 
 // File and path utilities
 std::string GetExeDirectory();
+std::string GetVersionString();
 std::string GetLevelQSCPath(int level_no);
 std::string GetLevelQVMPath(int level_no);
 bool ValidateAndSetupQEditor();

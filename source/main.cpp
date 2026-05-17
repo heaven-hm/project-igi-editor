@@ -47,8 +47,8 @@ constexpr int MENU_TERRAIN_BRUSH_LOWER = 75;
 constexpr int MENU_EDITOR_SAVE = 76;
 constexpr int MENU_TOGGLE_TASK_TREE = 77;
 constexpr int MENU_IGI_LIVE_DATA = 78;
-constexpr int MENU_LOOKUP_MODEL_NAME = 95;
-constexpr int MENU_LOOKUP_MODEL_ID = 96;
+constexpr int MENU_SEARCH_MODEL_BY_ID = 95;
+constexpr int MENU_SEARCH_MODEL_BY_NAME = 96;
 constexpr int MENU_COPY_MODEL_NAME = 97;
 constexpr int MENU_COPY_MODEL_ID = 98;
 constexpr int MENU_SCALE_0_1 = 81;
@@ -344,24 +344,11 @@ static void UpdateEditorToolsMenuText() {
 		glutChangeToMenuEntry(2, "Brush: Lower Terrain [*]", MENU_TERRAIN_BRUSH_LOWER);
 	}
 
-	glutSetMenu(g_menu_editor_tools);
-	if (g_app.GetShowHUD()) {
-		glutChangeToMenuEntry(6, "Show IGI Live Data [*]", MENU_IGI_LIVE_DATA);
-	}
-	else {
-		glutChangeToMenuEntry(6, "Show IGI Live Data [ ]", MENU_IGI_LIVE_DATA);
-	}
+	// Editor Tools menu no longer has a separate IGI Live Data entry here.
 }
 
 static void UpdateIGILiveDataMenuText() {
-	glutSetMenu(g_menu_editor_tools);
-
-	if (g_app.GetShowHUD()) {
-		glutChangeToMenuEntry(5, "Show IGI Live Data [*]", MENU_IGI_LIVE_DATA);
-	}
-	else {
-		glutChangeToMenuEntry(5, "Show IGI Live Data [ ]", MENU_IGI_LIVE_DATA);
-	}
+	// Keep this function for call-site compatibility; live data toggle isn't a visible menu entry.
 }
 
 static void UpdateScaleMenuText() {
@@ -449,11 +436,11 @@ static void OnMenu(int menu) {
 	case MENU_EDITOR_SAVE:
 		g_app.SaveCurrentLevel();
 		break;
-	case MENU_LOOKUP_MODEL_NAME:
-		g_app.LookupSelectedModelName();
+	case MENU_SEARCH_MODEL_BY_ID:
+		g_app.SearchModelById();
 		break;
-	case MENU_LOOKUP_MODEL_ID:
-		g_app.LookupSelectedModelId();
+	case MENU_SEARCH_MODEL_BY_NAME:
+		g_app.SearchModelByName();
 		break;
 	case MENU_COPY_MODEL_NAME:
 		g_app.CopySelectedModelName();
@@ -554,13 +541,15 @@ static int CustomAllocHook(int alloc_type, void* user_data, size_t size, int
 ================================================================================
 */
 int main(int argc, char **argv) {
+	std::string version = Utils::GetVersionString();
 #if defined(_WIN32) && defined(_DEBUG)
 	// Allocate console for debug mode
 	AllocConsole();
 	freopen("CONIN$", "r", stdin);
 	freopen("CONOUT$", "w", stdout);
 	freopen("CONOUT$", "w", stderr);
-	SetConsoleTitleA("IGI Editor v 0.0.2 BETA - Jones - HM - Debug Console");
+	std::string consoleTitle = "IGI Editor v " + version + " BETA - Jones - HM - Debug Console";
+	SetConsoleTitleA(consoleTitle.c_str());
 
 	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);	// detect memory leak
 # if defined(HOOK_ALLOC)
@@ -602,7 +591,8 @@ int main(int argc, char **argv) {
 	int pos_y = (screen_cy - wnd_h) >> 1;
 	glutInitWindowPosition(pos_x, pos_y);
 	glutInitWindowSize(wnd_w, wnd_h);
-	glutCreateWindow("IGI 1 Editor v0.0.5 - JonesHM");
+	std::string windowTitle = "IGI 1 Editor v" + version + " - JonesHM";
+	glutCreateWindow(windowTitle.c_str());
 
 #if defined(_WIN32)
 	// Load icon from file and set it
@@ -639,7 +629,7 @@ int main(int argc, char **argv) {
 	if (hIcon) {
 		HWND hwnd = GetActiveWindow();
 		if (!hwnd) {
-			hwnd = FindWindowA(NULL, "IGI Editor v 0.0.2 BETA - Jones - HM");
+			hwnd = FindWindowA(NULL, windowTitle.c_str());
 		}
 		if (!hwnd) {
 			int glutWindow = glutGetWindow();
@@ -739,14 +729,17 @@ int main(int argc, char **argv) {
 	glutAddMenuEntry("Task Tree Always On", MENU_TOGGLE_TASK_TREE);
 	glutAddMenuEntry("Edit Objects", MENU_EDIT_OBJECTS);
 	glutAddMenuEntry("Edit Terrain", MENU_EDIT_TERRAIN);
+	
 	g_menu_model_lookup = glutCreateMenu(OnMenu);
-	glutAddMenuEntry("Lookup Model Name", MENU_LOOKUP_MODEL_NAME);
-	glutAddMenuEntry("Lookup Model ID", MENU_LOOKUP_MODEL_ID);
+	glutAddMenuEntry("By ID", MENU_SEARCH_MODEL_BY_ID);
+	glutAddMenuEntry("By Name", MENU_SEARCH_MODEL_BY_NAME);
 	glutAddMenuEntry("Copy Model Name", MENU_COPY_MODEL_NAME);
 	glutAddMenuEntry("Copy Model ID", MENU_COPY_MODEL_ID);
-	glutAddSubMenu("Model Lookup", g_menu_model_lookup);
+	
+	glutSetMenu(g_menu_editor_tools); // Set back to editor tools before adding submenus
 	glutAddSubMenu("Terrain Brush", g_menu_terrain_brush);
 	glutAddMenuEntry("Save Changes", MENU_EDITOR_SAVE);
+
 
 	g_menu_object_scale = glutCreateMenu(OnMenu);
 	glutAddMenuEntry("0.1x", MENU_SCALE_0_1);
@@ -769,6 +762,7 @@ int main(int argc, char **argv) {
 	glutAddSubMenu("Terrain Draw Options", g_menu_terrain_draw_opts);
 	glutAddSubMenu("Terrain Mod Options", g_menu_terrain_modifier_opts);
 	glutAddSubMenu("Editor Tools", g_menu_editor_tools);
+	glutAddSubMenu("Model Search", g_menu_model_lookup);
 	glutAddSubMenu("Object Scale", g_menu_object_scale);
 	glutAddSubMenu("Load Options", g_menu_load_options);
 	glutAddSubMenu("Choose Level", g_menu_choose_level);
