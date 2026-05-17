@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <vector>
 #include <algorithm>
+#include <unordered_map>
 #include "logger.h"
 #include "utils.h"
 
@@ -513,16 +514,54 @@ void Level::SaveAndReloadObjects() {
 	std::string exeDir = GetExeDirectory();
 	std::string localQsc = exeDir + "\\objects.qsc";
 
-	// 1. Save changes to local QSC file
+	// Helper to get a unique tree path for an object to preserve expansion state
+	auto GetObjectTreePath = [](const std::vector<LevelObject>& objects, int idx) -> std::string {
+		std::string path;
+		int curr = idx;
+		while (curr >= 0 && curr < (int)objects.size()) {
+			const auto& obj = objects[curr];
+			std::string part = obj.type + ":" + obj.name + ":" + obj.taskId;
+			if (path.empty()) {
+				path = part;
+			} else {
+				path = part + "/" + path;
+			}
+			curr = obj.parentIndex;
+		}
+		return path;
+	};
+
+	// 1. Gather expanded states of containers before reloading
+	std::unordered_map<std::string, bool> expandedStates;
+	const auto& oldObjs = level_objects_.GetObjects();
+	for (int i = 0; i < (int)oldObjs.size(); ++i) {
+		if (oldObjs[i].isContainer && oldObjs[i].expanded) {
+			expandedStates[GetObjectTreePath(oldObjs, i)] = true;
+		}
+	}
+
+	// 2. Save changes to local QSC file
 	level_objects_.SaveToQSC(localQsc);
 
-	// 2. Reload objects from the saved file to ensure live synchronization
+	// 3. Reload objects from the saved file to ensure live synchronization
 	QSC* qsc = new QSC();
 	if (qsc) {
 		qsc->Load(localQsc.c_str());
 		level_objects_.Load(this, qsc);
 		delete qsc; // LevelObjects::Load copies everything, so we can free the temp QSC
-		Logger::Get().Log(LogLevel::INFO, "[Level] SaveAndReloadObjects: Synchronized with " + localQsc);
+
+		// 4. Restore expanded states to the newly loaded objects
+		auto& newObjs = level_objects_.GetObjects();
+		for (int i = 0; i < (int)newObjs.size(); ++i) {
+			if (newObjs[i].isContainer) {
+				std::string path = GetObjectTreePath(newObjs, i);
+				if (expandedStates.find(path) != expandedStates.end()) {
+					newObjs[i].expanded = true;
+				}
+			}
+		}
+
+		Logger::Get().Log(LogLevel::INFO, "[Level] SaveAndReloadObjects: Synchronized and expansion states preserved for: " + localQsc);
 	}
 }
 

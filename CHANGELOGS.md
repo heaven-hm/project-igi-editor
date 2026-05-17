@@ -1,5 +1,19 @@
 # Changelogs
 
+## 1.0.0 - Official First Public Release
+Welcome to the first public release of the **Project IGI 3D Editor**! This release marks a massive milestone, providing a state-of-the-art 3D modding suite with intuitive controls, visual script compilation pipelines, and precision world manipulation tools.
+
+### 🌟 Core Public Release Features
+* **Interactive 3D Terrain & Heightmap Editor**: Fully rendered real-time 3D terrain viewport with heightmap sculpting brushes.
+* **Procedural Spline & Waypoint System**: Dynamic editing of track splines, waypoint structures, and repeated mesh fence/wire layouts.
+* **Flight Camera & 3D Navigation**: Full 6-DOF fly-through camera with fine-grained speed controls, teleportation hotkeys, and real-time navigation grid.
+* **Complete Task & Object Editor**: Just like the classic IGI 2 Editor, you can add new tasks (`Task_New`), duplicate node hierarchies, copy/paste selections, delete objects, and perform full multi-step **Undo/Redo** operations.
+* **AI Behavior & Mission Intel Editor**: Full editing suite for soldier paths, movement node scripts, tactical AI weapon/ammo layouts, and mission logic constraints.
+* **All 14 Levels Supported**: Robust support for decompiling, editing, and compiling all 14 missions of the original game (with the first 3 levels fully tested and verified).
+* **Automatic Backup & Recovery**: Integrated restore systems that safeguard your pristine game files and allow instant reset to factory level state.
+
+---
+
 ## BETA 0.0.9 - Global Database Search & UI Polish
 ### Global Model Search Database
 - **Global Model Search Mappings**: Replaced local viewport-only model searches in `SearchModelById()` with a global database search inside `%APPDATA%\QEditor\IGIModels.json`.

@@ -153,6 +153,40 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
         LoadRecursive(qsc_objects, qsc_objects->GetRootFunc(i), -1);
     }
 
+    // Fallback: If a Task_New's task note/name is empty, query its child's model name in IGIModels.json
+    for (auto& obj : objects_) {
+        if (obj.qscFuncName == "Task_New" && obj.name.empty()) {
+            std::string foundModelId = "";
+            for (int childIdx : obj.childrenIndices) {
+                if (childIdx >= 0 && childIdx < (int)objects_.size()) {
+                    const auto& child = objects_[childIdx];
+                    if (!child.modelId.empty()) {
+                        foundModelId = child.modelId;
+                        break;
+                    }
+                }
+            }
+            if (!foundModelId.empty()) {
+                std::string friendlyName = GetModelName(foundModelId);
+                if (!friendlyName.empty()) {
+                    obj.name = friendlyName;
+                    obj.original_name = friendlyName;
+                    obj.has_original_name = true;
+                    
+                    // Also update the argument token in argTokens so that the UI text box matches
+                    if (obj.argTokens.size() > 2) {
+                        obj.argTokens[2] = "\"" + friendlyName + "\"";
+                    }
+                    
+                    // Force re-generation of qscLine so the UI displays it and the compiler sees it
+                    obj.qscLine.clear();
+                    
+                    Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Resolved empty task note for Task " + obj.taskId + " to model friendly name: " + friendlyName);
+                }
+            }
+        }
+    }
+
     // Only generate qscLine for objects that didn't get a raw line from the parser
     for (int i = 0; i < (int)objects_.size(); ++i) {
         if (objects_[i].qscLine.empty()) {
@@ -523,7 +557,9 @@ void LevelObjects::SaveToQSC(const std::string& qscPath) {
         obj.modified = false;
         obj.original_pos = glm::dvec3(obj.pos.x, obj.pos.y, obj.pos.z - obj.snap_z_offset);
         obj.original_rot = obj.rot;
-        obj.qscLine = GenerateTaskLine(obj);
+        if (obj.childrenIndices.empty()) {
+            obj.qscLine = GenerateTaskLine(obj);
+        }
     }
 
     Logger::Get().Log(LogLevel::INFO, "[LevelObjects::SaveToQSC] Successfully saved changes to: " + qscPath);
@@ -706,7 +742,9 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
         }
     }
 
-    obj.qscLine = GenerateTaskLine(obj);
+    if (obj.childrenIndices.empty()) {
+        obj.qscLine = GenerateTaskLine(obj);
+    }
 }
 
 std::string LevelObjects::GenerateTaskLine(const LevelObject& obj) {

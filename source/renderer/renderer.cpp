@@ -944,7 +944,8 @@ void Renderer::Draw(const draw_params_s& params, const task_tree_view_params_s& 
                         glVertex2i(save_btn_x + save_btn_w, save_btn_y + save_btn_h);
                         glVertex2i(save_btn_x, save_btn_y + save_btn_h);
                         glEnd();
-                        draw_text(save_btn_x + (save_btn_w / 2) - 14, viewport_h - (save_btn_y + 17), "Save", 1.0f, 1.0f, 1.0f);
+                        int text_w = glutBitmapLength(GLUT_BITMAP_HELVETICA_12, (const unsigned char*)"Save");
+                        draw_text(save_btn_x + (save_btn_w - text_w) / 2, viewport_h - (save_btn_y + 9), "Save", 1.0f, 1.0f, 1.0f);
                 }
 
                 if (task_tree_view.edit_mode_) {

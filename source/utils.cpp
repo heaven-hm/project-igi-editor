@@ -337,7 +337,7 @@ std::string GetVersionString() {
 		std::getline(file, version);
 		return version;
 	}
-	return "0.0.7"; // Fallback
+	return "1.0.0"; // Fallback
 }
 
 std::string GetLevelQSCPath(int level_no) {

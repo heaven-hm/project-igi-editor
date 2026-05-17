@@ -417,9 +417,6 @@ void App::LoadAIModelsFromFolder(int level_no) {
 	};
 	std::vector<AIData> aiDataList;
 	std::string jsonPath = qeditor_path + "\\IGIModelsAllLevel.json";
-	if (!std::filesystem::exists(jsonPath)) {
-		jsonPath = "C:\\Users\\hasee\\AppData\\Roaming\\QEditor\\IGIModelsAllLevel.json";
-	}
 	
 	if (std::filesystem::exists(jsonPath)) {
 		FILE* f = fopen(jsonPath.c_str(), "rb");
@@ -1366,14 +1363,6 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 			}
 			edit_string_.insert(edit_cursor_pos_, 1, key);
 			edit_cursor_pos_++;
-
-			// Live update from Task Editor to Object
-			if (selected_object_index_ >= 0) {
-				auto& obj = level_.GetLevelObjects().GetObjects()[selected_object_index_];
-				obj.qscLine = edit_string_;
-				level_.GetLevelObjects().ParseTaskLine(obj.qscLine, obj);
-				obj.modified = true;
-			}
 			return;
 		}
 
@@ -3331,10 +3320,6 @@ static std::vector<ModelEntry> LoadAllModelsFromJson() {
 	std::string jsonPath = qeditor_path + "\\IGIModels.json";
 	
 	std::ifstream file(jsonPath, std::ios::binary);
-	if (!file) {
-		jsonPath = "C:\\Users\\hasee\\AppData\\Roaming\\QEditor\\IGIModels.json";
-		file.open(jsonPath, std::ios::binary);
-	}
 	
 	if (!file) {
 		Logger::Get().Log(LogLevel::WARNING, "[App] Could not open database file: " + jsonPath);
