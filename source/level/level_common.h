@@ -169,6 +169,8 @@ public:
 	struct func_s {
 		const char*			func_name_;
 		int					line_;
+		int					start_offset_;
+		int					end_offset_;
 		arg_s*				args_;
 	};
 
@@ -182,6 +184,11 @@ public:
 	int						FindFuncByStr(const char* s, const func_s* funcs[1024]) const;
 	int						FindFuncByName(const char* name, const func_s* funcs[1024]) const;
 
+	int						GetRootFuncCount() const { return root_func_count_; }
+	const func_s*			GetRootFunc(int idx) const { return root_funcs_[idx]; }
+	const char*				GetScripts() const { return pristine_scripts_ ? pristine_scripts_ : scripts_; }
+	const char*				GetParsedScripts() const { return scripts_; }
+
 	// debug
 	void					Print() const;
 
@@ -191,6 +198,7 @@ private:
 	static constexpr int	MAX_QSC_ARGS = 65536;
 
 	char*					scripts_;
+	char*					pristine_scripts_;
 	char*					pc_;
 	int						line_;
 

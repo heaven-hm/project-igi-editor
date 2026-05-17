@@ -2,9 +2,70 @@
 #include "renderer_objects.h"
 #include <iostream>
 #include <filesystem>
+#include <unordered_set>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include "logger.h"
+
+
+bool Renderer_Objects::IsSkippedModelId(const std::string& modelId) {
+    if (modelId.empty()) return false;
+
+    // Use a static set for O(1) exact matches
+    static const std::unordered_set<std::string> skippedIds = {
+        // ── Fences & Gates (terrain-snapping glitches) ──
+        "303_01_1", "303_02_1", "303_03_1", "304_01_1",
+        "302_01_1", "331_01_1",
+        "341_01_1", "341_02_1", "341_03_1", "341_04_1",
+        "341_05_1", "341_06_1", "341_07_1",
+        "366_01_1", "370_01_1", "370_02_1", "370_03_1", "370_04_1",
+
+        // ── Wires & Poles ──
+        "320", "338", "355", "307", "308", "312", "203",
+
+        // ── Holders / Brackets ──
+        "373", "615", "252",
+
+        // ── Collision / Invisible Objects ──
+        "colbox", "colbox2","colbox4" "colbox66"
+    };
+
+    if (skippedIds.count(modelId) > 0) return true;
+
+    // Robust prefix matching: skip if modelId starts with any skip ID
+    for (const auto& sid : skippedIds) {
+        if (modelId.find(sid) == 0) return true; 
+    }
+    return false;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+static bool IsFenceModel(const std::string& nameOrId) {
+    std::string upper = nameOrId;
+    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    return upper.find("FENCE") != std::string::npos ||
+           upper.find("GATE") != std::string::npos ||
+           upper.find("POLE_WIRED") != std::string::npos ||
+           upper.find("WIRE") != std::string::npos;
+}
+
+// Known fence/gate model IDs from IGIModelsLevel.json
+static bool IsFenceModelId(const std::string& modelId) {
+    static const std::unordered_set<std::string> fenceIds = {
+        "303_01_1", "303_02_1", "303_03_1", "303_04_1", "304_01_1",
+        "302_01_1", "331_01_1",
+        "338_01_1",
+        "341_01_1", "341_02_1", "341_03_1", "341_04_1",
+        "341_05_1", "341_06_1", "341_07_1",
+        "366_01_1"
+    };
+    if (fenceIds.count(modelId) > 0) return true;
+    // Handle partial IDs from QSC (e.g. "303", "303_01")
+    for (const auto& fid : fenceIds) {
+        if (fid.find(modelId) == 0 || modelId.find(fid) == 0) return true;
+    }
+    return false;
+}
 
 
 // ─── Shader Sources ───────────────────────────────────────────────────────────
@@ -51,19 +112,24 @@ uniform int u_useTexture;
 out vec4 fragColor;
 
 void main() {
-    vec3 lightDir  = normalize(vec3(0.5, 1.0, 0.5));
-    float diff     = max(dot(normalize(v_normal), lightDir), 0.0);
-    vec3 light     = u_ambient + u_dirlight * diff;
-    
+    vec3 N = normalize(v_normal);
+    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5));
+    float diff = max(dot(N, lightDir), 0.0);
+
+    vec3 viewDir = normalize(vec3(0.0, 1.0, 1.0));
+    vec3 halfVec = normalize(lightDir + viewDir);
+    float spec = pow(max(dot(N, halfVec), 0.0), 32.0) * 0.25;
+
+    vec3 light = u_ambient + u_dirlight * (diff + spec);
+
     vec4 texColor = (u_useTexture != 0) ? texture(u_texture, v_uv) : vec4(1.0, 1.0, 1.0, 1.0);
-    
-    // Mix building hash color with texture if no texture
+
     if (u_useTexture == 0) {
         fragColor = vec4(light * texColor.rgb, 1.0);
     } else {
         fragColor = vec4(light * texColor.rgb, texColor.a);
     }
-    
+
     if (fragColor.a < 0.1) discard;
 }
 )";
@@ -165,7 +231,7 @@ void Renderer_Objects::Shutdown() {
 
 // ─── Draw ─────────────────────────────────────────────────────────────────────
 void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
-                            const std::vector<LevelObject>& objects, int selected_object_index, int draw_parts)
+                            const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts)
 {
     // Define the flags (must match renderer.h)
     const int DRAW_OBJECTS = 4;
@@ -210,6 +276,8 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     GLint loc_tex      = glGetUniformLocation(shader_program_, "u_texture");
 
     for (const auto& obj : objects) {
+        if (obj.deleted) continue;
+        
         // Selective rendering logic
         bool shouldDraw = false;
         if (draw_parts & DRAW_OBJECTS) {
@@ -221,18 +289,37 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
         if (!shouldDraw) continue;
 
+        // TODO: Temporarily skip loading and rendering fence/gate/wire objects and colbox66 due to snapping issues.
+        // Fences are floating or misaligned on terrain. Need to implement proper Z-offset calculation
+        // for fence models that accounts for their unique geometry (posts vs wires).
+        // colbox66 is a collision box model that should not be rendered.
+        // GitHub issue to be created for tracking this fix.
+        if (IsFenceModelId(obj.modelId) || IsFenceModel(obj.name) || IsFenceModel(obj.modelId) ||
+            obj.modelId == "colbox" || obj.name == "colbox" || 
+            obj.modelId == "colbox2" || obj.name == "colbox2" ||
+            obj.modelId == "colbox66" || obj.name == "colbox66") {
+            continue;
+        }
+
         Mesh mesh = GetOrLoadMesh(obj.modelId, obj.isBuilding);
         if (mesh.vertexCount == 0) continue;
 
 
         // ── Build model matrix ────────────────────────────────────────────────
-        // Each mesh is centered around (0,0,0) during load.
         // We now place it exactly at its world position (obj.pos) and apply its own rotation (obj.rot).
 
         glm::mat4 model = glm::mat4(1.0f);
-        
+
+        // 3. Scale
+        float base_scale = 40.96f;
+        float total_scale = base_scale * obj.scale;
+
         // 1. Translate to world position
+        // obj.pos.z already includes the terrain snap offset from app.cpp,
+        // so we use it directly without adding zOffset again.
         model = glm::translate(model, glm::vec3(obj.pos.x, obj.pos.y, obj.pos.z));
+
+        const bool isFence = IsFenceModelId(obj.modelId) || IsFenceModel(obj.name) || IsFenceModel(obj.modelId);
 
         // 2. Apply IGI rotations (Yaw, Pitch, Roll)
         // IGI rotation order: Yaw (Z), then Pitch (X), then Roll (Y)
@@ -240,9 +327,8 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         model = glm::rotate(model, (float)obj.rot.x, glm::vec3(1.0f, 0.0f, 0.0f)); // Pitch
         model = glm::rotate(model, (float)obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f)); // Roll
 
-        // 3. Scale 
-        float base_scale = 40.96f; 
-        model = glm::scale(model, glm::vec3(base_scale * obj.scale));
+        // 3. Scale
+        model = glm::scale(model, glm::vec3(total_scale));
 
         // 4. Convert OBJ Y-up to IGI Z-up (90 degree X rotation)
         model = glm::rotate(model, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f)); 
@@ -251,8 +337,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
 
         // ── Lighting and Color ────────────────────────────────────────────────
-        // Use a hash of the modelId to generate a unique but consistent color
-        // This helps visually distinguish different buildings without textures.
+        // Compute a hash-based fallback color for models/submeshes without textures.
         float r = 0.5f, g = 0.5f, b = 0.5f;
         if (!obj.modelId.empty()) {
             size_t hash = std::hash<std::string>{}(obj.modelId);
@@ -261,21 +346,83 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             b = 0.4f + (float)((hash >> 16) & 0xFF) / 255.0f * 0.4f;
         }
 
-        glUniform3f(loc_dirlight, 0.7f, 0.7f, 0.7f);
-        glUniform3f(loc_ambient,  r * 0.4f, g * 0.4f, b * 0.4f);
+        // Draw each submesh with its own texture and lighting
+        if (!mesh.subMeshes.empty()) {
+            // For mixed textured/untextured meshes, skip large untextured
+            // submeshes that are likely foundations (they should be underground).
+            int maxTexturedVerts = 0;
+            bool hasTextured = false, hasUntextured = false;
+            for (const auto& sub : mesh.subMeshes) {
+                if (sub.textureID > 0) {
+                    hasTextured = true;
+                    maxTexturedVerts = std::max(maxTexturedVerts, sub.vertexCount);
+                } else {
+                    hasUntextured = true;
+                }
+            }
+            bool mixedMesh = hasTextured && hasUntextured;
+            for (const auto& sub : mesh.subMeshes) {
+                if (sub.VAO == 0 || sub.vertexCount == 0) continue;
 
-        // Texture binding
-        if (mesh.textureID > 0) {
-            glUniform1i(loc_useTex, 1);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, mesh.textureID);
-            glUniform1i(loc_tex, 0);
+                // Skip large untextured foundations in mixed meshes (but NOT fences/gates)
+                if (!isFence && mixedMesh && sub.textureID == 0 && sub.vertexCount > maxTexturedVerts) {
+                    continue;
+                }
+
+                if (sub.textureID > 0) {
+                    // Textured submesh: neutral lighting so texture looks natural
+                    glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
+                    glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+                    glUniform1i(loc_useTex, 1);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, sub.textureID);
+                    glUniform1i(loc_tex, 0);
+                } else {
+                    // Untextured submesh: use material baseColorFactor if available,
+                    // otherwise fall back to the hash-based color.
+                    glm::vec3 color(sub.baseColorFactor.r, sub.baseColorFactor.g, sub.baseColorFactor.b);
+                    if (color.r >= 0.99f && color.g >= 0.99f && color.b >= 0.99f) {
+                        color = glm::vec3(r, g, b);
+                    }
+                    glUniform3f(loc_dirlight, color.r * 0.6f, color.g * 0.6f, color.b * 0.6f);
+                    glUniform3f(loc_ambient,  color.r * 0.4f, color.g * 0.4f, color.b * 0.4f);
+                    glUniform1i(loc_useTex, 0);
+                }
+
+                // Enable blending for alpha BLEND materials
+                bool blendEnabled = false;
+                if (sub.alphaMode == 2) { // BLEND
+                    glEnable(GL_BLEND);
+                    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                    blendEnabled = true;
+                }
+                glBindVertexArray(sub.VAO);
+                glDrawArrays(GL_TRIANGLES, 0, sub.vertexCount);
+                if (blendEnabled) {
+                    glDisable(GL_BLEND);
+                }
+            }
+            glBindVertexArray(0);
         } else {
-            glUniform1i(loc_useTex, 0);
+            // Legacy single-texture path (e.g. old OBJ models)
+            bool hasTexture = (mesh.textureID > 0);
+            if (hasTexture) {
+                glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
+                glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+            } else {
+                glUniform3f(loc_dirlight, 0.7f, 0.7f, 0.7f);
+                glUniform3f(loc_ambient,  r * 0.4f, g * 0.4f, b * 0.4f);
+            }
+            if (mesh.textureID > 0) {
+                glUniform1i(loc_useTex, 1);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, mesh.textureID);
+                glUniform1i(loc_tex, 0);
+            } else {
+                glUniform1i(loc_useTex, 0);
+            }
+            renderModel(mesh);
         }
-
-        // Draw
-        renderModel(mesh);
     }
 
     // Always reset polygon mode after draw
@@ -286,12 +433,24 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 }
 
 float Renderer_Objects::GetMeshZOffset(const std::string& modelId, bool isBuilding) {
-    std::string cacheKey = (isBuilding ? "building:" : "object:") + modelId;
-    auto it = mesh_cache_.find(cacheKey);
-    if (it != mesh_cache_.end()) {
-        return it->second.zOffset;
+    // TODO: Temporarily skip fence/gate/wire objects and colbox66 due to snapping issues.
+    // Fences are floating or misaligned on terrain. Need to implement proper Z-offset calculation.
+    // colbox66 is a collision box model that should not be rendered.
+    // See TODO in Draw function for more details.
+    if (IsFenceModelId(modelId) || modelId == "colbox66") {
+        return 0.0f;
     }
-    return GetOrLoadMesh(modelId, isBuilding).zOffset;
+
+    std::string cacheKey = std::to_string(current_level_) + ":" + (isBuilding ? "building:" : "object:") + modelId;
+    auto it = mesh_cache_.find(cacheKey);
+    Mesh mesh;
+    if (it != mesh_cache_.end()) {
+        mesh = it->second;
+    } else {
+        mesh = GetOrLoadMesh(modelId, isBuilding);
+    }
+
+    return mesh.mainZOffset;
 }
 
 glm::vec3 Renderer_Objects::GetMeshExtents(const std::string& modelId, bool isBuilding) {
@@ -301,7 +460,7 @@ glm::vec3 Renderer_Objects::GetMeshExtents(const std::string& modelId, bool isBu
 
 // ─── GetOrLoadMesh ────────────────────────────────────────────────────────────
 Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding) {
-    std::string cacheKey = (isBuilding ? "building:" : "object:") + modelId;
+    std::string cacheKey = std::to_string(current_level_) + ":" + (isBuilding ? "building:" : "object:") + modelId;
 
     // Return cached mesh if already loaded
     auto it = mesh_cache_.find(cacheKey);
@@ -321,25 +480,7 @@ Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding
 
     // Load and cache
     try {
-        std::string levelDir = "level" + std::to_string(current_level_);
-        std::string texturesBase = g_folders.textures_folder_;
-        
-        // Try to find matching texture in textures/levelX
-        std::string texPath = texturesBase + "/" + levelDir + "/" + modelId + ".png";
-        if (!std::filesystem::exists(texPath)) {
-            texPath = texturesBase + "/" + levelDir + "/" + modelId + "_argb8888.png";
-        }
-        
-        // Fallback to textures/ (non-level specific)
-        if (!std::filesystem::exists(texPath)) {
-             texPath = texturesBase + "/" + modelId + ".png";
-        }
-        
-        if (!std::filesystem::exists(texPath)) {
-            texPath = ""; // Fallback to no texture (default)
-        }
-
-        Mesh mesh = loadObjModel(filepath, texPath);
+        Mesh mesh = loadObjModel(filepath, "");
         mesh_cache_[cacheKey] = mesh;
         Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Success: Loaded model '" + modelId + "' from " + filepath + " (" + std::to_string(mesh.vertexCount) + " vertices)");
         return mesh;
@@ -534,6 +675,60 @@ Mesh Renderer_Objects::CreateCubeMesh() {
 
 std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isBuilding) {
     std::string levelDir = "level" + std::to_string(current_level_);
+    
+    // Try AI folder first if this might be an AI model (AI models have IDs starting with 000-019)
+    bool isAIModel = false;
+    if (modelId.size() >= 3) {
+        std::string prefix = modelId.substr(0, 3);
+        int prefixNum = 0;
+        try {
+            prefixNum = std::stoi(prefix);
+            if (prefixNum >= 0 && prefixNum <= 19) {
+                isAIModel = true;
+            }
+        } catch (...) {
+            // Not a number, not an AI model
+        }
+    }
+    
+    // Search in AI folder if it's an AI model
+    if (isAIModel) {
+        std::string aiBase = g_folders.ai_folder_;
+        for (char& c : aiBase) {
+            if (c == '/') c = '\\';
+        }
+        
+        std::filesystem::path aiBasePath(aiBase);
+        std::filesystem::path aiLevelPath = aiBasePath / levelDir;
+        
+        // Try exact match in AI folder
+        std::vector<std::filesystem::path> aiSearchPaths = { 
+            aiLevelPath / (modelId + ".glb"),
+            aiLevelPath / (modelId + ".obj")
+        };
+        for (const auto& path : aiSearchPaths) {
+            std::string pathStr = path.string();
+            if (std::filesystem::exists(pathStr)) {
+                return pathStr;
+            }
+        }
+        
+        // Try partial match in AI folder
+        if (std::filesystem::exists(aiLevelPath)) {
+            for (const auto& entry : std::filesystem::directory_iterator(aiLevelPath)) {
+                if (!entry.is_regular_file()) continue;
+                std::string fname = entry.path().filename().string();
+                std::string ext = entry.path().extension().string();
+                if (ext != ".glb" && ext != ".obj") continue;
+
+                if (fname.find(modelId) != std::string::npos) {
+                    return entry.path().string();
+                }
+            }
+        }
+    }
+    
+    // Fall back to buildings/objects folder
     std::string objectsBase = isBuilding ? g_folders.buildings_folder_ : g_folders.objects_folder_;
     
     // Convert forward slashes to backslashes for Windows
@@ -545,15 +740,28 @@ std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isB
     std::filesystem::path basePath(objectsBase);
     std::filesystem::path levelPath = basePath / levelDir;
     
-    // 1. Try exact match in level-specific folder
+    // 1. Try exact match in level-specific folder (.glb first, then .obj fallback)
     std::vector<std::filesystem::path> searchPaths = { 
-        levelPath / (modelId + ".obj"), 
-        levelPath / (modelId + ".mef")
+        levelPath / (modelId + ".glb"),
+        levelPath / (modelId + ".obj")
     };
     for (const auto& path : searchPaths) {
-        std::string pathStr = path.string();
-        if (std::filesystem::exists(pathStr)) {
-            return pathStr;
+        if (std::filesystem::exists(path)) return path.string();
+    }
+    
+    // 1b. Fallback to OTHER folder (buildings <-> objects)
+    std::string otherBase = isBuilding ? g_folders.objects_folder_ : g_folders.buildings_folder_;
+    for (char& c : otherBase) if (c == '/') c = '\\';
+    std::filesystem::path otherLevelPath = std::filesystem::path(otherBase) / levelDir;
+    
+    std::vector<std::filesystem::path> otherSearchPaths = { 
+        otherLevelPath / (modelId + ".glb"),
+        otherLevelPath / (modelId + ".obj")
+    };
+    for (const auto& path : otherSearchPaths) {
+        if (std::filesystem::exists(path)) {
+            Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Found " + modelId + " in ALTERNATE folder: " + path.string());
+            return path.string();
         }
     }
     
@@ -570,7 +778,7 @@ std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isB
             if (!entry.is_regular_file()) continue;
             std::string fname = entry.path().filename().string();
             std::string ext = entry.path().extension().string();
-            if (ext != ".obj" && ext != ".mef") continue;
+            if (ext != ".glb" && ext != ".obj") continue;
 
             // Exact match in filename
             if (fname.find(modelId) != std::string::npos) return entry.path().string();
@@ -633,7 +841,7 @@ void Renderer_Objects::InitSelectionBox() {
 }
 
 // ─── DrawSelectionBox ─────────────────────────────────────────────────────────
-void Renderer_Objects::DrawSelectionBox(const LevelObject& obj, GLuint ubo_mats) {
+void Renderer_Objects::DrawSelectionBox(const LevelObject& obj, GLuint ubo_mats, const glm::vec4& color) {
     if (selection_vao_ == 0) {
         InitSelectionBox();
     }
@@ -655,9 +863,10 @@ void main() {
 
     static const char* simple_frag = R"(
 #version 330 core
+uniform vec4 u_color;
 out vec4 fragColor;
 void main() {
-    fragColor = vec4(1.0, 1.0, 0.0, 1.0); // Yellow
+    fragColor = u_color;
 }
 )";
     
@@ -694,6 +903,9 @@ void main() {
     
     GLint loc_model = glGetUniformLocation(simple_shader, "u_model");
     glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
+    
+    GLint loc_color = glGetUniformLocation(simple_shader, "u_color");
+    glUniform4fv(loc_color, 1, glm::value_ptr(color));
     
     // Draw wireframe
     glBindVertexArray(selection_vao_);

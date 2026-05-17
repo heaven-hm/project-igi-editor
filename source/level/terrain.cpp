@@ -182,6 +182,10 @@ void Terrain::FreeCubeDataPools() {
 }
 
 bool Terrain::Load(load_params_s & params) {
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] ==========================================");
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Load() START for level " + std::to_string(params.level_no_));
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] ==========================================");
+	
 	Unload();
 
 #ifdef _DEBUG
@@ -195,47 +199,87 @@ bool Terrain::Load(load_params_s & params) {
 	Str_SPrintf(filename, 1024,
 		"%s/terrain.qsc",
 		terrainDir.c_str());
+	
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading terrain.qsc from: " + std::string(filename));
+
+	// Check if terrain.qsc exists
+	if (!File_Exists(filename)) {
+		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: terrain.qsc NOT FOUND at: " + std::string(filename));
+		return false;
+	}
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] terrain.qsc exists, loading...");
 
 	QSC* qsc_terrain = new QSC();
 	if (!qsc_terrain) {
+		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: Failed to allocate QSC for terrain");
 		return false;
 	}
 
 	qsc_terrain->Load(filename);
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] terrain.qsc loaded successfully");
 
 	LoadMaterialInfo(qsc_terrain);
 	LoadTileMapInfo(qsc_terrain);
 
 	delete qsc_terrain;
 
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading CMD file...");
 	if (!LoadCMDFile(params)) {
+		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: LoadCMDFile failed");
 		return false;
 	}
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] CMD file loaded");
 
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading CTR file...");
 	if (!LoadCTRFile(params)) {
+		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: LoadCTRFile failed");
 		return false;
 	}
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] CTR file loaded");
 
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading TEX file...");
 	if (!LoadTEXFile(params)) {
+		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: LoadTEXFile failed");
 		return false;
 	}
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] TEX file loaded");
 
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading LMP file...");
 	if (!LoadLMPFile(params)) {
+		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: LoadLMPFile failed");
 		return false;
 	}
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] LMP file loaded");
 
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading BIT file...");
 	if (!LoadBITFile(params)) {
+		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: LoadBITFile failed");
 		return false;
 	}
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] BIT file loaded");
 
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading HMP file...");
 	if (!LoadHMPFile(params)) {
+		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: LoadHMPFile failed");
 		return false;
 	}
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] HMP file loaded");
 
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading texture modifiers...");
 	LoadTextureModifier(params.level_dyn_cube_, params.qsc_objects_);
+	
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading terrain lightmap info...");
 	LoadTerrainLightMapInfo(params.level_dyn_cube_, params.qsc_objects_);
+	
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading heightmap info...");
 	LoadHeightMapInfo(params.level_dyn_cube_, params.qsc_objects_);
+	
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading discard terrain info...");
 	LoadDiscardTerrainInfo(params.level_dyn_cube_, params.qsc_objects_);
+	
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] ==========================================");
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Load() COMPLETE for level " + std::to_string(params.level_no_));
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] ==========================================");
 
 	return true;
 }
@@ -301,6 +345,15 @@ void Terrain::Unload() {
 	File_FreeBuf(cmd_);
 	cmd_ = nullptr;
 	cmd_sz_ = 0;
+
+	// Reset renderer buffer pointers - these point to renderer-managed memory
+	// that gets freed/reallocated when switching levels
+	vertices_ = nullptr;
+	indices_ = nullptr;
+	render_chunks_ = nullptr;
+	num_vertex_ = 0;
+	num_index_ = 0;
+	num_render_chunk_ = 0;
 
 	ClearCubeDataHash();
 }
@@ -444,7 +497,10 @@ bool Terrain::LoadCTRFile(load_params_s & params) {
 		const ctr_item_s* src = ctr_file_contents.head_ + i;
 		ctr_node_s* dst = ctr_ + i;
 
-		assert((int)src->cmd_offset_ < cmd_sz_);
+		if ((int)src->cmd_offset_ >= cmd_sz_) {
+			Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "CTR cmd_offset out of bounds\n");
+			return false;
+		}
 
 		memcpy(dst, src, sizeof(*src));
 
@@ -501,7 +557,9 @@ bool Terrain::LoadLMPFile(load_params_s & params) {
 			params.render_res_loader_->LoadTerrainLMPTex(pics.pics_ + i);
 
 #ifdef _DEBUG
-			assert(pics.pics_[i].width_ == pics.pics_[i].height_);
+			if (pics.pics_[i].width_ != pics.pics_[i].height_) {
+				Log(log_type_t::LOG_INFOR, __FILE__, __LINE__, "Lightmap width != height\n");
+			}
 			light_map_item_size_array_[i] = pics.pics_[i].width_;
 #endif
 		}
@@ -665,8 +723,12 @@ void Terrain::LoadTextureModifier(ILevelDynCube* level_dyn_cube, const QSC* qsc_
 		}
 
 #ifdef _DEBUG
-		assert(qtask_texture_modifier->bitmap_size_ >= 8);
-		assert(bitmap_item_size_array_[qtask_texture_modifier->bitmap_id_] == qtask_texture_modifier->bitmap_size_);
+		if (qtask_texture_modifier->bitmap_size_ < 8) {
+			Log(log_type_t::LOG_INFOR, __FILE__, __LINE__, "bitmap_size < 8\n");
+		}
+		if (bitmap_item_size_array_[qtask_texture_modifier->bitmap_id_] != qtask_texture_modifier->bitmap_size_) {
+			Log(log_type_t::LOG_INFOR, __FILE__, __LINE__, "bitmap size mismatch\n");
+		}
 #endif
 
 		int cube_half_size_shift = 30 - qtask_texture_modifier->lod_level_;
@@ -763,7 +825,9 @@ void Terrain::LoadTerrainLightMapInfo(ILevelDynCube* level_dyn_cube, const QSC* 
 		}
 
 #ifdef _DEBUG
-		assert(light_map_item_size_array_[qtask_terrain_light_map->tex_idx_] == qtask_terrain_light_map->light_map_size_);
+		if (light_map_item_size_array_[qtask_terrain_light_map->tex_idx_] != qtask_terrain_light_map->light_map_size_) {
+			Log(log_type_t::LOG_INFOR, __FILE__, __LINE__, "lightmap size mismatch\n");
+		}
 #endif
 
 		if (num_terrain_light_map_ >= MAX_LMP) {
@@ -872,8 +936,12 @@ void Terrain::LoadHeightMapInfo(ILevelDynCube* level_dyn_cube, const QSC* qsc_ob
 		}
 
 #ifdef _DEBUG
-		assert(qtask_height_map->height_map_size_ >= 2);
-		assert(height_map_item_size_array_[qtask_height_map->height_map_id_] == qtask_height_map->height_map_size_);
+		if (qtask_height_map->height_map_size_ < 2) {
+			Log(log_type_t::LOG_INFOR, __FILE__, __LINE__, "height_map_size < 2\n");
+		}
+		if (height_map_item_size_array_[qtask_height_map->height_map_id_] != qtask_height_map->height_map_size_) {
+			Log(log_type_t::LOG_INFOR, __FILE__, __LINE__, "heightmap size mismatch\n");
+		}
 #endif
 
 		int cube_half_size_shift = 30 - qtask_height_map->lod_level_;
@@ -1080,11 +1148,23 @@ bool Terrain::GetFirstHMPCenter(glm::vec3& out_pos) const {
 	return false;
 }
 
-bool Terrain::GetZ(const dyn_cube_s* root_dyn_cube, const glm::vec3& pos, float & ret_z) {
-	get_z_pos_ = pos;
+bool Terrain::GetZ(const dyn_cube_s* root_dyn_cube, double x, double y, float & ret_z, bool ignore_discard) {
+	// Safety check: ensure terrain data is loaded
+	if (!root_dyn_cube) {
+		Logger::Get().Log(LogLevel::WARNING, "[Terrain] GetZ called with null root_dyn_cube");
+		return false;
+	}
+	if (!ctr_) {
+		Logger::Get().Log(LogLevel::WARNING, "[Terrain] GetZ called with null ctr_ (terrain not loaded)");
+		return false;
+	}
+	
+	get_z_pos_.x = x;
+	get_z_pos_.y = y;
+	get_z_pos_.z = 0.0;
 
 	glm::ivec3 cube_pos(0);
-	return RecursiveGetZ(root_dyn_cube, ctr_ + 1, cube_pos, 0, ROOT_CUBE_HALF_SIZE, 0, ret_z);
+	return RecursiveGetZ(root_dyn_cube, ctr_ + 1, cube_pos, 0, ROOT_CUBE_HALF_SIZE, 0, ret_z, ignore_discard);
 }
 
 void Terrain::ClearCubeDataHash() {
@@ -2568,7 +2648,7 @@ double Terrain::CalcHMPDeltaZ(const height_map_s* height_map, double vert_x, dou
 }
 
 bool Terrain::RecursiveGetZ(const dyn_cube_s* dyn_cube, const ctr_node_s* cube_node,
-	glm::ivec3 & cube_pos, int cube_level, int cube_dim, uint8_t trans_flag, float & ret_z)
+	glm::ivec3 & cube_pos, int cube_level, int cube_dim, uint8_t trans_flag, float & ret_z, bool ignore_discard)
 {
 	if (dyn_cube) {
 		DynCube_RunQTaskPushFunc(dyn_cube);
@@ -2781,7 +2861,7 @@ bool Terrain::RecursiveGetZ(const dyn_cube_s* dyn_cube, const ctr_node_s* cube_n
 							sub_dyn_cube = dyn_cube->children_[child_idx];
 						}
 
-						if (!sub_dyn_cube || !(cur_mod_options_ & TERRAIN_DISCARD_MOD) || !(sub_dyn_cube->flags_ & CUBE_FLAG_DISCARD_TERRAIN)) {
+						if (!sub_dyn_cube || ignore_discard || !(cur_mod_options_ & TERRAIN_DISCARD_MOD) || !(sub_dyn_cube->flags_ & CUBE_FLAG_DISCARD_TERRAIN)) {
 
 							found = RecursiveGetZ(
 								sub_dyn_cube,
@@ -2790,7 +2870,8 @@ bool Terrain::RecursiveGetZ(const dyn_cube_s* dyn_cube, const ctr_node_s* cube_n
 								sub_cube_level,
 								sub_cube_dim,
 								trans_lines[cube_node->cmd_transform_[child_idx]],
-								ret_z
+								ret_z,
+								ignore_discard
 							);
 
 							if (found) {
@@ -2834,7 +2915,7 @@ void Terrain::EditorRaycastAndModify(const dyn_cube_s* root_dyn_cube, const glm:
 		current_pos += ray_dir * step_size;
 		
 		float terrain_z = 0.0f;
-		if (GetZ(root_dyn_cube, current_pos, terrain_z)) {
+		if (GetZ(root_dyn_cube, current_pos.x, current_pos.y, terrain_z)) {
 			if (current_pos.z <= terrain_z + 100.0f) { // Added a tiny tolerance to prevent slipping through cracks
 				hit = true;
 				break;

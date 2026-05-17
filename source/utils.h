@@ -8,6 +8,9 @@
 #include <string>
 #include <optional>
 #include <vector>
+#include <algorithm>
+
+struct KeyBinding;
 
 namespace Utils {
 
@@ -21,6 +24,7 @@ void SetLogEnabled(bool enabled);
 void ShowError(const std::string& message, const std::string& title = "Error");
 void ShowWarning(const std::string& message, const std::string& title = "Warning");
 void ShowInfo(const std::string& message, const std::string& title = "Information");
+std::optional<std::string> PromptForText(const std::string& title, const std::string& label, const std::string& initial = "");
 
 // Combined log + message box functions
 void LogAndShowError(const std::string& message, const std::string& title = "Error");
@@ -44,5 +48,23 @@ std::string ToString(const T& value);
 bool HotKeysDown(const std::vector<int>& keys);
 bool IsKeyPressed(int keycode);
 bool IsKeyToggled(int keycode);
+bool IsKeyBindingPressed(const KeyBinding& kb);
+
+// File and path utilities
+std::string GetExeDirectory();
+std::string GetVersionString();
+std::string GetLevelQSCPath(int level_no);
+std::string GetLevelQVMPath(int level_no);
+bool ValidateAndSetupQEditor();
+
+// Game specific utilities
+bool IsUndergroundModel(const std::string& name, const std::string& modelId);
+
+// Clipboard utilities
+void SetClipboardText(const std::string& text);
+std::string GetClipboardText();
+
+// File trim utility
+void TrimFileInPlace(const std::string& filepath);
 
 } // namespace Utils

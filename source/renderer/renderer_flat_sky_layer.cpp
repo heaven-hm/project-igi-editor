@@ -30,15 +30,16 @@ bool Renderer_FlatSkyLayer::Init(int layer_no, GLuint vbo, int vert_per_layer) {
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
 
 	int vert_offset = layer_no * sizeof(vert_flat_sky_layer_s) * vert_per_layer;
+	const auto base_offset = static_cast<std::uintptr_t>(vert_offset);
 
 	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(vert_flat_sky_layer_s), (const void*)vert_offset);
+	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(vert_flat_sky_layer_s), reinterpret_cast<const void*>(base_offset));
 
 	glEnableVertexAttribArray(1);
-	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(vert_flat_sky_layer_s), (const void*)(vert_offset + 16));
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(vert_flat_sky_layer_s), reinterpret_cast<const void*>(base_offset + 16u));
 
 	glEnableVertexAttribArray(2);
-	glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(vert_flat_sky_layer_s), (const void*)(vert_offset + 24));
+	glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(vert_flat_sky_layer_s), reinterpret_cast<const void*>(base_offset + 24u));
 
 	glBindVertexArray(0);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -49,7 +50,7 @@ bool Renderer_FlatSkyLayer::Init(int layer_no, GLuint vbo, int vert_per_layer) {
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
 
 	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(vert_flat_sky_layer_s), (const void*)vert_offset);
+	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(vert_flat_sky_layer_s), reinterpret_cast<const void*>(base_offset));
 
 	glBindVertexArray(0);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);

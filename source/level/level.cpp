@@ -7,7 +7,9 @@
 #include <filesystem>
 #include <vector>
 #include <algorithm>
+#include <unordered_map>
 #include "logger.h"
+#include "utils.h"
 
 
 
@@ -128,10 +130,14 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 		}
 	};
 
-	addCandidate(editorQsc, false);
+	// NOTE: Do NOT add editorQsc (exeDir\objects.qsc) as a candidate!
+	// That file is just a cache from the previously loaded level.
+	// Only look at actual source locations:
 	addCandidate(qeditorQsc, false);
 	addCandidate(igiQsc, false);
-	addCandidate(igiQvm, true);
+	if (!File_Exists(igiQsc)) {
+		addCandidate(igiQvm, true);
+	}
 
 	if (candidates.empty()) {
 		Logger::Get().Log(LogLevel::ERR, "[Level] FATAL: No objects.qsc or objects.qvm found anywhere");
@@ -159,8 +165,7 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 			Logger::Get().Log(LogLevel::INFO, "[Level] Copied latest QSC to editor: " + std::string(editorQsc));
 		}
 		Str_SPrintf(filename, 1024, "%s", editorQsc);
-		// Compile it so game QVM stays in sync
-		CompileCurrentQSC(params.level_no_);
+		// NOTE: Do NOT auto-compile on load - only compile when user explicitly saves
 	}
 
 	qsc_path_ = filename;
@@ -261,6 +266,7 @@ void Level::DecompileObjects(int levelNo) {
 		if (std::filesystem::exists(outputPath)) {
 			std::filesystem::copy_file(outputPath, destPath, std::filesystem::copy_options::overwrite_existing);
 			Logger::Get().Log(LogLevel::INFO, "[Decompile] Success! Saved to executable directory: " + std::string(destPath));
+			Utils::TrimFileInPlace(destPath);
 		} else {
 			Logger::Get().Log(LogLevel::ERR, "[Decompile] FAILED: Decompiler did not produce output at: " + std::string(outputPath));
 		}
@@ -336,29 +342,73 @@ void Level::CompileCurrentQSC(int level_no) {
 void Level::CopyTerrainFromQEditor(int level_no) {
 	char appData[1024];
 	GetEnvironmentVariableA("APPDATA", appData, 1024);
+	ConfigData& cfg = Config::Get();
 
 	// Source is AppData QEditor
 	std::string srcTerrain = std::string(appData) + "\\QEditor\\QFiles\\IGI_QVM\\missions\\location0\\level" + std::to_string(level_no) + "\\terrain";
+	// Fallback source is game path
+	std::string gameTerrain = cfg.igiPath + "\\missions\\location0\\level" + std::to_string(level_no) + "\\terrain";
 
 	// Copy to executable directory terrains\levelX\terrain
 	std::string exeDir = GetExeDirectory();
 	std::string dstTerrain = exeDir + "\\terrains\\level" + std::to_string(level_no) + "\\terrain";
 
 	Logger::Get().Log(LogLevel::INFO, "[Level] CopyTerrainFromQEditor: level=" + std::to_string(level_no));
-	Logger::Get().Log(LogLevel::INFO, "[Level] Source: " + srcTerrain);
+	Logger::Get().Log(LogLevel::INFO, "[Level] QEditor Source: " + srcTerrain);
+	Logger::Get().Log(LogLevel::INFO, "[Level] Game Source: " + gameTerrain);
 	Logger::Get().Log(LogLevel::INFO, "[Level] Dest: " + dstTerrain);
 
 	try {
-		if (!std::filesystem::exists(srcTerrain)) {
-			Logger::Get().Log(LogLevel::ERR, "[Level] FATAL: Missing terrain folder at: " + srcTerrain);
-			throw std::runtime_error("Missing terrain folder in QEditor path");
+		// Clean destination first to ensure no stale files from previous copies remain
+		if (std::filesystem::exists(dstTerrain)) {
+			std::filesystem::remove_all(dstTerrain);
+			Logger::Get().Log(LogLevel::INFO, "[Level] Cleaned old terrain dir: " + dstTerrain);
+		}
+		std::filesystem::create_directories(dstTerrain);
+
+		// Try QEditor first
+		if (std::filesystem::exists(srcTerrain)) {
+			std::filesystem::copy(srcTerrain, dstTerrain,
+				std::filesystem::copy_options::overwrite_existing | std::filesystem::copy_options::recursive);
+			Logger::Get().Log(LogLevel::INFO, "[Level] Copied terrain from QEditor to: " + dstTerrain);
+		}
+		else {
+			Logger::Get().Log(LogLevel::WARNING, "[Level] QEditor terrain not found at: " + srcTerrain);
 		}
 
-		std::filesystem::create_directories(dstTerrain);
-		
-		std::filesystem::copy(srcTerrain, dstTerrain,
-			std::filesystem::copy_options::overwrite_existing | std::filesystem::copy_options::recursive);
-		Logger::Get().Log(LogLevel::INFO, "[Level] Copied terrain from QEditor to: " + dstTerrain);
+		// Check if all required terrain files exist in destination
+		const char* requiredFiles[] = { "terrain.cmd", "terrain.ctr", "terrain.tex", "terrain.lmp", "terrain.bit" };
+		bool allExist = true;
+		for (const char* f : requiredFiles) {
+			std::string destFile = dstTerrain + "\\" + f;
+			if (!std::filesystem::exists(destFile)) {
+				allExist = false;
+				Logger::Get().Log(LogLevel::WARNING, "[Level] Missing terrain file: " + std::string(f));
+			}
+		}
+
+		// If any required files are missing, try to copy them from game path
+		if (!allExist && std::filesystem::exists(gameTerrain)) {
+			Logger::Get().Log(LogLevel::INFO, "[Level] Copying missing terrain files from game path...");
+			for (const auto& entry : std::filesystem::directory_iterator(gameTerrain)) {
+				std::string filename = entry.path().filename().string();
+				std::string destFile = dstTerrain + "\\" + filename;
+				if (!std::filesystem::exists(destFile)) {
+					std::filesystem::copy(entry.path(), destFile,
+						std::filesystem::copy_options::overwrite_existing);
+					Logger::Get().Log(LogLevel::INFO, "[Level] Copied from game: " + filename);
+				}
+			}
+		}
+
+		// Final check
+		for (const char* f : requiredFiles) {
+			std::string destFile = dstTerrain + "\\" + f;
+			if (!std::filesystem::exists(destFile)) {
+				Logger::Get().Log(LogLevel::ERR, "[Level] FATAL: Still missing terrain file after all fallbacks: " + std::string(f));
+				throw std::runtime_error(std::string("Missing terrain file: ") + f);
+			}
+		}
 	}
 	catch (const std::exception& e) {
 		Logger::Get().Log(LogLevel::ERR, "[Level] Terrain copy exception: " + std::string(e.what()));
@@ -441,22 +491,83 @@ void Level::Update(update_params_s& params) {
 	terrain_.Update(params, root_dyn_cube_);
 }
 
+void Level::SaveObjectsLocalOnly() {
+	std::string exeDir = GetExeDirectory();
+	std::string localQsc = exeDir + "\\objects.qsc";
+	Logger::Get().Log(LogLevel::INFO, "[Level] Saving local live QSC to: " + localQsc);
+	level_objects_.SaveToQSC(localQsc);
+}
+
 void Level::SaveChanges() {
 	terrain_.Save(cur_level_no_);
 
-	std::string exeDir = GetExeDirectory();
-	std::string localQsc = exeDir + "\\objects.qsc";
-	Logger::Get().Log(LogLevel::INFO, "[Level] Saving QSC to .exe path: " + localQsc);
-	level_objects_.SaveToQSC(localQsc);
-	Logger::Get().Log(LogLevel::INFO, "[Level] Saved QSC to: " + localQsc);
+	// IMPORTANT: AppData\Roaming\QEditor\QFiles is READ-ONLY.
+	// We NEVER write back to the QFiles source. All saves go to the local
+	// exe-directory copy of objects.qsc, which is then compiled to QVM.
+	SaveObjectsLocalOnly();
 
 	// Move terrain from editor path to IGI game path
 	MoveTerrainToGamePath(cur_level_no_);
 }
 
-bool Level::GetTerrainZ(const glm::vec3& pos, float& z) {
+void Level::SaveAndReloadObjects() {
+	std::string exeDir = GetExeDirectory();
+	std::string localQsc = exeDir + "\\objects.qsc";
+
+	// Helper to get a unique tree path for an object to preserve expansion state
+	auto GetObjectTreePath = [](const std::vector<LevelObject>& objects, int idx) -> std::string {
+		std::string path;
+		int curr = idx;
+		while (curr >= 0 && curr < (int)objects.size()) {
+			const auto& obj = objects[curr];
+			std::string part = obj.type + ":" + obj.name + ":" + obj.taskId;
+			if (path.empty()) {
+				path = part;
+			} else {
+				path = part + "/" + path;
+			}
+			curr = obj.parentIndex;
+		}
+		return path;
+	};
+
+	// 1. Gather expanded states of containers before reloading
+	std::unordered_map<std::string, bool> expandedStates;
+	const auto& oldObjs = level_objects_.GetObjects();
+	for (int i = 0; i < (int)oldObjs.size(); ++i) {
+		if (oldObjs[i].isContainer && oldObjs[i].expanded) {
+			expandedStates[GetObjectTreePath(oldObjs, i)] = true;
+		}
+	}
+
+	// 2. Save changes to local QSC file
+	level_objects_.SaveToQSC(localQsc);
+
+	// 3. Reload objects from the saved file to ensure live synchronization
+	QSC* qsc = new QSC();
+	if (qsc) {
+		qsc->Load(localQsc.c_str());
+		level_objects_.Load(this, qsc);
+		delete qsc; // LevelObjects::Load copies everything, so we can free the temp QSC
+
+		// 4. Restore expanded states to the newly loaded objects
+		auto& newObjs = level_objects_.GetObjects();
+		for (int i = 0; i < (int)newObjs.size(); ++i) {
+			if (newObjs[i].isContainer) {
+				std::string path = GetObjectTreePath(newObjs, i);
+				if (expandedStates.find(path) != expandedStates.end()) {
+					newObjs[i].expanded = true;
+				}
+			}
+		}
+
+		Logger::Get().Log(LogLevel::INFO, "[Level] SaveAndReloadObjects: Synchronized and expansion states preserved for: " + localQsc);
+	}
+}
+
+bool Level::GetTerrainZ(double x, double y, float& z, bool ignore_discard) {
 	if (root_dyn_cube_) {
-		return terrain_.GetZ(root_dyn_cube_, pos, z);
+		return terrain_.GetZ(root_dyn_cube_, x, y, z, ignore_discard);
 	}
 	else {
 		return false;

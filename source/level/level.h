@@ -31,9 +31,11 @@ public:
 	int						GetLevelNo() const;
 
 	void					Update(update_params_s & params);
+	void					SaveObjectsLocalOnly();
 	void					SaveChanges();
+	void					SaveAndReloadObjects();
 
-	bool					GetTerrainZ(const glm::vec3 & pos, float & z);
+	bool					GetTerrainZ(double x, double y, float & z, bool ignore_discard = false);
 	void					EditorRaycastAndModify(const glm::vec3& ray_origin, const glm::vec3& ray_dir, int brush_type);
 	void					TeleportToHMP(glm::vec3& pos) const;
 	void					CompileCurrentQSC(int level_no);

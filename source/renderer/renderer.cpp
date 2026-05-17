@@ -10,6 +10,7 @@
 #include "logger.h"
 #include "config.h"
 #include <glm/gtc/type_ptr.hpp>
+#include <vector>
 
 
 #include <freeglut.h>
@@ -21,7 +22,8 @@
 */
 Renderer::Renderer():
 	ubo_mats_(0),
-	ubo_fog_(0)
+	ubo_fog_(0),
+	splines_(objects_)
 {
 	LoadBuildingNames();
 }
@@ -30,14 +32,40 @@ Renderer::~Renderer() {
 	Shutdown();
 }
 
+static bool ExtractJsonStringValue(const std::string& text, const std::vector<std::string>& keys, std::string& value) {
+	for (const auto& key : keys) {
+		size_t keyPos = text.find(key);
+		if (keyPos == std::string::npos) continue;
+		size_t colonPos = text.find(':', keyPos + key.size());
+		if (colonPos == std::string::npos) continue;
+		size_t quoteStart = text.find('"', colonPos + 1);
+		if (quoteStart == std::string::npos) continue;
+		size_t quoteEnd = quoteStart + 1;
+		bool escape = false;
+		while (quoteEnd < text.size()) {
+			char c = text[quoteEnd];
+			if (escape) {
+				escape = false;
+			} else if (c == '\\') {
+				escape = true;
+			} else if (c == '"') {
+				value = text.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+				return true;
+			}
+			++quoteEnd;
+		}
+	}
+	return false;
+}
+
 void Renderer::LoadBuildingNames() {
 	char appDataPath[1024];
 	GetEnvironmentVariableA("APPDATA", appDataPath, 1024);
-	std::string jsonPath = std::string(appDataPath) + "\\QEditor\\IGIModelsLevel.json";
+	std::string jsonPath = std::string(appDataPath) + "\\QEditor\\IGIModelsAllLevel.json";
 
 	FILE* f = fopen(jsonPath.c_str(), "rb");
 	if (!f) {
-		std::cerr << "[Renderer] Failed to open IGIModelsLevel.json at: " << jsonPath << std::endl;
+		std::cerr << "[Renderer] Failed to open IGIModelsAllLevel.json at: " << jsonPath << std::endl;
 		return;
 	}
 
@@ -53,81 +81,100 @@ void Renderer::LoadBuildingNames() {
 	std::string content(buf);
 	delete[] buf;
 
-	// Parse IGIModelsLevel.json structure
-	// Format: { "Level 1": { "Objects": [...], "Buildings": [...] }, ... }
+	building_names_.clear();
+	task_ids_.clear();
+
+	// Parse IGIModelsAllLevel.json structure
 	size_t pos = 0;
 	while ((pos = content.find("\"Level ", pos)) != std::string::npos) {
 		size_t levelEnd = content.find("\"", pos + 7);
 		if (levelEnd == std::string::npos) break;
 		std::string levelStr = content.substr(pos + 7, levelEnd - pos - 7);
-		int levelNum = std::stoi(levelStr);
+		int levelNum = 0;
+		try {
+			levelNum = std::stoi(levelStr);
+		} catch (...) {
+			pos = levelEnd + 1;
+			continue;
+		}
 
-		// Find Objects array for this level
-		size_t objectsPos = content.find("\"Objects\"", levelEnd);
+		size_t levelBlockStart = content.find('{', levelEnd);
+		if (levelBlockStart == std::string::npos) break;
+		int braceDepth = 0;
+		size_t levelBlockEnd = std::string::npos;
+		for (size_t i = levelBlockStart; i < content.size(); ++i) {
+			if (content[i] == '{') braceDepth++;
+			else if (content[i] == '}') {
+				braceDepth--;
+				if (braceDepth == 0) {
+					levelBlockEnd = i;
+					break;
+				}
+			}
+		}
+		if (levelBlockEnd == std::string::npos) break;
+
+		std::string levelBlock = content.substr(levelBlockStart, levelBlockEnd - levelBlockStart + 1);
+
+		size_t objectsPos = levelBlock.find("\"Objects\"");
 		if (objectsPos != std::string::npos) {
-			size_t arrayStart = content.find("[", objectsPos);
-			size_t arrayEnd = content.find("]", arrayStart);
-			if (arrayStart != std::string::npos && arrayEnd != std::string::npos) {
-				std::string objectsArray = content.substr(arrayStart, arrayEnd - arrayStart + 1);
+			size_t arrayStart = levelBlock.find("[", objectsPos);
+			size_t arrayEnd = levelBlock.find("]", arrayStart);
+			if (arrayStart != std::string::npos && arrayEnd != std::string::npos && arrayEnd > arrayStart) {
+				std::string objectsArray = levelBlock.substr(arrayStart, arrayEnd - arrayStart + 1);
 				ParseLevelObjects(objectsArray, levelNum, false);
 			}
 		}
 
-		// Find Buildings array for this level
-		size_t buildingsPos = content.find("\"Buildings\"", levelEnd);
+		size_t buildingsPos = levelBlock.find("\"Buildings\"");
 		if (buildingsPos != std::string::npos) {
-			size_t arrayStart = content.find("[", buildingsPos);
-			size_t arrayEnd = content.find("]", arrayStart);
-			if (arrayStart != std::string::npos && arrayEnd != std::string::npos) {
-				std::string buildingsArray = content.substr(arrayStart, arrayEnd - arrayStart + 1);
+			size_t arrayStart = levelBlock.find("[", buildingsPos);
+			size_t arrayEnd = levelBlock.find("]", arrayStart);
+			if (arrayStart != std::string::npos && arrayEnd != std::string::npos && arrayEnd > arrayStart) {
+				std::string buildingsArray = levelBlock.substr(arrayStart, arrayEnd - arrayStart + 1);
 				ParseLevelObjects(buildingsArray, levelNum, true);
 			}
 		}
 
-		pos = levelEnd + 1;
+		pos = levelBlockEnd + 1;
 	}
 
-	Logger::Get().Log(LogLevel::INFO, "[Renderer] Loaded " + std::to_string(building_names_.size()) + " building names and " + std::to_string(task_ids_.size()) + " task IDs from IGIModelsLevel.json");
+	Logger::Get().Log(LogLevel::INFO, "[Renderer] Loaded " + std::to_string(building_names_.size()) + " building names and " + std::to_string(task_ids_.size()) + " task IDs from IGIModelsAllLevel.json");
 }
 
 void Renderer::ParseLevelObjects(const std::string& arrayContent, int levelNum, bool isBuilding) {
+	(void)isBuilding;
 	size_t pos = 0;
-	while ((pos = arrayContent.find("\"ModelID\"", pos)) != std::string::npos) {
-		size_t idStart = arrayContent.find("\"", pos + 10) + 1;
-		size_t idEnd = arrayContent.find("\"", idStart);
-		if (idStart == std::string::npos || idEnd == std::string::npos) break;
-
-		std::string modelId = arrayContent.substr(idStart, idEnd - idStart);
-
-		// Find boundary of current JSON object (next ModelID or end)
-		size_t nextModelIdPos = arrayContent.find("\"ModelID\"", idEnd);
-		size_t objectEnd = (nextModelIdPos != std::string::npos) ? nextModelIdPos : arrayContent.length();
-
-		// Find Name within this object only
-		size_t namePos = arrayContent.find("\"Name\"", idEnd);
-		if (namePos != std::string::npos && namePos < objectEnd) {
-			size_t nameStart = arrayContent.find("\"", namePos + 7) + 1;
-			size_t nameEnd = arrayContent.find("\"", nameStart);
-			if (nameStart != std::string::npos && nameEnd != std::string::npos) {
-				std::string name = arrayContent.substr(nameStart, nameEnd - nameStart);
-				std::string key = std::to_string(levelNum) + "_" + modelId;
-				building_names_[key] = name;
+	while ((pos = arrayContent.find('{', pos)) != std::string::npos) {
+		int braceDepth = 0;
+		size_t objectEnd = std::string::npos;
+		for (size_t i = pos; i < arrayContent.size(); ++i) {
+			if (arrayContent[i] == '{') braceDepth++;
+			else if (arrayContent[i] == '}') {
+				braceDepth--;
+				if (braceDepth == 0) {
+					objectEnd = i;
+					break;
+				}
 			}
 		}
+		if (objectEnd == std::string::npos) break;
 
-		// Find TaskID within this object only
-		size_t taskIdPos = arrayContent.find("\"TaskID\"", idEnd);
-		if (taskIdPos != std::string::npos && taskIdPos < objectEnd) {
-			size_t taskIdStart = arrayContent.find("\"", taskIdPos + 9) + 1;
-			size_t taskIdEnd = arrayContent.find("\"", taskIdStart);
-			if (taskIdStart != std::string::npos && taskIdEnd != std::string::npos) {
-				std::string taskId = arrayContent.substr(taskIdStart, taskIdEnd - taskIdStart);
-				std::string key = std::to_string(levelNum) + "_" + modelId;
-				task_ids_[key] = taskId;
-			}
+		std::string objContent = arrayContent.substr(pos, objectEnd - pos + 1);
+		std::string modelId;
+		std::string name;
+		std::string taskId;
+		ExtractJsonStringValue(objContent, { "\"Model ID\"", "\"ModelID\"", "\"ModelId\"" }, modelId);
+		ExtractJsonStringValue(objContent, { "\"Name\"", "\"ModelName\"" }, name);
+		ExtractJsonStringValue(objContent, { "\"Task ID\"", "\"TaskID\"" }, taskId);
+
+		if (!modelId.empty()) {
+			std::string key = std::to_string(levelNum) + "_" + modelId;
+			if (!name.empty()) building_names_[key] = name;
+			if (!taskId.empty()) task_ids_[key] = taskId;
 		}
 
-		pos = idEnd + 1;
+		pos = objectEnd + 1;
 	}
 }
 
@@ -272,7 +319,7 @@ render_chunk_s* Renderer::GetTerrainRenderChunckBuffer() {
 	return terrain_.GetRenderChunckBuffer();
 }
 
-void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
+void Renderer::Draw(const draw_params_s& params, const task_tree_view_params_s& task_tree_view) {
     static bool logged_params = false;
     if (!logged_params) {
         Logger::Get().Log(LogLevel::INFO, "[Renderer] Draw Params: draw_parts=" + std::to_string(params.draw_parts_) + " level_objects=" + (params.level_objects_ ? "VALID" : "NULL"));
@@ -303,12 +350,13 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                 glLoadMatrixf(glm::value_ptr(mat_proj_));
                 glMatrixMode(GL_MODELVIEW);
                 glLoadMatrixf(glm::value_ptr(mat_view_));
-                objects_.Draw(ubo_mats_, params.overlay_wireframe_, params.level_objects_->GetObjects(), params.selected_object_index_, params.draw_parts_);
+                objects_.Draw(ubo_mats_, params.overlay_wireframe_, params.level_objects_->GetObjects(), params.selected_object_index_, task_tree_view.hover_object_index_, params.draw_parts_);
+                splines_.Draw(params.level_objects_->GetObjects(), ubo_mats_, objects_.GetShaderProgram());
         }
 
 
 
-        if (hud.show_hud_) {
+        if (task_tree_view.show_hud_) {
                 glUseProgram(0); // Disable any active shaders for fixed-function HUD
                 glBindVertexArray(0); // UNBIND VAO to prevent state leak
                 glBindBufferBase(GL_UNIFORM_BUFFER, 0, 0); // UNBIND UBO
@@ -334,15 +382,41 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                 glLoadIdentity();
 
                 auto draw_text = [&](int x, int y, const char* str, float r, float g, float b) {
-                        // Draw shadow
-                        glColor3f(0.0f, 0.0f, 0.0f);
-                        glRasterPos2i(x + 1, params.view_define_->viewport_height_ - y - 1);
-                        for (const char* c = str; *c; ++c) glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, *c);
-                        
-                        // Draw main text
-                        glColor3f(r, g, b);
-                        glRasterPos2i(x, params.view_define_->viewport_height_ - y);
-                        for (const char* c = str; *c; ++c) glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, *c);
+                        std::stringstream ss(str);
+                        std::string line;
+                        int line_y = y;
+                        while (std::getline(ss, line)) {
+                            // Draw shadow
+                            glColor3f(0.0f, 0.0f, 0.0f);
+                            glRasterPos2i(x + 1, params.view_define_->viewport_height_ - line_y - 1);
+                            for (char c : line) glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, c);
+                            
+                            // Draw main text
+                            glColor3f(r, g, b);
+                            glRasterPos2i(x, params.view_define_->viewport_height_ - line_y);
+                            for (char c : line) glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, c);
+                            
+                            line_y += 15; // Vertical spacing
+                        }
+                };
+
+                auto draw_text_mono = [&](int x, int y, const char* str, float r, float g, float b) {
+                        std::stringstream ss(str);
+                        std::string line;
+                        int line_y = y;
+                        while (std::getline(ss, line)) {
+                            // Draw shadow
+                            glColor3f(0.0f, 0.0f, 0.0f);
+                            glRasterPos2i(x + 1, params.view_define_->viewport_height_ - line_y - 1);
+                            for (char c : line) glutBitmapCharacter(GLUT_BITMAP_9_BY_15, c);
+                            
+                            // Draw main text
+                            glColor3f(r, g, b);
+                            glRasterPos2i(x, params.view_define_->viewport_height_ - line_y);
+                            for (char c : line) glutBitmapCharacter(GLUT_BITMAP_9_BY_15, c);
+                            
+                            line_y += 18; // Vertical spacing for 9x15
+                        }
                 };
 
                 // Helper to convert KeyBinding to display string
@@ -374,83 +448,541 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                 float font_b = cfg.fontColorB / 255.0f;
 
                 int line_y = 30;
-                draw_text(20, line_y, "--- IGI EDITOR 0.0.2 BETA - Jones - HM ---", font_r, font_g, font_b); line_y += 15;
                 
-                float status_r = font_r, status_g = font_g, status_b = font_b;
-                if (hud.status_msg_.find("CONNECTED") != std::string::npos) { status_r = 0.0f; status_g = 1.0f; status_b = 0.0f; }
-                draw_text(20, line_y, hud.status_msg_.c_str(), status_r, status_g, status_b); line_y += 15;
+                // --- TreeView HUD Implementation ---
+                if (task_tree_view.level_objects_) {
+                    const auto& objects = task_tree_view.level_objects_->GetObjects();
+                    int tree_x = 0;
+                    int tree_y = 0; // Starting Y for tree
+                    int row_h = 16;
+                    int start_y = 0;
+                    int current_row = 0;
+                    int scroll_offset = task_tree_view.tree_scroll_offset;
+                    int viewport_h = params.view_define_->viewport_height_;
 
-                // Show Editor (Player) Position
-                char buf[256];
-                sprintf(buf, "EDITOR POSITION X: %.2f Y: %.2f Z: %.2f", hud.raw_pos_.x, hud.raw_pos_.y, hud.raw_pos_.z);
-                draw_text(20, line_y, buf, font_r, font_g, font_b); line_y += 15;
+                    // Recursive helper to draw tree nodes
+                current_row = 0;
+                std::function<void(int, int)> draw_node = [&](int idx, int depth) {
+                        if (idx < 0 || idx >= (int)objects.size()) return;
+                        const auto& obj = objects[idx];
+                        if (obj.deleted) return;
 
-                sprintf(buf, "EDITOR YAW: %.3f PITCH: %.3f ROLL: %.3f", hud.cam_yaw_, hud.cam_pitch_, hud.cam_roll_);
-                draw_text(20, line_y, buf, font_r, font_g, font_b); line_y += 15;
+                        int x = tree_x + (depth * 18);
+                        int y = start_y + (current_row - task_tree_view.tree_scroll_offset) * row_h;
+                        current_row++;
 
-                // Show Selected Object Position if an object is selected
-                if (hud.selected_object_index_ >= 0 && hud.level_objects_) {
-                        const auto& objects = hud.level_objects_->GetObjects();
-                        if (hud.selected_object_index_ < (int)objects.size()) {
-                                const auto& obj = objects[hud.selected_object_index_];
-                                sprintf(buf, "SELECTED OBJECT X: %.2f Y: %.2f Z: %.2f", obj.pos.x, obj.pos.y, obj.pos.z);
-                                draw_text(20, line_y, buf, font_r, font_g, font_b); line_y += 15;
+                        if (y >= start_y && y < params.view_define_->viewport_height_ - 50) {
+                                // Highlight if selected or hovered
+                                if (idx == task_tree_view.selected_object_index_) {
+                                        glEnable(GL_BLEND);
+                                        glColor4f(0.0f, 0.5f, 0.0f, 0.4f);
+                                        glBegin(GL_QUADS);
+                                        glVertex2i(tree_x - 5, params.view_define_->viewport_height_ - (y - 2));
+                                        glVertex2i(tree_x + 300, params.view_define_->viewport_height_ - (y - 2));
+                                        glVertex2i(tree_x + 300, params.view_define_->viewport_height_ - (y + row_h - 2));
+                                        glVertex2i(tree_x - 5, params.view_define_->viewport_height_ - (y + row_h - 2));
+                                        glEnd();
+                                } else if (idx == task_tree_view.hover_tree_index_) {
+                                        glEnable(GL_BLEND);
+                                        glColor4f(0.3f, 0.3f, 0.3f, 0.3f);
+                                        glBegin(GL_QUADS);
+                                        glVertex2i(tree_x - 5, params.view_define_->viewport_height_ - (y - 2));
+                                        glVertex2i(tree_x + 300, params.view_define_->viewport_height_ - (y - 2));
+                                        glVertex2i(tree_x + 300, params.view_define_->viewport_height_ - (y + row_h - 2));
+                                        glVertex2i(tree_x - 5, params.view_define_->viewport_height_ - (y + row_h - 2));
+                                        glEnd();
+                                }
+                            
+                            // Draw Hierarchy Line (dotted vertical)
+                            if (depth > 0) {
+                                glLineStipple(1, 0xAAAA);
+                                glEnable(GL_LINE_STIPPLE);
+                                glColor3f(0.5f, 0.5f, 0.5f);
+                                glBegin(GL_LINES);
+                                // Vertical line from parent down to this node
+                                glVertex2i(x - 9, viewport_h - (y - row_h/2));
+                                glVertex2i(x - 9, viewport_h - (y + row_h/2));
+                                // Horizontal line to the node
+                                glVertex2i(x - 9, viewport_h - (y + row_h/2));
+                                glVertex2i(x - 2, viewport_h - (y + row_h/2));
+                                glEnd();
+                                glDisable(GL_LINE_STIPPLE);
+                            }
 
-                                sprintf(buf, "OBJECT YAW: %.2f PITCH: %.2f ROLL: %.2f", obj.rot.z, obj.rot.x, obj.rot.y);
-                                draw_text(20, line_y, buf, font_r, font_g, font_b); line_y += 15;
+                            // Expansion Toggle [+] or [-] box
+                            if (obj.isContainer && !obj.childrenIndices.empty()) {
+                                glColor3f(1.0f, 1.0f, 1.0f);
+                                glBegin(GL_LINE_LOOP);
+                                glVertex2i(x - 14, viewport_h - (y + 4));
+                                glVertex2i(x - 6, viewport_h - (y + 4));
+                                glVertex2i(x - 6, viewport_h - (y + 12));
+                                glVertex2i(x - 14, viewport_h - (y + 12));
+                                glEnd();
+                                // Draw minus
+                                glBegin(GL_LINES);
+                                glVertex2i(x - 12, viewport_h - (y + 8));
+                                glVertex2i(x - 8, viewport_h - (y + 8));
+                                // Draw plus vertical
+                                if (!obj.expanded) {
+                                    glVertex2i(x - 10, viewport_h - (y + 6));
+                                    glVertex2i(x - 10, viewport_h - (y + 10));
+                                }
+                                glEnd();
+                            } else if (depth > 0) {
+                                // Just a horizontal dash if no children
+                                glColor3f(0.5f, 0.5f, 0.5f);
+                                glBegin(GL_LINES);
+                                glVertex2i(x - 14, viewport_h - (y + 8));
+                                glVertex2i(x - 6, viewport_h - (y + 8));
+                                glEnd();
+                            }
+
+                            // Draw Yellow Folder Icon
+                            glColor3f(1.0f, 0.9f, 0.2f);
+                            glBegin(GL_QUADS);
+                            glVertex2i(x, viewport_h - (y + 2));
+                            glVertex2i(x + 12, viewport_h - (y + 2));
+                            glVertex2i(x + 12, viewport_h - (y + 12));
+                            glVertex2i(x, viewport_h - (y + 12));
+                            glEnd();
+                            // Folder tab
+                            glBegin(GL_QUADS);
+                            glVertex2i(x, viewport_h - y);
+                            glVertex2i(x + 5, viewport_h - y);
+                            glVertex2i(x + 5, viewport_h - (y + 2));
+                            glVertex2i(x, viewport_h - (y + 2));
+                            glEnd();
+                            // Folder outline
+                            glColor3f(0.0f, 0.0f, 0.0f);
+                            glBegin(GL_LINE_LOOP);
+                            glVertex2i(x, viewport_h - (y + 2));
+                            glVertex2i(x + 12, viewport_h - (y + 2));
+                            glVertex2i(x + 12, viewport_h - (y + 12));
+                            glVertex2i(x, viewport_h - (y + 12));
+                            glEnd();
+
+                            // Format label: Type (ID, "Name")
+                            std::string label = obj.type;
+                            if (!obj.taskId.empty() && obj.taskId != "-1") {
+                                label += " (" + obj.taskId;
+                                if (!obj.name.empty()) label += ", \"" + obj.name + "\"";
+                                label += ")";
+                            } else if (!obj.name.empty()) {
+                                label += " (\"" + obj.name + "\")";
+                            }
+
+                            float tr = font_r, tg = font_g, tb = font_b;
+                            if (idx == task_tree_view.selected_object_index_) { tr = 1.0f; tg = 1.0f; tb = 0.0f; } // Selected = Yellow
+                            else if (idx == task_tree_view.hover_object_index_) { tr = 0.5f; tg = 0.8f; tb = 1.0f; } // Hover = Blue
+                            
+                            // Note: We use y + 11 for draw_text so the baseline aligns correctly with the hitbox
+                            draw_text(x + 16, y + 11, label.c_str(), tr, tg, tb);
                         }
-                }
-                
-                sprintf(buf, "ANGLE H: %.3f V: %.3f", hud.view_h_, hud.view_v_);
-                draw_text(20, line_y, buf, font_r, font_g, font_b); line_y += 15;
 
-                sprintf(buf, "LEVEL: %d | FOV: %.1f", hud.game_level_, hud.cam_fov_);
-                draw_text(20, line_y, buf, font_r, font_g, font_b); line_y += 15;
-                
-                draw_text(20, line_y, "Checks: 0", font_r, font_g, font_b);
+                        if (obj.expanded) {
+                            for (int childIdx : obj.childrenIndices) {
+                                draw_node(childIdx, depth + 1);
+                            }
+                        }
+                    };
+
+                    // To keep the root clean, group all Task_DeclareParameters into a virtual "Mission Declarations" folder
+                    std::vector<int> root_decls;
+                    std::vector<int> root_others;
+
+                    for (int i = 0; i < (int)objects.size(); ++i) {
+                        if (objects[i].parentIndex == -1 && !objects[i].deleted) {
+                            if (objects[i].type == "Task_DeclareParameters") root_decls.push_back(i);
+                            else root_others.push_back(i);
+                        }
+                    }
+
+                    if (!root_decls.empty()) {
+                        int y = start_y + (current_row - scroll_offset) * row_h;
+                        current_row++;
+                        if (y >= start_y && y < viewport_h - 50) {
+                            int vx = tree_x;
+                            // Draw folder icon
+                            glColor3f(1.0f, 0.9f, 0.2f);
+                            glBegin(GL_QUADS);
+                            glVertex2i(vx, viewport_h - (y + 2));
+                            glVertex2i(vx + 12, viewport_h - (y + 2));
+                            glVertex2i(vx + 12, viewport_h - (y + 12));
+                            glVertex2i(vx, viewport_h - (y + 12));
+                            glEnd();
+                            // Folder tab
+                            glBegin(GL_QUADS);
+                            glVertex2i(vx, viewport_h - y);
+                            glVertex2i(vx + 5, viewport_h - y);
+                            glVertex2i(vx + 5, viewport_h - (y + 2));
+                            glVertex2i(vx, viewport_h - (y + 2));
+                            glEnd();
+                            // Folder outline
+                            glColor3f(0.0f, 0.0f, 0.0f);
+                            glBegin(GL_LINE_LOOP);
+                            glVertex2i(vx, viewport_h - (y + 2));
+                            glVertex2i(vx + 12, viewport_h - (y + 2));
+                            glVertex2i(vx + 12, viewport_h - (y + 12));
+                            glVertex2i(vx, viewport_h - (y + 12));
+                            glEnd();
+
+                            // Draw toggle box
+                            glColor3f(1.0f, 1.0f, 1.0f);
+                            glBegin(GL_LINE_LOOP);
+                            glVertex2i(vx - 14, viewport_h - (y + 4));
+                            glVertex2i(vx - 6, viewport_h - (y + 4));
+                            glVertex2i(vx - 6, viewport_h - (y + 12));
+                            glVertex2i(vx - 14, viewport_h - (y + 12));
+                            glEnd();
+                            // Draw minus
+                            glBegin(GL_LINES);
+                            glVertex2i(vx - 12, viewport_h - (y + 8));
+                            glVertex2i(vx - 8, viewport_h - (y + 8));
+                            // Draw plus vertical
+                            if (!task_tree_view.tree_decl_expanded) {
+                                glVertex2i(vx - 10, viewport_h - (y + 6));
+                                glVertex2i(vx - 10, viewport_h - (y + 10));
+                            }
+                            glEnd();
+
+                            if (task_tree_view.selected_object_index_ == -2) {
+
+
+                            	glEnable(GL_BLEND);
+
+
+                            	glColor4f(0.0f, 0.5f, 0.0f, 0.4f);
+
+
+                            	glBegin(GL_QUADS);
+
+
+                            	glVertex2i(vx - 5, viewport_h - (y - 2));
+
+
+                            	glVertex2i(vx + 300, viewport_h - (y - 2));
+
+
+                            	glVertex2i(vx + 300, viewport_h - (y + row_h - 2));
+
+
+                            	glVertex2i(vx - 5, viewport_h - (y + row_h - 2));
+
+
+                            	glEnd();
+
+
+                            } else if (task_tree_view.hover_object_index_ == -2) {
+
+
+                            	glEnable(GL_BLEND);
+
+
+                            	glColor4f(0.3f, 0.3f, 0.3f, 0.3f);
+
+
+                            	glBegin(GL_QUADS);
+
+
+                            	glVertex2i(vx - 5, viewport_h - (y - 2));
+
+
+                            	glVertex2i(vx + 300, viewport_h - (y - 2));
+
+
+                            	glVertex2i(vx + 300, viewport_h - (y + row_h - 2));
+
+
+                            	glVertex2i(vx - 5, viewport_h - (y + row_h - 2));
+
+
+                            	glEnd();
+
+
+                            }
+
+
+                            float dtr = 0.7f, dtg = 0.7f, dtb = 0.7f;
+
+
+                            if (task_tree_view.selected_object_index_ == -2) { dtr = 1.0f; dtg = 1.0f; dtb = 0.0f; }
+
+
+                            else if (task_tree_view.hover_object_index_ == -2) { dtr = 0.5f; dtg = 0.8f; dtb = 1.0f; }
+
+
+                            draw_text(vx + 16, y + 11, "Mission Declarations", dtr, dtg, dtb);
+                        }
+                        if (task_tree_view.tree_decl_expanded) {
+                            for (int idx : root_decls) draw_node(idx, 1);
+                        }
+                    }
+
+                    for (int idx : root_others) {
+                        draw_node(idx, 0);
+                    }
+                    
+                    line_y = start_y + (current_row - scroll_offset) * row_h + 20;
+                }
+
+                // Show Editor/Object Telemetry (Only if debug is enabled and explicitly requested)
+                // Removed live info as requested
 
                 // Display object info at mouse position
-                int info_object_index = hud.edit_mode_ ? hud.selected_object_index_ : hud.hover_object_index_;
-                if (info_object_index >= 0 && hud.level_objects_) {
-                        const auto& objects = hud.level_objects_->GetObjects();
+                int info_object_index = task_tree_view.hover_object_index_;
+                if (!task_tree_view.status_msg_.empty() && task_tree_view.selected_object_index_ >= 0) {
+                    info_object_index = task_tree_view.selected_object_index_;
+                }
+                int tooltip_x = task_tree_view.mouse_x_;
+                int tooltip_y = task_tree_view.mouse_y_ + 25;
+                if (tooltip_x < 0) tooltip_x = 0;
+                if (tooltip_x > params.view_define_->viewport_width_ - 260) tooltip_x = params.view_define_->viewport_width_ - 260;
+                if (tooltip_y < 0) tooltip_y = 0;
+                if (tooltip_y > params.view_define_->viewport_height_ - 100) tooltip_y = params.view_define_->viewport_height_ - 100;
+
+                if (info_object_index >= 0 && task_tree_view.level_objects_) {
+                        const auto& objects = task_tree_view.level_objects_->GetObjects();
+                        if (info_object_index < (int)objects.size()) {
+                                const auto& obj = objects[info_object_index];
+
+                                // Skip labels for skipped models (Poles, Wires, etc.)
+                                if (Renderer_Objects::IsSkippedModelId(obj.modelId)) {
+                                    info_object_index = -1; // Reset to hide label
+                                }
+                        }
+                }
+
+                if (info_object_index >= 0 && task_tree_view.level_objects_) {
+                        const auto& objects = task_tree_view.level_objects_->GetObjects();
                         if (info_object_index < (int)objects.size()) {
                                 const auto& obj = objects[info_object_index];
 
                                 char buf[512];
-                                std::string display_name = obj.name;
-                                if (display_name.empty()) {
-                                        display_name = GetBuildingName(obj.modelId);
-                                }
-                                if (display_name.empty()) {
-                                        display_name = obj.modelId;
-                                }
+                                std::string display_name = GetBuildingName(obj.modelId);
+                                if (display_name.empty()) display_name = obj.name;
+                                if (display_name.empty()) display_name = obj.type;
+                                if (display_name.empty()) display_name = obj.modelId;
 
                                 std::string task_id = obj.taskId.empty() ? "-1" : obj.taskId;
 
-                                int text_x = hud.mouse_x_;
-                                int text_y = hud.mouse_y_ + 25;
-                                if (text_x < 0) text_x = 0;
-                                if (text_x > params.view_define_->viewport_width_ - 200) text_x = params.view_define_->viewport_width_ - 200;
-                                if (text_y < 0) text_y = 0;
-                                if (text_y > params.view_define_->viewport_height_ - 50) text_y = params.view_define_->viewport_height_ - 50;
+                                int text_x = tooltip_x;
+                                int text_y = tooltip_y;
 
-                                // Line 1: ModelName ID: Task_New first param
-                                snprintf(buf, sizeof(buf), "%s ID: %s", display_name.c_str(), task_id.c_str());
-                                draw_text(text_x, text_y, buf, 1.0f, 1.0f, 1.0f);
+                                bool isAI = !obj.aiId.empty() || obj.type.find("AITYPE") == 0 || obj.type == "HumanSoldier" || obj.type == "HumanAI";
+                                if (isAI) {
+                                        // Draw header line with Name and Type
+                                        std::string aiName = obj.name.empty() ? "AI Soldier" : obj.name;
+                                        snprintf(buf, sizeof(buf), "Name: %s (Type: %s)", aiName.c_str(), obj.type.c_str());
+                                        draw_text(text_x, text_y, buf, 0.0f, 0.8f, 1.0f); // Sky blue title
+                                        text_y += 15;
 
-                                // Line 2: Full ModelID
+                                        snprintf(buf, sizeof(buf), "Soldier ID: %s | AI ID: %s", task_id.c_str(), obj.aiId.empty() ? "-1" : obj.aiId.c_str());
+                                        draw_text(text_x, text_y, buf, 1.0f, 1.0f, 1.0f);
+                                        text_y += 15;
+
+                                        std::string teamStr = (obj.team == 1) ? "Enemy" : ((obj.team == 0) ? "Friendly" : "Neutral");
+                                        float tr = (obj.team == 1) ? 1.0f : 0.2f;
+                                        float tg = (obj.team == 1) ? 0.2f : 1.0f;
+                                        float tb = 0.2f;
+                                        snprintf(buf, sizeof(buf), "Team: %s", teamStr.c_str());
+                                        draw_text(text_x, text_y, buf, tr, tg, tb);
+                                        text_y += 15;
+
+                                        if (!obj.primaryWeapon.empty()) {
+                                                snprintf(buf, sizeof(buf), "Pri: %s (%s Ammo)", obj.primaryWeapon.c_str(), obj.primaryAmmo.c_str());
+                                                draw_text(text_x, text_y, buf, 0.9f, 0.9f, 0.9f);
+                                                text_y += 15;
+                                        }
+
+                                        if (!obj.secondaryWeapon.empty()) {
+                                                snprintf(buf, sizeof(buf), "Sec: %s (%s Ammo)", obj.secondaryWeapon.c_str(), obj.secondaryAmmo.c_str());
+                                                draw_text(text_x, text_y, buf, 0.8f, 0.8f, 0.8f);
+                                                text_y += 15;
+                                        }
+
+                                        if (!obj.graphName.empty() || !obj.graphId.empty()) {
+                                                snprintf(buf, sizeof(buf), "Graph: %s (ID: %s)", obj.graphName.c_str(), obj.graphId.c_str());
+                                                draw_text(text_x, text_y, buf, 0.9f, 0.6f, 0.9f);
+                                                text_y += 15;
+                                        }
+                                } else {
+                                        // Standard building / prop tooltip
+                                        snprintf(buf, sizeof(buf), "%s ID: %s", display_name.c_str(), task_id.c_str());
+                                        draw_text(text_x, text_y, buf, 1.0f, 1.0f, 1.0f);
+                                        text_y += 15;
+
+                                        snprintf(buf, sizeof(buf), "%s", obj.modelId.c_str());
+                                        draw_text(text_x, text_y, buf, obj.isBuilding ? 1.0f : 0.0f, 1.0f, 0.0f);
+                                        text_y += 15;
+                                }
+
+                                // Always display X, Y, Z coordinates for all objects
+                                snprintf(buf, sizeof(buf), "Pos: X: %.1f Y: %.1f Z: %.1f", obj.pos.x, obj.pos.y, obj.pos.z);
+                                draw_text(text_x, text_y, buf, 0.7f, 0.7f, 0.7f);
                                 text_y += 15;
-                                snprintf(buf, sizeof(buf), "%s", obj.modelId.c_str());
-                                draw_text(text_x, text_y, buf, obj.isBuilding ? 1.0f : 0.0f, 1.0f, 0.0f);
+
+                                if (!task_tree_view.status_msg_.empty() && info_object_index == task_tree_view.selected_object_index_) {
+                                        draw_text(text_x, text_y, task_tree_view.status_msg_.c_str(), 0.85f, 1.0f, 0.6f);
+                                }
                         }
                 }
 
-                if (hud.edit_mode_) {
-                        // Flip Y because glOrtho has y=0 at bottom, but mouse_y is top-down (GLUT)
-                        float cx = (float)(hud.mouse_x_);
-                        float cy = (float)(params.view_define_->viewport_height_ - hud.mouse_y_);
+                // Watermark
+                int w_width = glutBitmapLength(GLUT_BITMAP_HELVETICA_12, (const unsigned char*)"IGI Editor Copyright - JonesHM");
+                int w_x = (params.view_define_->viewport_width_ - w_width) / 2;
+                draw_text(w_x, params.view_define_->viewport_height_ - 20, "IGI Editor Copyright - JonesHM", 0.7f, 0.7f, 0.7f);
 
-                        if (hud.terrain_edit_enabled_) {
+                if (task_tree_view.task_editor_open_) {
+                        // Render Task Editor Box
+                        int box_w = task_tree_view.edit_box_w_;
+                        int box_h = task_tree_view.edit_box_h_;
+                        int box_x = (params.view_define_->viewport_width_ - box_w) / 2;
+                        int box_y = (params.view_define_->viewport_height_ - box_h) / 2;
+
+                        // Dark background
+                        glColor4f(0.05f, 0.05f, 0.05f, 0.95f);
+                        glBegin(GL_QUADS);
+                        glVertex2i(box_x, box_y);
+                        glVertex2i(box_x + box_w, box_y);
+                        glVertex2i(box_x + box_w, box_y + box_h);
+                        glVertex2i(box_x, box_y + box_h);
+                        glEnd();
+
+                        // Border
+                        glColor3f(1.0f, 0.4f, 0.0f); // Bright Orange border
+                        glLineWidth(2.0f);
+                        glBegin(GL_LINE_LOOP);
+                        glVertex2i(box_x, box_y);
+                        glVertex2i(box_x + box_w, box_y);
+                        glVertex2i(box_x + box_w, box_y + box_h);
+                        glVertex2i(box_x, box_y + box_h);
+                        glEnd();
+                        glLineWidth(1.0f);
+
+                        int viewport_h = params.view_define_->viewport_height_;
+                        draw_text(box_x + 10, viewport_h - (box_y + box_h - 20), "Task Editor (ESC: Discard, Save: Commit)", 1.0f, 1.0f, 1.0f);
+                        draw_text(box_x + 10, viewport_h - (box_y + box_h - 40), "Contents:", 0.6f, 0.6f, 0.6f);
+                        
+                        // Input field bg
+                        glColor4f(0.15f, 0.15f, 0.15f, 1.0f);
+                        glBegin(GL_QUADS);
+                        glVertex2i(box_x + 10, box_y + 10);
+                        glVertex2i(box_x + box_w - 10, box_y + 10);
+                        glVertex2i(box_x + box_w - 10, box_y + box_h - 50);
+                        glVertex2i(box_x + 10, box_y + box_h - 50);
+                        glEnd();
+
+                        // Use Scissor Test for clipping
+                        glEnable(GL_SCISSOR_TEST);
+                        glScissor(box_x + 10, box_y + 10, box_w - 20, box_h - 60);
+
+                        int visible_chars = std::max(1, (box_w - 40) / 9);
+
+                        // Selection Highlight (relative to visible window)
+                        if (task_tree_view.edit_selection_start_ != -1 && task_tree_view.edit_selection_end_ != -1 && task_tree_view.edit_selection_start_ != task_tree_view.edit_selection_end_) {
+                                int s = std::min(task_tree_view.edit_selection_start_, task_tree_view.edit_selection_end_);
+                                int e = std::max(task_tree_view.edit_selection_start_, task_tree_view.edit_selection_end_);
+                                int sel_x1 = box_x + 20 + ((s - task_tree_view.edit_scroll_x_) * 9);
+                                int sel_x2 = box_x + 20 + ((e - task_tree_view.edit_scroll_x_) * 9);
+                                
+                                glEnable(GL_BLEND);
+                                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                                glColor4f(0.0f, 0.5f, 1.0f, 0.4f); // Semi-transparent blue
+                                glBegin(GL_QUADS);
+                                glVertex2i(sel_x1, box_y + 25);
+                                glVertex2i(sel_x2, box_y + 25);
+                                glVertex2i(sel_x2, box_y + 45);
+                                glVertex2i(sel_x1, box_y + 45);
+                                glEnd();
+                                glDisable(GL_BLEND);
+                        }
+
+                        // Cursor (Scrolled) - 9px width
+                        int cursor_x = box_x + 20 + ((task_tree_view.edit_cursor_pos_ - task_tree_view.edit_scroll_x_) * 9);
+                        glColor3f(1.0f, 1.0f, 1.0f); // White cursor
+                        glLineWidth(2.0f);
+                        glBegin(GL_LINES);
+                        glVertex2i(cursor_x, box_y + 28);
+                        glVertex2i(cursor_x, box_y + 42);
+                        glEnd();
+                        glLineWidth(1.0f);
+
+                        // Draw only visible text window to avoid blank rendering on very long lines
+                        std::string displayString = task_tree_view.edit_string_;
+                        displayString.erase(std::remove(displayString.begin(), displayString.end(), '\r'), displayString.end());
+                        displayString.erase(std::remove(displayString.begin(), displayString.end(), '\n'), displayString.end());
+                        int start = std::max(0, task_tree_view.edit_scroll_x_);
+                        if (start > (int)displayString.size()) start = (int)displayString.size();
+                        std::string visible = displayString.substr((size_t)start, (size_t)visible_chars + 2);
+                        draw_text_mono(box_x + 20, viewport_h - (box_y + 35), visible.c_str(), 1.0f, 1.0f, 1.0f);
+                        
+                        glDisable(GL_SCISSOR_TEST);
+
+                        const int save_btn_w = 84;
+                        const int save_btn_h = 26;
+                        const int save_btn_x = box_x + box_w - save_btn_w - 14;
+                        const int save_btn_y = box_y + box_h - 40;
+                        bool save_hovered =
+                                task_tree_view.mouse_x_ >= save_btn_x && task_tree_view.mouse_x_ <= save_btn_x + save_btn_w &&
+                                task_tree_view.mouse_y_ >= save_btn_y && task_tree_view.mouse_y_ <= save_btn_y + save_btn_h;
+
+                        glEnable(GL_BLEND);
+                        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                        glColor4f(save_hovered ? 0.10f : 0.05f, save_hovered ? 0.55f : 0.35f, 0.10f, 0.95f);
+                        glBegin(GL_QUADS);
+                        glVertex2i(save_btn_x, save_btn_y);
+                        glVertex2i(save_btn_x + save_btn_w, save_btn_y);
+                        glVertex2i(save_btn_x + save_btn_w, save_btn_y + save_btn_h);
+                        glVertex2i(save_btn_x, save_btn_y + save_btn_h);
+                        glEnd();
+                        glDisable(GL_BLEND);
+
+                        glColor3f(1.0f, 1.0f, 1.0f);
+                        glBegin(GL_LINE_LOOP);
+                        glVertex2i(save_btn_x, save_btn_y);
+                        glVertex2i(save_btn_x + save_btn_w, save_btn_y);
+                        glVertex2i(save_btn_x + save_btn_w, save_btn_y + save_btn_h);
+                        glVertex2i(save_btn_x, save_btn_y + save_btn_h);
+                        glEnd();
+                        int text_w = glutBitmapLength(GLUT_BITMAP_HELVETICA_12, (const unsigned char*)"Save");
+                        draw_text(save_btn_x + (save_btn_w - text_w) / 2, viewport_h - (save_btn_y + 9), "Save", 1.0f, 1.0f, 1.0f);
+                }
+
+                if (task_tree_view.edit_mode_) {
+                        // Flip Y because glOrtho has y=0 at bottom, but mouse_y is top-down (GLUT)
+                        float cx = (float)(task_tree_view.mouse_x_);
+                        float cy = (float)(params.view_define_->viewport_height_ - task_tree_view.mouse_y_);
+
+                        if (task_tree_view.enable_camera_mode_) {
+                                // Draw camera icon at center (since mouse is warped there)
+                                float ccx = (float)(params.view_define_->viewport_width_ / 2);
+                                float ccy = (float)(params.view_define_->viewport_height_ / 2);
+                                float w = 16.0f, h = 10.0f;
+                                glColor3f(0.4f, 0.7f, 1.0f); // Sky blue
+                                glLineWidth(2.5f);
+                                // Camera body
+                                glBegin(GL_LINE_LOOP);
+                                glVertex2f(ccx - w/2, ccy - h/2);
+                                glVertex2f(ccx + w/2, ccy - h/2);
+                                glVertex2f(ccx + w/2, ccy + h/2);
+                                glVertex2f(ccx - w/2, ccy + h/2);
+                                glEnd();
+                                // Lens (inner circle-ish)
+                                glBegin(GL_LINE_LOOP);
+                                for(int i=0; i<8; ++i) {
+                                    float a = i * 6.28f / 8.0f;
+                                    glVertex2f(ccx + cosf(a)*3, ccy + sinf(a)*3);
+                                }
+                                glEnd();
+                                // Viewfinder
+                                glBegin(GL_LINE_LOOP);
+                                glVertex2f(ccx - 3, ccy + h/2);
+                                glVertex2f(ccx + 3, ccy + h/2);
+                                glVertex2f(ccx + 4, ccy + h/2 + 3);
+                                glVertex2f(ccx - 4, ccy + h/2 + 3);
+                                glEnd();
+                                glLineWidth(1.0f);
+                        } else if (task_tree_view.terrain_edit_enabled_) {
                                 // Terrain edit mode: orange circle brush cursor
                                 float radius = 10.0f;
                                 float th = 2.0f;
@@ -471,16 +1003,7 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                                 glEnd();
                                 glLineWidth(1.0f);
                         } else {
-                                // Object edit mode: green + icon at mouse cursor
-                                float sz = 7.0f;
-                                float th = 2.5f;
-                                glColor3f(0.0f, 1.0f, 0.0f);
-                                glLineWidth(th);
-                                glBegin(GL_LINES);
-                                glVertex2f(cx - sz, cy); glVertex2f(cx + sz, cy);
-                                glVertex2f(cx, cy - sz); glVertex2f(cx, cy + sz);
-                                glEnd();
-                                glLineWidth(1.0f);
+                                // Object edit mode: we rely on the OS cursor instead of a drawn +
                         }
                 } else {
                         // Draw a small blue camera icon at the screen center
@@ -513,57 +1036,77 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                         glLineWidth(1.0f);
                 }
 
-                if (hud.pause_mode_) {
-                        int menu_w = 350;
-                        int menu_h = 200;
-                        int menu_x = (params.view_define_->viewport_width_ - menu_w) / 2;
-                        int menu_y = (params.view_define_->viewport_height_ - menu_h) / 2;
+                if (task_tree_view.pause_mode_) {
+                        const int menu_w = 380;
+                        const int menu_h = 280;
+                        const int menu_x = (params.view_define_->viewport_width_  - menu_w) / 2;
+                        const int menu_y = (params.view_define_->viewport_height_ - menu_h) / 2;
+                        const int viewport_h = params.view_define_->viewport_height_;
 
-                        // Draw semi-transparent background
+                        // Glassmorphism-style background
                         glEnable(GL_BLEND);
                         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                        glColor4f(0.0f, 0.0f, 0.0f, 0.8f);
+                        glColor4f(0.02f, 0.15f, 0.02f, 0.94f); // Deep emerald
                         glBegin(GL_QUADS);
-                        glVertex2i(menu_x, menu_y);
+                        glVertex2i(menu_x,          menu_y);
                         glVertex2i(menu_x + menu_w, menu_y);
                         glVertex2i(menu_x + menu_w, menu_y + menu_h);
-                        glVertex2i(menu_x, menu_y + menu_h);
+                        glVertex2i(menu_x,          menu_y + menu_h);
                         glEnd();
                         glDisable(GL_BLEND);
 
-                        // Draw outline with thicker lines
-                        glLineWidth(2.0f);
-                        glColor3f(1.0f, 1.0f, 0.0f);
+                        // Sharp green border
+                        glLineWidth(2.5f);
+                        glColor3f(0.0f, 1.0f, 0.0f);
                         glBegin(GL_LINE_LOOP);
-                        glVertex2i(menu_x, menu_y);
+                        glVertex2i(menu_x,          menu_y);
                         glVertex2i(menu_x + menu_w, menu_y);
                         glVertex2i(menu_x + menu_w, menu_y + menu_h);
-                        glVertex2i(menu_x, menu_y + menu_h);
+                        glVertex2i(menu_x,          menu_y + menu_h);
+                        glEnd();
+
+                        // Header separator
+                        glBegin(GL_LINES);
+                        glVertex2i(menu_x + 10,     menu_y + menu_h - 45);
+                        glVertex2i(menu_x + menu_w - 10, menu_y + menu_h - 45);
                         glEnd();
                         glLineWidth(1.0f);
 
-                        // Title
-                        draw_text(menu_x + menu_w/2 - 50, menu_y + menu_h - 30, "PAUSE MENU", font_r, font_g, font_b);
+                        int screen_menu_top = (viewport_h - menu_h) / 2;
+                        draw_text(menu_x + menu_w/2 - 45, screen_menu_top + 18, "IGI EDITOR", 0.0f, 1.0f, 0.0f);
+                        draw_text(menu_x + menu_w/2 - 35, screen_menu_top + 32, "PAUSED", 0.8f, 0.8f, 0.8f);
 
-                        // Get keybindings from config
-                        std::string save_key = keybinding_to_string(cfg.keySave);
-                        std::string reset_key = keybinding_to_string(cfg.keyResetLevel);
-                        std::string debug_key = keybinding_to_string(cfg.keyDebug);
-                        std::string quit_key = keybinding_to_string(cfg.keyQuit);
-                        std::string reset_script_key = keybinding_to_string(cfg.keyResetScript);
+                        const char* btn_labels[] = { "Resume", "Debug", "Reset Level", "Save Level", "Quit" };
+                        const int NUM_BTNS = 5;
 
-                        // Menu items
-                        draw_text(menu_x + 30, menu_y + menu_h - 60, "[ESC] RESUME", font_r, font_g, font_b);
-                        draw_text(menu_x + 30, menu_y + menu_h - 85, ("[" + save_key + "] SAVE LEVEL").c_str(), font_r, font_g, font_b);
-                        draw_text(menu_x + 30, menu_y + menu_h - 110, ("[" + reset_key + "] RESET LEVEL").c_str(), font_r, font_g, font_b);
-                        draw_text(menu_x + 30, menu_y + menu_h - 135, ("[" + reset_script_key + "] RESET SCRIPT").c_str(), font_r, font_g, font_b);
-                        draw_text(menu_x + 30, menu_y + menu_h - 160, ("[" + debug_key + "] DEBUG").c_str(), font_r, font_g, font_b);
-                        draw_text(menu_x + 30, menu_y + menu_h - 185, ("[" + quit_key + "] EXIT").c_str(), font_r, font_g, font_b);
+                        for (int i = 0; i < NUM_BTNS; ++i) {
+                                int screen_btn_y = screen_menu_top + 80 + i * 35;
+                                int gl_btn_y     = viewport_h - screen_btn_y;
 
+                                bool hovered = (task_tree_view.mouse_x_ >= menu_x && task_tree_view.mouse_x_ <= menu_x + menu_w &&
+                                                task_tree_view.mouse_y_ >= screen_btn_y - 15 && task_tree_view.mouse_y_ <= screen_btn_y + 15);
 
+                                if (hovered) {
+                                        glEnable(GL_BLEND);
+                                        glColor4f(0.0f, 0.8f, 0.0f, 0.35f);
+                                        glBegin(GL_QUADS);
+                                        glVertex2i(menu_x + 20, gl_btn_y - 16);
+                                        glVertex2i(menu_x + menu_w - 20, gl_btn_y - 16);
+                                        glVertex2i(menu_x + menu_w - 20, gl_btn_y + 12);
+                                        glVertex2i(menu_x + 20, gl_btn_y + 12);
+                                        glEnd();
+                                        glDisable(GL_BLEND);
+                                        draw_text(menu_x + menu_w/2 - (int)(strlen(btn_labels[i]) * 4),
+                                                  screen_btn_y, btn_labels[i], 1.0f, 1.0f, 1.0f);
+                                } else {
+                                        draw_text(menu_x + menu_w/2 - (int)(strlen(btn_labels[i]) * 4),
+                                                  screen_btn_y, btn_labels[i], 0.0f, 0.85f, 0.0f);
+                                }
+                        }
                 }
 
-                if (hud.show_debug_) {
+
+                if (task_tree_view.show_debug_) {
                         const auto& entries = Logger::Get().GetEntries();
                         int debug_w = 600;
                         int debug_h = 280;
@@ -622,7 +1165,7 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                         }
                 }
 
-                if (hud.show_help_) {
+                if (task_tree_view.show_help_) {
                         int menu_w = 500;
                         int menu_h = 450;
                         int menu_x = (params.view_define_->viewport_width_ - menu_w) / 2;
@@ -659,7 +1202,7 @@ void Renderer::Draw(const draw_params_s& params, const hud_params_s& hud) {
                         draw_text(menu_x + 30, line_y, "[W/A/S/D] Movement", font_r, font_g, font_b); line_y -= 20;
                         draw_text(menu_x + 30, line_y, "[F2] Terrain Edit Toggle", font_r, font_g, font_b); line_y -= 20;
                         draw_text(menu_x + 30, line_y, "[F3] Clip Toggle", font_r, font_g, font_b); line_y -= 20;
-                        draw_text(menu_x + 30, line_y, "[F4] Edit Mode Toggle", font_r, font_g, font_b); line_y -= 20;
+                        // Edit Mode toggle removed as requested
                         draw_text(menu_x + 30, line_y, "[PageUp/Down] Move Speed", font_r, font_g, font_b); line_y -= 20;
                         draw_text(menu_x + 30, line_y, "[Left/Right] Roll", font_r, font_g, font_b); line_y -= 20;
                         draw_text(menu_x + 30, line_y, "[TAB] Select Next Object", font_r, font_g, font_b); line_y -= 20;

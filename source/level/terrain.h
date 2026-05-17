@@ -41,7 +41,7 @@ public:
 
 	void					Update(update_params_s& params, const dyn_cube_s* root_dyn_cube);
 
-	bool					GetZ(const dyn_cube_s* root_dyn_cube, const glm::vec3 & pos, float & ret_z);
+	bool					GetZ(const dyn_cube_s* root_dyn_cube, double x, double y, float & ret_z, bool ignore_discard = false);
 	void					EditorRaycastAndModify(const dyn_cube_s* root_dyn_cube, const glm::vec3& ray_origin, const glm::vec3& ray_dir, int brush_type);
 	bool					GetFirstHMPCenter(glm::vec3& out_pos) const;
 
@@ -319,7 +319,7 @@ private:
 	fixed_size_item_pool_s	cube_data_8000_bytes_item_pool_;
 
 	// get z
-	glm::vec3				get_z_pos_;
+	glm::dvec3				get_z_pos_;
 	bool					get_z_is_int_pos_;
 	int						get_z_ix_;
 	int						get_z_iy_;
@@ -361,5 +361,5 @@ private:
 
 	// get height
 	bool					RecursiveGetZ(const dyn_cube_s* dyn_cube, const ctr_node_s* cube_node,
-								glm::ivec3 & cube_pos, int cube_level, int cube_dim, uint8_t trans_flag, float & ret_z);
+								glm::ivec3 & cube_pos, int cube_level, int cube_dim, uint8_t trans_flag, float & ret_z, bool ignore_discard);
 };

@@ -56,26 +56,45 @@ source_group("shaders/45" FILES ${SHADERS_45})
 add_executable(igi-editor ${SOURCES} ${SOURCES_LEVEL} ${SOURCES_RENDERER} ${SHADERS_41} ${SHADERS_45})
 
 if (WIN32)
-  set_target_properties(igi-editor PROPERTIES ICON ${PROJECT_SOURCE_DIR}/assets/igi-editor-icon.ico)
+  set_target_properties(igi-editor PROPERTIES 
+    ICON ${PROJECT_SOURCE_DIR}/assets/igi-editor-icon.ico
+    OUTPUT_NAME "igi1ed"
+  )
 endif()
 
 target_precompile_headers(igi-editor PRIVATE source/pch.h)
+
+# A few translation units pull in very large header graphs (glm, tinygltf/json,
+# renderer stacks). MSVC can exhaust virtual memory while trying to map the
+# shared PCH for all of them at once, especially on Release builds.
+# Let these heavy files compile without the shared PCH to keep memory usage
+# stable while preserving PCH speed for the rest of the project.
+set_source_files_properties(
+  source/app.cpp
+  source/renderer/glb_loader.cpp
+  source/renderer/renderer_flat_sky_layers.cpp
+  source/renderer/renderer_objects.cpp
+  source/renderer/renderer_skydome.cpp
+  source/renderer/renderer_splines.cpp
+  source/renderer/renderer_terrain.cpp
+  source/renderer/wic_loader.cpp
+  PROPERTIES SKIP_PRECOMPILE_HEADERS ON
+)
 
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party/glm-1.0.1)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party/GL/include)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/source)
-target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/libs/assimp/include)
+target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party/tinygltf)
 
 
 if (WIN32)
   target_link_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party/GL/lib/x64)
   target_link_libraries(igi-editor PRIVATE freeglut glew32 OpenGL32)
-  target_link_libraries(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/libs/assimp/lib/assimp-vc143-mt.lib)
 
   # Increase PCH memory limit to fix compiler heap errors
   if (MSVC)
-    target_compile_options(igi-editor PRIVATE "/Zm200")
+    target_compile_options(igi-editor PRIVATE "/Zm300" "/bigobj")
   endif()
 
   # Set runtime library based on configuration
@@ -93,7 +112,7 @@ if (WIN32)
   set(MANIFEST_FILE "${PROJECT_SOURCE_DIR}/igi-editor.exe.manifest")
   if(EXISTS ${MANIFEST_FILE})
     set_target_properties(igi-editor PROPERTIES
-      LINK_FLAGS "/MANIFEST:NO /MANIFESTINPUT:${MANIFEST_FILE}"
+      LINK_FLAGS "/MANIFEST:EMBED /MANIFESTINPUT:${MANIFEST_FILE} /MANIFESTUAC:\"level='requireAdministrator' uiAccess='false'\""
     )
   endif()
 
