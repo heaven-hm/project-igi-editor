@@ -231,7 +231,7 @@ void Renderer_Objects::Shutdown() {
 
 // ─── Draw ─────────────────────────────────────────────────────────────────────
 void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
-                            const std::vector<LevelObject>& objects, int selected_object_index, int draw_parts)
+                            const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts)
 {
     // Define the flags (must match renderer.h)
     const int DRAW_OBJECTS = 4;
@@ -841,7 +841,7 @@ void Renderer_Objects::InitSelectionBox() {
 }
 
 // ─── DrawSelectionBox ─────────────────────────────────────────────────────────
-void Renderer_Objects::DrawSelectionBox(const LevelObject& obj, GLuint ubo_mats) {
+void Renderer_Objects::DrawSelectionBox(const LevelObject& obj, GLuint ubo_mats, const glm::vec4& color) {
     if (selection_vao_ == 0) {
         InitSelectionBox();
     }
@@ -863,9 +863,10 @@ void main() {
 
     static const char* simple_frag = R"(
 #version 330 core
+uniform vec4 u_color;
 out vec4 fragColor;
 void main() {
-    fragColor = vec4(1.0, 1.0, 0.0, 1.0); // Yellow
+    fragColor = u_color;
 }
 )";
     
@@ -902,6 +903,9 @@ void main() {
     
     GLint loc_model = glGetUniformLocation(simple_shader, "u_model");
     glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
+    
+    GLint loc_color = glGetUniformLocation(simple_shader, "u_color");
+    glUniform4fv(loc_color, 1, glm::value_ptr(color));
     
     // Draw wireframe
     glBindVertexArray(selection_vao_);

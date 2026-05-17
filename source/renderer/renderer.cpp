@@ -350,7 +350,7 @@ void Renderer::Draw(const draw_params_s& params, const task_tree_view_params_s& 
                 glLoadMatrixf(glm::value_ptr(mat_proj_));
                 glMatrixMode(GL_MODELVIEW);
                 glLoadMatrixf(glm::value_ptr(mat_view_));
-                objects_.Draw(ubo_mats_, params.overlay_wireframe_, params.level_objects_->GetObjects(), params.selected_object_index_, params.draw_parts_);
+                objects_.Draw(ubo_mats_, params.overlay_wireframe_, params.level_objects_->GetObjects(), params.selected_object_index_, task_tree_view.hover_object_index_, params.draw_parts_);
                 splines_.Draw(params.level_objects_->GetObjects(), ubo_mats_, objects_.GetShaderProgram());
         }
 
@@ -645,8 +645,72 @@ void Renderer::Draw(const draw_params_s& params, const task_tree_view_params_s& 
                             }
                             glEnd();
 
+                            if (task_tree_view.selected_object_index_ == -2) {
+
+
+                            	glEnable(GL_BLEND);
+
+
+                            	glColor4f(0.0f, 0.5f, 0.0f, 0.4f);
+
+
+                            	glBegin(GL_QUADS);
+
+
+                            	glVertex2i(vx - 5, viewport_h - (y - 2));
+
+
+                            	glVertex2i(vx + 300, viewport_h - (y - 2));
+
+
+                            	glVertex2i(vx + 300, viewport_h - (y + row_h - 2));
+
+
+                            	glVertex2i(vx - 5, viewport_h - (y + row_h - 2));
+
+
+                            	glEnd();
+
+
+                            } else if (task_tree_view.hover_object_index_ == -2) {
+
+
+                            	glEnable(GL_BLEND);
+
+
+                            	glColor4f(0.3f, 0.3f, 0.3f, 0.3f);
+
+
+                            	glBegin(GL_QUADS);
+
+
+                            	glVertex2i(vx - 5, viewport_h - (y - 2));
+
+
+                            	glVertex2i(vx + 300, viewport_h - (y - 2));
+
+
+                            	glVertex2i(vx + 300, viewport_h - (y + row_h - 2));
+
+
+                            	glVertex2i(vx - 5, viewport_h - (y + row_h - 2));
+
+
+                            	glEnd();
+
+
+                            }
+
+
                             float dtr = 0.7f, dtg = 0.7f, dtb = 0.7f;
-                            if (task_tree_view.hover_object_index_ == -2) { dtr = 0.5f; dtg = 0.8f; dtb = 1.0f; }
+
+
+                            if (task_tree_view.selected_object_index_ == -2) { dtr = 1.0f; dtg = 1.0f; dtb = 0.0f; }
+
+
+                            else if (task_tree_view.hover_object_index_ == -2) { dtr = 0.5f; dtg = 0.8f; dtb = 1.0f; }
+
+
                             draw_text(vx + 16, y + 11, "Mission Declarations", dtr, dtg, dtb);
                         }
                         if (task_tree_view.tree_decl_expanded) {
@@ -704,12 +768,57 @@ void Renderer::Draw(const draw_params_s& params, const task_tree_view_params_s& 
                                 int text_x = tooltip_x;
                                 int text_y = tooltip_y;
 
-                                snprintf(buf, sizeof(buf), "%s ID: %s", display_name.c_str(), task_id.c_str());
-                                draw_text(text_x, text_y, buf, 1.0f, 1.0f, 1.0f);
-                                text_y += 15;
+                                bool isAI = !obj.aiId.empty() || obj.type.find("AITYPE") == 0 || obj.type == "HumanSoldier" || obj.type == "HumanAI";
+                                if (isAI) {
+                                        // Draw header line with Name and Type
+                                        std::string aiName = obj.name.empty() ? "AI Soldier" : obj.name;
+                                        snprintf(buf, sizeof(buf), "Name: %s (Type: %s)", aiName.c_str(), obj.type.c_str());
+                                        draw_text(text_x, text_y, buf, 0.0f, 0.8f, 1.0f); // Sky blue title
+                                        text_y += 15;
 
-                                snprintf(buf, sizeof(buf), "%s", obj.modelId.c_str());
-                                draw_text(text_x, text_y, buf, obj.isBuilding ? 1.0f : 0.0f, 1.0f, 0.0f);
+                                        snprintf(buf, sizeof(buf), "Soldier ID: %s | AI ID: %s", task_id.c_str(), obj.aiId.empty() ? "-1" : obj.aiId.c_str());
+                                        draw_text(text_x, text_y, buf, 1.0f, 1.0f, 1.0f);
+                                        text_y += 15;
+
+                                        std::string teamStr = (obj.team == 1) ? "Enemy" : ((obj.team == 0) ? "Friendly" : "Neutral");
+                                        float tr = (obj.team == 1) ? 1.0f : 0.2f;
+                                        float tg = (obj.team == 1) ? 0.2f : 1.0f;
+                                        float tb = 0.2f;
+                                        snprintf(buf, sizeof(buf), "Team: %s", teamStr.c_str());
+                                        draw_text(text_x, text_y, buf, tr, tg, tb);
+                                        text_y += 15;
+
+                                        if (!obj.primaryWeapon.empty()) {
+                                                snprintf(buf, sizeof(buf), "Pri: %s (%s Ammo)", obj.primaryWeapon.c_str(), obj.primaryAmmo.c_str());
+                                                draw_text(text_x, text_y, buf, 0.9f, 0.9f, 0.9f);
+                                                text_y += 15;
+                                        }
+
+                                        if (!obj.secondaryWeapon.empty()) {
+                                                snprintf(buf, sizeof(buf), "Sec: %s (%s Ammo)", obj.secondaryWeapon.c_str(), obj.secondaryAmmo.c_str());
+                                                draw_text(text_x, text_y, buf, 0.8f, 0.8f, 0.8f);
+                                                text_y += 15;
+                                        }
+
+                                        if (!obj.graphName.empty() || !obj.graphId.empty()) {
+                                                snprintf(buf, sizeof(buf), "Graph: %s (ID: %s)", obj.graphName.c_str(), obj.graphId.c_str());
+                                                draw_text(text_x, text_y, buf, 0.9f, 0.6f, 0.9f);
+                                                text_y += 15;
+                                        }
+                                } else {
+                                        // Standard building / prop tooltip
+                                        snprintf(buf, sizeof(buf), "%s ID: %s", display_name.c_str(), task_id.c_str());
+                                        draw_text(text_x, text_y, buf, 1.0f, 1.0f, 1.0f);
+                                        text_y += 15;
+
+                                        snprintf(buf, sizeof(buf), "%s", obj.modelId.c_str());
+                                        draw_text(text_x, text_y, buf, obj.isBuilding ? 1.0f : 0.0f, 1.0f, 0.0f);
+                                        text_y += 15;
+                                }
+
+                                // Always display X, Y, Z coordinates for all objects
+                                snprintf(buf, sizeof(buf), "Pos: X: %.1f Y: %.1f Z: %.1f", obj.pos.x, obj.pos.y, obj.pos.z);
+                                draw_text(text_x, text_y, buf, 0.7f, 0.7f, 0.7f);
                                 text_y += 15;
 
                                 if (!task_tree_view.status_msg_.empty() && info_object_index == task_tree_view.selected_object_index_) {
@@ -835,7 +944,7 @@ void Renderer::Draw(const draw_params_s& params, const task_tree_view_params_s& 
                         glVertex2i(save_btn_x + save_btn_w, save_btn_y + save_btn_h);
                         glVertex2i(save_btn_x, save_btn_y + save_btn_h);
                         glEnd();
-                        draw_text(save_btn_x + (save_btn_w / 2) - 14, viewport_h - (save_btn_y + 18), "Save", 1.0f, 1.0f, 1.0f);
+                        draw_text(save_btn_x + (save_btn_w / 2) - 14, viewport_h - (save_btn_y + 17), "Save", 1.0f, 1.0f, 1.0f);
                 }
 
                 if (task_tree_view.edit_mode_) {

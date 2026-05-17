@@ -8,6 +8,7 @@
 #include "logger.h"
 #include "utils.h"
 #include <filesystem>
+#include <fstream>
 
 
 /*
@@ -254,6 +255,7 @@ void App::Shutdown() {
 
 void App::LoadLevel(int level_no) {
 	try {
+		LoadCutsceneSoldierIDs();
 		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
 		Logger::Get().Log(LogLevel::INFO, "[App] LoadLevel() START for level " + std::to_string(level_no));
 		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
@@ -293,6 +295,11 @@ void App::LoadLevel(int level_no) {
 		// Load QSC file for this level
 		Logger::Get().Log(LogLevel::INFO, "[App] Step 2: Loading QSC file for level " + std::to_string(level_no));
 		LoadQSCForLevel(level_no);
+		LoadCutsceneSoldierIDs();
+
+		// Load AI models from JSON for this level
+		Logger::Get().Log(LogLevel::INFO, "[App] Step 2.5: Loading AI models from IGIModelsAllLevel.json...");
+		LoadAIModelsFromFolder(level_no);
 
 		// Always snap objects to terrain after any level load
 		Logger::Get().Log(LogLevel::INFO, "[App] Step 3: Snapping objects to terrain...");
@@ -325,11 +332,13 @@ void App::LoadLevel(int level_no) {
 		auto& objects = level_.GetLevelObjects().GetObjects();
 		for (auto& obj : objects) {
 			if (obj.type == "HumanSoldier" || obj.type == "HumanAI" || obj.type.find("AITYPE") == 0) {
-				obj.rot.x = 0.0;           // PITCH = 0
-				obj.rot.y = 0.0;           // ROLL = 0
-				// Preserve existing rotation if it's already set, otherwise default to a full circle
-				if (obj.rot.z == 0.0) obj.rot.z = 6.28318;
-				Logger::Get().Log(LogLevel::INFO, "[App] Applied AI rotation override (horizontal only) for " + obj.name + " (" + obj.type + ")");
+				if (cutscene_soldier_ids_.find(obj.taskId) == cutscene_soldier_ids_.end()) {
+					obj.rot.x = 0.0;           // PITCH = 0
+					obj.rot.y = 0.0;           // ROLL = 0
+					// Preserve existing rotation if it's already set, otherwise default to a full circle
+					if (obj.rot.z == 0.0) obj.rot.z = 6.28318;
+					Logger::Get().Log(LogLevel::INFO, "[App] Applied AI rotation override (horizontal only) for " + obj.name + " (" + obj.type + ")");
+				}
 			}
 		}
 		
@@ -353,6 +362,77 @@ void App::SetGameLevel(int level_no) {
 	bridge_.SetGameLevel(level_no);
 }
 
+#include <sstream>
+#include <algorithm>
+
+static bool containsIgnoreCase(const std::string& str, const std::string& substr) {
+    if (substr.empty()) return true;
+    auto it = std::search(
+        str.begin(), str.end(),
+        substr.begin(), substr.end(),
+        [](char ch1, char ch2) { return std::tolower(ch1) == std::tolower(ch2); }
+    );
+    return it != str.end();
+}
+
+static std::set<std::string> LoadCutsceneGraphIds(int level_no) {
+    std::set<std::string> cutscene_graph_ids;
+    std::string graphsPath = Config::Get().graphsPath;
+    std::string jsonPath = graphsPath + "\\Areas\\graph_area_level" + std::to_string(level_no) + ".json";
+    
+    Logger::Get().Log(LogLevel::INFO, "[App] Loading cutscene graphs from: " + jsonPath);
+    
+    std::ifstream file(jsonPath, std::ios::binary);
+    if (!file) {
+        Logger::Get().Log(LogLevel::WARNING, "[App] Could not open graph area file: " + jsonPath);
+        return cutscene_graph_ids;
+    }
+    
+    std::stringstream ss;
+    ss << file.rdbuf();
+    std::string content = ss.str();
+    
+    size_t pos = 0;
+    while ((pos = content.find("{", pos)) != std::string::npos) {
+        size_t end = content.find("}", pos);
+        if (end == std::string::npos) break;
+        
+        std::string entry = content.substr(pos, end - pos + 1);
+        pos = end + 1;
+        
+        // Extract Graph and Area
+        auto extractValue = [](const std::string& str, const std::string& key) -> std::string {
+            size_t kpos = str.find("\"" + key + "\"");
+            if (kpos == std::string::npos) return "";
+            size_t colon = str.find(":", kpos);
+            if (colon == std::string::npos) return "";
+            size_t qStart = str.find("\"", colon);
+            if (qStart == std::string::npos) return "";
+            size_t qEnd = str.find("\"", qStart + 1);
+            if (qEnd == std::string::npos) return "";
+            return str.substr(qStart + 1, qEnd - qStart - 1);
+        };
+        
+        std::string graphVal = extractValue(entry, "Graph");
+        std::string areaVal = extractValue(entry, "Area");
+        
+        if (containsIgnoreCase(areaVal, "Cutscene")) {
+            // Extract number from "Graph #123"
+            size_t hashPos = graphVal.find('#');
+            if (hashPos != std::string::npos) {
+                std::string graphId = graphVal.substr(hashPos + 1);
+                graphId = Utils::Trim(graphId);
+                if (!graphId.empty()) {
+                    cutscene_graph_ids.insert(graphId);
+                    Logger::Get().Log(LogLevel::INFO, "[App] Identified cutscene graph ID: " + graphId + " (Area: " + areaVal + ")");
+                }
+            }
+        }
+    }
+    
+    return cutscene_graph_ids;
+}
+
 void App::LoadAIModelsFromFolder(int level_no) {
 	Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
 	Logger::Get().Log(LogLevel::INFO, "[App] LoadAIModelsFromFolder() START for level " + std::to_string(level_no));
@@ -363,21 +443,18 @@ void App::LoadAIModelsFromFolder(int level_no) {
 
 	Logger::Get().Log(LogLevel::INFO, "[App] AI folder path: " + aiFolderPath);
 
-	// Check if AI folder exists
-	if (!std::filesystem::exists(aiFolderPath)) {
-		Logger::Get().Log(LogLevel::WARNING, "[App] AI folder does not exist: " + aiFolderPath);
-		return;
-	}
-
-	// Get all GLB files in the AI folder
+	// Get all GLB files in the AI folder if it exists
 	std::vector<std::string> aiModels;
-	for (const auto& entry : std::filesystem::directory_iterator(aiFolderPath)) {
-		if (entry.path().extension() == ".glb") {
-			aiModels.push_back(entry.path().filename().string());
+	if (std::filesystem::exists(aiFolderPath)) {
+		for (const auto& entry : std::filesystem::directory_iterator(aiFolderPath)) {
+			if (entry.path().extension() == ".glb") {
+				aiModels.push_back(entry.path().filename().string());
+			}
 		}
+		Logger::Get().Log(LogLevel::INFO, "[App] Found " + std::to_string(aiModels.size()) + " AI GLB files");
+	} else {
+		Logger::Get().Log(LogLevel::WARNING, "[App] AI folder does not exist: " + aiFolderPath + " (skipping GLB loading, but proceeding with JSON)");
 	}
-
-	Logger::Get().Log(LogLevel::INFO, "[App] Found " + std::to_string(aiModels.size()) + " AI GLB files");
 
 	// Read JSON file to get AI model positions
 	struct AIData {
@@ -399,6 +476,9 @@ void App::LoadAIModelsFromFolder(int level_no) {
 	};
 	std::vector<AIData> aiDataList;
 	std::string jsonPath = qeditor_path + "\\IGIModelsAllLevel.json";
+	if (!std::filesystem::exists(jsonPath)) {
+		jsonPath = "C:\\Users\\hasee\\AppData\\Roaming\\QEditor\\IGIModelsAllLevel.json";
+	}
 	
 	if (std::filesystem::exists(jsonPath)) {
 		FILE* f = fopen(jsonPath.c_str(), "rb");
@@ -552,25 +632,7 @@ void App::LoadAIModelsFromFolder(int level_no) {
 								}
 							}
 
-							// Validations
-							bool isValid = true;
-							if (aiData.type.empty()) isValid = false;
-							else {
-								// Type validation: ^[A-Z0-9_]+$
-								for (char c : aiData.type) {
-									if (!isalnum(c) && c != '_') { isValid = false; break; }
-								}
-							}
-							
-							// Model ID validation: ddd_dd_d (e.g. 000_01_1)
-							if (aiData.modelId.length() != 8 || aiData.modelId[3] != '_' || aiData.modelId[6] != '_') {
-								isValid = false;
-							} else {
-								for (int i = 0; i < 8; ++i) {
-									if (i == 3 || i == 6) continue;
-									if (!isdigit(aiData.modelId[i])) { isValid = false; break; }
-								}
-							}
+							bool isValid = !aiData.soldierId.empty();
 
 							if (isValid) {
 								aiDataList.push_back(aiData);
@@ -591,6 +653,15 @@ void App::LoadAIModelsFromFolder(int level_no) {
 	int addedCount = 0;
 	int updatedCount = 0;
 
+	// Load Cutscene Graph IDs and populate cutscene_soldier_ids_
+	std::set<std::string> cutsceneGraphIds = LoadCutsceneGraphIds(level_no);
+	for (const auto& aiData : aiDataList) {
+		if (cutsceneGraphIds.count(aiData.graphId)) {
+			cutscene_soldier_ids_.insert(aiData.soldierId);
+			Logger::Get().Log(LogLevel::INFO, "[App] Added soldier taskId " + aiData.soldierId + " to cutscene list due to Graph ID " + aiData.graphId);
+		}
+	}
+
 	for (const auto& aiData : aiDataList) {
 		// Search for existing object with this taskId
 		LevelObject* existingObj = nullptr;
@@ -602,6 +673,11 @@ void App::LoadAIModelsFromFolder(int level_no) {
 		}
 
 		if (existingObj) {
+			// Skip sync for cutscene soldiers to preserve authored QSC state
+			if (cutscene_soldier_ids_.count(existingObj->taskId)) {
+				Logger::Get().Log(LogLevel::INFO, "[App] Skipping AI sync for cutscene soldier: " + aiData.modelId + " taskId=" + aiData.soldierId);
+				continue;
+			}
 			// Update existing object with AI metadata
 			existingObj->aiId = aiData.aiId;
 			existingObj->graphId = aiData.graphId;
@@ -789,6 +865,39 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 			if (task_editor_open_) {
 				int box_x = (window_state_.viewport_width_ - edit_box_w_) / 2;
 				int box_y = (window_state_.viewport_height_ - edit_box_h_) / 2;
+				
+				// Check Save button click first!
+				const int save_btn_w = 84;
+				const int save_btn_h = 26;
+				const int save_btn_x = box_x + edit_box_w_ - save_btn_w - 14;
+				const int save_btn_y_opengl = box_y + edit_box_h_ - 40;
+				int btn_y1 = window_state_.viewport_height_ - (save_btn_y_opengl + save_btn_h);
+				int btn_y2 = window_state_.viewport_height_ - save_btn_y_opengl;
+
+				if (x >= save_btn_x && x <= save_btn_x + save_btn_w && y >= btn_y1 && y <= btn_y2) {
+					// Trigger Save!
+					if (selected_object_index_ >= 0) {
+						auto& obj = level_.GetLevelObjects().GetObjects()[selected_object_index_];
+						std::string finalStr = edit_string_;
+						finalStr.erase(std::remove(finalStr.begin(), finalStr.end(), '\r'), finalStr.end());
+						finalStr.erase(std::remove(finalStr.begin(), finalStr.end(), '\n'), finalStr.end());
+						
+						obj.qscLine = finalStr;
+						level_.GetLevelObjects().ParseTaskLine(obj.qscLine, obj);
+						
+						int savedIndex = selected_object_index_;
+						level_.SaveAndReloadObjects();
+						auto& objects = level_.GetLevelObjects().GetObjects();
+						if (objects.empty()) selected_object_index_ = -1;
+						else selected_object_index_ = std::min(savedIndex, (int)objects.size() - 1);
+						Logger::Get().Log(LogLevel::INFO, "[App] Saved task changes via Save Button click.");
+					}
+					task_editor_open_ = false;
+					edit_cursor_pos_ = 0;
+					edit_scroll_x_ = 0;
+					return;
+				}
+
 				if (x >= box_x && x <= box_x + edit_box_w_ && y >= box_y && y <= box_y + edit_box_h_) {
 					int rel_x = x - (box_x + 20);
 					int char_w = 9;
@@ -954,6 +1063,109 @@ void App::Input_OnSpecial(int key, int x, int y) {
 			edit_scroll_x_ = edit_cursor_pos_ - visibleChars;
 		}
 		return;
+	}
+
+	if (show_hud_ && window_state_.cursor_visible_) {
+		if (key == GLUT_KEY_UP || key == GLUT_KEY_DOWN || key == GLUT_KEY_LEFT || key == GLUT_KEY_RIGHT) {
+			auto visibleList = GetVisibleTreeNodes();
+			if (!visibleList.empty()) {
+				int current_row = -1;
+				for (int i = 0; i < (int)visibleList.size(); ++i) {
+					if (visibleList[i] == selected_object_index_) {
+						current_row = i;
+						break;
+					}
+				}
+
+				if (key == GLUT_KEY_UP) {
+					if (current_row > 0) {
+						selected_object_index_ = visibleList[current_row - 1];
+						current_row--;
+					} else {
+						selected_object_index_ = visibleList.back();
+						current_row = (int)visibleList.size() - 1;
+					}
+				}
+				else if (key == GLUT_KEY_DOWN) {
+					if (current_row >= 0 && current_row < (int)visibleList.size() - 1) {
+						selected_object_index_ = visibleList[current_row + 1];
+						current_row++;
+					} else {
+						selected_object_index_ = visibleList.front();
+						current_row = 0;
+					}
+				}
+				else if (key == GLUT_KEY_LEFT) {
+					if (selected_object_index_ == -2) {
+						tree_decl_expanded_ = false;
+						Logger::Get().Log(LogLevel::INFO, "[App] Collapsed Mission Declarations");
+					} else if (selected_object_index_ >= 0) {
+						auto& obj = level_.GetLevelObjects().GetObjects()[selected_object_index_];
+						if (obj.isContainer && obj.expanded) {
+							auto& nonConstObj = const_cast<LevelObject&>(obj);
+							nonConstObj.expanded = false;
+							Logger::Get().Log(LogLevel::INFO, "[App] Collapsed: " + obj.type);
+						} else if (obj.parentIndex != -1) {
+							selected_object_index_ = obj.parentIndex;
+							for (int i = 0; i < (int)visibleList.size(); ++i) {
+								if (visibleList[i] == selected_object_index_) {
+									current_row = i;
+									break;
+								}
+							}
+						}
+					}
+				}
+				else if (key == GLUT_KEY_RIGHT) {
+					if (selected_object_index_ == -2) {
+						tree_decl_expanded_ = true;
+						Logger::Get().Log(LogLevel::INFO, "[App] Expanded Mission Declarations");
+					} else if (selected_object_index_ >= 0) {
+						auto& obj = level_.GetLevelObjects().GetObjects()[selected_object_index_];
+						if (obj.isContainer) {
+							if (!obj.expanded) {
+								auto& nonConstObj = const_cast<LevelObject&>(obj);
+								nonConstObj.expanded = true;
+								Logger::Get().Log(LogLevel::INFO, "[App] Expanded: " + obj.type);
+							} else if (!obj.childrenIndices.empty()) {
+								int firstChild = -1;
+								for (int childIdx : obj.childrenIndices) {
+									if (childIdx >= 0 && childIdx < (int)level_.GetLevelObjects().GetObjects().size()) {
+										if (!level_.GetLevelObjects().GetObjects()[childIdx].deleted) {
+											firstChild = childIdx;
+											break;
+										}
+									}
+								}
+								if (firstChild != -1) {
+									selected_object_index_ = firstChild;
+									auto newVisibleList = GetVisibleTreeNodes();
+									for (int i = 0; i < (int)newVisibleList.size(); ++i) {
+										if (newVisibleList[i] == selected_object_index_) {
+											current_row = i;
+											break;
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+
+				// Auto scroll to keep selected item visible
+				int row_h = 16;
+				int start_y = 30;
+				int max_rows = (window_state_.viewport_height_ - 50 - start_y) / row_h;
+				if (max_rows > 0) {
+					if (current_row < tree_scroll_offset_) {
+						tree_scroll_offset_ = current_row;
+					} else if (current_row >= tree_scroll_offset_ + max_rows) {
+						tree_scroll_offset_ = current_row - max_rows + 1;
+					}
+				}
+			}
+			return;
+		}
 	}
 
 	// Check configurable keybindings for special keys (F-keys, etc.)
@@ -1146,27 +1358,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	auto& config = Config::Get();
 
 	if (task_editor_open_) {
-		if (key == 27) { // ESC - Save and close
-			if (selected_object_index_ >= 0) {
-				auto& obj = level_.GetLevelObjects().GetObjects()[selected_object_index_];
-				
-				// Strip any newlines the user might have managed to paste/enter
-				std::string finalStr = edit_string_;
-				finalStr.erase(std::remove(finalStr.begin(), finalStr.end(), '\r'), finalStr.end());
-				finalStr.erase(std::remove(finalStr.begin(), finalStr.end(), '\n'), finalStr.end());
-				
-				obj.qscLine = finalStr;
-				level_.GetLevelObjects().ParseTaskLine(obj.qscLine, obj);
-				
-				// Live Editor: Save to file and reload everything
-				int savedIndex = selected_object_index_;
-				level_.SaveAndReloadObjects();
-				auto& objects = level_.GetLevelObjects().GetObjects();
-				if (objects.empty()) selected_object_index_ = -1;
-				else selected_object_index_ = std::min(savedIndex, (int)objects.size() - 1);
-				
-				Logger::Get().Log(LogLevel::INFO, "[App] Live Editor: Saved, Synchronized and Reloaded task.");
-			}
+		if (key == 27) { // ESC - Cancel and close (Discard edits!)
 			task_editor_open_ = false;
 			edit_cursor_pos_ = 0;
 			edit_scroll_x_ = 0;
@@ -1284,6 +1476,29 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	if (Utils::IsKeyBindingPressed(config.keyAssignTaskID)) {
 		AssignTaskID();
 		return;
+	}
+
+	// Open Task Editor on Enter if an object is selected
+	if (key == 13 && !(glutGetModifiers() & GLUT_ACTIVE_ALT)) {
+		if (selected_object_index_ >= 0) {
+			auto& objects = level_.GetLevelObjects().GetObjects();
+			if (selected_object_index_ < (int)objects.size()) {
+				auto& obj = objects[selected_object_index_];
+				task_editor_open_ = true;
+				std::string line = obj.qscLine.empty() ? level_.GetLevelObjects().GenerateTaskLine(obj) : obj.qscLine;
+
+				// Strip any newlines from the loaded line
+				line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
+				line.erase(std::remove(line.begin(), line.end(), '\n'), line.end());
+
+				edit_string_ = line;
+				edit_cursor_pos_ = (int)edit_string_.size();
+				edit_selection_start_ = edit_selection_end_ = -1;
+				edit_scroll_x_ = 0;
+				Logger::Get().Log(LogLevel::INFO, "[App] Pressed Enter on task from tree and opened Task Editor.");
+				return;
+			}
+		}
 	}
 
 	// Check for modifier keys - if pressed, skip movement key checks
@@ -1491,10 +1706,39 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 }
 
 
+#ifdef _WIN32
+#include <windows.h>
+#include <tlhelp32.h>
+#endif
+
 void App::ResetLevel() {
 	int levelNo = level_.GetLevelNo();
 
 	printf("Resetting Level %d - restore objects.qsc and objects.qvm from QFiles\n", levelNo);
+
+	// Force kill any running game instance to release file locks on objects.qvm
+#ifdef _WIN32
+	{
+		HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+		if (hSnap != INVALID_HANDLE_VALUE) {
+			PROCESSENTRY32 pe;
+			pe.dwSize = sizeof(pe);
+			if (Process32First(hSnap, &pe)) {
+				do {
+					if (_wcsicmp(pe.szExeFile, L"igi.exe") == 0) {
+						HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+						if (hProc) {
+							TerminateProcess(hProc, 0);
+							CloseHandle(hProc);
+							printf("[App] Terminated running game instance 'igi.exe' to unlock files.\n");
+						}
+					}
+				} while (Process32Next(hSnap, &pe));
+			}
+			CloseHandle(hSnap);
+		}
+	}
+#endif
 
 	std::string baseQFiles = Config::Get().filesPath;
 	if (baseQFiles.empty()) {
@@ -1513,6 +1757,13 @@ void App::ResetLevel() {
 
 	try {
 		if (std::filesystem::exists(srcQsc)) {
+			// Force permissions to allow overwrite/delete
+			if (std::filesystem::exists(dstQsc)) {
+				std::filesystem::permissions(dstQsc, 
+					std::filesystem::perms::owner_all | std::filesystem::perms::group_all | std::filesystem::perms::others_all,
+					std::filesystem::perm_options::replace);
+				std::filesystem::remove(dstQsc);
+			}
 			std::filesystem::copy_file(srcQsc, dstQsc, std::filesystem::copy_options::overwrite_existing);
 			printf("Objects.qsc copied successfully.\n");
 		}
@@ -1537,6 +1788,13 @@ void App::ResetLevel() {
 	try {
 		if (std::filesystem::exists(srcQvm)) {
 			std::filesystem::create_directories(std::filesystem::path(dstQvm).parent_path());
+			// Force permissions to allow overwrite/delete
+			if (std::filesystem::exists(dstQvm)) {
+				std::filesystem::permissions(dstQvm, 
+					std::filesystem::perms::owner_all | std::filesystem::perms::group_all | std::filesystem::perms::others_all,
+					std::filesystem::perm_options::replace);
+				std::filesystem::remove(dstQvm);
+			}
 			std::filesystem::copy_file(srcQvm, dstQvm, std::filesystem::copy_options::overwrite_existing);
 			printf("QVM copied successfully to game path.\n");
 		}
@@ -1878,8 +2136,7 @@ void App::ProcessInput(float delta_seconds) {
         if (!CheckCollision(next_pos)) {
 		    viewer_.pos_ = next_pos;
         } else {
-            // Sliding logic (optional) - for now just stop
-            viewer_.velocity_.x = 0.0f;
+            // Sliding logic (op0f;
             viewer_.velocity_.y = 0.0f;
         }
 
@@ -2235,6 +2492,11 @@ void App::SnapObjectsToTerrain() {
     int skipped = 0;
     int failed = 0;
     for (auto& obj : objects) {
+        // Skip snapping for cutscene soldiers
+        if (cutscene_soldier_ids_.count(obj.taskId)) {
+            skipped++;
+            continue;
+        }
         // Skip snapping for AI Soldiers, Cameras, Terminals, and Spline Waypoints
         // Terminals sit on interior floors at their exact QSC Z, not outdoor terrain.
         if (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale" ||
@@ -2362,7 +2624,7 @@ void App::UpdateMarkerManipulation() {
 	bool changed = (std::abs(deltaPos.x) > 1e-6 || std::abs(deltaPos.y) > 1e-6 || std::abs(deltaPos.z) > 1e-6 ||
 	                std::abs(deltaRot.x) > 1e-6 || std::abs(deltaRot.y) > 1e-6 || std::abs(deltaRot.z) > 1e-6);
 
-	if (changed) {
+	if (marker_manip_.mode_ != ManipulationMode::None) {
 		char buf[128];
 		if (marker_manip_.mode_ == ManipulationMode::MoveXY) {
 			snprintf(buf, sizeof(buf), "Moving to XY Plane with X: %.2f Y: %.2f Z: %.2f", obj.pos.x, obj.pos.y, obj.pos.z);
@@ -2380,7 +2642,7 @@ void App::UpdateMarkerManipulation() {
 			snprintf(buf, sizeof(buf), "Rotation Gamma: %.6f", obj.rot.z);
 			status_message_ = buf;
 		}
-	} else if (marker_manip_.mode_ == ManipulationMode::None) {
+	} else {
 		status_message_.clear();
 	}
 
@@ -2730,18 +2992,27 @@ void App::ProcessTreeViewClick(int mx, int my) {
                         }
                     } else { // Clicked on label area
                         selected_object_index_ = idx;
-                        task_editor_open_ = true;
-                        std::string line = obj.qscLine.empty() ? level_.GetLevelObjects().GenerateTaskLine(obj) : obj.qscLine;
-                        
-                        // Strip any newlines from the loaded line
-                        line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
-                        line.erase(std::remove(line.begin(), line.end(), '\n'), line.end());
-                        
-                        edit_string_ = line;
-                        edit_cursor_pos_ = (int)edit_string_.size();
-                        edit_selection_start_ = edit_selection_end_ = -1;
-                        edit_scroll_x_ = 0;
-                        Logger::Get().Log(LogLevel::INFO, "[App] Selected object from tree and opened Task Editor.");
+                        int currentTime = glutGet(GLUT_ELAPSED_TIME);
+                        bool isDoubleClick = (idx == last_tree_click_index_ && (currentTime - last_tree_click_time_ms_ < 400));
+                        last_tree_click_index_ = idx;
+                        last_tree_click_time_ms_ = currentTime;
+
+                        if (isDoubleClick) {
+                            task_editor_open_ = true;
+                            std::string line = obj.qscLine.empty() ? level_.GetLevelObjects().GenerateTaskLine(obj) : obj.qscLine;
+                            
+                            // Strip any newlines from the loaded line
+                            line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
+                            line.erase(std::remove(line.begin(), line.end(), '\n'), line.end());
+                            
+                            edit_string_ = line;
+                            edit_cursor_pos_ = (int)edit_string_.size();
+                            edit_selection_start_ = edit_selection_end_ = -1;
+                            edit_scroll_x_ = 0;
+                            Logger::Get().Log(LogLevel::INFO, "[App] Double clicked object from tree and opened Task Editor.");
+                        } else {
+                            Logger::Get().Log(LogLevel::INFO, "[App] Selected object from tree: " + obj.type);
+                        }
                     }
                 }
             }
@@ -2772,7 +3043,7 @@ void App::ProcessTreeViewClick(int mx, int my) {
                         tree_decl_expanded_ = !tree_decl_expanded_;
                         Logger::Get().Log(LogLevel::INFO, "[App] Toggled Mission Declarations");
                     } else {
-                        selected_object_index_ = -1;
+                        selected_object_index_ = -2;
                     }
                 }
             }
@@ -3201,6 +3472,68 @@ void App::SearchModelByName() {
 		SetLookupStatus(status_message_, "[App] Search: Found \"" + displayName + "\" (Type: " + obj.type + ") at index " + std::to_string(foundIdx));
 	} else {
 		SetLookupStatus(status_message_, "[App] Search: No object matches name \"" + searchName + "\"");
+	}
+}
+
+std::vector<int> App::GetVisibleTreeNodes() {
+    std::vector<int> visibleIndices;
+    if (level_.GetLevelObjects().GetObjects().empty()) return visibleIndices;
+    
+    auto& objects = level_.GetLevelObjects().GetObjects();
+    
+    std::function<void(int)> traverse = [&](int idx) {
+        if (idx < 0 || idx >= (int)objects.size()) return;
+        const auto& obj = objects[idx];
+        if (obj.deleted) return;
+        
+        visibleIndices.push_back(idx);
+        
+        if (obj.expanded) {
+            for (int childIdx : obj.childrenIndices) {
+                traverse(childIdx);
+            }
+        }
+    };
+    
+    std::vector<int> root_decls;
+    std::vector<int> root_others;
+    for (int i = 0; i < (int)objects.size(); ++i) {
+        if (objects[i].parentIndex == -1 && !objects[i].deleted) {
+            if (objects[i].type == "Task_DeclareParameters") root_decls.push_back(i);
+            else root_others.push_back(i);
+        }
+    }
+    
+    if (!root_decls.empty()) {
+        visibleIndices.push_back(-2); // Virtual "Mission Declarations" folder
+        if (tree_decl_expanded_) {
+            for (int idx : root_decls) {
+                traverse(idx);
+            }
+        }
+    }
+    
+    for (int idx : root_others) {
+        traverse(idx);
+    }
+    
+    return visibleIndices;
+}
+
+void App::LoadCutsceneSoldierIDs() {
+	cutscene_soldier_ids_.clear();
+	auto& objects = level_.GetLevelObjects().GetObjects();
+	for (const auto& obj : objects) {
+		if (obj.type == "AnimTask" && obj.argTokens.size() > 9) {
+			std::string targetId = Utils::Trim(obj.argTokens[9]);
+			if (!targetId.empty() && targetId.front() == '"' && targetId.back() == '"') {
+				targetId = targetId.substr(1, targetId.size() - 2);
+			}
+			if (!targetId.empty()) {
+				cutscene_soldier_ids_.insert(targetId);
+				Logger::Get().Log(LogLevel::INFO, "[App] Registered cutscene soldier task ID: " + targetId);
+			}
+		}
 	}
 }
 

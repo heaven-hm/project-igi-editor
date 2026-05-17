@@ -357,6 +357,26 @@ std::string GetLevelQVMPath(int level_no) {
 	return game_path + "\\missions\\location0\\level" + std::to_string(level_no) + "\\objects.qvm";
 }
 
+static void CopyDirExcludingQFiles(const std::filesystem::path& source, const std::filesystem::path& destination) {
+	std::filesystem::create_directories(destination);
+	for (const auto& entry : std::filesystem::directory_iterator(source)) {
+		const auto& path = entry.path();
+		auto filename = path.filename().string();
+		
+		if (filename == "QFiles") {
+			printf("[Utils] Skipping sync/copy of read-only QFiles backup folder.\n");
+			continue;
+		}
+		
+		auto dest_path = destination / filename;
+		if (std::filesystem::is_directory(path)) {
+			CopyDirExcludingQFiles(path, dest_path);
+		} else {
+			std::filesystem::copy_file(path, dest_path, std::filesystem::copy_options::overwrite_existing);
+		}
+	}
+}
+
 bool ValidateAndSetupQEditor() {
 	namespace fs = std::filesystem;
 
@@ -383,10 +403,9 @@ bool ValidateAndSetupQEditor() {
 			printf("[Utils] QEditor also exists in exe directory, performing sync...\n");
 			Logger::Get().Log(LogLevel::INFO, "[Utils] QEditor also exists in exe directory, performing sync...");
 			try {
-				fs::copy(exeQEditor, appDataQEditor,
-					fs::copy_options::recursive | fs::copy_options::overwrite_existing);
-				printf("[Utils] Successfully synced QEditor from exe to AppData\n");
-				Logger::Get().Log(LogLevel::INFO, "[Utils] Successfully synced QEditor from exe to AppData");
+				CopyDirExcludingQFiles(exeQEditor, appDataQEditor);
+				printf("[Utils] Successfully synced QEditor from exe to AppData (excluding QFiles)\n");
+				Logger::Get().Log(LogLevel::INFO, "[Utils] Successfully synced QEditor from exe to AppData (excluding QFiles)");
 			}
 			catch (const std::exception& e) {
 				// Sync failed but AppData QEditor is still usable, just log a warning
@@ -406,10 +425,9 @@ bool ValidateAndSetupQEditor() {
 
 		try {
 			fs::create_directories(appDataQEditor);
-			fs::copy(exeQEditor, appDataQEditor,
-				fs::copy_options::recursive | fs::copy_options::overwrite_existing);
-			printf("[Utils] Successfully copied QEditor to AppData\n");
-			Logger::Get().Log(LogLevel::INFO, "[Utils] Successfully copied QEditor to AppData");
+			CopyDirExcludingQFiles(exeQEditor, appDataQEditor);
+			printf("[Utils] Successfully copied QEditor to AppData (excluding QFiles)\n");
+			Logger::Get().Log(LogLevel::INFO, "[Utils] Successfully copied QEditor to AppData (excluding QFiles)");
 		}
 		catch (const std::exception& e) {
 			std::string errorMsg = "FATAL ERROR: Failed to copy QEditor from exe to AppData:\n" + std::string(e.what());
