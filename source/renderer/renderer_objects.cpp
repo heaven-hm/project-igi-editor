@@ -1,12 +1,16 @@
 #include "pch.h"
 #include "renderer_objects.h"
 #include <iostream>
+#include <fstream>
 #include <filesystem>
 #include <unordered_set>
+#include <algorithm>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include "logger.h"
 #include "utils.h"
+#include "../level/level_common.h"
+#include "gl_helper.h"
 
 
 bool Renderer_Objects::IsSkippedModelId(const std::string& modelId) {
@@ -214,6 +218,15 @@ void Renderer_Objects::Shutdown() {
     for (auto& pair : mesh_cache_)
         destroyModel(pair.second);
     mesh_cache_.clear();
+
+    for (auto& pair : texture_cache_) {
+        if (pair.second) {
+            glDeleteTextures(1, &pair.second);
+        }
+    }
+    texture_cache_.clear();
+    model_texture_map_cache_.clear();
+    texture_map_level_ = -1;
 
     if (shader_program_) {
         glDeleteProgram(shader_program_);
@@ -491,6 +504,7 @@ Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding
     // Load and cache
     try {
         Mesh mesh = loadObjModel(filepath, "");
+        ApplyTexturesToMesh(mesh, modelId);
         mesh_cache_[cacheKey] = mesh;
         Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Success: Loaded model '" + modelId + "' from " + filepath + " (" + std::to_string(mesh.vertexCount) + " vertices)");
         return mesh;
@@ -502,6 +516,223 @@ Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding
         return mesh_cache_[cacheKey];
     }
 
+}
+
+std::string Renderer_Objects::GetLevelTexturesPath() const {
+    const std::string root = Utils::GetIGIRootPath();
+    return root + "\\missions\\location0\\level" + std::to_string(current_level_) + "\\textures";
+}
+
+std::string Renderer_Objects::GetLevelTextureDatPath() const {
+    const std::string root = Utils::GetIGIRootPath();
+    return root + "\\missions\\location0\\level" + std::to_string(current_level_) + "\\level" + std::to_string(current_level_) + ".dat";
+}
+
+void Renderer_Objects::EnsureTextureMapLoaded() {
+    if (texture_map_level_ == current_level_) {
+        return;
+    }
+
+    model_texture_map_cache_.clear();
+    texture_map_level_ = current_level_;
+
+    const std::string datPath = GetLevelTextureDatPath();
+    Logger::Get().Log(LogLevel::INFO, "[TEX Native] Loading DAT map from " + datPath);
+
+    std::ifstream file(datPath);
+    if (!file.is_open()) {
+        Logger::Get().Log(LogLevel::WARNING, "[TEX Native] Failed to open DAT map: " + datPath);
+        return;
+    }
+
+    std::vector<std::string> tokens;
+    std::string line;
+    while (std::getline(file, line)) {
+        line = Utils::Trim(line);
+        if (line.empty()) {
+            continue;
+        }
+        if (line.rfind("***", 0) == 0) {
+            continue;
+        }
+        tokens.push_back(line);
+    }
+
+    if (tokens.empty()) {
+        Logger::Get().Log(LogLevel::WARNING, "[TEX Native] DAT map was empty: " + datPath);
+        return;
+    }
+
+    size_t cursor = 1; // token 0 is the total texture entry count
+    size_t parsedModels = 0;
+    while (cursor + 1 < tokens.size()) {
+        const std::string modelId = tokens[cursor++];
+        int textureCount = 0;
+        try {
+            textureCount = std::stoi(tokens[cursor++]);
+        } catch (...) {
+            Logger::Get().Log(LogLevel::ERR, "[TEX Native] Invalid texture count for model '" + modelId + "' in " + datPath);
+            break;
+        }
+
+        std::vector<std::string> textureIds;
+        textureIds.reserve(std::max(textureCount, 0));
+        for (int i = 0; i < textureCount && cursor < tokens.size(); ++i) {
+            textureIds.push_back(tokens[cursor++]);
+        }
+
+        model_texture_map_cache_[modelId] = textureIds;
+        ++parsedModels;
+    }
+
+    Logger::Get().Log(
+        LogLevel::INFO,
+        "[TEX Native] DAT map loaded level=" + std::to_string(current_level_) +
+        " models=" + std::to_string(parsedModels) +
+        " tokenCount=" + std::to_string(tokens.size()));
+}
+
+std::vector<std::string> Renderer_Objects::GetTextureIdsForModel(const std::string& modelId) {
+    EnsureTextureMapLoaded();
+
+    auto it = model_texture_map_cache_.find(modelId);
+    if (it != model_texture_map_cache_.end()) {
+        Logger::Get().Log(
+            LogLevel::INFO,
+            "[TEX Native] DAT hit modelId=" + modelId +
+            " textureCount=" + std::to_string(it->second.size()));
+        return it->second;
+    }
+
+    Logger::Get().Log(LogLevel::INFO, "[TEX Native] DAT miss for modelId=" + modelId + ", falling back to same-id texture");
+    return { modelId };
+}
+
+std::string Renderer_Objects::FindTextureFile(const std::string& textureId) const {
+    const std::filesystem::path texturesPath(GetLevelTexturesPath());
+    if (!std::filesystem::exists(texturesPath)) {
+        Logger::Get().Log(LogLevel::WARNING, "[TEX Native] Textures path does not exist: " + texturesPath.string());
+        return "";
+    }
+
+    const std::filesystem::path exactPath = texturesPath / (textureId + ".tex");
+    if (std::filesystem::exists(exactPath)) {
+        return exactPath.string();
+    }
+
+    for (const auto& entry : std::filesystem::directory_iterator(texturesPath)) {
+        if (!entry.is_regular_file()) continue;
+        if (entry.path().extension() != ".tex") continue;
+        const std::string stem = entry.path().stem().string();
+        if (stem == textureId || stem.find(textureId) != std::string::npos || textureId.find(stem) != std::string::npos) {
+            return entry.path().string();
+        }
+    }
+
+    return "";
+}
+
+GLuint Renderer_Objects::GetOrLoadTexture(const std::string& textureId) {
+    if (textureId.empty()) {
+        return 0;
+    }
+
+    const std::string texturePath = FindTextureFile(textureId);
+    if (texturePath.empty()) {
+        Logger::Get().Log(LogLevel::WARNING, "[TEX Native] Texture search FAILED for ID: " + textureId);
+        return 0;
+    }
+
+    const std::string cacheKey = std::to_string(current_level_) + ":" + texturePath;
+    auto it = texture_cache_.find(cacheKey);
+    if (it != texture_cache_.end()) {
+        Logger::Get().Log(LogLevel::INFO, "[TEX Native] Cache hit textureId=" + textureId + " path=" + texturePath);
+        return it->second;
+    }
+
+    pics_s pics{};
+    if (!Tex_Load(texturePath.c_str(), pics) || !pics.pics_ || pics.num_pic_ <= 0) {
+        Logger::Get().Log(LogLevel::ERR, "[TEX Native] Failed to decode TEX file: " + texturePath);
+        Pic_FreePics(pics);
+        return 0;
+    }
+
+    const pic_s* pic = pics.pics_;
+    Logger::Get().Log(
+        LogLevel::INFO,
+        "[TEX Native] Decoded textureId=" + textureId +
+        " path=" + texturePath +
+        " width=" + std::to_string(pic->width_) +
+        " height=" + std::to_string(pic->height_) +
+        " frames=" + std::to_string(pics.num_pic_));
+
+    const GLuint texture = GL_RegisterTexture(pic, GL_REPEAT, GL_LINEAR_MIPMAP_LINEAR, GL_LINEAR, true);
+    texture_cache_[cacheKey] = texture;
+    Pic_FreePics(pics);
+
+    Logger::Get().Log(
+        LogLevel::INFO,
+        "[TEX Native] Uploaded textureId=" + textureId +
+        " glId=" + std::to_string(texture));
+    return texture;
+}
+
+void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelId) {
+    const std::vector<std::string> textureIds = GetTextureIdsForModel(modelId);
+    if (textureIds.empty()) {
+        Logger::Get().Log(LogLevel::INFO, "[TEX Native] No textures mapped for modelId=" + modelId);
+        return;
+    }
+
+    std::vector<GLuint> textures;
+    textures.reserve(textureIds.size());
+    for (const auto& textureId : textureIds) {
+        textures.push_back(GetOrLoadTexture(textureId));
+    }
+
+    if (!mesh.subMeshes.empty()) {
+        size_t assigned = 0;
+        for (size_t i = 0; i < mesh.subMeshes.size(); ++i) {
+            GLuint texture = 0;
+            if (i < textures.size()) {
+                texture = textures[i];
+            } else if (textures.size() == 1) {
+                texture = textures.front();
+            }
+
+            mesh.subMeshes[i].textureID = texture;
+            if (texture) {
+                ++assigned;
+            }
+        }
+
+        if (!mesh.subMeshes.empty()) {
+            mesh.textureID = mesh.subMeshes.front().textureID;
+        }
+
+        Logger::Get().Log(
+            LogLevel::INFO,
+            "[TEX Native] Applied textures to modelId=" + modelId +
+            " subMeshes=" + std::to_string(mesh.subMeshes.size()) +
+            " datTextures=" + std::to_string(textureIds.size()) +
+            " assigned=" + std::to_string(assigned));
+
+        if (textureIds.size() != mesh.subMeshes.size()) {
+            Logger::Get().Log(
+                LogLevel::INFO,
+                "[TEX Native] Texture/submesh count mismatch modelId=" + modelId +
+                " subMeshes=" + std::to_string(mesh.subMeshes.size()) +
+                " datTextures=" + std::to_string(textureIds.size()));
+        }
+        return;
+    }
+
+    mesh.textureID = textures.front();
+    Logger::Get().Log(
+        LogLevel::INFO,
+        "[TEX Native] Applied legacy single texture to modelId=" + modelId +
+        " textureId=" + textureIds.front() +
+        " glId=" + std::to_string(mesh.textureID));
 }
 
 Mesh Renderer_Objects::CreateTextMesh(const std::string& text) {

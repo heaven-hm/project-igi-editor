@@ -4,6 +4,7 @@
 #include "../level/level_objects.h"
 #include <map>
 #include <string>
+#include <vector>
 
 class Renderer_Objects {
 public:
@@ -25,6 +26,9 @@ public:
 private:
     int current_level_ = 1;
     std::map<std::string, Mesh> mesh_cache_;
+    std::map<std::string, GLuint> texture_cache_;
+    std::map<std::string, std::vector<std::string>> model_texture_map_cache_;
+    int texture_map_level_ = -1;
     GLuint shader_program_;
     GLuint ubo_binding_point_;
     GLuint selection_vao_, selection_vbo_;
@@ -34,5 +38,12 @@ private:
     Mesh CreateTextMesh(const std::string& text);
     void AddCharacterVertices(std::vector<float>& vertices, char c, float x, float y, float scale);
     std::string FindModelFile(const std::string& modelId, bool isBuilding);
+    std::string FindTextureFile(const std::string& textureId) const;
+    std::string GetLevelTexturesPath() const;
+    std::string GetLevelTextureDatPath() const;
+    void EnsureTextureMapLoaded();
+    std::vector<std::string> GetTextureIdsForModel(const std::string& modelId);
+    GLuint GetOrLoadTexture(const std::string& textureId);
+    void ApplyTexturesToMesh(Mesh& mesh, const std::string& modelId);
     void InitSelectionBox();
 };
