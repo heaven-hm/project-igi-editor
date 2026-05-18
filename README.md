@@ -33,7 +33,7 @@ See the [CHANGELOGS.md](CHANGELOGS.md) for version history and detailed change l
 - **Terrain Editor**: Working - 3D terrain heightmap rendering and snapping fully functional.
 - **Task Tree & Objectives**: Working - interactive tree management, copy/paste, deletion, and insertion of new tasks fully operational.
 - **AI & Waypoint System**: Working - full editing of NPC patrol nodes and properties.
-- **Model Format**: Currently using **GLB (binary glTF)** format where textures and models are combined for optimal performance in OpenGL.
+- **Model Format**: Uses proprietary **Native MEF Models** natively loaded by the integrated MEF parser for optimal accuracy and parity with the game engine.
 - **Level Tested**: Supports compiling/decompiling all 14 original game levels. Note that only the first few levels are fully tested and verified. Levels from Level 5 onwards may have bugs or issues; if you find any, please create an issue on GitHub and report them to us! Thank you!
 
 ### ⚠️ Known Issues
@@ -41,7 +41,6 @@ See the [CHANGELOGS.md](CHANGELOGS.md) for version history and detailed change l
 - **Complex Splines**: Some highly intricate spline geometries are still work-in-progress and may exhibit artifacts.
 
 ### Future Work
-- **Mef Parser**: Developing a native parser for proprietary `.mef` model files.
 - **Expanded Sandbox Modding**: Expanding item drop coordinates, trigger boundary visualizers, and ammo boxes placements.
 - **Full Campaign Testing**: Continuing rigorous end-to-end testing across levels 4 through 14.
 
@@ -107,8 +106,8 @@ The editor requires QEditor to be installed in AppData for QSC/QVM compilation a
   - `ammo/`, `weapons/`, `common/` - Shared game data
 - **`QFiles/IGI_QVM/`**: Compiled QVM files for all levels
 - **`QCompiler/`**: Compilation tools (Compile, Decompile, DConv, GConv, TexConv, etc.)
-- **`3DEditor/objects/level[1-14]/`**: Level-specific 3D model storage (GLB format with built-in textures, `.obj`, `.mef`)
-- **`3DEditor/buildings/level[1-14]/`**: Building model storage (GLB format with built-in textures)
+- **`3DEditor/objects/level[1-14]/`**: Level-specific 3D model storage (proprietary `.mef` models, `.obj` files)
+- **`3DEditor/buildings/level[1-14]/`**: Building model storage (proprietary `.mef` models)
 - **`AIFiles/`**: AI data (AI-Json, AI-Path, AI-Script) per level
 - **`QGraphs/`**: Area and graph data for levels
 - **`QMissions/`**: Mission configuration files
@@ -123,7 +122,6 @@ The editor requires QEditor to be installed in AppData for QSC/QVM compilation a
 
 With the successful release of **Version 1.0.0**, core features like the **Task Tree Editor**, **Terrain Editing**, **Splines**, and **AI waypoint management** have been fully realized. Future milestones include:
 - **Visual 3D Graph Editor (Coming Soon)**: A full-featured Visual 3D Graph Editor displaying interactive nodes and visuals to seamlessly construct game logic, path routes, and area connections.
-- **Proprietary MEF Parser**: Direct support for loading proprietary `.mef` model meshes natively.
 - **Weapon & Item Configurator**: Rich telemetry overlays and visual UI for modifying active gun parameters, ammunition slots, and dropping custom inventory directly onto the battlefield.
 - **Full 14 Levels campaign run**: Complete, verified playthroughs of all custom compiled maps to guarantee total end-to-end stability.
 
@@ -162,7 +160,7 @@ With the successful release of **Version 1.0.0**, core features like the **Task 
 * If QVM is newest, it decompiles it to QSC; if QSC is newest, it copies and compiles to QVM to keep everything in sync
 * Editor loads the QSC file and parses level data including object positions, rotations, and model references
 * Then it loads the terrain heightmap, textures, and lightmaps for rendering and editing
-* Next, it loads all 3D models (buildings and props in GLB format with built-in textures) and positions them according to QSC data
+* Next, it loads all 3D models (buildings and props in native MEF format) and positions them according to QSC data
 * Objects are automatically snapped to the terrain surface to ensure correct placement
 * Camera is positioned at the level start coordinates and editor is ready for editing
 * When you save changes, the editor writes to objects.qsc, compiles it to objects.qvm, and copies it to the IGI game path
