@@ -77,6 +77,9 @@ set_source_files_properties(
   source/renderer/renderer_splines.cpp
   source/renderer/renderer_terrain.cpp
   source/renderer/wic_loader.cpp
+  source/renderer/qvm_parser.cpp
+  source/level/res_parser.cpp
+  source/level/mtp_parser.cpp
   PROPERTIES SKIP_PRECOMPILE_HEADERS ON
 )
 

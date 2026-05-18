@@ -263,7 +263,7 @@ void MEFParser::handle_face(const std::vector<std::string>& args) {
         
         std::string msg = "Face " + std::to_string(face.face_index) + ": vertex index out of range";
         m_current_object.parse_errors.push_back(msg);
-        Log(log_type_t::LOG_WARNING, __FILE__, __LINE__, "MEFParser - %s", msg.c_str());
+        Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "MEFParser - %s", msg.c_str());
         return;
     }
 
