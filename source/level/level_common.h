@@ -53,6 +53,7 @@ static constexpr uint32_t	TEX_IDENT = MAKE_FOURCC('L', 'O', 'O', 'P');
 
 static constexpr int32_t	IMAGE_MODE_2 = 2;
 static constexpr int32_t	IMAGE_MODE_3 = 3;
+static constexpr int32_t	IMAGE_MODE_67 = 67;
 
 #pragma pack(push, 1)
 
@@ -89,6 +90,35 @@ struct tex_head_v9_s {
 };
 
 static_assert(sizeof(tex_head_v9_s) == 52, "bad size of tex_head_v9_s");
+
+struct tex_head_v7_s {
+	uint32_t				ident_;
+	int32_t					version_;
+	int32_t					unk0_;
+	int32_t					unk1_;
+	int32_t					unk2_;
+	int32_t					unk3_;
+	int32_t					unk4_;
+	int32_t					footer_offset_;
+	int32_t					layer_count_;
+	int32_t					unk5_;
+	int32_t					image_width_;
+	int32_t					image_height_;
+	int32_t					image_mode_;
+};
+
+static_assert(sizeof(tex_head_v7_s) == 52, "bad size of tex_head_v7_s");
+
+struct tex_layer_v7_s {
+	int32_t					image_offset_;
+	int32_t					image_line_width_;
+	int16_t					image_width_;
+	int16_t					unk0_;
+	int16_t					image_height_;
+	int8_t					reserved[26];
+};
+
+static_assert(sizeof(tex_layer_v7_s) == 40, "bad size of tex_layer_v7_s");
 
 struct tex_footer_v9_s {
 	uint32_t				ident_;

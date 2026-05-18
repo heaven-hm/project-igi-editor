@@ -299,6 +299,53 @@ static bool Tex_Loadv9(tex_head_v9_s* head, pics_s& pics) {
 					cur_layer->image_height_, src_pixels, dst_pic);
 			}
 		}
+		else if (cur_layer->image_mode_ == IMAGE_MODE_67) {
+			ConvertTex32ToPic(cur_layer->image_line_width_, cur_layer->image_width_,
+				cur_layer->image_height_, src_pixels, dst_pic);
+		}
+	}
+
+	return true;
+}
+
+static bool Tex_Loadv7(tex_head_v7_s* head, pics_s& pics) {
+	pics.pics_ = (pic_s*)MEM_ALLOC(sizeof(pic_s) * head->layer_count_);
+	if (!pics.pics_) {
+		return false;
+	}
+
+	memset(pics.pics_, 0, sizeof(pic_s) * head->layer_count_);
+	pics.num_pic_ = head->layer_count_;
+
+	tex_layer_v7_s* layers = (tex_layer_v7_s*)(head + 1);
+	for (int i = 0; i < head->layer_count_; ++i) {
+		tex_layer_v7_s* cur_layer = layers + i;
+
+		uint8_t* src_pixels = (uint8_t*)head + cur_layer->image_offset_;
+		pic_s* dst_pic = pics.pics_ + i;
+		dst_pic->pixels_ = (uint8_t*)MEM_ALLOC(cur_layer->image_width_ * cur_layer->image_height_ * 4);
+		if (!dst_pic->pixels_) {
+			return false;
+		}
+
+		if (head->image_mode_ == IMAGE_MODE_2) {
+			ConvertTex16ToPic(cur_layer->image_line_width_, cur_layer->image_width_,
+				cur_layer->image_height_, src_pixels, dst_pic);
+		}
+		else if (head->image_mode_ == IMAGE_MODE_3) {
+			if (cur_layer->image_line_width_ / cur_layer->image_width_ == 4) {
+				ConvertTex32ToPic(cur_layer->image_line_width_, cur_layer->image_width_,
+					cur_layer->image_height_, src_pixels, dst_pic);
+			}
+			else {
+				ConvertTex24ToPic(cur_layer->image_line_width_, cur_layer->image_width_,
+					cur_layer->image_height_, src_pixels, dst_pic);
+			}
+		}
+		else if (head->image_mode_ == IMAGE_MODE_67) {
+			ConvertTex32ToPic(cur_layer->image_line_width_, cur_layer->image_width_,
+				cur_layer->image_height_, src_pixels, dst_pic);
+		}
 	}
 
 	return true;
@@ -325,6 +372,11 @@ static bool Tex_Loadv11(tex_head_v11_s* head, pics_s& pics) {
 		return true;
 	}
 	else if (head->image_mode_ == IMAGE_MODE_3) {
+		ConvertTex32ToPic(image_line_width, head->image_width_,
+			head->image_height_, src_pixels, pics.pics_);
+		return true;
+	}
+	else if (head->image_mode_ == IMAGE_MODE_67) {
 		ConvertTex32ToPic(image_line_width, head->image_width_,
 			head->image_height_, src_pixels, pics.pics_);
 		return true;
@@ -356,6 +408,9 @@ bool Tex_Load(const char* filename, pics_s& pics) {
 
 	if (head->version_ == 2) {
 		load_ok = Tex_Loadv2((tex_head_v2_s*)head, pics);
+	}
+	else if (head->version_ == 7) {
+		load_ok = Tex_Loadv7((tex_head_v7_s*)head, pics);
 	}
 	else if (head->version_ == 9) {
 		load_ok = Tex_Loadv9((tex_head_v9_s*)head, pics);
