@@ -41,6 +41,21 @@ struct XtvcVertex {
     uint32_t reserved{0};
 };
 
+struct XtvmVertex {
+    float px{0.f}, py{0.f}, pz{0.f};
+    int32_t unknown{0};
+};
+
+struct MefAttachment {
+    char name[16];
+    float px, py, pz;
+    float r00, r01, r02;
+    float r03, r04, r05;
+    float r06, r07, r08;
+    uint32_t unknown09;
+    int32_t boneId;
+};
+
 // ECFC: 12 bytes per face
 struct EcfcFace {
     uint16_t a{0}, b{0}, c{0};
@@ -87,6 +102,7 @@ struct ParsedGeometry {
     std::vector<std::array<uint32_t, 3>> triangles;
     std::vector<RenderBlock> renderBlocks;
     bool fromRenderMesh = false;
+    bool isIgi1 = false;
     uint32_t modelType = 0;
     size_t renderBlockCount = 0;
     size_t collisionVertexCount = 0;
@@ -97,6 +113,8 @@ struct ParsedGeometry {
 
     // ---- Collision/material data for ASCII export ----
     std::vector<XtvcVertex>  xtvcVerts;    // XTVC type1 (set 0)
+    std::vector<XtvmVertex>  xtvmVerts;    // XTVM (magic vertices)
+    std::vector<MefAttachment> mefAttachments; // ATTA (attachments)
     std::vector<EcfcFace>    ecfcFaces;    // ECFC (set 0)
     std::vector<EcafFace>    ecafFaces;    // ECAF render face indices
     std::vector<DnerRecord>  dnerRecords;  // DNER (all records)
