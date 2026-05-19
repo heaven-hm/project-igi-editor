@@ -79,6 +79,8 @@ struct DnerRecord {
     uint16_t numVerts{0};
     int16_t  td{-1}, tb{-1}, tr{-1};
     uint8_t  trd{0}, tbd{0};
+    uint16_t rawOpacity{0};
+    uint8_t  eflame{0};
 };
 
 // TAMC: 16 bytes per record

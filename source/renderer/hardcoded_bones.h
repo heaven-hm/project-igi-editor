@@ -11,6 +11,13 @@ struct HardcodedBoneRef {
     float px, py, pz;
 };
 
+enum class BoneRigType {
+    JonesCinematic = 0,    // Type 0: Jones & Key cinematic actors
+    StandardSoldier = 1,   // Type 1: Default enemies and player model
+    HeavySoldier = 6,      // Type 6: Heavy/special soldier models
+    AdvancedFingerRig = 48 // Type 48: Character models with advanced hand rig
+};
+
 inline std::vector<BoneInfo> GetIgi1HardcodedBones(const std::string& modelName, uint32_t maxBoneIdx) {
     // Normalize modelName to lowercase
     std::string normName = modelName;
@@ -18,20 +25,20 @@ inline std::vector<BoneInfo> GetIgi1HardcodedBones(const std::string& modelName,
         return std::tolower(c);
     });
 
-    int type = 1; // Default: Type 1
-    if (maxBoneIdx == 48) {
-        type = 48;
+    BoneRigType type = BoneRigType::StandardSoldier; // Default: StandardSoldier
+    if (maxBoneIdx == static_cast<uint32_t>(BoneRigType::AdvancedFingerRig)) {
+        type = BoneRigType::AdvancedFingerRig;
     } else {
         if (normName == "000_01_1" || normName == "009_02_1" || normName == "008_01_1") {
-            type = 0;
+            type = BoneRigType::JonesCinematic;
         } else if (normName == "012_01_1" || normName == "015_01_1" || normName == "028_01_1") {
-            type = 6;
+            type = BoneRigType::HeavySoldier;
         }
     }
 
     std::vector<HardcodedBoneRef> refs;
 
-    if (type == 0) {
+    if (type == BoneRigType::JonesCinematic) {
         refs = {
             {"center", -1, 0.0f, 0.0f, 3990.4f},
             {"lower body", 0, -5.13892293e-01f, 1.83352112e+02f, 553.558f},
@@ -67,7 +74,7 @@ inline std::vector<BoneInfo> GetIgi1HardcodedBones(const std::string& modelName,
             {"right toe", 30, 1.66293087e+01f, 3.90893158e+02f, -163.4263f},
             {"right toe end", 31, 1.02110405e+01f, 7.38062317e+02f, -258.84998f}
         };
-    } else if (type == 1) {
+    } else if (type == BoneRigType::StandardSoldier) {
         refs = {
             {"center", -1, 0.0f, 0.0f, 3990.4f},
             {"lower body", 0, -5.13904631e-01f, 1.8335211e+02f, 553.558f},
@@ -103,7 +110,7 @@ inline std::vector<BoneInfo> GetIgi1HardcodedBones(const std::string& modelName,
             {"right toe", 30, 1.66292667e+01f, 3.9089316e+02f, -163.4263f},
             {"right toe end", 31, 1.02110405e+01f, 7.3806232e+02f, -258.84998f}
         };
-    } else if (type == 6) {
+    } else if (type == BoneRigType::HeavySoldier) {
         refs = {
             {"center", -1, 0.0f, 0.0f, 3990.4f},
             {"lower body", 0, -5.13896406e-01f, 1.83352112e+02f, 489.6645f},
@@ -139,7 +146,7 @@ inline std::vector<BoneInfo> GetIgi1HardcodedBones(const std::string& modelName,
             {"right toe", 30, 1.66293087e+01f, 3.90893158e+02f, -342.1192f},
             {"right toe end", 31, 1.02111225e+01f, 7.38062317e+02f, -258.84998f}
         };
-    } else if (type == 48) {
+    } else if (type == BoneRigType::AdvancedFingerRig) {
         refs = {
             {"center shoulders", -1, 0.0f, 0.0f, 0.0f},
             {"none11", 0, -1.1343995e-01f, 808.52167f, -384.8368f},

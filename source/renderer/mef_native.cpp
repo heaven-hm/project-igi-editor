@@ -843,10 +843,17 @@ ParsedGeometry ParseMefGeometry(const std::vector<uint8_t>& bytes, const std::ve
                     rec.tb = ReadValue<int16_t>(bytes, base + 18); // _lmap
                     rec.offVerts = ReadValue<uint16_t>(bytes, base + 20);
                     rec.numVerts = ReadValue<uint16_t>(bytes, base + 22);
-                    rec.opacity = ReadValue<uint8_t>(bytes, base + 28); // _Eflame
-                    rec.mshine = ReadValue<uint8_t>(bytes, base + 29);  // _mshine
-                    rec.scolor = ReadValue<uint8_t>(bytes, base + 30);  // _mcolor
-                    rec.opacitd = ReadValue<uint8_t>(bytes, base + 31); // _Opacitd
+                    rec.rawOpacity = ReadValue<uint16_t>(bytes, base + 24);
+                    rec.eflame = ReadValue<uint8_t>(bytes, base + 28);
+                    rec.mshine = ReadValue<uint8_t>(bytes, base + 29);
+                    rec.scolor = ReadValue<uint8_t>(bytes, base + 30); // _mcolor (stored in scolor)
+                    rec.opacitd = ReadValue<uint8_t>(bytes, base + 31);
+                    
+                    uint8_t op = 0;
+                    if (rec.rawOpacity != 0) op |= 4;
+                    if (rec.scolor != 0)     op |= 2;
+                    if (rec.eflame != 0)     op |= 1;
+                    rec.opacity = op;
                     
                     rec.offsetIndex = accumulatedIndicesCount;
                     geometry.dnerRecords.push_back(rec);
@@ -877,10 +884,17 @@ ParsedGeometry ParseMefGeometry(const std::vector<uint8_t>& bytes, const std::ve
                     rec.td = ReadValue<int16_t>(bytes, base + 16);
                     rec.offVerts = ReadValue<uint16_t>(bytes, base + 18);
                     rec.numVerts = ReadValue<uint16_t>(bytes, base + 20);
-                    rec.opacity = ReadValue<uint8_t>(bytes, base + 24); // _Eflame
-                    rec.mshine = ReadValue<uint8_t>(bytes, base + 25);  // _mshine
-                    rec.scolor = ReadValue<uint8_t>(bytes, base + 26);  // _Scolor
-                    rec.opacitd = ReadValue<uint8_t>(bytes, base + 27); // _Opacitd
+                    rec.rawOpacity = ReadValue<uint16_t>(bytes, base + 22);
+                    rec.eflame = ReadValue<uint8_t>(bytes, base + 24);
+                    rec.mshine = ReadValue<uint8_t>(bytes, base + 25);
+                    rec.scolor = ReadValue<uint8_t>(bytes, base + 26); // _Scolor
+                    rec.opacitd = ReadValue<uint8_t>(bytes, base + 27);
+                    
+                    uint8_t op = 0;
+                    if (rec.rawOpacity != 0) op |= 4;
+                    if (rec.scolor != 0)     op |= 2;
+                    if (rec.eflame != 0)     op |= 1;
+                    rec.opacity = op;
                     
                     rec.offsetIndex = accumulatedIndicesCount;
                     geometry.dnerRecords.push_back(rec);
