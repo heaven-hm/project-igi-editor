@@ -152,35 +152,23 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 	const file_entry& latest = candidates[0];
 	Logger::Get().Log(LogLevel::INFO, "[Level] Latest objects file: " + latest.path + " (isQvm=" + (latest.isQvm ? "true" : "false") + ")");
 
-	if (latest.isQvm) {
-		// Game QVM is newest, decompile it to get latest QSC
-		Logger::Get().Log(LogLevel::INFO, "[Level] Game QVM is newer than QSC, decompiling...");
-		DecompileObjects(params.level_no_);
-		Str_SPrintf(filename, 1024, "%s\\objects.qsc", exeDir.c_str());
-	}
-	else {
-		// A QSC is newest, copy it to editor directory if not already there
-		if (strcmp(latest.path.c_str(), editorQsc) != 0) {
-			std::filesystem::copy_file(latest.path, editorQsc, std::filesystem::copy_options::overwrite_existing);
-			Logger::Get().Log(LogLevel::INFO, "[Level] Copied latest QSC to editor: " + std::string(editorQsc));
-		}
-		Str_SPrintf(filename, 1024, "%s", editorQsc);
-		// NOTE: Do NOT auto-compile on load - only compile when user explicitly saves
-	}
-
-	qsc_path_ = filename;
-
-	if (!File_Exists(filename)) {
-		Logger::Get().Log(LogLevel::ERR, "[Level] FATAL: ERROR Missing 'objects.qsc' file at: " + qsc_path_);
-		return false;
-	}
-
 	QSC* qsc_objects = new QSC();
 	if (!qsc_objects) {
 		return false;
 	}
 
-	qsc_objects->Load(filename);
+	if (latest.isQvm) {
+		// Native QVM loading - no external decompiler needed!
+		qsc_objects->LoadFromQVM(latest.path.c_str());
+		// Set qsc_path_ to the editor's local objects.qsc for saving/editing, 
+		// but we loaded data from the latest source.
+		qsc_path_ = exeDir + "\\objects.qsc";
+	}
+	else {
+		// A QSC is newest, load it directly
+		qsc_objects->Load(latest.path.c_str());
+		qsc_path_ = latest.path;
+	}
 
 	try {
 		LoadStartPosInfo(qsc_objects, start_pos, start_yaw);

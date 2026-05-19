@@ -6,6 +6,7 @@
 #include "pch.h"
 #include "level_common.h"
 #include "logger.h"
+#include "../renderer/qvm_parser.h"
 #include <string>
 
 static void CleanBloatedBackslashesInPlace(char* str) {
@@ -479,6 +480,32 @@ void QSC::Load(const char* filename) {
 	allocated_args_ = 0;
 
 	// start parse
+	Parse();
+}
+
+void QSC::LoadFromQVM(const char* filename) {
+	Unload();
+
+	Logger::Get().Log(LogLevel::INFO, "[QSC] Native Loading binary QVM: " + std::string(filename));
+	QVMFile qvm = QVM_Parse(filename);
+	if (!qvm.valid) {
+		Logger::Get().Log(LogLevel::ERR, "[QSC] FAILED to parse QVM: " + qvm.error);
+		return;
+	}
+
+	std::string decompiled = QVM_Decompile(qvm);
+	
+	scripts_ = (char*)MEM_ALLOC(decompiled.size() + 1);
+	memcpy(scripts_, decompiled.c_str(), decompiled.size() + 1);
+	pc_ = scripts_;
+
+	pristine_scripts_ = (char*)MEM_ALLOC(decompiled.size() + 1);
+	memcpy(pristine_scripts_, decompiled.c_str(), decompiled.size() + 1);
+
+	root_func_count_ = 0;
+	allocated_funcs_ = 0;
+	allocated_args_ = 0;
+
 	Parse();
 }
 

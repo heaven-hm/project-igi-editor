@@ -50,5 +50,17 @@ struct QVMFile {
 // Parse a QVM file from disk
 QVMFile QVM_Parse(const std::string& filepath);
 
+// Write QVM structure to a binary file
+bool QVM_Write(const QVMFile& qvm, const std::string& filepath);
+
+// Decompile a QVM structure to QSC text
+std::string QVM_Decompile(const QVMFile& qvm);
+
+// Forward declaration of QSC from level_common.h
+class QSC;
+
+// Compile a QSC object to a QVM structure
+QVMFile QVM_CompileFromQSC(const QSC& qsc);
+
 // Get opcode name string
 const char* QVM_OpName(QVMOpType op);

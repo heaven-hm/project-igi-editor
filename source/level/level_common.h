@@ -209,6 +209,8 @@ public:
 
 	// load a qsc file
 	void					Load(const char* filename);
+	// load from a binary qvm file
+	void					LoadFromQVM(const char* filename);
 	void					Unload();
 
 	int						FindFuncByStr(const char* s, const func_s* funcs[1024]) const;
