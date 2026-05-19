@@ -1,3 +1,4 @@
+#include "../pch.h"
 #include "qvm_parser.h"
 #include "../level/level_common.h"
 #include <fstream>
@@ -291,7 +292,7 @@ struct VMValue {
     std::string s;
 };
 
-static std::string DecompileBlock(const QVMFile& qvm, uint32_t start_addr, int indent) {
+static std::string DecompileBlock(const QVMFile& qvm, uint32_t start_addr, int indent, bool is_argument = false) {
     std::string out;
     std::string pad(indent * 4, ' ');
     std::vector<VMValue> stack;
@@ -336,15 +337,27 @@ static std::string DecompileBlock(const QVMFile& qvm, uint32_t start_addr, int i
             std::reverse(args.begin(), args.end());
             VMValue func; if (!stack.empty()) { func = stack.back(); stack.pop_back(); }
 
-            out += pad + func.s + "(";
-            for (size_t j = 0; j < args.size(); ++j) out += getValueStr(args[j]) + (j == args.size() - 1 ? "" : ", ");
+            std::string func_str;
+            if (!is_argument) {
+                func_str += pad;
+            }
+            func_str += func.s + "(";
+            for (size_t j = 0; j < args.size(); ++j) func_str += getValueStr(args[j]) + (j == args.size() - 1 ? "" : ", ");
 
             if (!instr.call_targets.empty()) {
-                out += ", {\n";
-                for (int32_t target : instr.call_targets) out += DecompileBlock(qvm, (uint32_t)target, indent + 1);
-                out += pad + "}";
+                for (size_t t = 0; t < instr.call_targets.size(); ++t) {
+                    func_str += ", ";
+                    if (!is_argument) {
+                        func_str += "\n";
+                    }
+                    func_str += DecompileBlock(qvm, (uint32_t)instr.call_targets[t], indent + 1, true);
+                }
             }
-            out += ");\n";
+            func_str += ")";
+            if (!is_argument) {
+                func_str += ";\n";
+            }
+            out += func_str;
             break;
         }
         case QVMOpType::POP: if (!stack.empty()) stack.pop_back(); break;
@@ -398,12 +411,22 @@ QVMFile QVM_CompileFromQSC(const QSC& qsc) {
         }
         QVMInstruction pushf{}; pushf.type = QVMOpType::PUSHSIB; pushf.operand = addIdent(f->func_name_); pushf.size = 2;
         qvm.instructions.push_back(pushf);
+        
         QVMInstruction call{}; call.type = QVMOpType::CALL; call.operand = (uint32_t)args.size();
         call.size = 1 + 4 + (uint32_t)local_bodies.size() * 4;
-        // Simplified bodies emission: follow top-level pattern
         qvm.instructions.push_back(call);
+        size_t call_idx = qvm.instructions.size() - 1;
+        
         QVMInstruction brk{}; brk.type = QVMOpType::BRK; brk.size = 1;
         qvm.instructions.push_back(brk);
+
+        // Recursively emit local bodies
+        for (const auto* child : local_bodies) {
+            uint32_t addr = 0;
+            for (const auto& ins : qvm.instructions) addr += ins.size;
+            qvm.instructions[call_idx].call_targets.push_back((int32_t)addr);
+            emitFunc(child);
+        }
     };
 
     QVMInstruction top_push{}; top_push.type = QVMOpType::PUSHIIB; top_push.operand = 0; top_push.size = 2;

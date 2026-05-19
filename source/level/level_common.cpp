@@ -494,7 +494,12 @@ void QSC::LoadFromQVM(const char* filename) {
 	}
 
 	std::string decompiled = QVM_Decompile(qvm);
-	
+
+	// Dump decompiled output to a file for debugging
+	std::ofstream dbg_out("native_decompiled_debug.qsc");
+	dbg_out << decompiled;
+	dbg_out.close();
+
 	scripts_ = (char*)MEM_ALLOC(decompiled.size() + 1);
 	memcpy(scripts_, decompiled.c_str(), decompiled.size() + 1);
 	pc_ = scripts_;
