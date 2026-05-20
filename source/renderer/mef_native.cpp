@@ -296,7 +296,7 @@ std::vector<std::array<uint32_t, 3>> ParsePackedRenderTriangles(
 
     while (cursor + headerSize <= chunk.size) {
         const size_t base          = chunk.data + cursor;
-        const int16_t  indexCount  = ReadValue<int16_t> (bytes, base + 12);
+        const uint16_t indexCount   = ReadValue<uint16_t>(bytes, base + 12);
         const int16_t  nextoffs    = ReadValue<int16_t> (bytes, base + 14);
         const int16_t  materialSlot = (modelType == 3)
             ? ReadValue<int16_t>(bytes, base + 16)
@@ -308,7 +308,7 @@ std::vector<std::array<uint32_t, 3>> ParsePackedRenderTriangles(
             ? ReadValue<uint16_t>(bytes, base + 22)
             : ReadValue<uint16_t>(bytes, base + 20);
         (void)vertsCount; // used for diagnostics only
-        const size_t indexBytes    = (indexCount > 0) ? static_cast<size_t>(indexCount) * sizeof(uint16_t) : 0;
+        const size_t indexBytes    = static_cast<size_t>(indexCount) * sizeof(uint16_t);
 
         if (cursor + headerSize + indexBytes > chunk.size) {
             break;
@@ -317,7 +317,7 @@ std::vector<std::array<uint32_t, 3>> ParsePackedRenderTriangles(
         const size_t facesBase         = base + headerSize;
         const size_t blockTriangleStart = triangles.size();
 
-        for (int16_t i = 0; i + 2 < indexCount; i += 3) {
+        for (uint32_t i = 0; i + 2 < indexCount; i += 3) {
             const uint16_t a = ReadValue<uint16_t>(bytes, facesBase + static_cast<size_t>(i + 0) * sizeof(uint16_t));
             const uint16_t b = ReadValue<uint16_t>(bytes, facesBase + static_cast<size_t>(i + 1) * sizeof(uint16_t));
             const uint16_t c = ReadValue<uint16_t>(bytes, facesBase + static_cast<size_t>(i + 2) * sizeof(uint16_t));
@@ -335,7 +335,10 @@ std::vector<std::array<uint32_t, 3>> ParsePackedRenderTriangles(
 
         ++blockCount;
         cursor += headerSize + indexBytes;
-        if (nextoffs == -1) {
+        // modelType 3 (buildings): base+14 is NOT a linked-list nextoffs field —
+        // the ASCII-export path never reads it. Rely solely on the while-loop
+        // boundary to stop. For other model types keep the -1 sentinel.
+        if (modelType != 3 && nextoffs == -1) {
             break;
         }
     }

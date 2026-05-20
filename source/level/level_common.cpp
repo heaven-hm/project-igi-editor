@@ -699,7 +699,7 @@ static bool IsValidNameChar(char c) {
 }
 
 bool QSC::Parser_SkipNumberChar() {
-	while (*pc_ != 0 && ((*pc_ >= '0' && *pc_ <= '9')) || (*pc_ == '-') || (*pc_ == '.') || (*pc_ == 'e')) {
+	while (*pc_ != 0 && ((*pc_ >= '0' && *pc_ <= '9') || (*pc_ == '-') || (*pc_ == '+') || (*pc_ == '.') || (*pc_ == 'e'))) {
 		pc_++;
 	}
 

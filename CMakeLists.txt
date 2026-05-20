@@ -43,7 +43,7 @@ file(GLOB SHADERS_45 "shaders/45/*.*")
 # Explicitly add new source files (GLOB might not pick them up immediately)
 list(APPEND SOURCES "source/compiler.cpp" "source/decompiler.cpp" "source/utils.cpp" "source/cli_handler.cpp" "source/renderer/mef_exporter.cpp" "source/cli_tests.cpp")
 list(APPEND SOURCES_RENDERER "source/renderer/qvm_decompiler.cpp")
-list(APPEND SOURCES_LEVEL "source/level/tex_parser.cpp" "source/level/graph_parser.cpp")
+list(APPEND SOURCES_LEVEL "source/level/tex_parser.cpp" "source/level/graph_parser.cpp" "source/level/asset_extractor.cpp")
 
 # Add Windows icon resource file
 if (WIN32)
@@ -84,6 +84,8 @@ set_source_files_properties(
   source/level/mtp_parser.cpp
   source/level/tex_parser.cpp
   source/level/graph_parser.cpp
+  source/level/asset_extractor.cpp
+  source/level/terrain.cpp
   source/renderer/qvm_decompiler.cpp
   source/cli_handler.cpp
   source/cli_tests.cpp

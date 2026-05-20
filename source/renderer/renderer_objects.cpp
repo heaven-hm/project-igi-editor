@@ -378,11 +378,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             bool mixedMesh = hasTextured && hasUntextured;
             for (const auto& sub : mesh.subMeshes) {
                 if (sub.VAO == 0 || sub.vertexCount == 0) continue;
-
-                // Skip large untextured foundations in mixed meshes (but NOT fences/gates)
-                if (!isFence && mixedMesh && sub.textureID == 0 && sub.vertexCount > maxTexturedVerts) {
-                    continue;
-                }
+                (void)mixedMesh; // render all submeshes — floors/stories must not be skipped
 
                 if (sub.textureID > 0) {
                     // Textured submesh: neutral lighting so texture looks natural
@@ -518,8 +514,7 @@ Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding
 }
 
 std::string Renderer_Objects::GetLevelTexturesPath() const {
-    const std::string root = Utils::GetIGIRootPath();
-    return root + "\\missions\\location0\\level" + std::to_string(current_level_) + "\\textures";
+    return Utils::GetExeDirectory() + "\\textures\\level" + std::to_string(current_level_);
 }
 
 std::string Renderer_Objects::GetLevelTextureDatPath() const {
@@ -914,9 +909,13 @@ Mesh Renderer_Objects::CreateCubeMesh() {
 }
 
 std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isBuilding) {
-    std::string modelsPathStr = Utils::GetIGIModelsPath(current_level_);
+    // Models are extracted per-level into {exeDir}\models\level{N} by AssetExtractor.
+    std::string exeModels = Utils::GetExeDirectory() + "\\models\\level" + std::to_string(current_level_);
+    std::string modelsPathStr = std::filesystem::exists(exeModels)
+        ? exeModels
+        : Utils::GetIGIModelsPath(current_level_);
     std::filesystem::path modelsPath(modelsPathStr);
-    
+
     if (!std::filesystem::exists(modelsPath)) {
         Logger::Get().Log(LogLevel::WARNING, "[Renderer_Objects] Models path does not exist: " + modelsPathStr);
         return "";

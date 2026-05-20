@@ -91,6 +91,9 @@ res/
 .cache/
 .gemini/
 .claude/
+claude.md
+cursor.md
+agent.md
 *.log
 *.tlog
 .env

@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include "logger.h"
 #include "utils.h"
+#include "asset_extractor.h"
 #include "../renderer/qvm_parser.h"
 #include "../renderer/qvm_decompiler.h"
 #include "../compiler.h"
@@ -87,6 +88,9 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 	ConfigData& cfg = Config::Get();
 	char filename[1024];
 	std::string exeDir = GetExeDirectory();
+
+	// Extract textures and models from IGI .res archives (cached per-level)
+	AssetExtractor::EnsureLevelAssets(params.level_no_, Utils::GetIGIRootPath(), exeDir);
 
 	// Copy terrain from IGI game path to executable directory on load
 	try {

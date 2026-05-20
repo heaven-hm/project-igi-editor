@@ -7,6 +7,8 @@
 #include "terrain_files.h"
 #include <filesystem>
 #include "logger.h"
+#include "../renderer/qvm_parser.h"
+#include "../renderer/qvm_decompiler.h"
 
 static std::string GetExeDirectory() {
 	char exePath[MAX_PATH];
@@ -202,10 +204,21 @@ bool Terrain::Load(load_params_s & params) {
 	
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading terrain.qsc from: " + std::string(filename));
 
-	// Check if terrain.qsc exists
+	// Check if terrain.qsc exists; if not, try decompiling terrain.qvm on the fly
 	if (!File_Exists(filename)) {
-		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: terrain.qsc NOT FOUND at: " + std::string(filename));
-		return false;
+		std::string qvmPath = terrainDir + "/terrain.qvm";
+		if (File_Exists(qvmPath.c_str())) {
+			Logger::Get().Log(LogLevel::INFO, "[Terrain] terrain.qsc missing — decompiling terrain.qvm...");
+			QVMFile qvm = QVM_Parse(qvmPath);
+			if (!qvm.valid || !QVM_Decompile(qvm, std::string(filename))) {
+				Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: terrain.qvm decompile failed for: " + qvmPath);
+				return false;
+			}
+			Logger::Get().Log(LogLevel::INFO, "[Terrain] terrain.qvm decompiled to terrain.qsc successfully");
+		} else {
+			Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: terrain.qsc and terrain.qvm both missing at: " + terrainDir);
+			return false;
+		}
 	}
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] terrain.qsc exists, loading...");
 
