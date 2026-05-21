@@ -93,20 +93,17 @@ With the release of our premium modding features, we have expanded our workspace
 ![IGI Editor Debug Screenshot](assets/screenshots/igi-editor-debug.png)
 *Debug Console showing IGIPath resolution and QVM compilation pipeline.*
 
-## Headless CLI Tool
+## 🕹️ CLI & GUI Command-Line Options
 
-The editor includes an integrated command-line testing suite for IGI native file formats. These can be run headlessly (without the graphical interface).
+The **IGI Editor** can be run as both a fully featured interactive 3D graphical suite and a high-performance, headless command-line asset tool:
 
-*   `--help`: Displays CLI commands.
-*   `--mef <file.mef>`: Parse and print MEF model details.
-*   `--qsc <file.qsc> --compile <out.qvm>`: Compile QSC script to QVM.
-*   `--qvm <file.qvm> --decompile <out.qsc>`: Decompile QVM back to QSC.
-*   `--qvm <file.qvm>`: Parse QVM bytecode details.
-*   `--res <file.res>`: List RES archive contents.
-*   `--res <file.res> --extract <block_name> <out_file>`: Extract a specific resource from an archive.
-*   `--mtp <file.mtp>`: Parse MTP texture mappings.
-*   `--terrain <file.lmp/.ctr>`: Parse terrain structure.
+*   **GUI Editor Mode**: Launch the graphical user interface to edit level data. Supports options like `-level <num>` (1-14), custom dimensions (`-w`, `-h`), ground snapping (`-stick_to_ground`), and selective rendering bitmasks (`-draw_parts`).
+*   **Headless CLI Mode**: Perform high-speed operations directly from your terminal. Parsers are provided for 3D meshes (`--mef`), script compiles (`--qsc`), reverse engineering bytecode (`--qvm`), extracting resource libraries (`--res`), textures (`--mtp`, `--tex`), navigation systems (`--graph`), and terrain geometries (`--terrain`).
 
+For a comprehensive list of all CLI commands, export options, selective rendering bitmask combinations, keyboard hotkeys, and hands-on examples, please check our detailed guide:
+👉 **[CLI & GUI Reference Guide](docs/CLI.md)**
+
+And for detailed information about file formats of IGI game 👉 **[IGI File Formats](docs/file-formats.md)**
 ---
  
 ## Folder Structure

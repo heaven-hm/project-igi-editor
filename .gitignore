@@ -114,7 +114,6 @@ Release/
 *.webp
 *.py
 *.qsc
-docs/
 models/
 
 # Dont Ignore
