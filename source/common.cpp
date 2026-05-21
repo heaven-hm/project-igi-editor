@@ -838,8 +838,22 @@ void Pic_FreePics(pics_s& pics) {
 ================================================================================
 */
 folders_s g_folders;
+bool g_isCLIMode = false;
 
 #if defined(_WIN32)
+static void RemoveEmptyDirs(const std::filesystem::path& path) {
+	namespace fs = std::filesystem;
+	if (!fs::exists(path) || !fs::is_directory(path)) return;
+	for (const auto& entry : fs::directory_iterator(path)) {
+		if (fs::is_directory(entry.path())) {
+			RemoveEmptyDirs(entry.path());
+		}
+	}
+	if (fs::directory_iterator(path) == fs::directory_iterator()) {
+		fs::remove(path);
+	}
+}
+
 static void SyncLocalQEditorToAppData(const std::string& local_path, const std::string& appdata_path) {
 	namespace fs = std::filesystem;
 	try {
@@ -850,6 +864,7 @@ static void SyncLocalQEditorToAppData(const std::string& local_path, const std::
 
 		std::vector<fs::path> dirs_to_create;
 		std::vector<std::pair<fs::path, fs::path>> files_to_move;
+		std::vector<fs::path> files_to_delete;
 
 		for (const auto& entry : fs::recursive_directory_iterator(local_path)) {
 			const auto& path = entry.path();
@@ -863,6 +878,8 @@ static void SyncLocalQEditorToAppData(const std::string& local_path, const std::
 			} else if (fs::is_regular_file(path)) {
 				if (!fs::exists(target)) {
 					files_to_move.push_back({path, target});
+				} else {
+					files_to_delete.push_back(path);
 				}
 			}
 		}
@@ -880,6 +897,15 @@ static void SyncLocalQEditorToAppData(const std::string& local_path, const std::
 			fs::remove(pair.first);
 			Logger::Get().Log(LogLevel::INFO, "[Folders] Synchronized/Moved new file to APPDATA: " + pair.second.string());
 		}
+
+		// Delete duplicate files from local folder to complete the "move" process
+		for (const auto& file_path : files_to_delete) {
+			fs::remove(file_path);
+			Logger::Get().Log(LogLevel::INFO, "[Folders] Removed duplicate local file: " + file_path.string());
+		}
+
+		// Recursively delete empty local directories to leave the exe folder perfectly clean
+		RemoveEmptyDirs(local_path);
 	} catch (const std::exception& e) {
 		Logger::Get().Log(LogLevel::ERR, "[Folders] Error synchronizing local QEditor: " + std::string(e.what()));
 	}
@@ -887,6 +913,10 @@ static void SyncLocalQEditorToAppData(const std::string& local_path, const std::
 #endif
 
 void Folders_Init() {
+	if (g_isCLIMode) {
+		return;
+	}
+
 	char buf[1024] = {};
 	char appdata_buf[1024] = {};
 
@@ -914,8 +944,12 @@ void Folders_Init() {
 	std::string local_qeditor = std::string(exe_dir) + "\\QEditor";
 	std::string local_qfiles = std::string(exe_dir) + "\\QFiles";
 
+	// Show warning if QEditor is missing from both current path and APPDATA
+	bool local_exists = std::filesystem::exists(local_qeditor);
+	bool appdata_exists = std::filesystem::exists(default_appdata);
+
 	// 2. Check if local QEditor directory exists in editor exe directory
-	if (std::filesystem::exists(local_qeditor)) {
+	if (local_exists) {
 		Logger::Get().Log(LogLevel::INFO, "[Folders] Local QEditor found at: " + local_qeditor + ". Synchronizing new folders/files to APPDATA: " + default_appdata);
 		SyncLocalQEditorToAppData(local_qeditor, default_appdata);
 		qeditor_path = default_appdata;
@@ -929,17 +963,17 @@ void Folders_Init() {
 		found = true;
 	}
 	// 4. Otherwise, check if default %APPDATA%\QEditor path exists
-	else if (std::filesystem::exists(default_appdata)) {
+	else if (appdata_exists) {
 		qeditor_path = default_appdata;
 		Config::Get().qEditorPath = qeditor_path;
 		found = true;
 	}
 
 	// 5. If not found in any location, log and show warning
-	if (!found) {
-		Logger::Get().Log(LogLevel::WARNING, "[Folders] QEditor not found in APPDATA or local directory. Some functionality like resetting files or script compiling may not work properly.");
+	if (!found || (!local_exists && !appdata_exists)) {
+		Logger::Get().Log(LogLevel::WARNING, "[Folders] QEditor not found in APPDATA or local directory. Some functionality like Reset of files or script compiling may not work properly.");
 		MessageBoxA(NULL, 
-			"Warning: QEditor not found in APPDATA or local directory. Some functionality (like Reset of files or script compiling) may not work properly.\n\n"
+			"Warning: QEditor not found in APPDATA or local directory. Some functionality (like Reset of files) may not work properly.\n\n"
 			"The system will continue to run, but some game files/features might not work properly.", 
 			"QEditor Directory Missing", 
 			MB_OK | MB_ICONWARNING);

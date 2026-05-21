@@ -187,6 +187,7 @@ struct folders_s {
 };
 
 extern folders_s	g_folders;
+extern bool			g_isCLIMode;
 
 void		Folders_Init();
 

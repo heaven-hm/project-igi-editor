@@ -607,6 +607,7 @@ int main(int argc, char **argv) {
 
   // Intercept headless CLI commands before any GUI/folder setup
   if (CLIHandler::IsCLICommand(argc, argv)) {
+    g_isCLIMode = true;
     int result = CLIHandler::Process(argc, argv);
 #if defined(_WIN32) && defined(_DEBUG)
     system("pause");
