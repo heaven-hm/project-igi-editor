@@ -86,6 +86,9 @@ set_source_files_properties(
   source/cli/asset_extractor.cpp
   source/level/terrain.cpp
   source/parsers/qvm_decompiler.cpp
+  source/parsers/qsc_lexer.cpp
+  source/parsers/qsc_parser.cpp
+  source/parsers/qvm_compiler.cpp
   source/cli/cli_handler.cpp
   source/cli/cli_tests.cpp
   PROPERTIES SKIP_PRECOMPILE_HEADERS ON
@@ -146,6 +149,28 @@ if (WIN32)
   set_target_properties(igi-editor PROPERTIES
     OUTPUT_NAME "igi1ed"
   )
+
+  # Copy required runtime files (DLLs, config, version, shaders) next to the exe
+  if (CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(DLL_SRC_DIR "${PROJECT_SOURCE_DIR}/assets/dlls/x64")
+  else()
+    set(DLL_SRC_DIR "${PROJECT_SOURCE_DIR}/assets/dlls/x86")
+  endif()
+
+  add_custom_command(TARGET igi-editor POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${DLL_SRC_DIR}/freeglut.dll"
+      "${DLL_SRC_DIR}/glew32.dll"
+      "${PROJECT_SOURCE_DIR}/config.ini"
+      "${PROJECT_SOURCE_DIR}/version"
+      "$<TARGET_FILE_DIR:igi-editor>"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${PROJECT_SOURCE_DIR}/shaders"
+      "$<TARGET_FILE_DIR:igi-editor>/shaders"
+    COMMENT "Copying runtime files (DLLs, config.ini, version, shaders) to output directory"
+  )
 else()
   target_link_libraries(igi-editor PRIVATE glut GL GLEW)
 endif()
+
+

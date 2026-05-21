@@ -9,6 +9,9 @@
 #include "parsers/mtp_parser.h"
 #include "parsers/qvm_parser.h"
 #include "parsers/qvm_decompiler.h"
+#include "parsers/qsc_lexer.h"
+#include "parsers/qsc_parser.h"
+#include "parsers/qvm_compiler.h"
 #include "compiler.h"
 #include "decompiler.h"
 #include "parsers/res_parser.h"
@@ -98,6 +101,12 @@ int CLIHandler::Process(int argc, char** argv) {
             std::string inpath = argv[++i];
             if (i + 1 < argc && std::string(argv[i+1]) == "--compile" && i + 2 < argc) {
                 return CompileQSC(inpath, argv[i+2]);
+            } else if (i + 1 < argc && std::string(argv[i+1]) == "--lex") {
+                return LexQSC(inpath);
+            } else if (i + 1 < argc && std::string(argv[i+1]) == "--parse") {
+                return ParseQSC(inpath);
+            } else if (i + 1 < argc && std::string(argv[i+1]) == "--compile-native" && i + 2 < argc) {
+                return CompileQSCNative(inpath, argv[i+2]);
             }
         } else if (arg == "--qvm" && i + 1 < argc) {
             std::string inpath = argv[++i];
@@ -264,6 +273,78 @@ int CLIHandler::CompileQSC(const std::string& inpath, const std::string& outpath
     }
     Logger::Get().Log(LogLevel::ERR, "[CLI] Failed to compile QSC: " + inpath);
     return 1;
+}
+
+int CLIHandler::LexQSC(const std::string& inpath) {
+    Logger::Get().Log(LogLevel::INFO, "[CLI] Lexing QSC: " + inpath);
+    std::ifstream f(inpath, std::ios::binary);
+    if (!f) {
+        Logger::Get().Log(LogLevel::ERR, "[CLI] Failed to open: " + inpath);
+        return 1;
+    }
+    std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    qsc::LexResult r = qsc::Lex(src);
+    if (!r.ok) {
+        Logger::Get().Log(LogLevel::ERR, "[CLI] " + r.error);
+        return 1;
+    }
+    for (const auto& t : r.tokens) {
+        std::cout << t.line << ":" << t.col << "\t"
+                  << qsc::TokKindName(t.kind) << "\t" << t.lexeme;
+        if (t.kind == qsc::TokKind::IntLit || t.kind == qsc::TokKind::HexLit) {
+            std::cout << "  (int=" << t.int_val << ")";
+        } else if (t.kind == qsc::TokKind::FloatLit) {
+            std::cout << "  (float=" << t.float_val << ")";
+        }
+        std::cout << "\n";
+    }
+    Logger::Get().Log(LogLevel::INFO, "[CLI] Lexed " + std::to_string(r.tokens.size()) + " tokens");
+    return 0;
+}
+
+int CLIHandler::ParseQSC(const std::string& inpath) {
+    Logger::Get().Log(LogLevel::INFO, "[CLI] Parsing QSC: " + inpath);
+    std::ifstream f(inpath, std::ios::binary);
+    if (!f) {
+        Logger::Get().Log(LogLevel::ERR, "[CLI] Failed to open: " + inpath);
+        return 1;
+    }
+    std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    qsc::LexResult lr = qsc::Lex(src);
+    if (!lr.ok) {
+        Logger::Get().Log(LogLevel::ERR, "[CLI] " + lr.error);
+        return 1;
+    }
+    qsc::ParseResult pr = qsc::Parse(lr.tokens);
+    if (!pr.ok) {
+        Logger::Get().Log(LogLevel::ERR, "[CLI] " + pr.error);
+        return 1;
+    }
+    qsc::DumpAst(*pr.program, std::cout);
+    Logger::Get().Log(LogLevel::INFO, "[CLI] Parsed " + std::to_string(pr.call_count) +
+                                          " calls / " + std::to_string(pr.arg_count) + " args");
+    return 0;
+}
+
+int CLIHandler::CompileQSCNative(const std::string& inpath, const std::string& outpath) {
+    Logger::Get().Log(LogLevel::INFO, "[CLI] Native-compiling QSC: " + inpath + " -> " + outpath);
+    std::ifstream f(inpath, std::ios::binary);
+    if (!f) {
+        Logger::Get().Log(LogLevel::ERR, "[CLI] Failed to open: " + inpath);
+        return 1;
+    }
+    std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    qsc::LexResult lr = qsc::Lex(src);
+    if (!lr.ok) { Logger::Get().Log(LogLevel::ERR, "[CLI] " + lr.error); return 1; }
+    qsc::ParseResult pr = qsc::Parse(lr.tokens);
+    if (!pr.ok) { Logger::Get().Log(LogLevel::ERR, "[CLI] " + pr.error); return 1; }
+    std::string err;
+    if (!qvm::CompileToFile(*pr.program, outpath, &err)) {
+        Logger::Get().Log(LogLevel::ERR, "[CLI] " + err);
+        return 1;
+    }
+    Logger::Get().Log(LogLevel::INFO, "[CLI] Native-compiled QSC -> " + outpath);
+    return 0;
 }
 
 int CLIHandler::ParseRES(const std::string& filepath, const std::string& extract_name, const std::string& outpath) {

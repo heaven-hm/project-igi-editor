@@ -153,14 +153,20 @@ With the successful release of **Version 1.5.0**, core features like the **Nativ
 ### Build Instructions
 1. Clone the repository.
 2. Open the directory in a terminal.
-3. Run the following commands:
+3. Run the following commands to build for **32-bit (Win32)**:
    ```powershell
-   cmake -B build -S .
+   # Clean previous build if necessary
+   if (Test-Path build) { Remove-Item build -Recurse -Force }
+
+   # Configure for 32-bit (Win32) using a specific Visual Studio instance
+   cmake -B build -G "Visual Studio 17 2022" -A Win32 -DCMAKE_GENERATOR_INSTANCE="C:/Program Files/Microsoft Visual Studio/2022/Community"
+
+   # Build in Release mode
    cmake --build build --config Release
    ```
 4. Launch the editor:
    ```powershell
-   .igi1ed.exe -level 1 -draw_parts 49 -stick_to_ground
+   .\bin\Release\igi1ed.exe -level 1 -draw_parts 49 -stick_to_ground
    ```
 
    #### 🎨 Selective Loading and Drawing (`-draw_parts` Bitmask)

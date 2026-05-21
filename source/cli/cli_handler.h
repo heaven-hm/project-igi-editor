@@ -17,6 +17,9 @@ private:
     static int ExportMEFToAscii(const std::string& filepath, const std::string& outpath);
     static int ParseQVM(const std::string& filepath, bool decompile, const std::string& outpath);
     static int CompileQSC(const std::string& inpath, const std::string& outpath);
+    static int LexQSC(const std::string& inpath);
+    static int ParseQSC(const std::string& inpath);
+    static int CompileQSCNative(const std::string& inpath, const std::string& outpath);
     static int ParseRES(const std::string& filepath, const std::string& extract_name, const std::string& outpath);
     static int ExtractAllRES(const std::string& filepath, const std::string& outdir);
     static int ParseMTP(const std::string& filepath);

@@ -410,8 +410,14 @@ std::vector<std::array<uint32_t, 3>> ParseSplitBoneTriangles(
             });
         }
 
+        // Read td (diffuse texture index) from bone DNER record at base+24
+        // This determines which texture from the DAT file this submesh uses.
+        const int16_t td = ReadValue<int16_t>(bytes, base + 24);
+        // Use td as the material slot when valid; fall back to sequential block index.
+        const int materialSlot = (td >= 0) ? static_cast<int>(td) : static_cast<int>(block);
+
         if (triangles.size() > blockTriangleStart) {
-            outBlocks.push_back({ blockTriangleStart, triangles.size() - blockTriangleStart, static_cast<int>(block) });
+            outBlocks.push_back({ blockTriangleStart, triangles.size() - blockTriangleStart, materialSlot });
         }
     }
 

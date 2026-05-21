@@ -518,8 +518,16 @@ std::string Renderer_Objects::GetLevelTexturesPath() const {
 }
 
 std::string Renderer_Objects::GetLevelTextureDatPath() const {
+    // Try local extracted DAT first
+    const std::string localDat = Utils::GetExeDirectory() +
+        "\\textures\\level" + std::to_string(current_level_) +
+        "\\level" + std::to_string(current_level_) + ".dat";
+    if (std::filesystem::exists(localDat)) return localDat;
+
+    // Fall back to the game's DAT in the IGI root
     const std::string root = Utils::GetIGIRootPath();
-    return root + "\\missions\\location0\\level" + std::to_string(current_level_) + "\\level" + std::to_string(current_level_) + ".dat";
+    return root + "\\missions\\location0\\level" + std::to_string(current_level_) +
+        "\\level" + std::to_string(current_level_) + ".dat";
 }
 
 void Renderer_Objects::EnsureTextureMapLoaded() {
@@ -603,26 +611,44 @@ std::vector<std::string> Renderer_Objects::GetTextureIdsForModel(const std::stri
 }
 
 std::string Renderer_Objects::FindTextureFile(const std::string& textureId) const {
-    const std::filesystem::path texturesPath(GetLevelTexturesPath());
-    if (!std::filesystem::exists(texturesPath)) {
-        Logger::Get().Log(LogLevel::WARNING, "[TEX Native] Textures path does not exist: " + texturesPath.string());
-        return "";
-    }
+    // Helper: search one directory for the texture file
+    auto searchDir = [&](const std::filesystem::path& texturesPath) -> std::string {
+        if (!std::filesystem::exists(texturesPath)) return "";
 
-    const std::filesystem::path exactPath = texturesPath / (textureId + ".tex");
-    if (std::filesystem::exists(exactPath)) {
-        return exactPath.string();
-    }
+        const std::filesystem::path exactPath = texturesPath / (textureId + ".tex");
+        if (std::filesystem::exists(exactPath)) return exactPath.string();
 
-    for (const auto& entry : std::filesystem::directory_iterator(texturesPath)) {
-        if (!entry.is_regular_file()) continue;
-        if (entry.path().extension() != ".tex") continue;
-        const std::string stem = entry.path().stem().string();
-        if (stem == textureId || stem.find(textureId) != std::string::npos || textureId.find(stem) != std::string::npos) {
-            return entry.path().string();
+        for (const auto& entry : std::filesystem::directory_iterator(texturesPath)) {
+            if (!entry.is_regular_file()) continue;
+            if (entry.path().extension() != ".tex") continue;
+            const std::string stem = entry.path().stem().string();
+            if (stem == textureId ||
+                stem.find(textureId) != std::string::npos ||
+                textureId.find(stem) != std::string::npos) {
+                return entry.path().string();
+            }
         }
+        return "";
+    };
+
+    // 1. Search local extracted textures directory first
+    std::string result = searchDir(std::filesystem::path(GetLevelTexturesPath()));
+    if (!result.empty()) return result;
+
+    // 2. Fall back to the game's own texture directory for this level
+    //    (covers levels 12-14 and underground buildings whose textures were
+    //    never extracted into the editor's local cache)
+    const std::string igiTexDir = Utils::GetIGIRootPath() +
+        "\\missions\\location0\\level" + std::to_string(current_level_) + "\\textures";
+    result = searchDir(std::filesystem::path(igiTexDir));
+    if (!result.empty()) {
+        Logger::Get().Log(LogLevel::DEBUG,
+            "[TEX Native] Found texture in IGI root: " + result);
+        return result;
     }
 
+    Logger::Get().Log(LogLevel::WARNING,
+        "[TEX Native] Texture not found in local or IGI root for id=" + textureId);
     return "";
 }
 
@@ -686,12 +712,26 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
 
     if (!mesh.subMeshes.empty()) {
         size_t assigned = 0;
+
+        // Find the best valid (non-zero) texture to use as fallback for submeshes
+        // that fall outside the DAT texture list range.
+        GLuint fallbackTexture = 0;
+        for (const GLuint t : textures) {
+            if (t != 0) { fallbackTexture = t; }
+        }
+
         for (size_t i = 0; i < mesh.subMeshes.size(); ++i) {
             GLuint texture = 0;
-            if (i < textures.size()) {
+            if (textures.size() == 1) {
+                // Single-texture model: apply the same texture to every submesh
+                // (covers building floors, bone model parts, etc.)
+                texture = textures[0];
+            } else if (i < textures.size()) {
                 texture = textures[i];
-            } else if (textures.size() == 1) {
-                texture = textures.front();
+            } else {
+                // More submeshes than DAT entries: use the last valid texture
+                // (avoids untextured floor/wall submeshes)
+                texture = fallbackTexture;
             }
 
             mesh.subMeshes[i].textureID = texture;
@@ -909,67 +949,64 @@ Mesh Renderer_Objects::CreateCubeMesh() {
 }
 
 std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isBuilding) {
-    // Models are extracted per-level into {exeDir}\models\level{N} by AssetExtractor.
-    std::string exeModels = Utils::GetExeDirectory() + "\\models\\level" + std::to_string(current_level_);
-    std::string modelsPathStr = std::filesystem::exists(exeModels)
-        ? exeModels
-        : Utils::GetIGIModelsPath(current_level_);
-    std::filesystem::path modelsPath(modelsPathStr);
+    // Helper: search one directory for modelId.mef (exact, then fuzzy by type prefix).
+    auto searchOneDir = [&](const std::string& dirStr) -> std::string {
+        if (dirStr.empty()) return "";
+        std::filesystem::path modelsPath(dirStr);
+        if (!std::filesystem::exists(modelsPath)) return "";
 
-    if (!std::filesystem::exists(modelsPath)) {
-        Logger::Get().Log(LogLevel::WARNING, "[Renderer_Objects] Models path does not exist: " + modelsPathStr);
-        return "";
-    }
+        // Exact match
+        std::filesystem::path exactPath = modelsPath / (modelId + ".mef");
+        if (std::filesystem::exists(exactPath)) return exactPath.string();
 
-    // 1. Try exact match first
-    std::filesystem::path exactPath = modelsPath / (modelId + ".mef");
-    if (std::filesystem::exists(exactPath)) {
-        return exactPath.string();
-    }
-    
-    // 2. Try partial/fuzzy match (wildcard search in models folder)
-    std::string baseId = modelId;
-    if (baseId.size() > 2 && baseId.substr(baseId.size() - 2) == "_1") {
-        baseId = baseId.substr(0, baseId.size() - 2);
-    }
+        // Fuzzy scan
+        std::string bestMatch;
+        for (const auto& entry : std::filesystem::directory_iterator(modelsPath)) {
+            if (!entry.is_regular_file()) continue;
+            if (entry.path().extension() != ".mef") continue;
+            const std::string fname = entry.path().filename().string();
+            const std::string stem  = entry.path().stem().string();
 
-    std::string bestMatch = "";
-    for (const auto& entry : std::filesystem::directory_iterator(modelsPath)) {
-        if (!entry.is_regular_file()) continue;
-        std::string fname = entry.path().filename().string();
-        std::string ext = entry.path().extension().string();
-        if (ext != ".mef") continue;
+            // Full modelId in filename
+            if (fname.find(modelId) != std::string::npos) return entry.path().string();
 
-        // Exact match in filename
-        if (fname.find(modelId) != std::string::npos) {
-            return entry.path().string();
-        }
-        
-        // Fuzzy match: if specific variation missing, look for variation 01
-        // e.g. 300_03_1 -> 300_01_1
-        size_t firstUnderscore = modelId.find_first_of('_');
-        if (firstUnderscore != std::string::npos) {
-            std::string typeId = modelId.substr(0, firstUnderscore);
-            if (fname.find(typeId + "_01") != std::string::npos) {
-                bestMatch = entry.path().string();
-            }
-            if (bestMatch.empty() && fname.rfind(typeId + "_", 0) == 0) {
-                bestMatch = entry.path().string();
+            // Variation fallback: require type prefix at stem start (e.g. "003_" not "1003_")
+            size_t firstUnderscore = modelId.find_first_of('_');
+            if (firstUnderscore != std::string::npos) {
+                const std::string typeId = modelId.substr(0, firstUnderscore);
+                if (stem.rfind(typeId + "_", 0) == 0) {
+                    if (bestMatch.empty() || stem.find(typeId + "_01") != std::string::npos) {
+                        bestMatch = entry.path().string();
+                    }
+                }
             }
         }
-        
-        // Last resort: any file containing the type prefix
-        if (bestMatch.empty() && fname.find(baseId) != std::string::npos) {
-            bestMatch = entry.path().string();
-        }
-    }
-
-    if (!bestMatch.empty()) {
         return bestMatch;
+    };
+
+    // 1. Search local extracted models ({exeDir}\models\level{N})
+    const std::string exeModels = Utils::GetExeDirectory() + "\\models\\level" + std::to_string(current_level_);
+    std::string result = searchOneDir(exeModels);
+    if (!result.empty()) {
+        Logger::Get().Log(LogLevel::DEBUG, "[Renderer_Objects] Model found locally: " + result);
+        return result;
     }
 
+    // 2. Fall back to game's native models directory
+    //    (covers 003_01_1 on Level 7, and models on levels 12-14 not extracted locally)
+    const std::string igiModels = Utils::GetIGIModelsPath(current_level_);
+    result = searchOneDir(igiModels);
+    if (!result.empty()) {
+        Logger::Get().Log(LogLevel::DEBUG, "[Renderer_Objects] Model found in IGI root: " + result);
+        return result;
+    }
+
+    Logger::Get().Log(LogLevel::WARNING,
+        "[Renderer_Objects] Model search FAILED for ID: " + modelId +
+        " (level " + std::to_string(current_level_) + "). Skipping render.");
     return "";
 }
+
 
 // ─── InitSelectionBox ────────────────────────────────────────────────────────
 void Renderer_Objects::InitSelectionBox() {
