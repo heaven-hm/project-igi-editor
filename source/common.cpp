@@ -10,6 +10,8 @@
 #include "config.h"
 #include <string>
 #include <filesystem>
+#include <vector>
+#include <utility>
 
 
 #if defined(_WIN32)
@@ -837,6 +839,53 @@ void Pic_FreePics(pics_s& pics) {
 */
 folders_s g_folders;
 
+#if defined(_WIN32)
+static void SyncLocalQEditorToAppData(const std::string& local_path, const std::string& appdata_path) {
+	namespace fs = std::filesystem;
+	try {
+		if (!fs::exists(local_path)) return;
+		if (!fs::exists(appdata_path)) {
+			fs::create_directories(appdata_path);
+		}
+
+		std::vector<fs::path> dirs_to_create;
+		std::vector<std::pair<fs::path, fs::path>> files_to_move;
+
+		for (const auto& entry : fs::recursive_directory_iterator(local_path)) {
+			const auto& path = entry.path();
+			auto relative = fs::relative(path, local_path);
+			auto target = fs::path(appdata_path) / relative;
+
+			if (fs::is_directory(path)) {
+				if (!fs::exists(target)) {
+					dirs_to_create.push_back(target);
+				}
+			} else if (fs::is_regular_file(path)) {
+				if (!fs::exists(target)) {
+					files_to_move.push_back({path, target});
+				}
+			}
+		}
+
+		// Create new directories first
+		for (const auto& dir : dirs_to_create) {
+			fs::create_directories(dir);
+			Logger::Get().Log(LogLevel::INFO, "[Folders] Synchronized new directory to APPDATA: " + dir.string());
+		}
+
+		// Move new files
+		for (const auto& pair : files_to_move) {
+			fs::create_directories(pair.second.parent_path());
+			fs::copy_file(pair.first, pair.second, fs::copy_options::overwrite_existing);
+			fs::remove(pair.first);
+			Logger::Get().Log(LogLevel::INFO, "[Folders] Synchronized/Moved new file to APPDATA: " + pair.second.string());
+		}
+	} catch (const std::exception& e) {
+		Logger::Get().Log(LogLevel::ERR, "[Folders] Error synchronizing local QEditor: " + std::string(e.what()));
+	}
+}
+#endif
+
 void Folders_Init() {
 	char buf[1024] = {};
 	char appdata_buf[1024] = {};
@@ -855,42 +904,42 @@ void Folders_Init() {
 		found = true;
 	}
 
-	// 2. Check local/portable path (at igi1ed.exe location)
 	char exe_dir[1024];
 	Str_Copy(exe_dir, 1024, buf);
 	Str_ExtractFileDirSelf(exe_dir);
 
-	if (!found) {
-		std::string local_qeditor = std::string(exe_dir) + "/QEditor";
-		std::string local_qfiles = std::string(exe_dir) + "/QFiles";
-		if (std::filesystem::exists(local_qfiles)) {
-			qeditor_path = exe_dir; // exe directory contains QFiles/IGI_QSC
-			Config::Get().qEditorPath = qeditor_path;
-			found = true;
-		} else if (std::filesystem::exists(local_qeditor)) {
-			qeditor_path = local_qeditor;
-			Config::Get().qEditorPath = qeditor_path;
-			found = true;
-		}
+	char appdata_env[1024] = {};
+	GetEnvironmentVariableA("APPDATA", appdata_env, 1024);
+	std::string default_appdata = std::string(appdata_env) + "\\QEditor";
+	std::string local_qeditor = std::string(exe_dir) + "\\QEditor";
+	std::string local_qfiles = std::string(exe_dir) + "\\QFiles";
+
+	// 2. Check if local QEditor directory exists in editor exe directory
+	if (std::filesystem::exists(local_qeditor)) {
+		Logger::Get().Log(LogLevel::INFO, "[Folders] Local QEditor found at: " + local_qeditor + ". Synchronizing new folders/files to APPDATA: " + default_appdata);
+		SyncLocalQEditorToAppData(local_qeditor, default_appdata);
+		qeditor_path = default_appdata;
+		Config::Get().qEditorPath = qeditor_path;
+		found = true;
+	}
+	// 3. Otherwise, check if local portable QFiles directory exists
+	else if (std::filesystem::exists(local_qfiles)) {
+		qeditor_path = exe_dir; // exe directory contains QFiles/IGI_QSC
+		Config::Get().qEditorPath = qeditor_path;
+		found = true;
+	}
+	// 4. Otherwise, check if default %APPDATA%\QEditor path exists
+	else if (std::filesystem::exists(default_appdata)) {
+		qeditor_path = default_appdata;
+		Config::Get().qEditorPath = qeditor_path;
+		found = true;
 	}
 
-	// 3. Check default %APPDATA%\QEditor path
+	// 5. If not found in any location, log and show warning
 	if (!found) {
-		char appdata_env[1024] = {};
-		GetEnvironmentVariableA("APPDATA", appdata_env, 1024);
-		std::string default_appdata = std::string(appdata_env) + "\\QEditor";
-		if (std::filesystem::exists(default_appdata)) {
-			qeditor_path = default_appdata;
-			Config::Get().qEditorPath = qeditor_path;
-			found = true;
-		}
-	}
-
-	// 4. Show warning if missing from all locations, but do not abort
-	if (!found) {
+		Logger::Get().Log(LogLevel::WARNING, "[Folders] QEditor not found in APPDATA or local directory. Some functionality like resetting files or script compiling may not work properly.");
 		MessageBoxA(NULL, 
-			"Warning: QEditor / QVM Editor path could not be found in APPDATA or the local directory!\n\n"
-			"Some features such as level script compilation and friendly model name lookup will not work properly without it.\n"
+			"Warning: QEditor not found in APPDATA or local directory. Some functionality (like Reset of files or script compiling) may not work properly.\n\n"
 			"The system will continue to run, but some game files/features might not work properly.", 
 			"QEditor Directory Missing", 
 			MB_OK | MB_ICONWARNING);
