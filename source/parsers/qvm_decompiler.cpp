@@ -10,18 +10,23 @@
 #include <cstdint>
 #include <memory>
 
-// Float formatting helper — matches Python's str(float) behaviour:
-// shortest round-trip decimal for the float64 value, always with a decimal point.
+// Float formatting helper — matches legacy GConv's decimal output.
+// Use 10-digit fixed precision. Legacy GConv does not support 
+// scientific notation (e/p), but it can parse long decimal strings.
+// This provides enough resolution to capture the 32-bit float bits.
 static std::string FloatStr(float v) {
-    double d = (double)v;
-    char buf[64];
-    auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), d);
-    std::string s(buf, ptr);
-    // Python always includes a decimal point to distinguish floats from ints
-    if (s.find('.') == std::string::npos &&
-        s.find('e') == std::string::npos &&
-        s.find('E') == std::string::npos) {
-        s += ".0";
+    char buf[128];
+    int len = snprintf(buf, sizeof(buf), "%.10f", (double)v);
+    std::string s(buf, len);
+    
+    // Trim trailing zeros but keep .0
+    size_t last = s.find_last_not_of('0');
+    if (last != std::string::npos) {
+        if (s[last] == '.') {
+            s = s.substr(0, last + 2);
+        } else {
+            s = s.substr(0, last + 1);
+        }
     }
     return s;
 }
