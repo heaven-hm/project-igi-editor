@@ -2578,6 +2578,13 @@ void App::SnapObjectsToTerrain() {
     int skipped = 0;
     int failed = 0;
     for (auto& obj : objects) {
+        // Skip non-spatial task nodes: HumanAI, PatrolPath, ConditionalContainer, LevelFlow, etc.
+        // These have no world position (stored as 0,0,0) and no model to snap.
+        // IGI world coordinates are in the millions range, so (0,0) is always outside the map.
+        if (obj.modelId.empty() || (obj.pos.x == 0.0 && obj.pos.y == 0.0)) {
+            skipped++;
+            continue;
+        }
         // Skip snapping for Player Jones (000_01_1) to preserve exact QSC position
         if (obj.modelId == "000_01_1") {
             skipped++;
