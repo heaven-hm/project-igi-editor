@@ -556,14 +556,14 @@ std::vector<std::string> ParseManbNames(const std::vector<uint8_t>& bytes, const
 }
 
 // ---------------------------------------------------------------------------
-// ATTA attachment records (72 bytes each)
+// ATTA attachment records (68 bytes each)
 // ---------------------------------------------------------------------------
 
 std::vector<Attachment> ParseAttachments(const std::vector<uint8_t>& bytes, const std::vector<ChunkInfo>& chunks) {
     const ChunkInfo* atta = FindChunk(chunks, "ATTA");
     if (!atta || atta->size == 0) return {};
 
-    const size_t stride = 72;
+    const size_t stride = 68;
     const size_t count  = atta->size / stride;
     std::vector<Attachment> result(count);
     for (size_t i = 0; i < count; ++i) {
@@ -576,7 +576,7 @@ std::vector<Attachment> ParseAttachments(const std::vector<uint8_t>& bytes, cons
         result[i].pos.x  = ReadValue<float>  (bytes, base + 16);
         result[i].pos.y  = ReadValue<float>  (bytes, base + 20);
         result[i].pos.z  = ReadValue<float>  (bytes, base + 24);
-        result[i].boneId = ReadValue<int32_t>(bytes, base + 68);
+        result[i].boneId = ReadValue<int32_t>(bytes, base + 64);
     }
     return result;
 }
@@ -590,26 +590,25 @@ std::vector<Attachment> ParseAttachments(const std::vector<uint8_t>& bytes, cons
 // ---------------------------------------------------------------------------
 
 std::vector<MefAttachment> ParseMefAttachments(const std::vector<uint8_t>& bytes, const ChunkInfo& chunk) {
-    const size_t stride = 72;
+    const size_t stride = 68;
     const size_t count  = chunk.size / stride;
     std::vector<MefAttachment> attas(count);
     for (size_t i = 0; i < count; ++i) {
         const size_t base = chunk.data + i * stride;
         std::memcpy(attas[i].name, &bytes[base + 0], 16);
-        attas[i].px        = ReadValue<float>   (bytes, base + 16);
-        attas[i].py        = ReadValue<float>   (bytes, base + 20);
-        attas[i].pz        = ReadValue<float>   (bytes, base + 24);
-        attas[i].r00       = ReadValue<float>   (bytes, base + 28);
-        attas[i].r01       = ReadValue<float>   (bytes, base + 32);
-        attas[i].r02       = ReadValue<float>   (bytes, base + 36);
-        attas[i].r03       = ReadValue<float>   (bytes, base + 40);
-        attas[i].r04       = ReadValue<float>   (bytes, base + 44);
-        attas[i].r05       = ReadValue<float>   (bytes, base + 48);
-        attas[i].r06       = ReadValue<float>   (bytes, base + 52);
-        attas[i].r07       = ReadValue<float>   (bytes, base + 56);
-        attas[i].r08       = ReadValue<float>   (bytes, base + 60);
-        attas[i].unknown09 = ReadValue<uint32_t>(bytes, base + 64);
-        attas[i].boneId    = ReadValue<int32_t> (bytes, base + 68);
+        attas[i].px  = ReadValue<float>  (bytes, base + 16);
+        attas[i].py  = ReadValue<float>  (bytes, base + 20);
+        attas[i].pz  = ReadValue<float>  (bytes, base + 24);
+        attas[i].r00 = ReadValue<float>  (bytes, base + 28);
+        attas[i].r01 = ReadValue<float>  (bytes, base + 32);
+        attas[i].r02 = ReadValue<float>  (bytes, base + 36);
+        attas[i].r03 = ReadValue<float>  (bytes, base + 40);
+        attas[i].r04 = ReadValue<float>  (bytes, base + 44);
+        attas[i].r05 = ReadValue<float>  (bytes, base + 48);
+        attas[i].r06 = ReadValue<float>  (bytes, base + 52);
+        attas[i].r07 = ReadValue<float>  (bytes, base + 56);
+        attas[i].r08 = ReadValue<float>  (bytes, base + 60);
+        attas[i].boneId = ReadValue<int32_t>(bytes, base + 64);
     }
     return attas;
 }

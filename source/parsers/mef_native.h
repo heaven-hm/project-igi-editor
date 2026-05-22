@@ -52,7 +52,6 @@ struct MefAttachment {
     float r00, r01, r02;
     float r03, r04, r05;
     float r06, r07, r08;
-    uint32_t unknown09;
     int32_t boneId;
 };
 
