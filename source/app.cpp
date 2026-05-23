@@ -19,6 +19,7 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <unordered_map>
 
 /*
 ================================================================================
@@ -1613,6 +1614,10 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		SaveCurrentLevel();
 	}
 
+	// Undo / Redo
+	if (Utils::IsKeyBindingPressed(config.keyUndo)) { Undo(); return; }
+	if (Utils::IsKeyBindingPressed(config.keyRedo)) { Redo(); return; }
+
 	// Reset Level
 	if (Utils::IsKeyBindingPressed(config.keyResetLevel)) {
 		ResetLevel();
@@ -1655,7 +1660,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		PasteTask();
 		return;
 	}
-	if (Utils::IsKeyBindingPressed(config.keyDeleteTask)) {
+	if (key == 127 || Utils::IsKeyBindingPressed(config.keyDeleteTask)) {
 		DeleteSelectedTask();
 		return;
 	}
@@ -1704,17 +1709,19 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	if (toupper(key) == toupper(config.keyRotateAlpha)) { input_.keys_ |= MK_MANIP_A; return; }
 	if (toupper(key) == toupper(config.keyRotateBeta))  { input_.keys_ |= MK_MANIP_B; return; }
 	if (toupper(key) == toupper(config.keyRotateGamma)) { input_.keys_ |= MK_MANIP_G; return; }
-	if (toupper(key) == toupper(config.keySnapGround))  { 
-        input_.keys_ |= MK_MANIP_S; 
+	if (toupper(key) == toupper(config.keySnapGround))  {
+        PushUndoState();
+        input_.keys_ |= MK_MANIP_S;
         if (selected_object_index_ >= 0) UpdateMarkerManipulation();
-        input_.keys_ &= ~MK_MANIP_S; 
-        return; 
+        input_.keys_ &= ~MK_MANIP_S;
+        return;
     }
-	if (toupper(key) == toupper(config.keySnapObject))  { 
-        input_.keys_ |= MK_MANIP_O; 
+	if (toupper(key) == toupper(config.keySnapObject))  {
+        PushUndoState();
+        input_.keys_ |= MK_MANIP_O;
         if (selected_object_index_ >= 0) UpdateMarkerManipulation();
-        input_.keys_ &= ~MK_MANIP_O; 
-        return; 
+        input_.keys_ &= ~MK_MANIP_O;
+        return;
     }
 	if (key == ' ') { input_.keys_ |= MK_MANIP_SPACE; return; }
 
@@ -1952,9 +1959,9 @@ void App::Input_OnKeyboardUp(unsigned char key, int x, int y) {
 		}
 	}
 	// Object Manipulation from QED config
-	if (toupper(key) == toupper(config.keyRotateAlpha)) { input_.keys_ &= ~MK_MANIP_A; }
-	if (toupper(key) == toupper(config.keyRotateBeta))  { input_.keys_ &= ~MK_MANIP_B; }
-	if (toupper(key) == toupper(config.keyRotateGamma)) { input_.keys_ &= ~MK_MANIP_G; }
+	if (toupper(key) == toupper(config.keyRotateAlpha)) { input_.keys_ &= ~MK_MANIP_A; undo_state_pushed_for_manip_ = false; }
+	if (toupper(key) == toupper(config.keyRotateBeta))  { input_.keys_ &= ~MK_MANIP_B; undo_state_pushed_for_manip_ = false; }
+	if (toupper(key) == toupper(config.keyRotateGamma)) { input_.keys_ &= ~MK_MANIP_G; undo_state_pushed_for_manip_ = false; }
 	if (toupper(key) == toupper(config.keySnapGround))  { input_.keys_ &= ~MK_MANIP_S; }
 	if (toupper(key) == toupper(config.keySnapObject))  { input_.keys_ &= ~MK_MANIP_O; }
 	if (key == ' ') { input_.keys_ &= ~MK_MANIP_SPACE; }
@@ -2718,6 +2725,29 @@ void App::SnapObjectsToTerrain() {
     }
     Logger::Get().Log(LogLevel::INFO, "[App] Snap complete. snapped=" + std::to_string(snapped) + " skipped=" + std::to_string(skipped) + " failed=" + std::to_string(failed));
 }
+static glm::dmat3 BuildRotMatZXY(const glm::dvec3& euler) {
+	glm::dmat4 m(1.0);
+	m = glm::rotate(m, euler.z, glm::dvec3(0, 0, 1));
+	m = glm::rotate(m, euler.x, glm::dvec3(1, 0, 0));
+	m = glm::rotate(m, euler.y, glm::dvec3(0, 1, 0));
+	return glm::dmat3(m);
+}
+
+// R[1][2]=sin(x); R[0][2]=-cx*sy, R[2][2]=cx*cy; R[1][0]=-sz*cx, R[1][1]=cz*cx
+static glm::dvec3 ExtractEulerZXY(const glm::dmat3& R) {
+	double sin_x = glm::clamp((double)R[1][2], -1.0, 1.0);
+	double angle_x = std::asin(sin_x);
+	double angle_y, angle_z;
+	if (std::abs(std::cos(angle_x)) > 1e-6) {
+		angle_y = std::atan2(-R[0][2], R[2][2]);
+		angle_z = std::atan2(-R[1][0], R[1][1]);
+	} else {
+		angle_y = 0.0;
+		angle_z = std::atan2(R[0][1], R[0][0]);
+	}
+	return glm::dvec3(angle_x, angle_y, angle_z);
+}
+
 void App::UpdateMarkerManipulation() {
 	if (selected_object_index_ < 0) return;
 	auto& objects = level_.GetLevelObjects().GetObjects();
@@ -2743,6 +2773,16 @@ void App::UpdateMarkerManipulation() {
 	else if (input_.keys_ & MK_MANIP_B) marker_manip_.mode_ = ManipulationMode::RotateBeta;
 	else if (input_.keys_ & MK_MANIP_G) marker_manip_.mode_ = ManipulationMode::RotateGamma;
 	else               marker_manip_.mode_ = ManipulationMode::None;
+
+	// Push undo state once at the start of each new manipulation gesture
+	if (marker_manip_.mode_ != ManipulationMode::None) {
+		if (!undo_state_pushed_for_manip_) {
+			PushUndoState();
+			undo_state_pushed_for_manip_ = true;
+		}
+	} else {
+		undo_state_pushed_for_manip_ = false;
+	}
 
 	const float moveSensitivity = 200.0f;
 	const float rotSensitivity  = 0.008f; // radians per pixel
@@ -2778,10 +2818,44 @@ void App::UpdateMarkerManipulation() {
 		marker_manip_.start_rot_.z = obj.rot.z;
 	}
 
-	// Propagate transform to children
+	// Apply snap-to-ground BEFORE computing delta so children get the full displacement
+	if (input_.keys_ & MK_MANIP_S) {
+		bool isUnderground = Utils::IsUndergroundModel(obj.name, obj.modelId) || (obj.type == "Underground");
+		float terrainZ = 0.0f;
+		if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ, isUnderground)) {
+			float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
+			obj.snap_z_offset = isUnderground ? 0.0 : (double)(zOffset * 40.96f * obj.scale);
+			obj.pos.z = (double)terrainZ + obj.snap_z_offset;
+			obj.modified = true;
+		}
+	}
+
+	// Apply snap-to-nearest-object BEFORE computing delta so children get the full displacement
+	if (input_.keys_ & MK_MANIP_O) {
+		int nearestIdx = -1;
+		double minDist = 1e10;
+		auto& objects = level_.GetLevelObjects().GetObjects();
+		for (int i = 0; i < (int)objects.size(); ++i) {
+			if (i == selected_object_index_ || objects[i].deleted) continue;
+			double d = glm::distance(obj.pos, objects[i].pos);
+			if (d < minDist) { minDist = d; nearestIdx = i; }
+		}
+		if (nearestIdx >= 0) {
+			obj.pos = objects[nearestIdx].pos;
+			obj.modified = true;
+			Logger::Get().Log(LogLevel::INFO, "[App] Snapped object to nearest object: " + objects[nearestIdx].type);
+		}
+	}
+
+	if (input_.keys_ & MK_MANIP_SPACE) {
+		obj.rot = glm::vec3(0.0f);
+		obj.modified = true;
+	}
+
+	// Compute full delta (includes snap displacement)
 	glm::dvec3 deltaPos = obj.pos - oldPos;
 	glm::dvec3 deltaRot = obj.rot - oldRot;
-	
+
 	bool changed = (std::abs(deltaPos.x) > 1e-6 || std::abs(deltaPos.y) > 1e-6 || std::abs(deltaPos.z) > 1e-6 ||
 	                std::abs(deltaRot.x) > 1e-6 || std::abs(deltaRot.y) > 1e-6 || std::abs(deltaRot.z) > 1e-6);
 
@@ -2807,55 +2881,14 @@ void App::UpdateMarkerManipulation() {
 		status_message_.clear();
 	}
 
-	if (changed || (input_.keys_ & MK_MANIP_S) || (input_.keys_ & MK_MANIP_O)) {
-		PropagateTransformToChildren(selected_object_index_, deltaPos, deltaRot, oldPos);
+	if (changed || (input_.keys_ & MK_MANIP_S) || (input_.keys_ & MK_MANIP_O) || (input_.keys_ & MK_MANIP_SPACE)) {
+		glm::dmat3 deltaWorld = BuildRotMatZXY(obj.rot) * glm::transpose(BuildRotMatZXY(oldRot));
+		PropagateTransformToChildren(selected_object_index_, deltaPos, deltaWorld, oldPos);
 		obj.modified = true;
-
-		// Live update from Object to Task Editor
 		level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
 		if (task_editor_open_) {
 			edit_string_ = obj.qscLine;
 		}
-	}
-
-	if (input_.keys_ & MK_MANIP_S) {
-		bool isUnderground = Utils::IsUndergroundModel(obj.name, obj.modelId) || (obj.type == "Underground");
-		float terrainZ = 0.0f;
-		if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ, isUnderground)) {
-			float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
-			if (isUnderground) {
-				obj.snap_z_offset = 0.0;
-			} else {
-				obj.snap_z_offset = (double)(zOffset * 40.96f * obj.scale);
-			}
-			obj.pos.z = (double)terrainZ + obj.snap_z_offset;
-			obj.modified = true;
-		}
-	}
-
-	if (input_.keys_ & MK_MANIP_O) {
-		// Snap to nearest object
-		int nearestIdx = -1;
-		double minDist = 1e10;
-		const auto& objects = level_.GetLevelObjects().GetObjects();
-		for (int i = 0; i < (int)objects.size(); ++i) {
-			if (i == selected_object_index_ || objects[i].deleted) continue;
-			double d = glm::distance(obj.pos, objects[i].pos);
-			if (d < minDist) {
-				minDist = d;
-				nearestIdx = i;
-			}
-		}
-		if (nearestIdx >= 0) {
-			obj.pos = objects[nearestIdx].pos;
-			obj.modified = true;
-			Logger::Get().Log(LogLevel::INFO, "[App] Snapped object to nearest object: " + objects[nearestIdx].type);
-		}
-	}
-
-	if (input_.keys_ & MK_MANIP_SPACE) {
-		obj.rot = glm::vec3(0.0f);
-		obj.modified = true;
 	}
 
 	if (dx != 0 || dy != 0) {
@@ -2867,52 +2900,54 @@ void App::UpdateMarkerManipulation() {
 	}
 }
 
-void App::PropagateTransformToChildren(int parentIdx, const glm::dvec3& deltaPos, const glm::dvec3& deltaRot, const glm::dvec3& pivot) {
+void App::PushUndoState() {
+	auto& objects = level_.GetLevelObjects().GetObjects();
+	object_undo_stack_.push_back(objects);
+	object_redo_stack_.clear();
+	if (object_undo_stack_.size() > 20)
+		object_undo_stack_.erase(object_undo_stack_.begin());
+}
+
+void App::Undo() {
+	if (object_undo_stack_.empty()) { status_message_ = "Nothing to undo"; return; }
+	auto& objects = level_.GetLevelObjects().GetObjects();
+	object_redo_stack_.push_back(objects);
+	objects = object_undo_stack_.back();
+	object_undo_stack_.pop_back();
+	level_.SaveAndReloadObjects();
+	status_message_ = "Undo";
+}
+
+void App::Redo() {
+	if (object_redo_stack_.empty()) { status_message_ = "Nothing to redo"; return; }
+	auto& objects = level_.GetLevelObjects().GetObjects();
+	object_undo_stack_.push_back(objects);
+	objects = object_redo_stack_.back();
+	object_redo_stack_.pop_back();
+	level_.SaveAndReloadObjects();
+	status_message_ = "Redo";
+}
+
+void App::PropagateTransformToChildren(int parentIdx, const glm::dvec3& deltaPos, const glm::dmat3& deltaWorld, const glm::dvec3& pivot) {
 	auto& objects = level_.GetLevelObjects().GetObjects();
 	std::vector<int> children = objects[parentIdx].childrenIndices;
 
 	for (int childIdx : children) {
 		LevelObject& child = objects[childIdx];
-		child.pos += deltaPos;
-		// Apply rotation delta (if any)
-		bool hasRot = (std::abs(deltaRot.x) > 0.0001 || std::abs(deltaRot.y) > 0.0001 || std::abs(deltaRot.z) > 0.0001);
-		if (hasRot) {
-			// Position change due to rotation around pivot (parent's old position)
-			glm::dvec3 relativePos = child.pos - pivot;
-			if (std::abs(deltaRot.z) > 0.0001) {
-				double cosZ = cos(deltaRot.z), sinZ = sin(deltaRot.z);
-				double nx = relativePos.x * cosZ - relativePos.y * sinZ;
-				double ny = relativePos.x * sinZ + relativePos.y * cosZ;
-				relativePos.x = nx; relativePos.y = ny;
-			}
-			if (std::abs(deltaRot.x) > 0.0001) {
-				double cosX = cos(deltaRot.x), sinX = sin(deltaRot.x);
-				double ny = relativePos.y * cosX - relativePos.z * sinX;
-				double nz = relativePos.y * sinX + relativePos.z * cosX;
-				relativePos.y = ny; relativePos.z = nz;
-			}
-			if (std::abs(deltaRot.y) > 0.0001) {
-				double cosY = cos(deltaRot.y), sinY = sin(deltaRot.y);
-				double nx = relativePos.x * cosY + relativePos.z * sinY;
-				double nz = -relativePos.x * sinY + relativePos.z * cosY;
-				relativePos.x = nx; relativePos.z = nz;
-			}
-			child.pos = pivot + relativePos;
-			child.rot += deltaRot;
 
-			// If it's a soldier, update its internal AI graph position too
-			if (child.type == "HumanSoldier" || child.type == "HumanSoldierFemale") {
-				child.graphPos += deltaPos;
-			}
-		} else {
-			// Just a translation move
-			// If it's a soldier, update its internal AI graph position too
-			if (child.type == "HumanSoldier" || child.type == "HumanSoldierFemale") {
-				child.graphPos += deltaPos;
-			}
+		// Rotate child's relative position around the parent's old pivot, then translate
+		glm::dvec3 relPos = child.pos - pivot;
+		child.pos = pivot + glm::dvec3(deltaWorld * relPos) + deltaPos;
+
+		// Compose child's orientation with the parent's world-space rotation delta
+		child.rot = ExtractEulerZXY(deltaWorld * BuildRotMatZXY(child.rot));
+
+		if (child.type == "HumanSoldier" || child.type == "HumanSoldierFemale") {
+			child.graphPos += deltaPos;
 		}
+
 		child.modified = true;
-		PropagateTransformToChildren(childIdx, deltaPos, deltaRot, pivot);
+		PropagateTransformToChildren(childIdx, deltaPos, deltaWorld, pivot);
 	}
 }
 
@@ -2935,8 +2970,9 @@ int App::PickObjectAtScreenPos(int screen_x, int screen_y) {
 	glm::mat4 mvp_base = proj * view * glm::scale(glm::mat4(1.0f), glm::vec3(RENDERER_MODEL_SCALE_DOWN));
 	constexpr float BASE_SCALE = 40.96f;
 
-	int closest_index = -1;
-	float closest_depth = FLT_MAX;
+	// Pass 1: collect every object whose screen AABB covers the cursor
+	struct Candidate { int index; float min_depth; };
+	std::vector<Candidate> candidates;
 
 	for (size_t i = 0; i < objects.size(); ++i) {
 		const auto& obj = objects[i];
@@ -2983,13 +3019,33 @@ int App::PickObjectAtScreenPos(int screen_x, int screen_y) {
 
 		if (!any_front) continue;
 
-		float margin = 6.0f;
+		constexpr float margin = 6.0f;
 		if ((float)screen_x >= min_px - margin && (float)screen_x <= max_px + margin &&
 			(float)screen_y >= min_py - margin && (float)screen_y <= max_py + margin) {
-			if (closest_index == -1 || min_depth < closest_depth) {
-				closest_depth = min_depth;
-				closest_index = (int)i;
-			}
+			candidates.push_back({ (int)i, min_depth });
+		}
+	}
+
+	// Pass 2: build a depth map, then pick the closest candidate that isn't occluded by its parent.
+	// A child is occluded when the camera is outside the parent building: the parent's AABB depth
+	// (closer to camera = smaller clip.w) is less than the child's depth.
+	// When the camera is inside the building the parent's depth will be larger, so the child is allowed.
+	std::unordered_map<int, float> cand_depth;
+	cand_depth.reserve(candidates.size());
+	for (const auto& c : candidates) cand_depth[c.index] = c.min_depth;
+
+	int closest_index = -1;
+	float closest_depth = FLT_MAX;
+	for (const auto& c : candidates) {
+		const auto& obj = objects[c.index];
+		if (obj.parentIndex != -1) {
+			auto it = cand_depth.find(obj.parentIndex);
+			if (it != cand_depth.end() && it->second < c.min_depth)
+				continue; // parent is in front — camera is outside building, skip child
+		}
+		if (c.min_depth < closest_depth) {
+			closest_depth = c.min_depth;
+			closest_index = c.index;
 		}
 	}
 
@@ -3072,6 +3128,18 @@ void App::SaveAndCompile() {
 		return;
 	}
 
+	// Backup existing QVM before overwriting so we can revert if compile produces garbage
+	std::vector<uint8_t> qvm_backup;
+	{
+		std::ifstream backup_in(qvm_dest, std::ios::binary);
+		if (backup_in) {
+			qvm_backup.assign(std::istreambuf_iterator<char>(backup_in),
+			                  std::istreambuf_iterator<char>());
+			Logger::Get().Log(LogLevel::INFO, "[App] Backed up existing QVM (" +
+			                  std::to_string(qvm_backup.size()) + " bytes)");
+		}
+	}
+
 	Logger::Get().Log(LogLevel::INFO, "[App] Compiling QSC (native)");
 	std::ifstream qscFile(qsc_source);
 	std::string qscSrc((std::istreambuf_iterator<char>(qscFile)), std::istreambuf_iterator<char>());
@@ -3081,9 +3149,30 @@ void App::SaveAndCompile() {
 	bool success = lexResult.ok && parseResult.ok &&
 	               qvm::CompileToFile(*parseResult.program, qvm_dest, &compileErr);
 	if (success) {
-		Logger::Get().Log(LogLevel::INFO, "[App] Successfully compiled and deployed QVM to: " + qvm_dest);
+		// Round-trip validate: parse the QVM we just wrote to catch silent corruption
+		QVMFile written_qvm = QVM_Parse(qvm_dest);
+		if (!written_qvm.valid) {
+			Logger::Get().Log(LogLevel::ERR, "[App] CRITICAL: Written QVM failed validation — reverting to backup");
+			if (!qvm_backup.empty()) {
+				std::ofstream revert(qvm_dest, std::ios::binary | std::ios::trunc);
+				if (revert) {
+					revert.write(reinterpret_cast<const char*>(qvm_backup.data()), qvm_backup.size());
+					Logger::Get().Log(LogLevel::INFO, "[App] Backup QVM restored successfully");
+				} else {
+					Logger::Get().Log(LogLevel::ERR, "[App] FATAL: Could not restore backup QVM");
+				}
+			}
+			Utils::LogAndShowError(
+				"Save failed: the compiled QVM was invalid and has been reverted.\n"
+				"Your edits are NOT lost — they remain in the editor.",
+				"IGI Editor - Save Error");
+			return;
+		}
+		Logger::Get().Log(LogLevel::INFO, "[App] QVM round-trip validation passed. Deployed to: " + qvm_dest);
 	} else {
-		Logger::Get().Log(LogLevel::ERR, "[App] Failed to compile QSC");
+		std::string detail = compileErr.empty() ? "(no detail)" : compileErr;
+		Logger::Get().Log(LogLevel::ERR, "[App] Failed to compile QSC. Detail: " + detail);
+		Utils::LogAndShowError("Compile failed. Error: " + detail, "IGI Editor - Compile Error");
 	}
 }
 
@@ -3266,6 +3355,7 @@ void App::ProcessTreeViewHover(int mx, int my) {
 
 void App::CreateNewTask() {
     if (task_picker_open_) return;
+    PushUndoState();
     auto& objects = level_.GetLevelObjects().GetObjects();
     if (selected_object_index_ < 0 && !objects.empty()) {
         status_message_ = "Error: Must select a valid parent task first.";
@@ -3300,6 +3390,7 @@ void App::CreateNewTask() {
 
 void App::DeleteSelectedTask() {
     if (selected_object_index_ < 0) return;
+    PushUndoState();
     auto& objects = level_.GetLevelObjects().GetObjects();
     if (selected_object_index_ >= (int)objects.size()) return;
     int parentIndex = objects[selected_object_index_].parentIndex;
@@ -3353,6 +3444,7 @@ void App::CopySelectedTask(bool includeSubtree) {
 
 void App::PasteTask() {
     if (clipboard_.empty()) return;
+    PushUndoState();
     auto& objects = level_.GetLevelObjects().GetObjects();
     if (selected_object_index_ < 0 || selected_object_index_ >= (int)objects.size()) {
         status_message_ = "Error: Must select a valid parent task first.";

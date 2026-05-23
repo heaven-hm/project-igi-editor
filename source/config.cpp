@@ -91,7 +91,8 @@ void Config::CreateDefault() {
     data_.keyQuit = {0x51, true, false, false};    
     data_.keyHelp = {0x48, false, false, false};   
     data_.keyResetScript = {0x52, false, true, false}; 
-    data_.keyClipMode = {VK_F3, false, false, false}; 
+    data_.keyClipMode = {VK_F3, false, false, false};
+    data_.keyDeleteTask = {VK_DELETE, false, false, false};
     data_.enableLogging = true;
     data_.debugLogging = false;
     data_.consoleAutoActivate = 2;
@@ -222,6 +223,7 @@ void Config::Load() {
                 else if (eventName == "TaskNew") data_.keyCreateNewTask = ParseKeyBinding(binding);
                 else if (eventName == "TaskCopy") data_.keyCopyTask = ParseKeyBinding(binding);
                 else if (eventName == "TaskPaste") data_.keyPasteTask = ParseKeyBinding(binding);
+                else if (eventName == "DeleteTask") data_.keyDeleteTask = ParseKeyBinding(binding);
                 else if (eventName == "TaskSetID") data_.keyAssignTaskID = ParseKeyBinding(binding);
                 else if (eventName == "AnimTaskStartRecording") data_.keyStartRecording = ParseKeyBinding(binding);
                 else if (eventName == "AnimTaskGoToCursor") data_.keyGoToCursor = ParseKeyBinding(binding);

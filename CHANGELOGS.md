@@ -1,5 +1,41 @@
 # Changelogs
 
+## 1.7.0 - Robust Hierarchical Manipulation & Undo/Redo
+This release focus on stabilizing complex object manipulation and providing essential safety features for level editing.
+
+### 🔄 State Management & Safety
+- **Multi-Step Undo/Redo**: Implemented a comprehensive Undo/Redo system for object manipulation. The editor now tracks level snapshots, allowing users to revert and redo changes with `CTRL+Z` and `CTRL+Y` (fully configurable via `qedkeybindings.qsc`).
+- **Persistent State Fix**: Resolved a persistent bug where modifications to building objects were reset when selecting a different object.
+- **Improved Change Tracking**: Updated `LevelObjects::SaveToQSC` to automatically clear stale cached lines for all modified objects, ensuring changes are always reflected in the underlying script.
+
+### 📐 Precision Hierarchical Manipulation
+- **Global Root Pivot Enforcement**: Fixed a critical bug in hierarchical rotation where child objects would drift or disappear. Nested descendants (furniture, items, AI) now rotate relative to the root building origin, ensuring perfect coordinate stability.
+- **AI Graph Synchronization**: AI soldiers inside buildings now have their internal `graphPos` metadata automatically updated during building translation and rotation, maintaining pathing integrity.
+- **Building Snap Preservation**: Refined hierarchical "Snap to Ground" and "Snap to Object" to ensure all child objects maintain their relative offsets after the parent snaps.
+- **Snap Search Radius**: Added a 5000-unit search radius to "Snap to Object" for more predictable nearest-neighbor detection.
+
+### 📜 Hierarchical Synchronization
+- **Hierarchical Task Editor Sync**: The Task Editor now live-updates with the **full hierarchical script tree** when a container object is manipulated, preventing data loss in the script view.
+- **Balanced Parenthesis Engine**: Completely refactored the QSC serialization engine to guarantee perfectly balanced parentheses and correct comma separation in saved mission files.
+
+---
+
+## 1.6.0 - Advanced QVM Configuration & In-Memory Logic
+This update transitions the editor to a proprietary configuration system powered by the IGI bytecode engine.
+
+### ⚙️ QSC/QVM Configuration System
+- **Unified Config Standard**: Migrated all editor settings and keybindings from legacy `.txt` files to a robust `.qsc` (source) and `.qvm` (compiled) system.
+- **In-Memory Decompilation**: Implemented `QVM_DecompileToString` in `qvm_decompiler.cpp`. The editor now parses compiled `.qvm` files and decompiles them directly into a RAM string for processing, eliminating temporary file overhead.
+- **Automated Startup Compilation**: The editor now automatically scans the `content/qed/` directory and compiles any new or updated `.qsc` configuration scripts to `.qvm` bytecode at launch.
+- **QED Prefix Enforcement**: Enforced a new project-wide convention where all configuration keys must be prefixed with `QED` (e.g., `QEDFontSize`, `QEDLevel`) and lines terminate with a semicolon (`;`).
+
+### 🛠️ Advanced QED Parameters
+- **New Engine Parameters**: Added support for 20+ advanced configuration settings including `QEDConsoleAutoActivate`, `QEDSearchType`, `QEDInvertMouse`, `QEDDisplayTaskNote`, and `QEDCameraLock`.
+- **Dynamic File Overrides**: Implemented `QEDSetObjectFile("path")` with support for `LOCAL:` path resolution, allowing modders to load specific object scripts for rapid testing.
+- **Camera State Persistence**: Added configuration support for initial camera orientation, radius, and matrices, allowing the viewport to restore its exact state between sessions.
+
+---
+
 ## 1.5.0 - Asset Extraction & Advanced Native Fixes
 This release introduces automated asset extraction and addresses critical rendering and caching bugs for complex native models.
 

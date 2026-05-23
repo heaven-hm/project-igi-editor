@@ -160,6 +160,10 @@ private:
 	int						level_root_index_;
 	std::vector<LevelObject> clipboard_;
 
+	std::vector<std::vector<LevelObject>> object_undo_stack_;
+	std::vector<std::vector<LevelObject>> object_redo_stack_;
+	bool					undo_state_pushed_for_manip_ = false;
+
 
 	int64_t					prior_frame_time_;
 
@@ -216,7 +220,10 @@ private:
 	void					UpdateViewDefine();
 	void					EditorProcessClick();
 	void					UpdateMarkerManipulation();
-	void					PropagateTransformToChildren(int parentIdx, const glm::dvec3& deltaPos, const glm::dvec3& deltaRot, const glm::dvec3& pivot);
+	void					PropagateTransformToChildren(int parentIdx, const glm::dvec3& deltaPos, const glm::dmat3& deltaWorld, const glm::dvec3& pivot);
+	void					PushUndoState();
+	void					Undo();
+	void					Redo();
 	void					PushTaskEditorUndoState();
 	void					UndoTaskEditorChange();
 	void					RedoTaskEditorChange();

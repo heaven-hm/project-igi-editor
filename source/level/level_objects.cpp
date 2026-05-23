@@ -577,9 +577,10 @@ void LevelObjects::SaveToQSC(const std::string& qscPath) {
         return;
     }
 
-    // Only update coordinates for objects that were actually modified
+    // Clear stale cached lines and update coordinates for modified objects
     for (auto& obj : objects_) {
         if (!obj.deleted && obj.modified) {
+            obj.qscLine.clear();
             UpdateCoordinatesInLine(obj);
         }
     }
@@ -597,7 +598,13 @@ void LevelObjects::SaveToQSC(const std::string& qscPath) {
         if (obj.parentIndex != -1 || obj.deleted) continue;
 
         std::string serialized = SerializeObjectRecursive(objects_, i);
-        if (serialized.empty()) continue;
+        if (serialized.empty()) {
+            Logger::Get().Log(LogLevel::WARNING,
+                "[LevelObjects::SaveToQSC] Root object idx=" + std::to_string(i) +
+                " name='" + objects_[i].name + "' type='" + objects_[i].type +
+                "' serialized to empty — will be absent from saved QSC");
+            continue;
+        }
 
         if (!first) ss << "\n";
         ss << serialized << ";";
@@ -844,6 +851,8 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
 
     if (obj.childrenIndices.empty()) {
         obj.qscLine = GenerateTaskLine(obj);
+    } else {
+        obj.qscLine.clear(); // force re-serialization of this container subtree
     }
 }
 
