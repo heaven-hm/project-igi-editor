@@ -6,6 +6,8 @@
 #include "pch.h"
 #include "flat_sky_layer.inl"
 #include "config.h"
+#include "utils.h"
+
 
 /*
 ================================================================================
@@ -42,7 +44,7 @@ void FlatSkyLayer::Setup(int layer_no, IRenderResLoader * render_res_loader, con
 	char full_tex_filename[1024];
 	Str_SPrintf(full_tex_filename, 1024,
 		"%s/missions/location0/common/textures/%s",
-		Config::Get().igiPath.c_str(), tex_filename_only);
+		Utils::GetIGIRootPath().c_str(), tex_filename_only);
 
 	pics_s pics = {};
 	if (Tex_Load(full_tex_filename, pics)) {

@@ -516,21 +516,14 @@ static std::vector<std::shared_ptr<ASTNode>> walk(
     return statements;
 }
 
-bool QVM_Decompile(const QVMFile& qvm, const std::string& outpath) {
+std::string QVM_DecompileToString(const QVMFile& qvm) {
     if (!qvm.valid) {
         Logger::Get().Log(LogLevel::ERR, "[QVM_Decompile] QVM is not valid: " + qvm.error);
-        return false;
-    }
-
-    std::ofstream out(outpath, std::ios::binary);
-    if (!out.is_open()) {
-        Logger::Get().Log(LogLevel::ERR, "[QVM_Decompile] Cannot open output file: " + outpath);
-        return false;
+        return "";
     }
 
     if (qvm.instructions.empty()) {
-        Logger::Get().Log(LogLevel::INFO, "[QVM_Decompile] No instructions to decompile.");
-        return true;
+        return "";
     }
 
     std::map<uint32_t, size_t> addrToInstrIndex;
@@ -543,8 +536,7 @@ bool QVM_Decompile(const QVMFile& qvm, const std::string& outpath) {
     auto qvmtree = walk(qvm, addrToInstrIndex, address, success);
     if (!success) {
         Logger::Get().Log(LogLevel::ERR, "[QVM_Decompile] Decompilation failed during AST reconstruction.");
-        out.close();
-        return false;
+        return "";
     }
 
     std::string qvmtext;
@@ -554,6 +546,21 @@ bool QVM_Decompile(const QVMFile& qvm, const std::string& outpath) {
         } else {
             qvmtext += st->strepr(0) + ";\n";
         }
+    }
+
+    return qvmtext;
+}
+
+bool QVM_Decompile(const QVMFile& qvm, const std::string& outpath) {
+    std::string qvmtext = QVM_DecompileToString(qvm);
+    if (qvmtext.empty() && !qvm.instructions.empty()) {
+        return false;
+    }
+
+    std::ofstream out(outpath, std::ios::binary);
+    if (!out.is_open()) {
+        Logger::Get().Log(LogLevel::ERR, "[QVM_Decompile] Cannot open output file: " + outpath);
+        return false;
     }
 
     out << qvmtext;

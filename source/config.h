@@ -11,16 +11,7 @@ struct KeyBinding {
 
 struct ConfigData {
     // [GamePath]
-    std::string igiPath;
     int level;
-    std::string editorPath;     // Path to this editor
-    std::string qEditorPath;    // Path to %APPDATA%\QEditor
-
-    // [Paths]
-    std::string aiPath;
-    std::string filesPath;
-    std::string graphsPath;
-
     // [Marker] - IGI 2 Style Manipulation
     char keySnapGround;
     char keySnapObject;
@@ -84,6 +75,29 @@ struct ConfigData {
     // NEW: Logging
     bool enableLogging;
     bool debugLogging;
+
+    // NEW: Advanced QED Settings
+    int consoleAutoActivate;
+    int searchType;
+    bool invertMouse;
+    bool displayTaskNote;
+    bool allowDynamicSwitching;
+    bool saveConfigOnExit;
+    bool runEvent;
+    bool cameraLock;
+    std::string findTaskName;
+    std::string findTaskNote;
+    std::string findTaskID;
+    std::string findTaskText;
+    std::string taskFileName;
+    std::string objectFilePath;
+    int interpolation;
+
+    // Camera State
+    float cameraOriX, cameraOriY, cameraOriZ;
+    float cameraRadiusX, cameraRadiusY;
+    float cameraPosX, cameraPosY, cameraPosZ;
+    float cameraMatX, cameraMatY, cameraMatZ;
 };
 
 class Config {

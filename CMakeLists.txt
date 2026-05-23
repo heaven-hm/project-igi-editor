@@ -25,6 +25,10 @@ if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     message("Set cmake debug")
 endif ()
 
+if (MSVC)
+  add_compile_options("/FS")
+endif()
+
 
 # set output binary file directory
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
@@ -44,7 +48,7 @@ file(GLOB SHADERS_45 "shaders/45/*.*")
 
 # Add Windows icon resource file
 if (WIN32)
-  list(APPEND SOURCES "assets/igi-editor-icon.rc")
+  list(APPEND SOURCES "assets/igi-editor.rc")
 endif()
 
 source_group("level" FILES ${SOURCES_LEVEL})
@@ -58,7 +62,7 @@ add_executable(igi-editor ${SOURCES} ${SOURCES_LEVEL} ${SOURCES_RENDERER} ${SOUR
 
 if (WIN32)
   set_target_properties(igi-editor PROPERTIES
-    ICON ${PROJECT_SOURCE_DIR}/assets/igi-editor-icon.ico
+    ICON ${PROJECT_SOURCE_DIR}/assets/igi-editor.ico
     OUTPUT_NAME "igi1ed"
   )
 endif()
@@ -117,7 +121,7 @@ if (WIN32)
 
   # Increase PCH memory limit to fix compiler heap errors
   if (MSVC)
-    target_compile_options(igi-editor PRIVATE "/Zm300" "/bigobj")
+    target_compile_options(igi-editor PRIVATE "/Zm300" "/bigobj" "/FS")
   endif()
 
   # Set runtime library based on configuration
@@ -158,14 +162,10 @@ if (WIN32)
   endif()
 
   add_custom_command(TARGET igi-editor POST_BUILD
-    # Create the new folder structure
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:igi-editor>/content/tools"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:igi-editor>/content/qed"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:igi-editor>/content/cache"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:igi-editor>/content/models"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:igi-editor>/content/terrains"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:igi-editor>/content/textures"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:igi-editor>/content/shaders"
+    # Copy assets/content structure directly
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${PROJECT_SOURCE_DIR}/assets/content"
+      "$<TARGET_FILE_DIR:igi-editor>/content"
 
     # Copy files to root (DLLs and version)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -173,17 +173,6 @@ if (WIN32)
       "${DLL_SRC_DIR}/glew32.dll"
       "${PROJECT_SOURCE_DIR}/version"
       "$<TARGET_FILE_DIR:igi-editor>"
-
-    # Copy tools to content/tools
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${PROJECT_SOURCE_DIR}/assets/misc/IGIModels.json"
-      "${PROJECT_SOURCE_DIR}/assets/misc/IGIModelsAllLevel.json"
-      "$<TARGET_FILE_DIR:igi-editor>/content/tools"
-
-    # Copy shaders
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-      "${PROJECT_SOURCE_DIR}/shaders"
-      "$<TARGET_FILE_DIR:igi-editor>/content/shaders"
 
     COMMENT "Copying runtime files to content/ structure"
   )

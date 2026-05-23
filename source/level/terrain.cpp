@@ -9,6 +9,7 @@
 #include "logger.h"
 #include "parsers/qvm_parser.h"
 #include "parsers/qvm_decompiler.h"
+#include "utils.h"
 
 static std::string GetExeDirectory() {
 	char exePath[MAX_PATH];
@@ -22,7 +23,7 @@ static std::string GetExeDirectory() {
 }
 
 static std::string GetTerrainDir(int level_no) {
-	return GetExeDirectory() + "\\content\\terrains\\level" + std::to_string(level_no) + "\\terrain";
+	return Utils::GetIGIRootPath() + "\\missions\\location0\\level" + std::to_string(level_no) + "\\terrain";
 }
 
 /*

@@ -595,7 +595,7 @@ int main(int argc, char **argv) {
 
   // Initialize logger early (handles both GUI and Headless modes)
   std::string exeDir = Utils::GetExeDirectory();
-  Logger::Get().Init(exeDir + "\\igi_editor.log");
+  Logger::Get().Init(exeDir + "\\igi1ed.log");
 
   // Initialize config first (before Folders_Init which uses Config)
   Config::Init();
@@ -621,7 +621,7 @@ int main(int argc, char **argv) {
   std::string igiExePath = igiRoot + "\\igi.exe";
   if (!std::filesystem::exists(igiExePath)) {
     std::string errorMsg = "Fatal Error: 'igi.exe' not found in game directory:\n" + igiRoot +
-                           "\n\nPlease configure a valid IGIPath in config.ini";
+                           "\n\nPlease make sure the editor is placed in the main Project IGI game directory next to 'igi.exe'.";
 #if defined(_WIN32)
     Utils::LogAndShowError(errorMsg, "IGI Editor - Launch Error");
 #else
@@ -689,7 +689,7 @@ int main(int argc, char **argv) {
     iconExeDir = iconExeDir.substr(0, lastSlash);
   }
   std::string iconFilePath =
-      iconExeDir + "\\..\\..\\assets\\igi-editor-icon.ico";
+      iconExeDir + "\\..\\..\\assets\\igi-editor.ico";
 
   HICON hIcon = (HICON)LoadImageA(
       NULL, iconFilePath.c_str(), IMAGE_ICON, GetSystemMetrics(SM_CXICON),

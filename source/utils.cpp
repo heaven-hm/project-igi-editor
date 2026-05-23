@@ -341,6 +341,18 @@ std::string GetVersionString() {
 }
 
 std::string GetLevelQSCPath(int level_no) {
+	const auto& config = Config::Get();
+	if (!config.objectFilePath.empty()) {
+		std::string path = config.objectFilePath;
+		// Handle LOCAL: prefix if needed (for now just strip it as we assume relative to game/exe)
+		if (path.find("LOCAL:") == 0) {
+			path = path.substr(6);
+			// In IGI, LOCAL: usually means it's relative to the game root or mission folder
+			// For the editor, we'll try to resolve it relative to the game root.
+			return GetIGIRootPath() + "\\" + path;
+		}
+		return path;
+	}
 	std::string exeDir = GetExeDirectory();
 	return exeDir + "\\objects.qsc";
 }

@@ -114,7 +114,7 @@ App::~App() {
 bool App::Init(int argc, char** argv) {
 	// Initialize logger with absolute path to exe directory
 	std::string exeDir = Utils::GetExeDirectory();
-	Logger::Get().Init(exeDir + "\\igi_editor.log");
+	Logger::Get().Init(exeDir + "\\igi1ed.log");
 	Logger::Get().Log(LogLevel::INFO, "IGI Editor Initializing...");
 
 	if (!renderer_.Init()) {
@@ -211,10 +211,14 @@ void App::LoadLevel(int level_no) {
 		glm::vec3 start_pos;
 		float start_yaw;
 		if (level_.Load(level_load_params_s, start_pos, start_yaw)) {
-			viewer_.pos_ = start_pos;
-			viewer_.yaw_ = 13.0f; // Manually updated to requested start angle
-			viewer_.pitch_ = 10.0f; // Manually updated to requested start angle
-			viewer_.roll_ = 0.0f;
+			const auto& config = Config::Get();
+			viewer_.pos_ = (config.cameraPosX != 0.0f || config.cameraPosY != 0.0f || config.cameraPosZ != 0.0f) ?
+				glm::vec3(config.cameraPosX, config.cameraPosY, config.cameraPosZ) : start_pos;
+			
+			// Use orientation if provided, otherwise default/start values
+			viewer_.yaw_ = (config.cameraOriX != 0.0f || config.cameraOriY != 0.0f || config.cameraOriZ != 0.0f) ? config.cameraOriX : 13.0f;
+			viewer_.pitch_ = (config.cameraOriX != 0.0f || config.cameraOriY != 0.0f || config.cameraOriZ != 0.0f) ? config.cameraOriY : 10.0f;
+			viewer_.roll_ = (config.cameraOriX != 0.0f || config.cameraOriY != 0.0f || config.cameraOriZ != 0.0f) ? config.cameraOriZ : 0.0f;
 
 			UpdateViewerVectors();
 			Logger::Get().Log(LogLevel::INFO, "[App] Level " + std::to_string(level_no) + " loaded. Viewer start=(" + std::to_string(viewer_.pos_.x) + "," + std::to_string(viewer_.pos_.y) + "," + std::to_string(viewer_.pos_.z) + ")");
@@ -316,8 +320,8 @@ void App::LoadAIModelsFromFolder(int level_no) {
 	Logger::Get().Log(LogLevel::INFO, "[App] LoadAIModelsFromFolder() START for level " + std::to_string(level_no));
 	Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
 
-	std::string qeditor_path = Config::Get().qEditorPath;
-	std::string aiFolderPath = qeditor_path + "\\AIFiles\\missions\\location0\\level" + std::to_string(level_no);
+	std::string qeditor_path = Utils::GetExeDirectory() + "\\content\\qed";
+	std::string aiFolderPath = qeditor_path + "\\restore\\missions\\location0\\level" + std::to_string(level_no);
 
 	Logger::Get().Log(LogLevel::INFO, "[App] AI folder path: " + aiFolderPath);
 
@@ -1187,8 +1191,8 @@ void App::Input_OnSpecial(int key, int x, int y) {
 
 	// Reload Settings
 	if (Utils::IsKeyBindingPressed(config.keyReloadSettings)) {
-		Config::Init(); // Re-read config.ini
-		Logger::Get().Log(LogLevel::INFO, "[App] Settings reloaded from config.ini");
+		Config::Init(); // Re-read QED config
+		Logger::Get().Log(LogLevel::INFO, "[App] Settings reloaded from QED config");
 		return;
 	}
 	if (key == GLUT_KEY_PAGE_UP) {
@@ -1696,7 +1700,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		}
 	}
 
-	// Object Manipulation from config.ini
+	// Object Manipulation from QED config
 	if (toupper(key) == toupper(config.keyRotateAlpha)) { input_.keys_ |= MK_MANIP_A; return; }
 	if (toupper(key) == toupper(config.keyRotateBeta))  { input_.keys_ |= MK_MANIP_B; return; }
 	if (toupper(key) == toupper(config.keyRotateGamma)) { input_.keys_ |= MK_MANIP_G; return; }
@@ -1782,7 +1786,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 void App::ResetLevel() {
 	int levelNo = level_.GetLevelNo();
 
-	Logger::Get().Log(LogLevel::INFO, "[App] Resetting Level " + std::to_string(levelNo) + " - restore objects.qvm from content/tools/IGI_QVM to IGIPath");
+	Logger::Get().Log(LogLevel::INFO, "[App] Resetting Level " + std::to_string(levelNo) + " - restore objects.qvm from content/tools/restore to IGIPath");
 
 	// Force kill any running game instance to release file locks on objects.qvm
 #ifdef _WIN32
@@ -1808,11 +1812,11 @@ void App::ResetLevel() {
 	}
 #endif
 
-	std::string toolsDir = Utils::GetExeDirectory() + "\content\tools";
+	std::string toolsDir = Utils::GetExeDirectory() + "\\content\\tools";
 
-	// Copy objects.qvm from content/tools/IGI_QVM to IGIPath
+	// Copy objects.qvm from content/tools/restore to IGIPath
 	char srcQvm[1024];
-	Str_SPrintf(srcQvm, 1024, "%s\IGI_QVM\missions\location0\level%d\objects.qvm", toolsDir.c_str(), levelNo);
+	Str_SPrintf(srcQvm, 1024, "%s\\restore\\missions\\location0\\level%d\\objects.qvm", toolsDir.c_str(), levelNo);
 
 	char dstQvm[1024];
 	Str_SPrintf(dstQvm, 1024, "%s\\missions\\location0\\level%d\\objects.qvm", Utils::GetIGIRootPath().c_str(), levelNo);
@@ -1859,13 +1863,13 @@ void App::ResetLevel() {
 void App::ResetScript() {
 	int levelNo = level_.GetLevelNo();
 
-	Logger::Get().Log(LogLevel::INFO, "[App] Resetting Script for Level " + std::to_string(levelNo) + " - restore objects.qvm from content/tools/IGI_QVM to IGIPath");
+	Logger::Get().Log(LogLevel::INFO, "[App] Resetting Script for Level " + std::to_string(levelNo) + " - restore objects.qvm from content/tools/restore to IGIPath");
 
-	std::string toolsDir = Utils::GetExeDirectory() + "\content\tools";
+	std::string toolsDir = Utils::GetExeDirectory() + "\\content\\tools";
 
-	// Copy objects.qvm from content/tools/IGI_QVM to IGIPath
+	// Copy objects.qvm from content/tools/restore to IGIPath
 	char srcQvm[1024];
-	Str_SPrintf(srcQvm, 1024, "%s\IGI_QVM\missions\location0\level%d\objects.qvm", toolsDir.c_str(), levelNo);
+	Str_SPrintf(srcQvm, 1024, "%s\\restore\\missions\\location0\\level%d\\objects.qvm", toolsDir.c_str(), levelNo);
 
 	char dstQvm[1024];
 	Str_SPrintf(dstQvm, 1024, "%s\\missions\\location0\\level%d\\objects.qvm", Utils::GetIGIRootPath().c_str(), levelNo);
@@ -1947,7 +1951,7 @@ void App::Input_OnKeyboardUp(unsigned char key, int x, int y) {
 			// Don't return, check manip keys too
 		}
 	}
-	// Object Manipulation from config.ini
+	// Object Manipulation from QED config
 	if (toupper(key) == toupper(config.keyRotateAlpha)) { input_.keys_ &= ~MK_MANIP_A; }
 	if (toupper(key) == toupper(config.keyRotateBeta))  { input_.keys_ &= ~MK_MANIP_B; }
 	if (toupper(key) == toupper(config.keyRotateGamma)) { input_.keys_ &= ~MK_MANIP_G; }
@@ -3026,7 +3030,7 @@ void App::DecompileFromGame(int level_no) {
 		std::string qsc_dest = Utils::GetExeDirectory() + "\\objects.qsc";
 
 		if (!fs::exists(qvm_source)) {
-			std::string errorMsg = "Game QVM not found at:\n" + qvm_source + "\n\nPlease check your IGI game path in config.ini";
+			std::string errorMsg = "Game QVM not found at:\n" + qvm_source + "\n\nPlease check your IGI game path in qedconfig.txt";
 			Utils::LogAndShowError(errorMsg, "IGI Editor - Error");
 			Logger::Get().Log(LogLevel::ERR, "[App] Game QVM not found at: " + qvm_source);
 			return;

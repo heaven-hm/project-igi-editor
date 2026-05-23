@@ -94,14 +94,11 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 	// Extract textures and models from IGI .res archives (cached per-level)
 	AssetExtractor::EnsureLevelAssets(params.level_no_, Utils::GetIGIRootPath(), exeDir);
 
-	// Copy terrain from IGI game path to executable directory on load
+	// Verify terrain folder exists in game directory
 	try {
-		CopyTerrainFromIGI(params.level_no_);
-
-		// Check if terrain folder exists in executable directory
-		std::string terrainPath = exeDir + "\\content\\terrains\\level" + std::to_string(params.level_no_) + "\\terrain";
+		std::string terrainPath = Utils::GetIGIRootPath() + "\\missions\\location0\\level" + std::to_string(params.level_no_) + "\\terrain";
 		if (!std::filesystem::exists(terrainPath)) {
-			Logger::Get().Log(LogLevel::ERR, "[Level] FATAL: ERROR Missing terrain folder at: " + std::string(terrainPath));
+			Logger::Get().Log(LogLevel::ERR, "[Level] FATAL: ERROR Missing terrain folder at: " + terrainPath);
 			return false;
 		}
 	}
@@ -252,71 +249,11 @@ void Level::CompileCurrentQSC(int level_no) {
 }
 
 void Level::CopyTerrainFromIGI(int level_no) {
-	std::string gameTerrain = Utils::GetIGIRootPath() + "\\missions\\location0\\level" + std::to_string(level_no) + "\\terrain";
-	std::string exeDir = GetExeDirectory();
-	std::string dstTerrain = exeDir + "\\content\\terrains\\level" + std::to_string(level_no) + "\\terrain";
-
-	Logger::Get().Log(LogLevel::INFO, "[Level] CopyTerrainFromIGI: level=" + std::to_string(level_no));
-	Logger::Get().Log(LogLevel::INFO, "[Level] Source: " + gameTerrain);
-	Logger::Get().Log(LogLevel::INFO, "[Level] Dest: " + dstTerrain);
-
-	try {
-		if (std::filesystem::exists(dstTerrain)) {
-			std::filesystem::remove_all(dstTerrain);
-		}
-		std::filesystem::create_directories(dstTerrain);
-
-		if (!std::filesystem::exists(gameTerrain)) {
-			throw std::runtime_error("IGI terrain not found at: " + gameTerrain);
-		}
-
-		std::filesystem::copy(gameTerrain, dstTerrain,
-			std::filesystem::copy_options::overwrite_existing | std::filesystem::copy_options::recursive);
-		Logger::Get().Log(LogLevel::INFO, "[Level] Terrain copied from IGI path to: " + dstTerrain);
-
-		const char* requiredFiles[] = { "terrain.cmd", "terrain.ctr", "terrain.tex", "terrain.lmp", "terrain.bit" };
-		for (const char* f : requiredFiles) {
-			std::string destFile = dstTerrain + "\\" + f;
-			if (!std::filesystem::exists(destFile)) {
-				Logger::Get().Log(LogLevel::ERR, "[Level] Missing terrain file: " + std::string(f));
-				throw std::runtime_error(std::string("Missing terrain file: ") + f);
-			}
-		}
-	}
-	catch (const std::exception& e) {
-		Logger::Get().Log(LogLevel::ERR, "[Level] Terrain copy exception: " + std::string(e.what()));
-		throw;
-	}
+	// Obsolete - terrain is loaded directly from IGI game path
 }
 
 void Level::MoveTerrainToGamePath(int level_no) {
-	// Source is executable directory content\terrains\levelX\terrain
-	std::string exeDir = GetExeDirectory();
-	std::string srcTerrain = exeDir + "\\content\\terrains\\level" + std::to_string(level_no) + "\\terrain";
-
-	ConfigData& cfg = Config::Get();
-	char dstTerrain[1024];
-	Str_SPrintf(dstTerrain, 1024, "%s\\missions\\location0\\level%d\\terrain", Utils::GetIGIRootPath().c_str(), level_no);
-
-	try {
-		if (std::filesystem::exists(srcTerrain)) {
-			// Remove existing destination terrain folder first to ensure clean copy
-			if (std::filesystem::exists(dstTerrain)) {
-				std::filesystem::remove_all(dstTerrain);
-				Logger::Get().Log(LogLevel::INFO, "[Level] Removed old terrain at: " + std::string(dstTerrain));
-			}
-			std::filesystem::create_directories(std::filesystem::path(dstTerrain).parent_path());
-			std::filesystem::copy(srcTerrain, dstTerrain,
-				std::filesystem::copy_options::recursive);
-			Logger::Get().Log(LogLevel::INFO, "[Level] Moved terrain from " + srcTerrain + " to game path: " + std::string(dstTerrain));
-		}
-		else {
-			Logger::Get().Log(LogLevel::ERR, "[Level] Cannot move terrain, source not found: " + srcTerrain);
-		}
-	}
-	catch (const std::exception& e) {
-		Logger::Get().Log(LogLevel::ERR, "[Level] Terrain move exception: " + std::string(e.what()));
-	}
+	// Obsolete - terrain is saved directly to IGI game path
 }
 
 
@@ -372,17 +309,12 @@ void Level::SaveObjectsLocalOnly() {
 }
 
 void Level::SaveChanges() {
-	bool terrainSaved = terrain_.Save(cur_level_no_);
+	terrain_.Save(cur_level_no_);
 
 	// IMPORTANT: AppData\Roaming\QEditor\QFiles is READ-ONLY.
 	// We NEVER write back to the QFiles source. All saves go to the local
 	// exe-directory copy of objects.qsc, which is then compiled to QVM.
 	SaveObjectsLocalOnly();
-
-	// Only move terrain to game path if it was actually loaded and saved
-	if (terrainSaved) {
-		MoveTerrainToGamePath(cur_level_no_);
-	}
 }
 
 void Level::SaveAndReloadObjects() {
