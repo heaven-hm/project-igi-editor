@@ -304,6 +304,23 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             b = 0.4f + (float)((hash >> 16) & 0xFF) / 255.0f * 0.4f;
         }
 
+        // Underground building hulls (_01_1 exterior shells) have 0 textures in the
+        // DAT by design — they are never viewed from outside in-game. When such a hull
+        // has textured ATTA interior children, draw it as wireframe so the interior
+        // remains visible from the editor's outside viewpoint.
+        bool drawHullAsWireframe = false;
+        if (obj.isBuilding) {
+            bool hasAnyTexture = false;
+            for (const auto& sub : mesh.subMeshes) {
+                if (sub.textureID > 0) { hasAnyTexture = true; break; }
+            }
+            if (!hasAnyTexture && mesh.textureID == 0) {
+                const std::string attKey = std::to_string(current_level_) + ":building:" + obj.modelId;
+                drawHullAsWireframe = attachment_cache_.count(attKey) > 0;
+            }
+        }
+        if (drawHullAsWireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+
         // Draw each submesh with its own texture and lighting
         if (!mesh.subMeshes.empty()) {
             // For mixed textured/untextured meshes, skip large untextured
@@ -376,6 +393,8 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             }
             renderModel(mesh);
         }
+
+        if (drawHullAsWireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
         // ── Render ATTA sub-models ────────────────────────────────────────────
         if (obj.isBuilding) {

@@ -160,7 +160,6 @@ bool AssetExtractor::EnsureCommonAssets(const std::string& igi_path,
                                         const std::string& output_dir) {
     static bool s_done = false;
     if (s_done) return true;
-    s_done = true;
 
     const std::string commonDir = igi_path + "\\missions\\location0\\common";
     const std::string texRes    = commonDir + "\\textures\\location0.res";
@@ -172,9 +171,12 @@ bool AssetExtractor::EnsureCommonAssets(const std::string& igi_path,
     const std::string modelStamp= cacheDir + "\\common_models.stamp";
 
     Logger::Get().Log(LogLevel::INFO, "[AssetExtractor] EnsureCommonAssets from " + commonDir);
-    ExtractResIfNeeded(texRes,   texOut,   texStamp);
+    const bool texOk = ExtractResIfNeeded(texRes,   texOut,   texStamp);
     ExtractResIfNeeded(modelRes, modelOut, modelStamp);
-    return true;
+    // Only mark done when texture extraction succeeded so a failed first attempt
+    // (e.g. location0.res not yet accessible) retries on the next level load.
+    if (texOk) s_done = true;
+    return texOk;
 }
 
 void AssetExtractor::CleanupExtractedAssets(const std::string& output_dir) {
