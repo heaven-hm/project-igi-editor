@@ -41,7 +41,7 @@ constexpr int		MIN_LEVEL_NO = 1;
 constexpr int		MAX_LEVEL_NO = 14;
 
 // renderer
-constexpr float		RENDER_Z_NEAR = 0.4096f;
+constexpr float		RENDER_Z_NEAR = 4.096f;       // 1m near clip; 100K:1 ratio → ~3mm depth precision at 250m
 constexpr float		RENDER_Z_FAR  = 409600.03125f;
 constexpr float		RENDER_DEPTH_MIN = 0.06f;
 constexpr float		RENDER_DEPTH_MAX = 1.0f;

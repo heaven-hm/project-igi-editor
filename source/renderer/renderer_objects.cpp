@@ -10,6 +10,67 @@
 #include "../level/level_common.h"
 #include "gl_helper.h"
 #include "../parsers/mef_native.h"
+#include "../parsers/qvm_parser.h"
+#include "../parsers/qvm_decompiler.h"
+#include <sstream>
+
+
+// ─── EnsurePortalDistancesLoaded ──────────────────────────────────────────────
+void Renderer_Objects::EnsurePortalDistancesLoaded() {
+    if (portal_distances_loaded_) return;
+    portal_distances_loaded_ = true;
+
+    std::string qvmPath = Utils::GetIGIRootPath() + "\\lod.qvm";
+    if (!std::filesystem::exists(qvmPath)) {
+        Logger::Get().Log(LogLevel::WARNING, "[Renderer_Objects] lod.qvm not found at: " + qvmPath);
+        return;
+    }
+
+    QVMFile qvm = QVM_Parse(qvmPath);
+    if (!qvm.valid) {
+        Logger::Get().Log(LogLevel::ERR, "[Renderer_Objects] Failed to parse lod.qvm");
+        return;
+    }
+
+    std::string decompiled = QVM_DecompileToString(qvm);
+    if (decompiled.empty()) return;
+
+    std::stringstream ss(decompiled);
+    std::string line;
+    while (std::getline(ss, line)) {
+        // Look for: Task_New(-1, "ModelLODSettings", "300_01_1", "300_01_1", 70.0, 170.0, 300.0, 350.0, 500.0);
+        if (line.find("Task_New") == std::string::npos) continue;
+        if (line.find("\"ModelLODSettings\"") == std::string::npos) continue;
+
+        size_t start = line.find('(');
+        size_t end = line.rfind(')');
+        if (start == std::string::npos || end == std::string::npos) continue;
+
+        std::string args = line.substr(start + 1, end - start - 1);
+        
+        std::vector<std::string> tokens;
+        std::stringstream argStream(args);
+        std::string token;
+        while (std::getline(argStream, token, ',')) {
+            token.erase(0, token.find_first_not_of(" \t\r\n"));
+            token.erase(token.find_last_not_of(" \t\r\n") + 1);
+            tokens.push_back(token);
+        }
+
+        if (tokens.size() >= 9) {
+            std::string modelId = tokens[2];
+            if (modelId.size() >= 2 && modelId.front() == '"' && modelId.back() == '"') {
+                modelId = modelId.substr(1, modelId.size() - 2);
+            }
+            try {
+                float portalDist = std::stof(tokens[4]);
+                portal_distances_[modelId] = portalDist;
+            } catch (...) {}
+        }
+    }
+    
+    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Loaded " + std::to_string(portal_distances_.size()) + " LOD distances from lod.qvm");
+}
 
 
 // ─── EnsureWindowModelIdsLoaded ───────────────────────────────────────────────
@@ -117,6 +178,7 @@ uniform vec3 u_ambient;    // ambient light RGB
 uniform sampler2D u_texture;
 uniform int u_useTexture;
 uniform float u_alpha;     // material alpha (1.0 = opaque, <1.0 = transparent)
+uniform vec4 u_baseColor;  // Base color when no texture
 
 out vec4 fragColor;
 
@@ -131,12 +193,12 @@ void main() {
 
     vec3 light = u_ambient + u_dirlight * (diff + spec);
 
-    vec4 texColor = (u_useTexture != 0) ? texture(u_texture, v_uv) : vec4(1.0, 1.0, 1.0, 1.0);
+    vec4 texColor = (u_useTexture != 0) ? texture(u_texture, v_uv) : u_baseColor;
 
     float finalAlpha = (u_useTexture != 0 ? texColor.a : 1.0) * u_alpha;
     fragColor = vec4(light * texColor.rgb, finalAlpha);
 
-    if (u_alpha >= 0.99 && texColor.a < 0.75) discard;
+    if (u_alpha >= 0.99 && texColor.a < 0.5) discard;
     if (fragColor.a < 0.05) discard;
 }
 )";
@@ -248,7 +310,8 @@ void Renderer_Objects::Shutdown() {
 
 // ─── Draw ─────────────────────────────────────────────────────────────────────
 void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
-                            const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts)
+                            const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts,
+                            const glm::vec3& camera_pos)
 {
     // Define the flags (must match renderer.h)
     const int DRAW_OBJECTS = 4;
@@ -294,7 +357,11 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     GLint loc_useTex   = glGetUniformLocation(shader_program_, "u_useTexture");
     GLint loc_tex      = glGetUniformLocation(shader_program_, "u_texture");
     GLint loc_alpha    = glGetUniformLocation(shader_program_, "u_alpha");
+    GLint loc_baseColor = glGetUniformLocation(shader_program_, "u_baseColor");
     glUniform1f(loc_alpha, 1.0f); // default: fully opaque
+    glUniform4f(loc_baseColor, 1.0f, 1.0f, 1.0f, 1.0f); // default: white
+
+    EnsurePortalDistancesLoaded();
 
     for (int pass = 0; pass < 2; ++pass) {
         bool isTransparentPass = (pass == 1);
@@ -400,6 +467,10 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 glUniform1f(loc_alpha, 0.4f);
             }
 
+            // Pull hull surfaces slightly toward camera to prevent Z-fighting with terrain.
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonOffset(-1.0f, -1.0f);
+
             // Draw each submesh with its own texture and lighting
             if (!mesh.subMeshes.empty()) {
                 // For mixed textured/untextured meshes, skip large untextured
@@ -467,15 +538,28 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 glDisable(GL_BLEND);
                 glUniform1f(loc_alpha, 1.0f);
             }
+
+            glDisable(GL_POLYGON_OFFSET_FILL);
         }
 
         if (drawHullAsWireframe) glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
+        // Only render interior/attachments when close to the building (LOD/Portal culling)
+        float distToCamera = glm::distance(camera_pos, glm::vec3(obj.pos));
+        float portalDistance = 100.0f; // Default fallback
+        if (portal_distances_.count(obj.modelId)) {
+            portalDistance = portal_distances_[obj.modelId];
+        }
+        bool isCloseEnough = (distToCamera <= (portalDistance * WORLD_UNITS_PER_METER));
+
         // ── Render ATTA sub-models ────────────────────────────────────────────
-        if (obj.isBuilding) {
+        if (obj.isBuilding && isCloseEnough) {
             std::string attCacheKey = std::to_string(current_level_) + ":building:" + obj.modelId;
             auto ait = attachment_cache_.find(attCacheKey);
             if (ait != attachment_cache_.end()) {
+                glEnable(GL_POLYGON_OFFSET_FILL);
+                glPolygonOffset(-2.0f, -2.0f); // Prevent z-fighting with hull walls
+
                 for (const auto &att : ait->second) {
                     std::string subKey = std::to_string(current_level_) + ":building:" + att.modelId;
                     auto sit = mesh_cache_.find(subKey);
@@ -567,6 +651,8 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                         glUniform1f(loc_alpha, 1.0f);
                     }
                 }
+                
+                glDisable(GL_POLYGON_OFFSET_FILL);
             }
         }
     }
@@ -574,7 +660,9 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
     // Always reset polygon mode after draw
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-    
+    glDepthFunc(GL_LEQUAL); // Restore global depth func changed above to GL_LESS
+    glDisable(GL_POLYGON_OFFSET_FILL);
+
     // Unbind shader
     glUseProgram(0);
 }

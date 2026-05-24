@@ -211,6 +211,80 @@ Mesh BuildMeshFromGeometry(const ParsedGeometry& geometry, const std::string& fi
         throw std::runtime_error("MEF file resulted in no valid vertices: " + filepath);
     }
 
+    // Build portal meshes
+    for (const auto& portal : geometry.portals) {
+        if (portal.verts.empty() || portal.faces.empty()) {
+            continue;
+        }
+
+        std::vector<float> verts;
+        verts.reserve(portal.faces.size() * 3 * 8);
+
+        for (const auto& face : portal.faces) {
+            if (face[0] >= portal.verts.size() ||
+                face[1] >= portal.verts.size() ||
+                face[2] >= portal.verts.size()) {
+                continue;
+            }
+
+            const glm::vec3 p0 = portal.verts[face[0]] * kMefNativeScale;
+            const glm::vec3 p1 = portal.verts[face[1]] * kMefNativeScale;
+            const glm::vec3 p2 = portal.verts[face[2]] * kMefNativeScale;
+
+            glm::vec3 normal = glm::cross(p1 - p0, p2 - p0);
+            const float len = glm::length(normal);
+            if (len > 1e-6f) {
+                normal /= len;
+            } else {
+                normal = glm::vec3(0.0f, 0.0f, 1.0f);
+            }
+
+            auto addVertex = [&](uint32_t index) {
+                const glm::vec3 pos = portal.verts[index] * kMefNativeScale;
+                verts.push_back(pos.x);
+                verts.push_back(pos.y);
+                verts.push_back(pos.z);
+
+                verts.push_back(normal.x);
+                verts.push_back(normal.y);
+                verts.push_back(normal.z);
+
+                verts.push_back(0.0f);
+                verts.push_back(0.0f);
+            };
+
+            addVertex(face[0]);
+            addVertex(face[1]);
+            addVertex(face[2]);
+        }
+
+        if (verts.empty()) {
+            continue;
+        }
+
+        SubMesh sub;
+        sub.textureID = 0;
+        sub.alphaMode = 0;
+        sub.vertexCount = static_cast<int>(verts.size() / 8);
+        sub.baseColorFactor = glm::vec4(1.0f);
+        sub.materialSlot = portal.materialId;
+
+        glGenVertexArrays(1, &sub.VAO);
+        glGenBuffers(1, &sub.VBO);
+        glBindVertexArray(sub.VAO);
+        glBindBuffer(GL_ARRAY_BUFFER, sub.VBO);
+        glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glBindVertexArray(0);
+
+        mesh.portalMeshes.push_back(sub);
+    }
+
     mesh.VAO = mesh.subMeshes.front().VAO;
     mesh.VBO = mesh.subMeshes.front().VBO;
     mesh.textureID = 0;
@@ -296,6 +370,13 @@ void destroyModel(Mesh& mesh) {
         sub.VAO = sub.VBO = sub.textureID = 0;
     }
     mesh.subMeshes.clear();
+
+    for (auto& sub : mesh.portalMeshes) {
+        if (sub.VBO) glDeleteBuffers(1, &sub.VBO);
+        if (sub.VAO) glDeleteVertexArrays(1, &sub.VAO);
+        sub.VAO = sub.VBO = sub.textureID = 0;
+    }
+    mesh.portalMeshes.clear();
 
     if (mesh.vertexData) {
         delete[] mesh.vertexData;

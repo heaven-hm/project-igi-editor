@@ -564,6 +564,8 @@ void App::LoadAIModelsFromFolder(int level_no) {
 				continue;
 			}
 			// Update existing object with AI metadata
+			existingObj->modelId = aiData.modelId;
+			existingObj->name = aiData.name;
 			existingObj->aiId = aiData.aiId;
 			existingObj->graphId = aiData.graphId;
 			existingObj->graphName = aiData.graphName;
@@ -573,14 +575,19 @@ void App::LoadAIModelsFromFolder(int level_no) {
 			existingObj->primaryAmmo = aiData.primaryAmmo;
 			existingObj->secondaryWeapon = aiData.secondaryWeapon;
 			existingObj->secondaryAmmo = aiData.secondaryAmmo;
-			
-			// If the position in JSON differs from QSC, update it 
+
+			// If the position in JSON differs from QSC, update it
 			// (JSON is usually more up-to-date for AI state)
 			existingObj->pos = aiData.pos;
 			existingObj->modified = true; // Mark as modified so it gets saved
-			
+
 			updatedCount++;
 			Logger::Get().Log(LogLevel::INFO, "[App] Updated existing AI object: " + aiData.modelId + " taskId=" + aiData.soldierId);
+			Logger::Get().Log(LogLevel::INFO, "[LevelLoader] Object Loaded: ModelID=" + aiData.modelId +
+				", Type=" + existingObj->type +
+				", Name=" + aiData.name +
+				", Pos=(" + std::to_string(aiData.pos.x) + ", " + std::to_string(aiData.pos.y) + ", " + std::to_string(aiData.pos.z) + ")" +
+				", Ori=(" + std::to_string(existingObj->rot.x) + ", " + std::to_string(existingObj->rot.y) + ", " + std::to_string(existingObj->rot.z) + ")");
 		} else {
 			// Create new LevelObject for this AI entry
 			LevelObject newObj;
@@ -2678,45 +2685,38 @@ void App::SnapObjectsToTerrain() {
         float terrainZ = 0.0f;
         if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ, false)) {
             bool isHuman = (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale");
-            if (isHuman && (obj.original_pos.z - (double)terrainZ) > 400.0) {
-                // AI is well above the terrain surface — standing on a building or elevated platform.
-                // Preserve the level designer's original Z instead of snapping to terrain below.
+            double zDelta = obj.original_pos.z - (double)terrainZ;
+
+            // Non-human objects always keep their QSC Z — trees, buildings, fences, crates, etc.
+            // all have authoritative Z values authored by level designers. Snapping them to
+            // terrain destroys heights for elevated platforms, embedded foundations, and stacked props.
+            if (!isHuman) {
                 obj.snap_z_offset = 0.0;
                 obj.pos.z = obj.original_pos.z;
                 skipped++;
                 continue;
             }
-            if (isHuman && (obj.original_pos.z - (double)terrainZ) < -100000.0) {
-                // AI deep underground (e.g. AITYPE_ANYA, AITYPE_SOLDIER_AK inside ANYA_HQ bunker).
-                // Snapping would pull them to the surface; preserve their original Z.
+            // Human soldiers: snap to terrain unless they are elevated (on a platform/building)
+            // or below terrain (underground bunker).
+            if (zDelta > 100.0 || zDelta < 0.0) {
+                // On elevated surface or below terrain — preserve original Z.
                 obj.snap_z_offset = 0.0;
                 obj.pos.z = obj.original_pos.z;
                 skipped++;
                 continue;
             }
-            // Underground/subsurface: QSC Z is far below terrain (e.g. ANYA_HQ, AITYPE_ANYA at ~-13M).
-            // Snapping would pull them to the surface; preserve their original underground Z.
-            if ((obj.original_pos.z - (double)terrainZ) < -1000000.0) {
+            // Underground/subsurface: QSC Z is far below terrain (e.g. ANYA_HQ at ~-13M).
+            if (zDelta < -1000000.0) {
                 obj.snap_z_offset = 0.0;
                 obj.pos.z = obj.original_pos.z;
                 Logger::Get().Log(LogLevel::INFO, "[App] Deep underground, preserving Z for " + obj.modelId + " (" + obj.name + ") Z=" + std::to_string(obj.pos.z));
                 skipped++;
                 continue;
             }
-            // Stacked/elevated non-human objects (containers on containers, crates on platforms).
-            // Their QSC Z already accounts for the stack height; snapping collapses them to ground.
-            if (!isHuman && (obj.original_pos.z - (double)terrainZ) > 5000.0) {
-                obj.snap_z_offset = 0.0;
-                obj.pos.z = obj.original_pos.z;
-                Logger::Get().Log(LogLevel::INFO, "[App] Elevated object preserved: " + obj.modelId + " (" + obj.name + ") Z=" + std::to_string(obj.pos.z));
-                skipped++;
-                continue;
-            }
-            // IGI places the mesh origin at the QSC Z coordinate; no mesh-bottom offset is added.
-            // snap_z_offset stays 0 so SaveToQSC writes back the terrain-adjusted Z unchanged.
+            // Human soldiers within 100 units of terrain surface: snap to terrain.
             obj.snap_z_offset = 0.0;
             obj.pos.z = (double)terrainZ;
-            Logger::Get().Log(LogLevel::DEBUG, "[App] Snapped " + obj.modelId + " to Z=" + std::to_string(obj.pos.z));
+            Logger::Get().Log(LogLevel::DEBUG, "[App] Snapped human " + obj.modelId + " to Z=" + std::to_string(obj.pos.z));
             snapped++;
         } else {
             Logger::Get().Log(LogLevel::WARNING, "[App] Snap FAILED for " + obj.modelId + " at (" + std::to_string(obj.pos.x) + ", " + std::to_string(obj.pos.y) + "). Outside terrain?");

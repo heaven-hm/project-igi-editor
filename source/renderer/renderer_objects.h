@@ -25,7 +25,7 @@ public:
     void SetLevel(int level) { current_level_ = level; }
     void ClearCaches();
 
-    void Draw(GLuint ubo_mats, bool overlay_wireframe, const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts);
+    void Draw(GLuint ubo_mats, bool overlay_wireframe, const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts, const glm::vec3& camera_pos);
     static bool IsSkippedModelId(const std::string& modelId);
     glm::vec3 GetMeshExtents(const std::string& modelId, bool isBuilding);
     float GetMeshZOffset(const std::string& modelId, bool isBuilding);
@@ -46,6 +46,10 @@ private:
     std::set<std::string> window_model_ids_;
     bool window_ids_loaded_ = false;
 
+    std::map<std::string, float> portal_distances_;
+    bool portal_distances_loaded_ = false;
+
+    void EnsurePortalDistancesLoaded();
     void EnsureWindowModelIdsLoaded();
     void DrawSelectionBox(const LevelObject& obj, GLuint ubo_mats, const glm::vec4& color);
     Mesh CreateCubeMesh();

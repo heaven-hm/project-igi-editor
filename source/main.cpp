@@ -679,7 +679,7 @@ int main(int argc, char **argv) {
   bool stick_to_ground = (Arg_OptionIdx(argc, argv, "-stick_to_ground") > -1);
 
   glutInit(&argc, argv);
-  glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA | GLUT_DEPTH);
+  glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA | GLUT_DEPTH | GLUT_STENCIL);
 
   // center display
   int screen_cx = glutGet(GLUT_SCREEN_WIDTH);

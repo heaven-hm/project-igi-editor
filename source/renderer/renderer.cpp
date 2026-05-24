@@ -344,7 +344,7 @@ void Renderer::Draw(const draw_params_s &params,
 
   // start draw
   glDepthMask(GL_TRUE); // insure clear depth buffer
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
   glViewport(0, 0, params.view_define_->viewport_width_,
              params.view_define_->viewport_height_);
 
@@ -371,8 +371,8 @@ void Renderer::Draw(const draw_params_s &params,
     glLoadMatrixf(glm::value_ptr(mat_view_));
     objects_.Draw(ubo_mats_, params.overlay_wireframe_,
                   params.level_objects_->GetObjects(),
-                  params.selected_object_index_,
-                  task_tree_view.hover_object_index_, params.draw_parts_);
+                  params.selected_object_index_, task_tree_view.hover_object_index_,
+                  params.draw_parts_, params.view_define_->pos_);
     splines_.Draw(params.level_objects_->GetObjects(), ubo_mats_,
                   objects_.GetShaderProgram());
   }
