@@ -37,8 +37,10 @@ private:
     std::map<std::string, Mesh> mesh_cache_;
     std::map<std::string, GLuint> texture_cache_;
     std::map<std::string, std::vector<std::string>> model_texture_map_cache_;
-    std::map<std::string, std::vector<std::string>> global_texture_map_;
-    bool global_texture_map_loaded_ = false;
+    mutable std::map<std::string, std::vector<std::string>> global_texture_map_;
+    mutable bool global_texture_map_loaded_ = false;
+    mutable std::map<std::string, int> model_level_map_;
+    mutable std::map<std::string, int> texture_level_map_;
     std::map<std::string, std::vector<AttachInfo>> attachment_cache_;
     int texture_map_level_ = -1;
     GLuint shader_program_;
@@ -63,7 +65,7 @@ private:
     std::string GetLevelTextureDatPath() const;
     void LoadDatIntoMap(const std::string& datPath, std::map<std::string, std::vector<std::string>>& outMap);
     void EnsureTextureMapLoaded();
-    void EnsureGlobalTextureMapLoaded();
+    void EnsureGlobalTextureMapLoaded() const;
     std::vector<std::string> GetTextureIdsForModel(const std::string& modelId);
     GLuint GetOrLoadTexture(const std::string& textureId);
     void ApplyTexturesToMesh(Mesh& mesh, const std::string& modelId, const std::string& parentModelId = "");

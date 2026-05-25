@@ -868,7 +868,7 @@ void Renderer_Objects::EnsureTextureMapLoaded() {
     Logger::Get().Log(LogLevel::INFO, "[TEX Native] DAT map loaded level=" + std::to_string(current_level_) + " models=" + std::to_string(model_texture_map_cache_.size()));
 }
 
-void Renderer_Objects::EnsureGlobalTextureMapLoaded() {
+void Renderer_Objects::EnsureGlobalTextureMapLoaded() const {
     if (global_texture_map_loaded_) return;
     global_texture_map_loaded_ = true;
 
@@ -882,8 +882,22 @@ void Renderer_Objects::EnsureGlobalTextureMapLoaded() {
         std::string gameDat  = igiRoot + "\\missions\\location0\\level" + std::to_string(lvl) +
                                "\\level" + std::to_string(lvl) + ".dat";
 
-        if (std::filesystem::exists(localDat)) LoadDatIntoMap(localDat, global_texture_map_);
-        else if (std::filesystem::exists(gameDat)) LoadDatIntoMap(gameDat, global_texture_map_);
+        std::string datPath = "";
+        if (std::filesystem::exists(localDat)) datPath = localDat;
+        else if (std::filesystem::exists(gameDat)) datPath = gameDat;
+
+        if (!datPath.empty()) {
+            DATFile dat = DAT_Parse(datPath);
+            if (dat.valid) {
+                for (const auto& m : dat.models) {
+                    global_texture_map_[m.modelName] = m.textures;
+                    model_level_map_[m.modelName] = lvl;
+                }
+                for (const auto& t : dat.allTextures) {
+                    texture_level_map_[t] = lvl;
+                }
+            }
+        }
     }
 
     Logger::Get().Log(LogLevel::INFO,
@@ -939,7 +953,7 @@ std::vector<std::string> Renderer_Objects::GetTextureIdsForModel(const std::stri
     }
 
     Logger::Get().Log(LogLevel::DEBUG, "[TEX Native] DAT miss (all sources) for modelId=" + modelId);
-    return { modelId };
+    return {};
 }
 
 std::string Renderer_Objects::FindTextureFile(const std::string& textureId) const {
@@ -1002,6 +1016,19 @@ std::string Renderer_Objects::FindTextureFile(const std::string& textureId) cons
         Logger::Get().Log(LogLevel::DEBUG,
             "[TEX Native] Found texture in IGI location0 common folder: " + result);
         return result;
+    }
+
+    // Lazy On-Demand Extraction for cross-level texture references
+    EnsureGlobalTextureMapLoaded();
+    auto tit = texture_level_map_.find(textureId);
+    if (tit != texture_level_map_.end()) {
+        int targetLvl = tit->second;
+        if (targetLvl != current_level_) {
+            Logger::Get().Log(LogLevel::INFO,
+                "[TEX Native] Lazy extracting textures/models on-demand for level " + std::to_string(targetLvl) +
+                " to resolve cross-level texture: " + textureId);
+            AssetExtractor::EnsureLevelAssets(targetLvl, Utils::GetIGIRootPath(), Utils::GetExeDirectory());
+        }
     }
 
     // 6. Search all other levels' extracted and game texture directories.
@@ -1071,13 +1098,17 @@ GLuint Renderer_Objects::GetOrLoadTexture(const std::string& textureId) {
 void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelId, const std::string& parentModelId) {
     std::vector<std::string> textureIds = GetTextureIdsForModel(modelId);
 
-    // When a sub-model has no DAT entry, GetTextureIdsForModel returns {modelId} as a
-    // self-name fallback. IGI ATTA sub-models commonly share material slots with their
+    // If it's a DAT miss (not explicitly in dat), fallback to self name first.
+    bool isDatMiss = textureIds.empty();
+    if (isDatMiss) {
+        textureIds = { modelId };
+    }
+
+    // When a sub-model has no DAT entry, IGI ATTA sub-models commonly share material slots with their
     // parent building, so inherit the parent's texture list in that case.
-    if (!parentModelId.empty() && textureIds.size() == 1 && textureIds[0] == modelId) {
+    if (!parentModelId.empty() && isDatMiss) {
         const std::vector<std::string> parentIds = GetTextureIdsForModel(parentModelId);
-        const bool parentHasRealEntry = !parentIds.empty() &&
-            !(parentIds.size() == 1 && parentIds[0] == parentModelId);
+        const bool parentHasRealEntry = !parentIds.empty();
         if (parentHasRealEntry) {
             Logger::Get().Log(LogLevel::INFO,
                 "[TEX Native] Sub-model '" + modelId + "' has no DAT entry; inheriting " +
@@ -1414,6 +1445,19 @@ std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isB
     if (!result.empty()) {
         Logger::Get().Log(LogLevel::DEBUG, "[Renderer_Objects] Model found in IGI root: " + result);
         return result;
+    }
+
+    // Lazy On-Demand Extraction for cross-level model references
+    EnsureGlobalTextureMapLoaded();
+    auto mit = model_level_map_.find(modelId);
+    if (mit != model_level_map_.end()) {
+        int targetLvl = mit->second;
+        if (targetLvl != current_level_) {
+            Logger::Get().Log(LogLevel::INFO,
+                "[Renderer_Objects] Lazy extracting textures/models on-demand for level " + std::to_string(targetLvl) +
+                " to resolve cross-level model: " + modelId);
+            AssetExtractor::EnsureLevelAssets(targetLvl, Utils::GetIGIRootPath(), Utils::GetExeDirectory());
+        }
     }
 
     // 3. Search all other level directories (local extracted, then IGI root) —
