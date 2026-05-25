@@ -1024,7 +1024,16 @@ int CLIHandler::VerifyLevel(const VerifyLevelParams& params) {
     std::string igiPath = params.gamePath.empty() ? Utils::GetIGIRootPath() : params.gamePath;
     std::string exeDir  = Utils::GetExeDirectory();
     std::string logPath = params.logPath.empty()  ? (igiPath + "\\igi1ed.log") : params.logPath;
-    std::string exePath = igiPath + "\\igi1ed.exe";
+    std::string exePath = exeDir + "\\igi1ed.exe";
+
+    // Export IGI_GAME_PATH environment variable so spawned child processes use the correct IGI path.
+    if (!igiPath.empty()) {
+#if defined(_WIN32)
+        _putenv_s("IGI_GAME_PATH", igiPath.c_str());
+#else
+        setenv("IGI_GAME_PATH", igiPath.c_str(), 1);
+#endif
+    }
 
     std::string modelNamesPath = igiPath + "\\content\\tools\\IGIModels.json";
     std::map<std::string, std::string> modelNames = LoadModelNames(modelNamesPath);

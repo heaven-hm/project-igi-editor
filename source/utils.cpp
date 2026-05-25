@@ -480,6 +480,26 @@ void TrimFileInPlace(const std::string& filepath) {
 }
 
 std::string GetIGIRootPath() {
+#if defined(_WIN32)
+	char* envPath = nullptr;
+	size_t len = 0;
+	if (_dupenv_s(&envPath, &len, "IGI_GAME_PATH") == 0 && envPath != nullptr) {
+		std::string path(envPath);
+		free(envPath);
+		if (!path.empty()) {
+			return path;
+		}
+	}
+#else
+	char* envPath = std::getenv("IGI_GAME_PATH");
+	if (envPath != nullptr) {
+		std::string path(envPath);
+		if (!path.empty()) {
+			return path;
+		}
+	}
+#endif
+
 	std::string path = GetExeDirectory();
 	// Trim trailing slashes/spaces
 	while (!path.empty() && (path.back() == '\\' || path.back() == '/' || path.back() == ' ')) {

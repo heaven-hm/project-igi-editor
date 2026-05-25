@@ -184,7 +184,9 @@ void App::Shutdown() {
 	level_.Unload();
 	level_.FreeTerrainCubeDataPools();
 	renderer_.Shutdown();
-	AssetExtractor::CleanupExtractedAssets(Utils::GetExeDirectory());
+	if (!g_isCLIMode) {
+		AssetExtractor::CleanupExtractedAssets(Utils::GetExeDirectory());
+	}
 }
 
 void App::LoadLevel(int level_no) {
@@ -248,29 +250,6 @@ void App::LoadLevel(int level_no) {
 		// Always snap objects to terrain after any level load
 		Logger::Get().Log(LogLevel::INFO, "[App] Step 3: Snapping objects to terrain...");
 		SnapObjectsToTerrain();
-
-		// Level-specific rotation overrides for model 615 (Missile)
-		if (level_no == 9 || level_no == 12 || level_no == 13) {
-			auto& objects = level_.GetLevelObjects().GetObjects();
-			for (auto& obj : objects) {
-				if (obj.modelId.find("615") == 0) {
-					if (level_no == 12) {
-						obj.rot.x = 0.0;       // PITCH
-						obj.rot.y = -1.54;     // ROLL
-						obj.rot.z = 1.57;      // YAW
-					} else if (level_no == 9) {
-						obj.rot.x = 0.0;       // PITCH
-						obj.rot.y = -1.58;     // ROLL
-						obj.rot.z = 0.0;       // YAW
-					} else if (level_no == 13) {
-						obj.rot.x = 0.0;       // PITCH
-						obj.rot.y = -1.57;     // ROLL
-						obj.rot.z = 0.0;       // YAW
-					}
-					Logger::Get().Log(LogLevel::INFO, "[App] Applied missile rotation override for model " + obj.modelId + " in level " + std::to_string(level_no));
-				}
-			}
-		}
 
 		// AI rotation override: AI models (HumanSoldier, HumanAI) only have horizontal rotation
 		auto& objects = level_.GetLevelObjects().GetObjects();

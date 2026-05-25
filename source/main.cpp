@@ -577,6 +577,19 @@ static int CustomAllocHook(int alloc_type, void *user_data, size_t size,
 ================================================================================
 */
 int main(int argc, char **argv) {
+  // Check for --game-path or -game_path in arguments
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if ((arg == "--game-path" || arg == "-game_path") && i + 1 < argc) {
+#if defined(_WIN32)
+      _putenv_s("IGI_GAME_PATH", argv[i + 1]);
+#else
+      setenv("IGI_GAME_PATH", argv[i + 1], 1);
+#endif
+      break;
+    }
+  }
+
   std::string version = Utils::GetVersionString();
 #if defined(_WIN32) && defined(_DEBUG)
   // Allocate console for debug mode
