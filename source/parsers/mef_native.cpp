@@ -298,9 +298,7 @@ std::vector<std::array<uint32_t, 3>> ParsePackedRenderTriangles(
         const size_t base          = chunk.data + cursor;
         const uint16_t indexCount   = ReadValue<uint16_t>(bytes, base + 12);
         const int16_t  nextoffs    = ReadValue<int16_t> (bytes, base + 14);
-        const int16_t  materialSlot = (modelType == 3)
-            ? ReadValue<int16_t>(bytes, base + 16)
-            : static_cast<int16_t>(blockCount);
+        const int16_t  materialSlot = ReadValue<int16_t>(bytes, base + 16);
         const uint16_t vertsOffset = (modelType == 3)
             ? ReadValue<uint16_t>(bytes, base + 20)
             : ReadValue<uint16_t>(bytes, base + 18);

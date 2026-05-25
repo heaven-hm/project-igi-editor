@@ -206,10 +206,18 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
     std::string funcName = func->func_name_;
     std::string typeStr;
 
+    Logger::Get().Log(LogLevel::INFO, "[DEBUG] Function name: " + funcName);
     // Check if it's a Task_New call (common wrapper)
     if (funcName == "Task_New") {
-        if (a->next_ && a->next_->type_ == QSC::arg_s::type_t::STR) {
-            typeStr = a->next_->str_;
+        const QSC::arg_s* cur = a;
+        int argCount = 0;
+        while (cur) {
+            if (argCount == 1 && cur->type_ == QSC::arg_s::type_t::STR) {
+                typeStr = cur->str_;
+                Logger::Get().Log(LogLevel::INFO, "[DEBUG] Task_New typeStr: '" + typeStr + "'");
+            }
+            cur = cur->next_;
+            argCount++;
         }
     } else {
         // Direct call (less common in modern IGI QSC but possible)
@@ -232,10 +240,14 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
     bool isSCameraCtrl = (typeStr == "SCameraControl");
     bool isExplode = (typeStr == "ExplodeObject");
     bool isAmbient = (typeStr == "AmbientArea");
+    bool isFence = (typeStr == "Fence");
 
     bool isDecl = (typeStr == "Task_DeclareParameters");
     bool isGrouping = (typeStr == "Container" || typeStr == "Static" || typeStr == "Game" || typeStr == "Level" || typeStr == "Flow" || typeStr == "Task" || typeStr == "Folder" ||
-                       typeStr == "container" || typeStr == "static" || typeStr == "game" || typeStr == "level" || typeStr == "flow" || typeStr == "task" || typeStr == "folder" || typeStr == "dynamic" || typeStr == "Dynamic");
+                       typeStr == "container" || typeStr == "static" || typeStr == "game" || typeStr == "level" || typeStr == "flow" || typeStr == "task" || typeStr == "folder" || typeStr == "dynamic" || typeStr == "Dynamic" ||
+                       typeStr == "ConditionalContainer" || typeStr == "SequenceContainer" || typeStr == "Rooms");
+
+    bool isMissingGeneric = (typeStr == "AIStationaryGunHolder" || typeStr == "AlarmLight" || typeStr == "Elevator" || typeStr == "Generator" || typeStr == "GenericPickup" || typeStr == "GenericTBA" || typeStr == "HumanSoldierRPG" || typeStr == "Plane" || typeStr == "Radio" || typeStr == "RotatingObject" || typeStr == "Siren" || typeStr == "StationaryGun");
 
     int currentObjIdx = -1;
 
@@ -336,15 +348,6 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 case 11: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
                 case 12: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
             }
-        } else if (isCamera) {
-            switch (arg_idx) {
-                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
-                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
-                case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
-                case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
-                case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
-                case 10: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
-            }
         } else if (isHeli || isCar) {
             switch (arg_idx) {
                 case 0: obj.taskId = TaskIdFromArg(cur_a); break;
@@ -392,7 +395,7 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break;
                 case 7: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
                 case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
-                case 17: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = cur_a->str_; break;
+                case 11: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
             }
         } else if (isAlarm || isSCameraCtrl || isExplode) {
             switch (arg_idx) {
@@ -404,7 +407,17 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break;
                 case 7: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
                 case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
-                case 15: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = cur_a->str_; break;
+                case 9: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
+            }
+        } else if (isCamera || isFence) {
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
+                case 7: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
             }
         } else if (isAmbient) {
             switch (arg_idx) {
@@ -416,6 +429,30 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break;
                 case 7: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
                 case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
+            }
+        } else if (isMissingGeneric) {
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break;
+                case 7: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
+                case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
+                default:
+                    if (arg_idx >= 9 && obj.modelId.empty() && cur_a->type_ == QSC::arg_s::type_t::STR) {
+                        std::string val = Utils::Trim(cur_a->str_);
+                        // DEBUG
+                        if (typeStr.find("AIStationary") != std::string::npos || typeStr.find("Elevator") != std::string::npos) {
+                            Logger::Get().Log(LogLevel::INFO, "[DEBUG] isMissingGeneric: val='" + val + "', len=" + std::to_string(val.length()));
+                        }
+                        if (val.length() == 8 && val[3] == '_' && val[6] == '_') {
+                            obj.modelId = val;
+                            obj.modelIdArgIdx = arg_idx;
+                        }
+                    }
+                    break;
             }
         } else {
             // Default: just try to get taskId from first arg
@@ -754,6 +791,21 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(7, obj.rot.y);
             readDouble(8, obj.rot.z);
             if (obj.argTokens.size() > 9) obj.modelId = unquote(obj.argTokens[9]);
+        } else if (obj.type == "AIStationaryGunHolder" || obj.type == "AlarmLight" || obj.type == "Elevator" || obj.type == "Generator" || obj.type == "GenericPickup" || obj.type == "GenericTBA" || obj.type == "HumanSoldierRPG" || obj.type == "Plane" || obj.type == "Radio" || obj.type == "RotatingObject" || obj.type == "Siren" || obj.type == "StationaryGun") {
+            readDouble(3, obj.pos.x);
+            readDouble(4, obj.pos.y);
+            readDouble(5, obj.pos.z);
+            readDouble(6, obj.rot.x);
+            readDouble(7, obj.rot.y);
+            readDouble(8, obj.rot.z);
+            for (size_t i = 9; i < obj.argTokens.size(); ++i) {
+                std::string val = unquote(obj.argTokens[i]);
+                if (val.length() == 8 && val[3] == '_' && val[6] == '_') {
+                    obj.modelId = val;
+                    obj.modelIdArgIdx = (int)i;
+                    break;
+                }
+            }
         }
     }
 
@@ -851,6 +903,20 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
             setToken(7, FormatQscDouble(obj.rot.y));
             setToken(8, FormatQscDouble(obj.rot.z));
             if (!obj.modelId.empty() || obj.argTokens.size() > 9) setStringToken(9, obj.modelId);
+        } else if (obj.type == "AIStationaryGunHolder" || obj.type == "AlarmLight" || obj.type == "Elevator" || obj.type == "Generator" || obj.type == "GenericPickup" || obj.type == "GenericTBA" || obj.type == "HumanSoldierRPG" || obj.type == "Plane" || obj.type == "Radio" || obj.type == "RotatingObject" || obj.type == "Siren" || obj.type == "StationaryGun") {
+            setToken(3, FormatQscDouble(obj.pos.x));
+            setToken(4, FormatQscDouble(obj.pos.y));
+            setToken(5, FormatQscDouble(saveZ));
+            setToken(6, FormatQscDouble(obj.rot.x));
+            setToken(7, FormatQscDouble(obj.rot.y));
+            setToken(8, FormatQscDouble(obj.rot.z));
+            if (!obj.modelId.empty()) {
+                if (obj.modelIdArgIdx != -1) {
+                    setStringToken(obj.modelIdArgIdx, obj.modelId);
+                } else if (obj.argTokens.size() > 9) {
+                    setStringToken(9, obj.modelId);
+                }
+            }
         }
     }
 

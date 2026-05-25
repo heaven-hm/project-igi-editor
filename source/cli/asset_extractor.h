@@ -19,6 +19,11 @@ public:
     static bool EnsureCommonAssets(const std::string& igi_path,
                                    const std::string& output_dir);
 
+    // Extract textures from ALL 14 level .res archives (not models).
+    // Called once per session; subsequent calls are instant cache hits.
+    static void EnsureAllLevelTextures(const std::string& igi_path,
+                                       const std::string& output_dir);
+
     // Remove all extracted models and textures folders from output_dir.
     static void CleanupExtractedAssets(const std::string& output_dir);
 

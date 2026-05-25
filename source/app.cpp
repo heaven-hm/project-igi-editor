@@ -287,8 +287,12 @@ void App::LoadLevel(int level_no) {
 
 		// Log all loaded objects for verification script
 		for (const auto& obj : objects) {
-			if (obj.deleted || obj.modelId.empty()) continue;
-			Logger::Get().Log(LogLevel::INFO, "[LevelLoader] Object Loaded: ModelID=" + obj.modelId + 
+			if (obj.isSplineWaypoint || !obj.segmentModelId.empty()) {
+			    Logger::Get().Log(LogLevel::INFO, "[App_Debug] Found waypoint/segment. modelId=" + obj.modelId + " segmentModelId=" + obj.segmentModelId);
+			}
+			std::string mId = !obj.modelId.empty() ? obj.modelId : obj.segmentModelId;
+			if (obj.deleted || mId.empty()) continue;
+			Logger::Get().Log(LogLevel::INFO, "[LevelLoader] Object Loaded: ModelID=" + mId + 
 				", Type=" + obj.type + ", Name=" + obj.name + ", Pos=(" + 
 				std::to_string(obj.pos.x) + ", " + std::to_string(obj.pos.y) + ", " + std::to_string(obj.pos.z) + ")");
 		}

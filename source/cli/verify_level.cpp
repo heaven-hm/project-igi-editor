@@ -255,7 +255,12 @@ static std::vector<VerifyObj> ParseLog(const std::string& logPath, int levelNo,
 
     for (int i = startIdx; i < endIdx; ++i) {
         std::smatch m;
-        if (!std::regex_search(lines[i], m, objRe)) continue;
+        if (!std::regex_search(lines[i], m, objRe)) {
+            if (lines[i].find("[LevelLoader] Object Loaded:") != std::string::npos) {
+                std::cout << "REGEX FAILED ON: " << lines[i] << "\n";
+            }
+            continue;
+        }
 
         VerifyObj obj;
         obj.modelId = Trim(m[1].str());
@@ -940,7 +945,7 @@ static LevelReport VerifyOneLevel(const std::string& igiPath,
         auto allObjs = ParseQscObjects(qscPath, modelNames);
 
 
-        try { fs::remove(qscPath); } catch (...) {}
+        // try { fs::remove(qscPath); } catch (...) {}
 
         // 3. Categorise into buildings / objects / AI by task type
         for (const auto& v : allObjs) {

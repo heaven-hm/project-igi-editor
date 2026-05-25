@@ -53,6 +53,7 @@ struct LevelObject {
     std::string qscLine; // Raw QSC line for "Notepad" editing
     bool isNested = false; // True if this is a sub-call (like LightmapInfo inside Building)
     bool preserveTaskId = false; // Keep Task_New arg[0] as an integer token
+    int modelIdArgIdx = -1; // Index of the modelId argument in argTokens
 };
 
 

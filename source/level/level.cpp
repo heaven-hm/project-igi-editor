@@ -93,6 +93,10 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 
 	// Extract textures and models from IGI .res archives (cached per-level)
 	AssetExtractor::EnsureLevelAssets(params.level_no_, Utils::GetIGIRootPath(), exeDir);
+	// Extract textures from all other levels once per session so cross-level
+	// texture references (e.g. model 618 in level 3 whose textures live in level 6)
+	// are available for the FindTextureFile cross-level search.
+	AssetExtractor::EnsureAllLevelTextures(Utils::GetIGIRootPath(), exeDir);
 
 	// Verify terrain folder exists in game directory
 	try {

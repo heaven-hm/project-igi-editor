@@ -179,6 +179,23 @@ bool AssetExtractor::EnsureCommonAssets(const std::string& igi_path,
     return texOk;
 }
 
+void AssetExtractor::EnsureAllLevelTextures(const std::string& igi_path,
+                                             const std::string& output_dir) {
+    static bool s_done = false;
+    if (s_done) return;
+    s_done = true;
+
+    const std::string cacheDir = output_dir + "\\content\\cache";
+    for (int lvl = 1; lvl <= 14; ++lvl) {
+        const std::string levelName = "level" + std::to_string(lvl);
+        const std::string texRes  = igi_path + "\\missions\\location0\\" + levelName +
+                                    "\\textures\\" + levelName + ".res";
+        const std::string texOut   = output_dir + "\\content\\textures\\" + levelName;
+        const std::string texStamp = cacheDir + "\\" + levelName + "_textures.stamp";
+        ExtractResIfNeeded(texRes, texOut, texStamp);
+    }
+}
+
 void AssetExtractor::CleanupExtractedAssets(const std::string& output_dir) {
     std::error_code ec;
     const std::string modelsDir   = output_dir + "\\content\\models";
