@@ -226,7 +226,7 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
 
     bool isBuilding = (typeStr == "Building");
     bool isRigid = (typeStr == "EditRigidObj");
-    bool isSoldier = (typeStr == "HumanSoldier" || typeStr == "HumanSoldierFemale" || typeStr == "HumanPlayer");
+    bool isSoldier = (typeStr == "HumanSoldier" || typeStr == "HumanSoldierFemale" || typeStr == "HumanPlayer" || typeStr == "HumanSoldierRPG" || typeStr == "Cabinet");
     bool isDoor = (typeStr == "Door");
     bool isTerminal = (typeStr == "Terminal");
     bool isCamera = (typeStr == "SCamera");
@@ -247,7 +247,7 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                        typeStr == "container" || typeStr == "static" || typeStr == "game" || typeStr == "level" || typeStr == "flow" || typeStr == "task" || typeStr == "folder" || typeStr == "dynamic" || typeStr == "Dynamic" ||
                        typeStr == "ConditionalContainer" || typeStr == "SequenceContainer" || typeStr == "Rooms");
 
-    bool isMissingGeneric = (typeStr == "AIStationaryGunHolder" || typeStr == "AlarmLight" || typeStr == "Elevator" || typeStr == "Generator" || typeStr == "GenericPickup" || typeStr == "GenericTBA" || typeStr == "HumanSoldierRPG" || typeStr == "Plane" || typeStr == "Radio" || typeStr == "RotatingObject" || typeStr == "Siren" || typeStr == "StationaryGun");
+    bool isMissingGeneric = (typeStr == "AIStationaryGunHolder" || typeStr == "AlarmLight" || typeStr == "Elevator" || typeStr == "Generator" || typeStr == "GenericPickup" || typeStr == "GenericTBA" || typeStr == "Plane" || typeStr == "Radio" || typeStr == "RotatingObject" || typeStr == "Siren" || typeStr == "StationaryGun");
 
     int currentObjIdx = -1;
 
@@ -443,10 +443,6 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 default:
                     if (arg_idx >= 9 && obj.modelId.empty() && cur_a->type_ == QSC::arg_s::type_t::STR) {
                         std::string val = Utils::Trim(cur_a->str_);
-                        // DEBUG
-                        if (typeStr.find("AIStationary") != std::string::npos || typeStr.find("Elevator") != std::string::npos) {
-                            Logger::Get().Log(LogLevel::INFO, "[DEBUG] isMissingGeneric: val='" + val + "', len=" + std::to_string(val.length()));
-                        }
                         if (val.length() == 8 && val[3] == '_' && val[6] == '_') {
                             obj.modelId = val;
                             obj.modelIdArgIdx = arg_idx;
@@ -726,7 +722,7 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             obj.isContainer = true;
         }
 
-        if (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale" || obj.type == "HumanPlayer") {
+        if (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale" || obj.type == "HumanPlayer" || obj.type == "HumanSoldierRPG" || obj.type == "Cabinet") {
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);
             readDouble(5, obj.pos.z);
@@ -791,7 +787,7 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(7, obj.rot.y);
             readDouble(8, obj.rot.z);
             if (obj.argTokens.size() > 9) obj.modelId = unquote(obj.argTokens[9]);
-        } else if (obj.type == "AIStationaryGunHolder" || obj.type == "AlarmLight" || obj.type == "Elevator" || obj.type == "Generator" || obj.type == "GenericPickup" || obj.type == "GenericTBA" || obj.type == "HumanSoldierRPG" || obj.type == "Plane" || obj.type == "Radio" || obj.type == "RotatingObject" || obj.type == "Siren" || obj.type == "StationaryGun") {
+        } else if (obj.type == "AIStationaryGunHolder" || obj.type == "AlarmLight" || obj.type == "Elevator" || obj.type == "Generator" || obj.type == "GenericPickup" || obj.type == "GenericTBA" || obj.type == "Plane" || obj.type == "Radio" || obj.type == "RotatingObject" || obj.type == "Siren" || obj.type == "StationaryGun") {
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);
             readDouble(5, obj.pos.z);
@@ -828,7 +824,7 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
         setStringToken(2, obj.name);
 
         double saveZ = obj.pos.z - obj.snap_z_offset;
-        if (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale" || obj.type == "HumanPlayer") {
+        if (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale" || obj.type == "HumanPlayer" || obj.type == "HumanSoldierRPG" || obj.type == "Cabinet") {
             setToken(3, FormatQscDouble(obj.pos.x));
             setToken(4, FormatQscDouble(obj.pos.y));
             setToken(5, FormatQscDouble(saveZ));
@@ -903,7 +899,7 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
             setToken(7, FormatQscDouble(obj.rot.y));
             setToken(8, FormatQscDouble(obj.rot.z));
             if (!obj.modelId.empty() || obj.argTokens.size() > 9) setStringToken(9, obj.modelId);
-        } else if (obj.type == "AIStationaryGunHolder" || obj.type == "AlarmLight" || obj.type == "Elevator" || obj.type == "Generator" || obj.type == "GenericPickup" || obj.type == "GenericTBA" || obj.type == "HumanSoldierRPG" || obj.type == "Plane" || obj.type == "Radio" || obj.type == "RotatingObject" || obj.type == "Siren" || obj.type == "StationaryGun") {
+        } else if (obj.type == "AIStationaryGunHolder" || obj.type == "AlarmLight" || obj.type == "Elevator" || obj.type == "Generator" || obj.type == "GenericPickup" || obj.type == "GenericTBA" || obj.type == "Plane" || obj.type == "Radio" || obj.type == "RotatingObject" || obj.type == "Siren" || obj.type == "StationaryGun") {
             setToken(3, FormatQscDouble(obj.pos.x));
             setToken(4, FormatQscDouble(obj.pos.y));
             setToken(5, FormatQscDouble(saveZ));

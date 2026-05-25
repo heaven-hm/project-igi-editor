@@ -324,30 +324,45 @@ static void CategoriseQscObjects(const std::vector<LevelObject>& objs,
 static void CrossRef(LevelReport::Category& cat,
                      const std::vector<VerifyObj>& logged,
                      bool matchOri) {
+    std::vector<bool> consumed(logged.size(), false);
+
     for (const auto& exp : cat.expected) {
         // Full match: same model, same pos, and either ori not checked, not logged, or matches
         auto it = std::find_if(logged.begin(), logged.end(), [&](const VerifyObj& q) {
-            return q.modelId == exp.modelId && PosMatch(q, exp) &&
+            size_t idx = &q - &logged[0];
+            return !consumed[idx] && q.modelId == exp.modelId && PosMatch(q, exp) &&
                    (!matchOri || !q.ori_logged || OriMatch(q, exp));
         });
-        if (it != logged.end()) { cat.found.push_back(exp); continue; }
+        if (it != logged.end()) { 
+            consumed[&*it - &logged[0]] = true;
+            cat.found.push_back(exp); 
+            continue; 
+        }
 
-        // Pos match, ori was logged but differs → real mismatch
+        // Pos match, ori was logged but differs -> real mismatch
         if (matchOri) {
             auto it2 = std::find_if(logged.begin(), logged.end(), [&](const VerifyObj& q) {
-                return q.modelId == exp.modelId && PosMatch(q, exp) && q.ori_logged;
+                size_t idx = &q - &logged[0];
+                return !consumed[idx] && q.modelId == exp.modelId && PosMatch(q, exp) && q.ori_logged;
             });
-            if (it2 != logged.end()) { cat.ori_mismatch.push_back({exp, *it2}); continue; }
+            if (it2 != logged.end()) { 
+                consumed[&*it2 - &logged[0]] = true;
+                cat.ori_mismatch.push_back({exp, *it2}); 
+                continue; 
+            }
         }
 
         // Model match, find closest by XY
-        std::vector<VerifyObj> byModel;
-        for (const auto& q : logged) if (q.modelId == exp.modelId) byModel.push_back(q);
+        std::vector<VerifyObj*> byModel;
+        for (size_t i = 0; i < logged.size(); ++i) {
+            if (!consumed[i] && logged[i].modelId == exp.modelId) byModel.push_back(const_cast<VerifyObj*>(&logged[i]));
+        }
         if (!byModel.empty()) {
-            auto cl = std::min_element(byModel.begin(), byModel.end(), [&](const VerifyObj& a, const VerifyObj& b) {
-                return DistSq2D(a, exp) < DistSq2D(b, exp);
+            auto cl = std::min_element(byModel.begin(), byModel.end(), [&](VerifyObj* a, VerifyObj* b) {
+                return DistSq2D(*a, exp) < DistSq2D(*b, exp);
             });
-            cat.pos_mismatch.push_back({exp, *cl});
+            consumed[*cl - &logged[0]] = true;
+            cat.pos_mismatch.push_back({exp, **cl});
             continue;
         }
 
