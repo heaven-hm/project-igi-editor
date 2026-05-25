@@ -90,6 +90,7 @@ void Renderer::Shutdown() {
 void Renderer::BeginLoadLevel() {
   flat_sky_layers_.UnloadAllTexs();
   terrain_.UnloadAllTexs();
+  objects_.ClearCaches();
 }
 
 void Renderer::SetupClearColor(const glm::vec4 &color) {

@@ -279,6 +279,33 @@ bool Renderer_Objects::Init() {
     return true;
 }
 
+// ─── ClearCaches ──────────────────────────────────────────────────────────────
+void Renderer_Objects::ClearCaches() {
+    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Clearing all level caches...");
+    for (auto& pair : mesh_cache_) {
+        destroyModel(pair.second);
+    }
+    mesh_cache_.clear();
+    attachment_cache_.clear();
+
+    for (auto& pair : texture_cache_) {
+        if (pair.second) {
+            glDeleteTextures(1, &pair.second);
+        }
+    }
+    texture_cache_.clear();
+    model_texture_map_cache_.clear();
+    
+    global_texture_map_.clear();
+    global_texture_map_loaded_ = false;
+    texture_map_level_ = -1;
+    window_model_ids_.clear();
+    window_ids_loaded_ = false;
+    portal_distances_.clear();
+    portal_distances_loaded_ = false;
+    logged_draw_buildings_.clear();
+}
+
 // ─── Shutdown ─────────────────────────────────────────────────────────────────
 void Renderer_Objects::Shutdown() {
     for (auto& pair : mesh_cache_)
