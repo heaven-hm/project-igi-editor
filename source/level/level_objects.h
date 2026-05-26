@@ -20,11 +20,11 @@ struct LevelObject {
     std::string secondaryWeapon; // Secondary weapon name from JSON
     std::string secondaryAmmo;    // Secondary ammo from JSON
     int team; // 0 = Friendly, 1 = Enemy
-    glm::dvec3 pos;
-    glm::dvec3 original_pos;  // Original position from QSC for fallback matching
-    glm::dvec3 rot;
-    glm::dvec3 original_rot;  // Original rotation from QSC for change detection
-    bool isBuilding;
+    glm::dvec3 pos = glm::dvec3(0.0);
+    glm::dvec3 original_pos = glm::dvec3(0.0);  // Original position from QSC for fallback matching
+    glm::dvec3 rot = glm::dvec3(0.0);
+    glm::dvec3 original_rot = glm::dvec3(0.0);  // Original rotation from QSC for change detection
+    bool isBuilding = false;
     bool isContainer = false; // For grouping tasks like "Container", "Static", "Game"
     bool expanded = false;    // For TreeView HUD state
     bool modified = false;
@@ -40,6 +40,9 @@ struct LevelObject {
     bool isSplineWaypoint = false;
     bool isWire = false;
     std::string segmentModelId;    // The model repeated along the path (e.g. 368_01_1)
+    std::string secondaryModelId;  // For SCamera (Camera body)
+    std::string lensModelId;       // For SCamera (Lens)
+    std::string splineTaskId;      // For Train (RailroadQTaskID)
     bool linearSegments = false;   // If true, straight lines; if false, curved
     int splineSegmentCount = 20;   // Number of sub-segments per waypoint segment
     glm::dmat3 orientationMatrix = glm::dmat3(1.0); // 3x3 rotation matrix for Splines/Joints

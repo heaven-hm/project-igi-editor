@@ -231,14 +231,22 @@ void App::LoadLevel(int level_no) {
 			const auto& config = Config::Get();
 			viewer_.pos_ = (config.cameraPosX != 0.0f || config.cameraPosY != 0.0f || config.cameraPosZ != 0.0f) ?
 				glm::vec3(config.cameraPosX, config.cameraPosY, config.cameraPosZ) : start_pos;
-			
-			// Use orientation if provided, otherwise default/start values
-			viewer_.yaw_ = (config.cameraOriX != 0.0f || config.cameraOriY != 0.0f || config.cameraOriZ != 0.0f) ? config.cameraOriX : 13.0f;
-			viewer_.pitch_ = (config.cameraOriX != 0.0f || config.cameraOriY != 0.0f || config.cameraOriZ != 0.0f) ? config.cameraOriY : 10.0f;
-			viewer_.roll_ = (config.cameraOriX != 0.0f || config.cameraOriY != 0.0f || config.cameraOriZ != 0.0f) ? config.cameraOriZ : 0.0f;
+
+			bool hasConfigOri = (config.cameraOriX != 0.0f || config.cameraOriY != 0.0f || config.cameraOriZ != 0.0f);
+			if (hasConfigOri) {
+				viewer_.yaw_   = config.cameraOriX;
+				viewer_.pitch_ = config.cameraOriY;
+				viewer_.roll_  = config.cameraOriZ;
+			} else {
+				// Convert game yaw (radians) to viewer yaw (degrees, 0=+Y north, CW).
+				// Add 180° so the editor camera faces toward objects rather than with them.
+				viewer_.yaw_   = glm::degrees(atan2f(-cosf(start_yaw), sinf(start_yaw))) + 180.0f;
+				viewer_.pitch_ = 10.0f;
+				viewer_.roll_  = 0.0f;
+			}
 
 			UpdateViewerVectors();
-			Logger::Get().Log(LogLevel::INFO, "[App] Level " + std::to_string(level_no) + " loaded. Viewer start=(" + std::to_string(viewer_.pos_.x) + "," + std::to_string(viewer_.pos_.y) + "," + std::to_string(viewer_.pos_.z) + ")");
+			Logger::Get().Log(LogLevel::INFO, "[App] Level " + std::to_string(level_no) + " loaded. Viewer start=(" + std::to_string(viewer_.pos_.x) + "," + std::to_string(viewer_.pos_.y) + "," + std::to_string(viewer_.pos_.z) + ") yaw=" + std::to_string(viewer_.yaw_));
 		}
 		else {
 			std::string errorMsg = "Failed to load level " + std::to_string(level_no) + "\n\nPlease check if the terrain files exist in the correct location.";
@@ -247,7 +255,10 @@ void App::LoadLevel(int level_no) {
 		}
 
 
-		// Always snap objects to terrain after any level load
+		// Step 2: Track Evaluation (Dynamic object placement along paths)
+		EvaluateTrainTrackPositions();
+
+		// Step 3: Always snap objects to terrain after any level load
 		Logger::Get().Log(LogLevel::INFO, "[App] Step 3: Snapping objects to terrain...");
 		SnapObjectsToTerrain();
 
@@ -271,10 +282,10 @@ void App::LoadLevel(int level_no) {
 			}
 			std::string mId = !obj.modelId.empty() ? obj.modelId : obj.segmentModelId;
 			if (obj.deleted || mId.empty()) continue;
-			Logger::Get().Log(LogLevel::INFO, "[LevelLoader] Object Loaded: ModelID=" + mId + 
-				", Type=" + obj.type + ", Name=" + obj.name + ", Pos=(" + 
-				std::to_string(obj.pos.x) + ", " + std::to_string(obj.pos.y) + ", " + std::to_string(obj.pos.z) + ")");
-		}
+			Logger::Get().Log(LogLevel::INFO, "[LevelLoader] Object Loaded: ModelID=" + mId +
+				", Type=" + obj.type + ", Name=" + obj.name + ", Pos=(" +
+				std::to_string(obj.pos.x) + ", " + std::to_string(obj.pos.y) + ", " + std::to_string(obj.pos.z) + ")" +
+				", Ori=(" + std::to_string(obj.rot.x) + ", " + std::to_string(obj.rot.y) + ", " + std::to_string(obj.rot.z) + ")");		}
 		
 		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
 		Logger::Get().Log(LogLevel::INFO, "[App] LoadLevel() COMPLETE for level " + std::to_string(level_no));
@@ -2310,12 +2321,12 @@ void App::SnapObjectsToTerrain() {
             skipped++;
             continue;
         }
-        // Skip snapping for Cameras, Terminals, and Spline Waypoints
+        // Skip snapping for Cameras, Terminals, Trains and Spline Waypoints
         // Terminals sit on interior floors at their exact QSC Z, not outdoor terrain.
         // AI soldiers (HumanSoldier/HumanSoldierFemale) fall through so they can be
         // terrain-snapped; the isIndoorChild check below handles interior AI.
         if (obj.type == "SCamera" || obj.type == "Terminal" || obj.type == "SplineObjWaypoint" ||
-            obj.type == "AmbientArea" || obj.type == "Elevator" || obj.isWire) {
+            obj.type == "AmbientArea" || obj.type == "Elevator" || obj.isWire || obj.type == "Train") {
             
             // Only restore original Z if the object has NOT been moved/modified by the user
             // or by its parent building. This allows hierarchical movement to stick.
@@ -3573,4 +3584,130 @@ bool App::ValidateParentChildCompatibility(const LevelObject& parent, const std:
 		}
 	}
 	return true;
+}
+
+void App::EvaluateTrainTrackPositions() {
+	auto& objects = level_.GetLevelObjects().GetObjects();
+
+	std::map<std::string, int> taskToIdx;
+	for (int i = 0; i < (int)objects.size(); ++i) {
+		if (!objects[i].taskId.empty())
+			taskToIdx[objects[i].taskId] = i;
+	}
+
+	struct SplineData {
+		std::vector<glm::dvec3> pts;
+		std::vector<double> cumDist;
+		double totalLen = 0.0;
+	};
+	std::map<std::string, SplineData> splineCache;
+
+	auto getSpline = [&](const std::string& id) -> const SplineData* {
+		auto cached = splineCache.find(id);
+		if (cached != splineCache.end()) return &cached->second;
+		auto it = taskToIdx.find(id);
+		if (it == taskToIdx.end()) return nullptr;
+		const auto& spline = objects[it->second];
+		if (spline.childrenIndices.size() < 2) return nullptr;
+		SplineData sd;
+		for (int ci : spline.childrenIndices)
+			sd.pts.push_back(objects[ci].pos);
+		sd.cumDist.resize(sd.pts.size(), 0.0);
+		for (int i = 1; i < (int)sd.pts.size(); ++i)
+			sd.cumDist[i] = sd.cumDist[i-1] + glm::length(sd.pts[i] - sd.pts[i-1]);
+		sd.totalLen = sd.cumDist.back();
+		splineCache[id] = sd;
+		return &splineCache[id];
+	};
+
+	// Evaluate world position+rotation for a given arc distance on a spline
+	auto evalOnSpline = [](const SplineData& sd, double arcLen, glm::dvec3& outPos, glm::dvec3& outRot) {
+		double clamped = glm::clamp(arcLen, 0.0, sd.totalLen);
+		int seg = 0;
+		for (int i = 1; i < (int)sd.cumDist.size(); ++i) {
+			if (sd.cumDist[i] >= clamped) { seg = i - 1; break; }
+			if (i == (int)sd.cumDist.size() - 1) { seg = i - 1; break; }
+		}
+		int segNext = std::min(seg + 1, (int)sd.pts.size() - 1);
+		double segLen = sd.cumDist[segNext] - sd.cumDist[seg];
+		double t = (segLen > 0.0) ? (clamped - sd.cumDist[seg]) / segLen : 0.0;
+		outPos = sd.pts[seg] + t * (sd.pts[segNext] - sd.pts[seg]);
+		glm::dvec3 fwd = glm::normalize(sd.pts[segNext] - sd.pts[seg]);
+		outRot.z = atan2(fwd.y, fwd.x);
+		outRot.x = asin(glm::clamp(fwd.z, -1.0, 1.0));
+		outRot.y = 0.0;
+	};
+
+	// Save original rail positions from QSC (obj.pos.x) before modifying obj.pos
+	std::vector<double> rawRailPos(objects.size(), 0.0);
+	for (int i = 0; i < (int)objects.size(); ++i) {
+		if (objects[i].type == "Train" && !objects[i].deleted && !objects[i].splineTaskId.empty())
+			rawRailPos[i] = objects[i].pos.x;
+	}
+
+	// Computed arc distances (from spline start) per object index — filled in pass 1
+	std::map<int, double> arcByObjIdx;
+
+	int evaluated = 0;
+
+	// Pass 1: trains with an explicit non-zero 1D position from QSC.
+	// Negative position = distance from the END of the track (game convention):
+	//   arcFromStart = totalLen + negativePos
+	for (int i = 0; i < (int)objects.size(); ++i) {
+		auto& obj = objects[i];
+		if (obj.type != "Train" || obj.deleted || obj.splineTaskId.empty()) continue;
+		if (rawRailPos[i] == 0.0) continue;
+
+		const SplineData* sd = getSpline(obj.splineTaskId);
+		if (!sd || sd->totalLen <= 0.0) continue;
+
+		double rawPos = rawRailPos[i];
+		double arcPos = (rawPos < 0.0) ? sd->totalLen + rawPos : rawPos;
+		arcPos = glm::clamp(arcPos, 0.0, sd->totalLen);
+		arcByObjIdx[i] = arcPos;
+
+		glm::dvec3 newPos, newRot;
+		evalOnSpline(*sd, arcPos, newPos, newRot);
+		obj.pos = newPos;
+		obj.original_pos = newPos;
+		obj.rot = newRot;
+		obj.original_rot = newRot;
+		++evaluated;
+	}
+
+	// Pass 2: child wagons with position=0 — place them behind their parent lead car.
+	// Wagon length ~52,756 game units (644 local half-extent * 2 * scale 40.96).
+	const double WAGON_SPACING = 52756.0;
+	std::map<int, int> wagonCountByParent;
+
+	for (int i = 0; i < (int)objects.size(); ++i) {
+		auto& obj = objects[i];
+		if (obj.type != "Train" || obj.deleted || obj.splineTaskId.empty()) continue;
+		if (rawRailPos[i] != 0.0) continue;
+		if (obj.parentIndex < 0 || objects[obj.parentIndex].type != "Train") continue;
+
+		auto parentArcIt = arcByObjIdx.find(obj.parentIndex);
+		if (parentArcIt == arcByObjIdx.end()) continue;
+
+		const SplineData* sd = getSpline(obj.splineTaskId);
+		if (!sd || sd->totalLen <= 0.0) continue;
+
+		int wagonIdx = wagonCountByParent[obj.parentIndex]++;
+		// Negative rawRailPos on the parent means the train moves toward arc=0 (Flip=TRUE),
+		// so wagons trail behind at HIGHER arc positions (where the train came from).
+		double dir = (rawRailPos[obj.parentIndex] < 0.0) ? 1.0 : -1.0;
+		double arcPos = glm::clamp(parentArcIt->second + dir * (wagonIdx + 1) * WAGON_SPACING, 0.0, sd->totalLen);
+		arcByObjIdx[i] = arcPos;
+
+		glm::dvec3 newPos, newRot;
+		evalOnSpline(*sd, arcPos, newPos, newRot);
+		obj.pos = newPos;
+		obj.original_pos = newPos;
+		obj.rot = newRot;
+		obj.original_rot = newRot;
+		++evaluated;
+	}
+
+	if (evaluated > 0)
+		Logger::Get().Log(LogLevel::INFO, "[App] Evaluated track positions for " + std::to_string(evaluated) + " train objects.");
 }

@@ -241,6 +241,7 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
     bool isExplode = (typeStr == "ExplodeObject");
     bool isAmbient = (typeStr == "AmbientArea");
     bool isFence = (typeStr == "Fence");
+    bool isTrain = (typeStr == "Train");
 
     bool isDecl = (typeStr == "Task_DeclareParameters");
     bool isGrouping = (typeStr == "Container" || typeStr == "Static" || typeStr == "Game" || typeStr == "Level" || typeStr == "Flow" || typeStr == "Task" || typeStr == "Folder" ||
@@ -355,8 +356,18 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
                 case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
                 case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
-                case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break; // gamma
+                case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break;
+                case 7: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
+                case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
                 case 13: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
+            }
+        } else if (isTrain) {
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break; // Position is 1D (Real32) for Train
+                case 5: obj.splineTaskId = TaskIdFromArg(cur_a); break;
+                case 6: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
             }
         } else if (isWire) {
             switch (arg_idx) {
@@ -418,6 +429,10 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
                 case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
                 case 7: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
+                case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break; // Camera Pitch
+                case 9: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break; // Camera Yaw (relative?)
+                case 10: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.secondaryModelId = Utils::Trim(cur_a->str_); break;
+                case 11: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.lensModelId = Utils::Trim(cur_a->str_); break;
             }
         } else if (isAmbient) {
             switch (arg_idx) {
@@ -736,11 +751,13 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(10, obj.rot.y);
             readDouble(11, obj.rot.z);
             if (obj.argTokens.size() > 12) obj.modelId = unquote(obj.argTokens[12]);
-        } else if (obj.type == "SCamera") {
+        } else if (obj.type == "SCamera" || obj.type == "Fence") {
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);
             readDouble(5, obj.pos.z);
-            if (obj.argTokens.size() > 10) obj.modelId = unquote(obj.argTokens[10]);
+            readDouble(6, obj.rot.z);
+            if (obj.argTokens.size() > 7 && obj.type == "Fence") obj.modelId = unquote(obj.argTokens[7]);
+            else if (obj.argTokens.size() > 10 && obj.type == "SCamera") obj.modelId = unquote(obj.argTokens[10]);
         } else if (obj.type == "Heli" || obj.type == "Car") {
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);
@@ -779,6 +796,11 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(6, obj.rot.x);
             readDouble(7, obj.rot.y);
             readDouble(8, obj.rot.z);
+        } else if (obj.type == "Train") {
+            // Position (arg[3]), RailroadQTaskID (arg[5]), Model (arg[6])
+            readDouble(3, obj.pos.x); // 1D position along spline
+            if (obj.argTokens.size() > 5) obj.splineTaskId = Utils::Trim(unquote(obj.argTokens[5]));
+            if (obj.argTokens.size() > 6) obj.modelId = unquote(obj.argTokens[6]);
         } else if (obj.argTokens.size() > 8) {
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);
@@ -849,6 +871,10 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
             setToken(5, FormatQscDouble(saveZ));
             setToken(8, FormatQscDouble(obj.rot.z));
             if (!obj.modelId.empty() || obj.argTokens.size() > 13) setStringToken(13, obj.modelId);
+        } else if (obj.type == "Train") {
+            setToken(3, FormatQscDouble(obj.pos.x)); // 1D Position
+            if (!obj.splineTaskId.empty() || obj.argTokens.size() > 5) setToken(5, obj.splineTaskId.empty() ? "0" : obj.splineTaskId);
+            if (!obj.modelId.empty() || obj.argTokens.size() > 6) setStringToken(6, obj.modelId);
         } else if (obj.type == "SplineObjWaypoint") {
             setToken(3, FormatQscDouble(obj.rot.x));
             setToken(4, FormatQscDouble(obj.rot.y));

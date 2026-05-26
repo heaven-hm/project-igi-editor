@@ -211,6 +211,7 @@ private:
 	void					ProcessInput(float delta_seconds);
 	bool					CheckCollision(const glm::vec3& next_pos);
 	void					SnapObjectsToTerrain();
+	void					EvaluateTrainTrackPositions();
 
 	bool					stick_to_ground_ = false;
 	bool					noclip_mode_ = true; // By default true as requested by user

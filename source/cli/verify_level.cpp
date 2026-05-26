@@ -38,6 +38,7 @@ struct VerifyObj {
     long long px = 0, py = 0, pz = 0;
     double ox = 0, oy = 0, oz = 0;  // radians, as stored in QSC
     bool ori_logged = false;          // false → editor did not emit Ori= in log
+    bool posIsRail  = false;          // true → Train: 1D rail pos, skip position cross-ref
 };
 
 struct LevelReport {
@@ -327,6 +328,23 @@ static void CrossRef(LevelReport::Category& cat,
     std::vector<bool> consumed(logged.size(), false);
 
     for (const auto& exp : cat.expected) {
+        // Train (posIsRail): the QSC position is a 1D rail coordinate, not a world XYZ.
+        // The editor converts it to a 3D world position via EvaluateTrainTrackPositions.
+        // We can only verify that the model ID appears somewhere in the log.
+        if (exp.posIsRail) {
+            auto it = std::find_if(logged.begin(), logged.end(), [&](const VerifyObj& q) {
+                size_t idx = &q - &logged[0];
+                return !consumed[idx] && q.modelId == exp.modelId;
+            });
+            if (it != logged.end()) {
+                consumed[&*it - &logged[0]] = true;
+                cat.found.push_back(exp);
+            } else {
+                cat.missing.push_back(exp);
+            }
+            continue;
+        }
+
         // Full match: same model, same pos, and either ori not checked, not logged, or matches
         auto it = std::find_if(logged.begin(), logged.end(), [&](const VerifyObj& q) {
             size_t idx = &q - &logged[0];
@@ -807,10 +825,34 @@ static std::map<std::string, TaskSchema> GetBuiltinSchemas() {
       add(sc, "Orientation", "Real32x9",  3);
       add(sc, "Position",    "ObjectPos", 6);
       add(sc, "Model",       "String16",  9); }
-    // AmbientArea / ExplodeObject already above
+    // AmbientArea
     { auto& sc = s["AmbientArea"];
       add(sc, "Position",    "ObjectPos", 3);
       add(sc, "Orientation", "Real32x9",  6); }
+    // Train: 1D rail position@3 (Real32), RailroadQTaskID@5, Model@6
+    // Position is not a world XYZ but a 1D distance along the spline.
+    // We use the special type "TrainPos1D" so the parser knows to set posIsRail=true.
+    { auto& sc = s["Train"];
+      add(sc, "Position", "TrainPos1D", 3);
+      add(sc, "Model",    "String256",  6); }
+    // Fence: pos@3, heading@6, model@7
+    { auto& sc = s["Fence"];
+      add(sc, "Position", "ObjectPos", 3);
+      add(sc, "Heading",  "Real32",    6);
+      add(sc, "Model",    "String16",  7); }
+    // Cabinet: same layout as HumanSoldier
+    { auto& sc = s["Cabinet"];
+      add(sc, "Position", "ObjectPos", 3);
+      add(sc, "Heading",  "Real32",    6);
+      add(sc, "Model",    "String16",  7); }
+    // Generic positioned objects: pos@3, ori@6, model scanned from arg 9+
+    for (const char* t : {"AIStationaryGunHolder","AlarmLight","Elevator","Generator",
+                           "GenericPickup","GenericTBA","Plane","Radio",
+                           "RotatingObject","Siren","StationaryGun"}) {
+        add(s[t], "Position",    "ObjectPos", 3);
+        add(s[t], "Orientation", "Real32x9",  6);
+        add(s[t], "Model",       "String16",  9);
+    }
 
     return s;
 }
@@ -854,9 +896,8 @@ static std::vector<VerifyObj> ParseQscObjects(
         std::string modelId;
 
         for (const auto& fd : schema) {
-            // Position: first ObjectPos field (or field named "Position")
-            if (!hasPos && (fd.typeName == "ObjectPos" ||
-                            fd.name.find("Position") != std::string::npos)) {
+            // Position: 3D ObjectPos field
+            if (!hasPos && fd.typeName == "ObjectPos") {
                 if (fd.argCount == 3 && fd.argOffset + 2 < (int)args.size() &&
                     !args[fd.argOffset].empty() && !args[fd.argOffset+1].empty() && !args[fd.argOffset+2].empty()) {
                     try {
@@ -867,10 +908,23 @@ static std::vector<VerifyObj> ParseQscObjects(
                     } catch (...) {}
                 }
             }
-            // Orientation: Real32x9 (3 Euler angles) or single-float Heading
+            // Train 1D rail position — mark hasPos so object isn't filtered out,
+            // store the raw rail coordinate in px and flag posIsRail.
+            bool isRailPos = false;
+            if (!hasPos && fd.typeName == "TrainPos1D") {
+                if (fd.argOffset < (int)args.size() && !args[fd.argOffset].empty()) {
+                    try {
+                        px = std::stod(args[fd.argOffset]);
+                        hasPos  = true;
+                        isRailPos = true;
+                    } catch (...) {}
+                }
+            }
+            // Orientation: Real32x9 (3 Euler angles) or single-float Heading/Gamma
             if (!hasOri && (fd.typeName == "Real32x9" ||
                             fd.name.find("Orientation") != std::string::npos ||
-                            fd.name.find("Heading")     != std::string::npos)) {
+                            fd.name.find("Heading")     != std::string::npos ||
+                            fd.name.find("Gamma")       != std::string::npos)) {
                 if (fd.argCount == 3 && fd.argOffset + 2 < (int)args.size() &&
                     !args[fd.argOffset].empty() && !args[fd.argOffset+1].empty() && !args[fd.argOffset+2].empty()) {
                     try {
@@ -884,16 +938,20 @@ static std::vector<VerifyObj> ParseQscObjects(
                     try { oz = std::stod(args[fd.argOffset]); hasOri = true; } catch (...) {}
                 }
             }
-            // Model: first String16/VarString value matching XXX_XX_X
+            // Model: first String16/String256/VarString value matching XXX_XX_X
             if (modelId.empty() &&
-                (fd.typeName == "String16" || fd.typeName == "VarString") &&
+                (fd.typeName == "String16" || fd.typeName == "String256" || fd.typeName == "VarString") &&
                 fd.argOffset < (int)args.size() && !args[fd.argOffset].empty()) {
                 std::string val = UnquoteStr(args[fd.argOffset]);
                 if (IsModelId(val)) modelId = val;
             }
+            (void)isRailPos; // will be captured via lambda below
         }
 
         if (!hasPos || modelId.empty()) continue;
+
+        // Determine if this is a rail-position type
+        bool isRailType = (typeStr == "Train");
 
         VerifyObj v;
         v.modelId   = modelId;
@@ -904,6 +962,7 @@ static std::vector<VerifyObj> ParseQscObjects(
         v.pz = (long long)std::llround(pz);
         v.ox = ox; v.oy = oy; v.oz = oz;
         v.ori_logged = hasOri;
+        v.posIsRail  = isRailType;
         auto mnIt = modelNames.find(modelId);
         if (mnIt != modelNames.end()) v.modelName = mnIt->second;
         result.push_back(v);
@@ -1023,7 +1082,7 @@ static LevelReport VerifyOneLevel(const std::string& igiPath,
 int CLIHandler::VerifyLevel(const VerifyLevelParams& params) {
     std::string igiPath = params.gamePath.empty() ? Utils::GetIGIRootPath() : params.gamePath;
     std::string exeDir  = Utils::GetExeDirectory();
-    std::string logPath = params.logPath.empty()  ? (igiPath + "\\igi1ed.log") : params.logPath;
+    std::string logPath = params.logPath.empty()  ? (exeDir + "\\igi1ed.log") : params.logPath;
     std::string exePath = exeDir + "\\igi1ed.exe";
 
     // Export IGI_GAME_PATH environment variable so spawned child processes use the correct IGI path.
