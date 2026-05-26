@@ -38,9 +38,7 @@ void Renderer_Splines::Draw(
 
         const auto& children = obj.childrenIndices;
 
-        // In IGI QSC, only the first SplineObjWaypoint carries the segmentModelId.
-        // Subsequent waypoints leave it empty. Find the shared model here and use
-        // it as a fallback so all segments in the spline get rendered.
+        // Find the first non-empty segmentModelId as fallback for waypoints that leave it blank.
         std::string fallbackSegmentModelId;
         for (int ci : children) {
             if (ci >= 0 && ci < (int)objects.size() && !objects[ci].segmentModelId.empty()) {
@@ -96,7 +94,6 @@ void Renderer_Splines::DrawSplineSegment(
     GLint loc_useTex   = glGetUniformLocation(shader_program, "u_useTexture");
     GLint loc_tex      = glGetUniformLocation(shader_program, "u_texture");
 
-    // Catmull-Rom tangents as Hermite tangents for both endpoints
     glm::vec3 p0     = glm::vec3(start.pos);
     glm::vec3 p1     = glm::vec3(end.pos);
     glm::vec3 p_prev = glm::vec3(prev.pos);
@@ -105,20 +102,20 @@ void Renderer_Splines::DrawSplineSegment(
     glm::vec3 tan0 = (p1 - p_prev) * 0.5f;
     glm::vec3 tan1 = (p_next - p0) * 0.5f;
 
-    // Clamp tangent magnitude to interval length to prevent Hermite overshoot/looping
-    // at waypoints where adjacent segments have very different lengths or directions.
-    float intervalLen2 = glm::length(p1 - p0);
+    // Clamp tangent magnitude to interval length to prevent overshoot at transitions.
+    float intervalLen = glm::length(p1 - p0);
     float t0len = glm::length(tan0);
     float t1len = glm::length(tan1);
-    if (t0len > intervalLen2) tan0 *= intervalLen2 / t0len;
-    if (t1len > intervalLen2) tan1 *= intervalLen2 / t1len;
+    if (t0len > intervalLen) tan0 *= intervalLen / t0len;
+    if (t1len > intervalLen) tan1 *= intervalLen / t1len;
 
     float localX = mesh.center.x + mesh.halfExtents.x;
-    if (localX < 0.1f) localX = 0.1f;
+    if (localX < 1.f) localX = 1.f;
+    const float LENGTH_SCALE = 4.096f;
+    float tileWorldLen = localX * LENGTH_SCALE;
 
-    int steps = parent.splineSegmentCount;
-    if (steps <= 0) steps = 20;
-    if (steps > 64) steps = 64;
+    int steps = std::max(1, (int)std::ceil(intervalLen / tileWorldLen));
+    steps = std::min(steps, 64);
 
     for (int i = 0; i < steps; ++i) {
         float t      = (float)i       / (float)steps;
@@ -134,19 +131,14 @@ void Renderer_Splines::DrawSplineSegment(
 
         glm::vec3 tangent = glm::normalize(nextPos - pos);
 
-        // Yaw: align local +X with tangent in the XY plane.
         float gamma = std::atan2(tangent.y, tangent.x);
-        // Pitch: tilt tile up/down to follow slope (around pre-yaw local Y).
         float horiz = std::sqrt(tangent.x * tangent.x + tangent.y * tangent.y);
         float pitch  = std::atan2(tangent.z, horiz);
 
-        float dist = glm::distance(pos, nextPos);
-        float scaleX = dist / localX;
-
         glm::mat4 model = glm::translate(glm::mat4(1.f), pos);
-        model = glm::rotate(model, gamma, glm::vec3(0.f, 0.f, 1.f));   // yaw around world Z
-        model = glm::rotate(model, -pitch, glm::vec3(0.f, 1.f, 0.f));  // pitch around local Y
-        model = glm::scale(model, glm::vec3(scaleX, 40.96f, 40.96f));
+        model = glm::rotate(model, gamma,  glm::vec3(0.f, 0.f, 1.f));  // yaw around world Z
+        model = glm::rotate(model, -pitch, glm::vec3(0.f, 1.f, 0.f)); // pitch around local Y
+        model = glm::scale(model, glm::vec3(LENGTH_SCALE, 40.96f, 40.96f));
 
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
 

@@ -72,7 +72,7 @@ Mesh BuildMeshFromGeometry(const ParsedGeometry& geometry, const std::string& fi
                 verts.push_back(n.y);
                 verts.push_back(n.z);
 
-                verts.push_back(src.uv.x);
+                verts.push_back(1.0f - src.uv.x);
                 verts.push_back(1.0f - src.uv.y);
             };
 

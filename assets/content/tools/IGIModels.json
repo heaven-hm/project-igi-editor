@@ -1604,11 +1604,11 @@
     "ModelId": "364_02_1"
   },
   {
-    "ModelName": "ROAD_TRACK",
+    "ModelName": "ROAD_TRACK_FLAT",
     "ModelId": "322_01_1"
   },
   {
-    "ModelName": "ROAD_TRACK",
+    "ModelName": "ROAD_TRACK_ELEVATED",
     "ModelId": "368_01_1"
   },
   {
@@ -2108,7 +2108,7 @@
     "ModelId": "364_01_1"
   },
   {
-    "ModelName": "TRAIN_BRIDGE",
+    "ModelName": "ROAD_TRACK_BRIDGE",
     "ModelId": "325_01_1"
   },
   {
