@@ -293,10 +293,10 @@ void Renderer::Draw(const draw_params_s &params,
     // --- TreeView HUD Implementation ---
     if (task_tree_view.level_objects_) {
       const auto &objects = task_tree_view.level_objects_->GetObjects();
-      int tree_x = 0;
-      int tree_y = 0; // Starting Y for tree
+      int tree_x = 20;
+      int tree_y = 30; // Starting Y for tree
       int row_h = 16;
-      int start_y = 0;
+      int start_y = 30;
       int current_row = 0;
       int scroll_offset = task_tree_view.tree_scroll_offset;
       int viewport_h = params.view_define_->viewport_height_;
