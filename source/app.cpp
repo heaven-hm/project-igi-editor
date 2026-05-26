@@ -1701,6 +1701,21 @@ void App::OnIdle() {
 		return;
 	}
 
+	if (game_process_.running) {
+		DWORD result = WaitForSingleObject(game_process_.hProcess, 0);
+		if (result == WAIT_OBJECT_0 || result == WAIT_FAILED) {
+			Logger::Get().Log(LogLevel::INFO, "[App] Game process exited (PID=" +
+			                  std::to_string(game_process_.pid) + "), restoring editor");
+			CloseHandle(game_process_.hProcess);
+			CloseHandle(game_process_.hThread);
+			game_process_ = {};
+			if (editor_hwnd_) {
+				ShowWindow(editor_hwnd_, SW_RESTORE);
+				SetForegroundWindow(editor_hwnd_);
+			}
+		}
+	}
+
 	Frame(delta_time * 0.001f);	// convert to seconds
 
 	prior_frame_time_ = cur_time;
