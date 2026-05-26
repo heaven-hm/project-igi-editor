@@ -42,7 +42,6 @@ struct ConfigData {
     KeyBinding keyResetLevel;
     KeyBinding keyDebug;
     KeyBinding keyQuit;
-    KeyBinding keyHelp;
     KeyBinding keyResetScript;
 
     // NEW: Camera Controls

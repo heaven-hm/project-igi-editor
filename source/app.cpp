@@ -1362,19 +1362,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		exit(0);
 	}
 
-	// Help
-	if (Utils::IsKeyBindingPressed(config.keyHelp)) {
-		show_help_ = !show_help_;
-		if (show_help_) {
-			if (!pause_mode_) {
-				TogglePauseMenu();
-			}
-		} else {
-			if (pause_mode_) {
-				TogglePauseMenu();
-			}
-		}
-	}
+
 
 	// Task Controls (CTRL+C, CTRL+V, CTRL+I, etc.)
 	if (Utils::IsKeyBindingPressed(config.keyCreateNewTask)) {
@@ -1464,20 +1452,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 
 	// HUD toggle removed as per request
 
-	if (key == 'h' || key == 'H') {
-		int modifiers = glutGetModifiers();
-		bool ctrl = (modifiers & GLUT_ACTIVE_CTRL);
-		if (ctrl || !pause_mode_) {
-			show_help_ = !show_help_;
-			if (!pause_mode_) {
-				// If not in pause mode, pause when showing help
-				if (show_help_) {
-					pause_mode_ = true;
-				}
-			}
-		}
-		return;
-	}
+
 
 	if (key == 's' || key == 'S') {
 		// Snap selected object to ground (works in any mode)

@@ -1368,9 +1368,6 @@ void Renderer::Draw(const draw_params_s &params,
       draw_text(menu_x + 30, line_y, "[W/A/S/D] Movement", font_r, font_g,
                 font_b);
       line_y -= 20;
-      draw_text(menu_x + 30, line_y, "[F2] Terrain Edit Toggle", font_r, font_g,
-                font_b);
-      line_y -= 20;
       draw_text(menu_x + 30, line_y, "[F3] Clip Toggle", font_r, font_g,
                 font_b);
       line_y -= 20;
@@ -1386,11 +1383,6 @@ void Renderer::Draw(const draw_params_s &params,
       line_y -= 20;
       draw_text(menu_x + 30, line_y, "[T] Teleport to Height Map", font_r,
                 font_g, font_b);
-      line_y -= 20;
-      draw_text(menu_x + 30, line_y, "[L] HUD Toggle", font_r, font_g, font_b);
-      line_y -= 20;
-      draw_text(menu_x + 30, line_y, "[H/CTRL+H] Help Toggle", font_r, font_g,
-                font_b);
       line_y -= 20;
       draw_text(menu_x + 30, line_y, "[S] Snap Object to Ground", font_r,
                 font_g, font_b);

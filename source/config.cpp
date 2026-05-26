@@ -89,7 +89,6 @@ void Config::CreateDefault() {
     data_.keyResetLevel = {0x52, true, false, false}; 
     data_.keyDebug = {0x44, true, false, false};   
     data_.keyQuit = {0x51, true, false, false};    
-    data_.keyHelp = {0x48, false, false, false};   
     data_.keyResetScript = {0x52, false, true, false}; 
     data_.keyClipMode = {VK_F3, false, false, false};
     data_.keyDeleteTask = {VK_DELETE, false, false, false};
@@ -345,7 +344,6 @@ void Config::Save() {
         WriteBind("ResetLevel", data_.keyResetLevel);
         WriteBind("Debug", data_.keyDebug);
         WriteBind("Quit", data_.keyQuit);
-        WriteBind("Help", data_.keyHelp);
         WriteBind("ResetScript", data_.keyResetScript);
         WriteBind("CameraEnable", data_.keyEnableCamera);
         WriteBind("CameraMoveForward", data_.keyMoveCameraForward);

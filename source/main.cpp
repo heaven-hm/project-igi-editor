@@ -30,7 +30,6 @@ constexpr int MENU_OVERLAY_WIREFRAME = 21;
 // draw parts
 constexpr int MENU_DRAW_SKYDOME = 31;
 constexpr int MENU_DRAW_FLAT_SKY_LAYER = 32;
-constexpr int MENU_DRAW_TERRAIN = 33;
 
 // apply terrain tiled texture / light map / fog
 constexpr int MENU_DRAW_TERRAIN_OPT_MAT = 41;
@@ -48,7 +47,7 @@ constexpr int MENU_EDIT_TERRAIN = 73;
 constexpr int MENU_TERRAIN_BRUSH_RAISE = 74;
 constexpr int MENU_TERRAIN_BRUSH_LOWER = 75;
 constexpr int MENU_EDITOR_SAVE = 76;
-constexpr int MENU_TOGGLE_TASK_TREE = 77;
+
 constexpr int MENU_IGI_LIVE_DATA = 78;
 constexpr int MENU_SEARCH_MODEL_BY_ID = 95;
 constexpr int MENU_SEARCH_MODEL_BY_NAME = 96;
@@ -238,11 +237,7 @@ static void UpdateDrawPartsMenuText() {
     glutChangeToMenuEntry(2, "FlatSkyLayer [-]", MENU_DRAW_FLAT_SKY_LAYER);
   }
 
-  if (draw_parts & Renderer::DRAW_TERRAIN) {
-    glutChangeToMenuEntry(3, "Terrain      [+]", MENU_DRAW_TERRAIN);
-  } else {
-    glutChangeToMenuEntry(3, "Terrain      [-]", MENU_DRAW_TERRAIN);
-  }
+
 }
 
 static void UpdateTerrainDrawOptionsMenuText() {
@@ -313,14 +308,12 @@ static void UpdateChooseLevelMenuText() {
 static void UpdateEditorToolsMenuText() {
   glutSetMenu(g_menu_editor_tools);
 
-  glutChangeToMenuEntry(1, "Task Tree Always On", MENU_TOGGLE_TASK_TREE);
-
   if (g_app.GetTerrainEditEnabled()) {
-    glutChangeToMenuEntry(2, "Edit Objects [ ]", MENU_EDIT_OBJECTS);
-    glutChangeToMenuEntry(3, "Edit Terrain [*]", MENU_EDIT_TERRAIN);
+    glutChangeToMenuEntry(1, "Edit Objects [ ]", MENU_EDIT_OBJECTS);
+    glutChangeToMenuEntry(2, "Edit Terrain [*]", MENU_EDIT_TERRAIN);
   } else {
-    glutChangeToMenuEntry(2, "Edit Objects [*]", MENU_EDIT_OBJECTS);
-    glutChangeToMenuEntry(3, "Edit Terrain [ ]", MENU_EDIT_TERRAIN);
+    glutChangeToMenuEntry(1, "Edit Objects [*]", MENU_EDIT_OBJECTS);
+    glutChangeToMenuEntry(2, "Edit Terrain [ ]", MENU_EDIT_TERRAIN);
   }
 
   glutSetMenu(g_menu_terrain_brush);
@@ -378,10 +371,7 @@ static void OnMenu(int menu) {
     g_app.ToggleDrawParts(Renderer::DRAW_FLAT_SKY_LAYER);
     g_update_menu_flags |= UPDATE_MENU_DRAW_PARTS;
     break;
-  case MENU_DRAW_TERRAIN:
-    g_app.ToggleDrawParts(Renderer::DRAW_TERRAIN);
-    g_update_menu_flags |= UPDATE_MENU_DRAW_PARTS;
-    break;
+
   case MENU_DRAW_TERRAIN_OPT_MAT:
     g_app.ToggleTerrainDrawOption(Renderer_Terrain::DRAW_TERRAIN_OPT_MAT);
     g_update_menu_flags |= UPDATE_MENU_TERRAIN_DRAW_OPTS;
@@ -406,10 +396,7 @@ static void OnMenu(int menu) {
     g_app.ToggleTerrainModOption(TERRAIN_DISCARD_MOD);
     g_update_menu_flags |= UPDATE_MENU_TERRAIN_MODIFIER_OPTS;
     break;
-  case MENU_TOGGLE_TASK_TREE:
-    g_app.SetShowHUD(true);
-    g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS;
-    break;
+
   case MENU_EDIT_OBJECTS:
     g_app.SetTerrainEditEnabled(false);
     g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS;
@@ -809,7 +796,6 @@ int main(int argc, char **argv) {
   g_menu_draw_parts = glutCreateMenu(OnMenu);
   glutAddMenuEntry("", MENU_DRAW_SKYDOME);
   glutAddMenuEntry("", MENU_DRAW_FLAT_SKY_LAYER);
-  glutAddMenuEntry("", MENU_DRAW_TERRAIN);
 
   g_menu_terrain_draw_opts = glutCreateMenu(OnMenu);
   glutAddMenuEntry("", MENU_DRAW_TERRAIN_OPT_MAT);
@@ -831,7 +817,6 @@ int main(int argc, char **argv) {
   glutAddMenuEntry("Brush: Lower Terrain", MENU_TERRAIN_BRUSH_LOWER);
 
   g_menu_editor_tools = glutCreateMenu(OnMenu);
-  glutAddMenuEntry("Task Tree Always On", MENU_TOGGLE_TASK_TREE);
   glutAddMenuEntry("Edit Objects", MENU_EDIT_OBJECTS);
   glutAddMenuEntry("Edit Terrain", MENU_EDIT_TERRAIN);
 
@@ -845,7 +830,7 @@ int main(int argc, char **argv) {
       g_menu_editor_tools); // Set back to editor tools before adding submenus
   glutAddSubMenu("Terrain Brush", g_menu_terrain_brush);
   glutAddMenuEntry("Save Changes", MENU_EDITOR_SAVE);
-  glutAddMenuEntry("Export Tex Map (JSON)", MENU_EXPORT_TEXMAP);
+  glutAddMenuEntry("Export Texture Map", MENU_EXPORT_TEXMAP);
 
   g_menu_object_scale = glutCreateMenu(OnMenu);
   glutAddMenuEntry("0.1x", MENU_SCALE_0_1);
