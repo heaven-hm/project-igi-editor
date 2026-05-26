@@ -1714,7 +1714,7 @@ void App::OnIdle() {
 
 	if (game_process_.running) {
 		DWORD result = WaitForSingleObject(game_process_.hProcess, 0);
-		if (result == WAIT_OBJECT_0 || result == WAIT_FAILED) {
+		if (result == WAIT_OBJECT_0) {
 			Logger::Get().Log(LogLevel::INFO, "[App] Game process exited (PID=" +
 			                  std::to_string(game_process_.pid) + "), restoring editor");
 			CloseHandle(game_process_.hProcess);
@@ -2922,22 +2922,21 @@ void App::LaunchGame() {
 		return;
 	}
 
-	Sleep(600);
-
-	HANDLE hGame = Utils::FindProcess("igi");
+	HANDLE hGame = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pi.dwProcessId);
 	if (!hGame) {
-		Logger::Get().Log(LogLevel::ERR, "[App] LaunchGame: FindProcess(\"igi\") returned null");
+		DWORD err = GetLastError();
+		Logger::Get().Log(LogLevel::ERR, "[App] LaunchGame: OpenProcess failed, error=" + std::to_string(err));
 		CloseHandle(pi.hProcess);
 		CloseHandle(pi.hThread);
 		return;
 	}
 
+	CloseHandle(pi.hProcess);
+
 	game_process_.hProcess = hGame;
 	game_process_.hThread  = pi.hThread;
-	game_process_.pid      = Utils::GetProcessId();
+	game_process_.pid      = pi.dwProcessId;
 	game_process_.running  = true;
-
-	CloseHandle(pi.hProcess);
 
 	Logger::Get().Log(LogLevel::INFO, "[App] LaunchGame: game started PID=" +
 	                  std::to_string(game_process_.pid));

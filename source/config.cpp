@@ -90,7 +90,7 @@ void Config::CreateDefault() {
     data_.keyDebug = {0x44, true, false, false};   
     data_.keyQuit = {0x51, true, false, false};    
     data_.keyResetScript = {0x52, false, true, false}; 
-    data_.keyClipMode = {VK_F3, false, false, false};
+    data_.keyClipMode = {VK_F2, false, false, false};
     data_.keyToggleGame = {VK_F3, false, false, false};
     data_.keyDeleteTask = {VK_DELETE, false, false, false};
     data_.enableLogging = true;
