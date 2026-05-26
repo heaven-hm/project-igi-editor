@@ -33,6 +33,7 @@ public:
 	void					LoadLevel(int level_no);
 	void					SetGameLevel(int level_no);
 	void					SaveCurrentLevel();
+	void					LaunchGame();
 	void					ExportTextureMap();
 	int						GetCurLevelNo() const;
 
@@ -171,6 +172,15 @@ private:
 	input_s					input_;
 
 	bool					skip_input_on_motion_once_;
+
+	// Game launch state
+	struct game_process_s {
+		HANDLE				hProcess = NULL;
+		HANDLE				hThread  = NULL;
+		DWORD				pid      = 0;
+		bool				running  = false;
+	}						game_process_;
+	HWND					editor_hwnd_ = NULL;
 
 	bool					orbit_active_ = false;
 	glm::vec3				orbit_target_pos_ = glm::vec3(0.0f);
