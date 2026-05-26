@@ -1,5 +1,41 @@
 # Changelogs
 
+## 2.0.0 - Workspace Navigation & Map Selection
+This release introduces direct 3D interaction and enhanced state restoration.
+
+### 🖱️ Workspace & State Polish
+- **Map View Selection**: Implemented click-to-select support on the main map rendering, enabling direct object interaction from the 3D viewport canvas.
+- **Undo/Redo Stability**: Fixed state restoration where Train locations are correctly reserved and restored when performing Undo operations.
+
+---
+
+## 1.9.0 - Train Engine & Precision Logic
+This update adds support for railway networks and addresses mission serialization limitations.
+
+### 🚂 Train & Locomotive Support
+- **Train Object Support**: Initial integration and rendering of Train models and locomotives.
+- **Locomotive Orientation**: Resolved critical direction and alignment bugs when placing locomotive engines.
+- **Track Spline Parsing**: Implemented robust rendering and Catmull-Rom smoothing for train track splines.
+
+### 📐 Parser & Level Synchronization
+- **Float/Double Precision Guard**: Solved precision truncation issues within QSC file serialization, preserving exact floating-point decimals.
+- **Level 3 Integrity Fix**: Patched bracket and node compiler errors when saving mission data in Level 3.
+
+---
+
+## 1.8.0 - Level Cache, Textures, and CLI Standalone
+This major update accelerates startup times and establishes a standalone utility toolchain.
+
+### ⚡ Performance & Caching
+- **Level Load Cache System**: Introduced an advanced caching layer for models and textures, decreasing startup load times across repeated sessions.
+- **AI Texture Map Fixes**: Corrected texturing and mesh configurations for AI MEF models.
+- **Render Distance Optimization**: Stabilized dynamic clip distance and global coordinate mappings.
+
+### 🛠️ Headless Toolchain
+- **CLI Independence**: Unlocked headless functionality from local executable path structures, allowing command-line tools to resolve game directories standalone.
+
+---
+
 ## 1.7.0 - Robust Hierarchical Manipulation & Undo/Redo
 This release focus on stabilizing complex object manipulation and providing essential safety features for level editing.
 

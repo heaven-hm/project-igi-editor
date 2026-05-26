@@ -7,6 +7,7 @@
 #include "utils.h"
 #include "logger.h"
 #include <windows.h>
+#include <tlhelp32.h>
 #include <sstream>
 #include <algorithm>
 #include <filesystem>
@@ -16,6 +17,19 @@
 namespace Utils {
 
 static bool g_logEnabled = true;
+
+static HANDLE g_processHandle = nullptr;
+static DWORD g_processId = 0;
+static HWND g_processWindow = NULL;
+static DWORD g_processBaseAddress = 0;
+static std::string g_processName = "";
+
+template<typename T>
+static std::string to_hex_string(T val) {
+	std::ostringstream ss;
+	ss << "0x" << std::hex << val;
+	return ss.str();
+}
 
 // Logging functions
 void LogInfo(const std::string& message) {
@@ -525,6 +539,220 @@ std::string GetIGIModelsPath(int level_no) {
 		return pathLoc;
 	}
 	return "";
+}
+
+HANDLE FindProcess(const std::string &processName)
+{
+    LogInfo("FindProcess: Trying to find process: " + processName);
+
+    auto EndsWith = [](const std::string &str, const std::string &suffix)
+    {
+        if (suffix.size() > str.size())
+        {
+            return false;
+        }
+        return std::equal(suffix.rbegin(), suffix.rend(), str.rbegin());
+    };
+
+    // Check if process name ends with .exe
+    std::string processNameExe = processName;
+    if (!EndsWith(processNameExe, ".exe"))
+    {
+        processNameExe += ".exe";
+        LogInfo("FindProcess: Process name appended with .exe: " + processNameExe);
+    }
+
+    PROCESSENTRY32 pe;
+    HANDLE hSnapshot = INVALID_HANDLE_VALUE;
+
+    try
+    {
+        hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        LogInfo("FindProcess: Snapshot handle: " + to_hex_string(hSnapshot));
+
+        if (hSnapshot == INVALID_HANDLE_VALUE)
+        {
+            std::string errMsg = "Failed to create process snapshot\n" + GetLastErrorAsString();
+            LogError("FindProcess: " + errMsg);
+            return nullptr;
+        }
+
+        pe.dwSize = sizeof(PROCESSENTRY32);
+
+        if (!Process32First(hSnapshot, &pe))
+        {
+            std::string errMsg = "Failed to get first process entry\n" + GetLastErrorAsString();
+            LogError("FindProcess: " + errMsg);
+            CloseHandle(hSnapshot);
+            return nullptr;
+        }
+
+        std::wstring processNameExeW(processNameExe.begin(), processNameExe.end());
+
+        do
+        {
+            if (!lstrcmpiW(pe.szExeFile, processNameExeW.c_str()))
+            {
+                CloseHandle(hSnapshot);
+                g_processHandle = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pe.th32ProcessID);
+
+                if (g_processHandle == NULL && pe.th32ProcessID > 0)
+                {
+                    BOOL isElevated = IsElevatedProcess();
+                    if (!isElevated)
+                    {
+                        CloseHandle(g_processHandle);
+                        throw std::runtime_error("Try to run this program with Admin privileges\n" + GetLastErrorAsString());
+                    }
+                    else
+                    {
+                        throw std::runtime_error("Handle could not be detected for specified process\n" + GetLastErrorAsString());
+                    }
+                }
+
+                /*set current process info.*/
+                g_processName = processName;
+                g_processId = pe.th32ProcessID;
+                g_processWindow = FindWindow(processName); // Only works if process name is same as window name.
+                g_processBaseAddress = GetProcessBaseAddress();
+                LogInfo("FindProcess: Process: " + processName + " Process ID: " + to_hex_string(g_processId) +
+                                              " Handle: " + to_hex_string(g_processHandle) + " Window Handle: " + to_hex_string(g_processWindow) + " Base Address: " + to_hex_string(g_processBaseAddress));
+
+                return g_processHandle;
+            }
+        } while (Process32Next(hSnapshot, &pe));
+        // Set Last error to file not found.
+        SetLastError(ERROR_FILE_NOT_FOUND);
+
+        throw std::runtime_error("Process not found '" + processName + "'\n" + GetLastErrorAsString());
+    }
+    catch (const std::exception &e)
+    {
+        LogError("FindProcess: " + std::string(e.what()));
+    }
+
+    if (hSnapshot != INVALID_HANDLE_VALUE) {
+        CloseHandle(hSnapshot);
+    }
+    return g_processHandle;
+}
+
+HWND FindWindow(const std::string &windowName)
+{
+    LogInfo("FindWindow: Trying to find window: " + windowName);
+    return FindWindowA(NULL, windowName.c_str());
+}
+
+DWORD GetProcessId()
+{
+    LogInfo("GetProcessId: Trying to get process ID");
+    try
+    {
+        if (g_processId != 0)
+        {
+            return g_processId;
+        }
+        else
+        {
+            LogInfo("GetProcessId: Error: process ID is 0");
+        }
+    }
+    catch (const std::exception &e)
+    {
+        LogError("GetProcessId: Error: " + std::string(e.what()));
+        return 0;
+    }
+    return 0;
+}
+
+HANDLE GetProcessHandle4mHWND(HWND hwnd)
+{
+    LogInfo("GetProcessHandle4mHWND: Trying to get process handle");
+    HANDLE processHandle = nullptr;
+    try
+    {
+        DWORD processId;
+        if (!GetWindowThreadProcessId(hwnd, &processId))
+        {
+            throw std::runtime_error("GetWindowThreadProcessId failed\n" + GetLastErrorAsString());
+        }
+        processHandle = OpenProcess(PROCESS_ALL_ACCESS, FALSE, processId);
+
+        if (!processHandle)
+        {
+            throw std::runtime_error("OpenProcess failed\n" + GetLastErrorAsString());
+        }
+        else
+        {
+            LogInfo("GetProcessHandle4mHWND: Return value: " + to_hex_string(processHandle));
+            g_processHandle = processHandle;
+        }
+    }
+    catch (const std::exception &e)
+    {
+        LogError("GetProcessHandle4mHWND: Error: " + std::string(e.what()));
+        return nullptr;
+    }
+    return processHandle;
+}
+
+DWORD GetProcessID4mHWND(HWND hwnd)
+{
+    try {
+        LogInfo("GetProcessID4mHWND: Trying to get process ID");
+        DWORD processId;
+
+        if (!GetWindowThreadProcessId(hwnd, &processId))
+        {
+            throw std::runtime_error("GetWindowThreadProcessId failed\n" + GetLastErrorAsString());
+        }
+        else
+        {
+            LogInfo("GetProcessID4mHWND: Return value: " + to_hex_string(processId));
+            g_processId = processId;
+        }
+        return processId;
+    }
+    catch (const std::exception &e)
+    {
+        LogError("GetProcessID4mHWND: Error: " + std::string(e.what()));
+        return 0;
+    }
+}
+
+DWORD GetProcessBaseAddress()
+{
+    LogInfo("GetProcessBaseAddress: Trying to get process base address of process ID: " + std::to_string(g_processId));
+    try
+    {
+        MODULEENTRY32 module;
+        HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, g_processId);
+        if (snapshot == INVALID_HANDLE_VALUE)
+        {
+            LogInfo("GetProcessBaseAddress: Error: snapshot is invalid\n" + GetLastErrorAsString());
+            return 0;
+        }
+        module.dwSize = sizeof(MODULEENTRY32);
+        if (!Module32First(snapshot, &module))
+        {
+            LogInfo("GetProcessBaseAddress: Error: module32first failed\n" + GetLastErrorAsString());
+            CloseHandle(snapshot);
+            return 0;
+        }
+        else
+        {
+            CloseHandle(snapshot);
+            uintptr_t modBaseAddr = reinterpret_cast<uintptr_t>(module.modBaseAddr);
+            g_processBaseAddress = static_cast<DWORD>(modBaseAddr);
+            LogInfo("GetProcessBaseAddress: Return value: " + to_hex_string(g_processBaseAddress));
+        }
+        return g_processBaseAddress;
+    }
+    catch (const std::exception &e)
+    {
+        LogError("GetProcessBaseAddress: Error: " + std::string(e.what()));
+        return 0;
+    }
 }
 
 } // namespace Utils

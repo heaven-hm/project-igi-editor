@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <windows.h>
 #include <string>
 #include <optional>
 #include <vector>
@@ -49,6 +50,14 @@ bool HotKeysDown(const std::vector<int>& keys);
 bool IsKeyPressed(int keycode);
 bool IsKeyToggled(int keycode);
 bool IsKeyBindingPressed(const KeyBinding& kb);
+
+// Process and window utilities (Windows API)
+HANDLE FindProcess(const std::string& processName);
+HWND FindWindow(const std::string& windowName);
+DWORD GetProcessId();
+HANDLE GetProcessHandle4mHWND(HWND hwnd);
+DWORD GetProcessID4mHWND(HWND hwnd);
+DWORD GetProcessBaseAddress();
 
 // File and path utilities
 std::string GetExeDirectory();
