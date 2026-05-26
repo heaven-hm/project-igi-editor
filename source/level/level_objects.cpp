@@ -421,7 +421,21 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
                 case 9: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
             }
-        } else if (isCamera || isFence) {
+        } else if (isCamera) {
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
+                case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break;
+                case 9: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
+                case 10: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
+                case 11: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.secondaryModelId = Utils::Trim(cur_a->str_); break;
+                case 12: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.lensModelId = Utils::Trim(cur_a->str_); break;
+            }
+        } else if (isFence) {
             switch (arg_idx) {
                 case 0: obj.taskId = TaskIdFromArg(cur_a); break;
                 case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
@@ -430,10 +444,8 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
                 case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
                 case 7: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
-                case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break; // Camera Pitch
-                case 9: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break; // Camera Yaw (relative?)
-                case 10: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.secondaryModelId = Utils::Trim(cur_a->str_); break;
-                case 11: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.lensModelId = Utils::Trim(cur_a->str_); break;
+                case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break;
+                case 9: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
             }
         } else if (isAmbient) {
             switch (arg_idx) {
@@ -752,13 +764,20 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(10, obj.rot.y);
             readDouble(11, obj.rot.z);
             if (obj.argTokens.size() > 12) obj.modelId = unquote(obj.argTokens[12]);
-        } else if (obj.type == "SCamera" || obj.type == "Fence") {
+        } else if (obj.type == "SCamera") {
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);
             readDouble(5, obj.pos.z);
             readDouble(6, obj.rot.z);
-            if (obj.argTokens.size() > 7 && obj.type == "Fence") obj.modelId = unquote(obj.argTokens[7]);
-            else if (obj.argTokens.size() > 10 && obj.type == "SCamera") obj.modelId = unquote(obj.argTokens[10]);
+            readDouble(8, obj.rot.x);
+            readDouble(9, obj.rot.y);
+            if (obj.argTokens.size() > 10) obj.modelId = unquote(obj.argTokens[10]);
+        } else if (obj.type == "Fence") {
+            readDouble(3, obj.pos.x);
+            readDouble(4, obj.pos.y);
+            readDouble(5, obj.pos.z);
+            readDouble(6, obj.rot.z);
+            if (obj.argTokens.size() > 7) obj.modelId = unquote(obj.argTokens[7]);
         } else if (obj.type == "Heli" || obj.type == "Car") {
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);
@@ -802,14 +821,9 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(3, obj.pos.x); // 1D position along spline
             if (obj.argTokens.size() > 5) obj.splineTaskId = Utils::Trim(unquote(obj.argTokens[5]));
             if (obj.argTokens.size() > 6) obj.modelId = unquote(obj.argTokens[6]);
-        } else if (obj.argTokens.size() > 8) {
-            readDouble(3, obj.pos.x);
-            readDouble(4, obj.pos.y);
-            readDouble(5, obj.pos.z);
-            readDouble(6, obj.rot.x);
-            readDouble(7, obj.rot.y);
-            readDouble(8, obj.rot.z);
-            if (obj.argTokens.size() > 9) obj.modelId = unquote(obj.argTokens[9]);
+        } else if (obj.type == "TextureModifier" || obj.type == "TerrainLightMap" || obj.type == "HeightMap" || obj.type == "DiscardTerrain" || obj.type == "GlobalLight" || obj.type == "GlobalLightKeyframe" || obj.type == "Dirlight" || obj.type == "DirlightKeyframe" || obj.type == "FlatSkyLayer" || obj.type == "FlatSky" || obj.type == "MipMapControl" || obj.type == "LODSettings" || obj.type == "SoundSource") {
+            // Do not parse coordinates for environmental/terrain types as they do not follow the generic pos/rot argument layout
+
         } else if (obj.type == "AIStationaryGunHolder" || obj.type == "AlarmLight" || obj.type == "Elevator" || obj.type == "Generator" || obj.type == "GenericPickup" || obj.type == "GenericTBA" || obj.type == "Plane" || obj.type == "Radio" || obj.type == "RotatingObject" || obj.type == "Siren" || obj.type == "StationaryGun") {
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);
@@ -825,6 +839,14 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
                     break;
                 }
             }
+        } else if (obj.argTokens.size() > 8) {
+            readDouble(3, obj.pos.x);
+            readDouble(4, obj.pos.y);
+            readDouble(5, obj.pos.z);
+            readDouble(6, obj.rot.x);
+            readDouble(7, obj.rot.y);
+            readDouble(8, obj.rot.z);
+            if (obj.argTokens.size() > 9) obj.modelId = unquote(obj.argTokens[9]);
         }
     }
 
@@ -865,7 +887,16 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
             setToken(3, FormatQscDouble(obj.pos.x));
             setToken(4, FormatQscDouble(obj.pos.y));
             setToken(5, FormatQscDouble(saveZ));
+            setToken(6, FormatQscDouble(obj.rot.z));
+            setToken(8, FormatQscDouble(obj.rot.x));
+            setToken(9, FormatQscDouble(obj.rot.y));
             if (!obj.modelId.empty() || obj.argTokens.size() > 10) setStringToken(10, obj.modelId);
+        } else if (obj.type == "Fence") {
+            setToken(3, FormatQscDouble(obj.pos.x));
+            setToken(4, FormatQscDouble(obj.pos.y));
+            setToken(5, FormatQscDouble(saveZ));
+            setToken(6, FormatQscDouble(obj.rot.z));
+            if (!obj.modelId.empty() || obj.argTokens.size() > 7) setStringToken(7, obj.modelId);
         } else if (obj.type == "Heli" || obj.type == "Car") {
             setToken(3, FormatQscDouble(obj.pos.x));
             setToken(4, FormatQscDouble(obj.pos.y));
@@ -889,7 +920,10 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
             setToken(3, FormatQscDouble(obj.pos.x));
             setToken(4, FormatQscDouble(obj.pos.y));
             setToken(5, FormatQscDouble(saveZ));
-            if (!obj.modelId.empty() || obj.argTokens.size() > 17) setStringToken(17, obj.modelId);
+            setToken(6, FormatQscDouble(obj.rot.x));
+            setToken(7, FormatQscDouble(obj.rot.y));
+            setToken(8, FormatQscDouble(obj.rot.z));
+            if (!obj.modelId.empty() || obj.argTokens.size() > 11) setStringToken(11, obj.modelId);
         } else if (obj.type == "AlarmControl" || obj.type == "SCameraControl" || obj.type == "ExplodeObject") {
             setToken(3, FormatQscDouble(obj.pos.x));
             setToken(4, FormatQscDouble(obj.pos.y));
@@ -918,14 +952,9 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
             setToken(7, FormatQscDouble(obj.rot.y));
             setToken(8, FormatQscDouble(obj.rot.z));
             if (!obj.modelId.empty() || obj.argTokens.size() > 9) setStringToken(9, obj.modelId);
-        } else if (obj.argTokens.size() > 8) {
-            setToken(3, FormatQscDouble(obj.pos.x));
-            setToken(4, FormatQscDouble(obj.pos.y));
-            setToken(5, FormatQscDouble(saveZ));
-            setToken(6, FormatQscDouble(obj.rot.x));
-            setToken(7, FormatQscDouble(obj.rot.y));
-            setToken(8, FormatQscDouble(obj.rot.z));
-            if (!obj.modelId.empty() || obj.argTokens.size() > 9) setStringToken(9, obj.modelId);
+        } else if (obj.type == "TextureModifier" || obj.type == "TerrainLightMap" || obj.type == "HeightMap" || obj.type == "DiscardTerrain" || obj.type == "GlobalLight" || obj.type == "GlobalLightKeyframe" || obj.type == "Dirlight" || obj.type == "DirlightKeyframe" || obj.type == "FlatSkyLayer" || obj.type == "FlatSky" || obj.type == "MipMapControl" || obj.type == "LODSettings" || obj.type == "SoundSource") {
+            // Do not update coordinates for environmental/terrain types as they do not follow the generic pos/rot argument layout
+
         } else if (obj.type == "AIStationaryGunHolder" || obj.type == "AlarmLight" || obj.type == "Elevator" || obj.type == "Generator" || obj.type == "GenericPickup" || obj.type == "GenericTBA" || obj.type == "Plane" || obj.type == "Radio" || obj.type == "RotatingObject" || obj.type == "Siren" || obj.type == "StationaryGun") {
             setToken(3, FormatQscDouble(obj.pos.x));
             setToken(4, FormatQscDouble(obj.pos.y));
@@ -940,6 +969,14 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
                     setStringToken(9, obj.modelId);
                 }
             }
+        } else if (obj.argTokens.size() > 8) {
+            setToken(3, FormatQscDouble(obj.pos.x));
+            setToken(4, FormatQscDouble(obj.pos.y));
+            setToken(5, FormatQscDouble(saveZ));
+            setToken(6, FormatQscDouble(obj.rot.x));
+            setToken(7, FormatQscDouble(obj.rot.y));
+            setToken(8, FormatQscDouble(obj.rot.z));
+            if (!obj.modelId.empty() || obj.argTokens.size() > 9) setStringToken(9, obj.modelId);
         }
     }
 
@@ -991,9 +1028,9 @@ std::string LevelObjects::SerializeObjectRecursive(const std::vector<LevelObject
             return true;
         };
 
-        // If the entire subtree is unmodified, output its EXACT original qscLine!
-        // This preserves floats, spacing, commas perfectly.
-        if (IsTreeUnmodified(IsTreeUnmodified, objectIdx)) {
+        // For leaf nodes only: if unmodified, return the EXACT original qscLine to preserve float precision.
+        // Container nodes must always recurse into children — qscLine only holds the opening line, not the full block.
+        if (liveChildren.empty() && IsTreeUnmodified(IsTreeUnmodified, objectIdx)) {
             std::string raw = Utils::Trim(node.qscLine);
             while (!raw.empty() && (raw.back() == ';' || raw.back() == ',' || raw.back() == '\r' || raw.back() == '\n' || raw.back() == ' ' || raw.back() == '\t')) {
                 raw.pop_back();

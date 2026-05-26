@@ -594,6 +594,10 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 for (const auto &att : ait->second) {
                     std::string subKey = std::to_string(current_level_) + ":building:" + att.modelId;
                     auto sit = mesh_cache_.find(subKey);
+                    if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) {
+                        subKey = std::to_string(current_level_) + ":object:" + att.modelId;
+                        sit = mesh_cache_.find(subKey);
+                    }
                     if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) continue;
                     const Mesh &subMesh = sit->second;
 

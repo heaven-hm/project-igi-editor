@@ -612,9 +612,11 @@ static void WriteMdCategory(std::ostream& o, const LevelReport::Category& cat,
     }
     if (!cat.missing.empty()) {
         std::vector<std::vector<std::string>> rows;
-        for (const auto& m : cat.missing)
-            rows.push_back({m.modelName, m.modelId, FmtPos(m.px,m.py,m.pz)});
-        o << "#### " << missingKey << "\n" << MdTable({"Model Name","Model ID","Position"}, rows) << "\n";
+        for (const auto& m : cat.missing) {
+            std::string oriStr = m.ori_logged ? FmtOri(m.ox, m.oy, m.oz) : "N/A";
+            rows.push_back({m.modelName, m.modelId, FmtPos(m.px,m.py,m.pz), oriStr});
+        }
+        o << "#### " << missingKey << "\n" << MdTable({"Model Name","Model ID","Position","Orientation"}, rows) << "\n";
     }
 }
 
@@ -816,10 +818,11 @@ static std::map<std::string, TaskSchema> GetBuiltinSchemas() {
         add(s[t], "Orientation", "Real32x9",  6);
         add(s[t], "Model",       "String16",  9);
     }
-    // SCamera: pos@3, (4 unknowns @6), model@10
+    // SCamera: pos@3, ori@6, unknown@9, model@10
     { auto& sc = s["SCamera"];
-      add(sc, "Position", "ObjectPos", 3);
-      add(sc, "Model",    "String16",  10); }
+      add(sc, "Position",    "ObjectPos", 3);
+      add(sc, "Orientation", "Real32x9",  6);
+      add(sc, "Model",       "String16",  10); }
     // SplineObjWaypoint: ori first@3, pos@6, model@9
     { auto& sc = s["SplineObjWaypoint"];
       add(sc, "Orientation", "Real32x9",  3);
@@ -946,6 +949,17 @@ static std::vector<VerifyObj> ParseQscObjects(
                 if (IsModelId(val)) modelId = val;
             }
             (void)isRailPos; // will be captured via lambda below
+        }
+
+        if (typeStr == "SCamera" && args.size() > 10) {
+            try {
+                oz = std::stod(args[6]);
+                ox = std::stod(args[8]);
+                oy = std::stod(args[9]);
+                hasOri = true;
+            } catch (...) {}
+            std::string val = UnquoteStr(args[10]);
+            if (IsModelId(val)) modelId = val;
         }
 
         if (!hasPos || modelId.empty()) continue;

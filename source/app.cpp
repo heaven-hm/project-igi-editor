@@ -2325,7 +2325,9 @@ void App::SnapObjectsToTerrain() {
         // Terminals sit on interior floors at their exact QSC Z, not outdoor terrain.
         // AI soldiers (HumanSoldier/HumanSoldierFemale) fall through so they can be
         // terrain-snapped; the isIndoorChild check below handles interior AI.
-        if (obj.type == "SCamera" || obj.type == "Terminal" || obj.type == "SplineObjWaypoint" ||
+        if (obj.type == "SCamera" || obj.type == "SCameraControl" || obj.type == "AlarmControl" ||
+            obj.type == "AIStationaryGunHolder" || obj.type == "StationaryGun" ||
+            obj.type == "Door" || obj.type == "Terminal" || obj.type == "SplineObjWaypoint" ||
             obj.type == "AmbientArea" || obj.type == "Elevator" || obj.isWire || obj.type == "Train") {
             
             // Only restore original Z if the object has NOT been moved/modified by the user
