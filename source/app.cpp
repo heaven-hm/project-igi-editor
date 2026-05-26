@@ -920,6 +920,12 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		return;
 	}
 
+	// Launch Game
+	if (Utils::IsKeyBindingPressed(config.keyToggleGame)) {
+		LaunchGame();
+		return;
+	}
+
 	// Reset Script (pause menu only)
 	if (pause_mode_ && Utils::IsKeyBindingPressed(config.keyResetScript)) {
 		ResetScript();
