@@ -24,6 +24,26 @@
 
 /*
 ================================================================================
+ Game monitor thread — blocks until game process exits, then signals main thread
+================================================================================
+*/
+struct GameMonitorParam {
+	HANDLE             hProcess;
+	std::atomic<bool>* pExited;
+};
+
+static DWORD WINAPI GameMonitorProc(LPVOID param) {
+	auto* p = static_cast<GameMonitorParam*>(param);
+	HANDLE h      = p->hProcess;
+	auto*  pExited = p->pExited;
+	delete p;
+	WaitForSingleObject(h, INFINITE);
+	pExited->store(true, std::memory_order_release);
+	return 0;
+}
+
+/*
+================================================================================
  App
 ================================================================================
 */
@@ -185,6 +205,11 @@ bool App::Init(int argc, char** argv) {
 
 void App::Shutdown() {
 	if (game_process_.running) {
+		// Wait briefly for monitor thread (it's blocking on the game process handle)
+		if (game_process_.hMonitorThread) {
+			WaitForSingleObject(game_process_.hMonitorThread, 500);
+			CloseHandle(game_process_.hMonitorThread);
+		}
 		CloseHandle(game_process_.hProcess);
 		CloseHandle(game_process_.hThread);
 		game_process_ = {};
@@ -1712,18 +1737,24 @@ void App::OnIdle() {
 		return;
 	}
 
-	if (game_process_.running) {
-		DWORD result = WaitForSingleObject(game_process_.hProcess, 0);
-		if (result == WAIT_OBJECT_0) {
-			Logger::Get().Log(LogLevel::INFO, "[App] Game process exited (PID=" +
-			                  std::to_string(game_process_.pid) + "), restoring editor");
-			CloseHandle(game_process_.hProcess);
-			CloseHandle(game_process_.hThread);
-			game_process_ = {};
-			if (editor_hwnd_) {
-				ShowWindow(editor_hwnd_, SW_RESTORE);
-				SetForegroundWindow(editor_hwnd_);
-			}
+	if (game_process_.running && game_exited_.load(std::memory_order_acquire)) {
+		Logger::Get().Log(LogLevel::INFO, "[App] Game process exited (PID=" +
+		                  std::to_string(game_process_.pid) + "), restoring editor");
+		CloseHandle(game_process_.hProcess);
+		CloseHandle(game_process_.hThread);
+		if (game_process_.hMonitorThread) {
+			WaitForSingleObject(game_process_.hMonitorThread, 1000);
+			CloseHandle(game_process_.hMonitorThread);
+		}
+		game_exited_.store(false, std::memory_order_relaxed);
+		game_process_ = {};
+		prior_frame_time_ = Sys_Milliseconds();	// reset so next Frame() gets a normal delta
+		glutShowWindow();
+		glutPostRedisplay();
+		if (editor_hwnd_) {
+			ShowWindow(editor_hwnd_, SW_RESTORE);
+			SetForegroundWindow(editor_hwnd_);
+			BringWindowToTop(editor_hwnd_);
 		}
 	}
 
@@ -2938,10 +2969,18 @@ void App::LaunchGame() {
 	game_process_.pid      = pi.dwProcessId;
 	game_process_.running  = true;
 
+	// Spawn background monitor thread — detects game exit via WaitForSingleObject(INFINITE)
+	// and signals game_exited_ so OnIdle restores the editor even if GLUT is iconified
+	game_exited_.store(false, std::memory_order_relaxed);
+	auto* monParam = new GameMonitorParam{hGame, &game_exited_};
+	DWORD monTid;
+	game_process_.hMonitorThread = CreateThread(nullptr, 0, GameMonitorProc, monParam, 0, &monTid);
+
 	Logger::Get().Log(LogLevel::INFO, "[App] LaunchGame: game started PID=" +
 	                  std::to_string(game_process_.pid));
 
-	if (editor_hwnd_) ShowWindow(editor_hwnd_, SW_MINIMIZE);
+	// Use GLUT's iconify so its internal window state stays consistent
+	glutIconifyWindow();
 }
 
 void App::SaveAndCompile() {

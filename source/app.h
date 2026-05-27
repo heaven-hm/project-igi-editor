@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <set>
 #include "igi_bridge.h"
 #include "renderer/model.h"
@@ -175,11 +176,13 @@ private:
 
 	// Game launch state
 	struct game_process_s {
-		HANDLE				hProcess = NULL;
-		HANDLE				hThread  = NULL;
-		DWORD				pid      = 0;
-		bool				running  = false;
+		HANDLE				hProcess       = NULL;
+		HANDLE				hThread        = NULL;
+		HANDLE				hMonitorThread = NULL;
+		DWORD				pid            = 0;
+		bool				running        = false;
 	}						game_process_;
+	std::atomic<bool>		game_exited_{false};	// set by monitor thread when game process exits
 	HWND					editor_hwnd_ = NULL;
 
 	bool					orbit_active_ = false;
