@@ -584,13 +584,16 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         }
 
         // ── Render ATTA sub-models (recursively) ─────────────────────────────
-        if (obj.isBuilding && isCloseEnough) {
-            std::string attCacheKey = std::to_string(current_level_) + ":building:" + obj.modelId;
+        // Buildings and vehicles (Car, Heli, Plane, Train) can have ATTA sub-models.
+        bool hasAttachments = obj.isBuilding || IsVehicleType(obj.type);
+        if (hasAttachments && isCloseEnough) {
+            std::string prefix = obj.isBuilding ? "building:" : "object:";
+            std::string attCacheKey = std::to_string(current_level_) + ":" + prefix + obj.modelId;
             if (attachment_cache_.find(attCacheKey) != attachment_cache_.end()) {
                 glEnable(GL_POLYGON_OFFSET_FILL);
                 glPolygonOffset(-2.0f, -2.0f); // Prevent z-fighting with hull walls
 
-                // Build the root building's unscaled world matrix (translate + rotate)
+                // Build the root object's unscaled world matrix (translate + rotate)
                 glm::mat4 parentRot(1.0f);
                 parentRot = glm::rotate(parentRot, (float)obj.rot.z, glm::vec3(0,0,1));
                 parentRot = glm::rotate(parentRot, (float)obj.rot.x, glm::vec3(1,0,0));
@@ -601,7 +604,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 rootWorldMat = rootWorldMat * parentRot;
 
                 std::unordered_set<std::string> drawn;
-                DrawAttachmentsRecursive(obj.modelId, rootWorldMat, isTransparentPass,
+                DrawAttachmentsRecursive(obj.modelId, obj.isBuilding, rootWorldMat, isTransparentPass,
                                           loc_model, loc_dirlight, loc_ambient,
                                           loc_useTex, loc_tex, loc_alpha, drawn);
 
@@ -725,18 +728,19 @@ void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool
 // (translate + rotate only), so children can position themselves relative to it.
 // The 40.96 scale is applied only at the leaf draw call.
 void Renderer_Objects::DrawAttachmentsRecursive(
-    const std::string& parentModelId, const glm::mat4& parentWorldMat,
+    const std::string& parentModelId, bool isBuilding, const glm::mat4& parentWorldMat,
     bool isTransparentPass, GLint loc_model, GLint loc_dirlight,
     GLint loc_ambient, GLint loc_useTex, GLint loc_tex, GLint loc_alpha,
     std::unordered_set<std::string>& drawn)
 {
-    std::string attCacheKey = std::to_string(current_level_) + ":building:" + parentModelId;
+    std::string prefix = isBuilding ? "building:" : "object:";
+    std::string attCacheKey = std::to_string(current_level_) + ":" + prefix + parentModelId;
     auto ait = attachment_cache_.find(attCacheKey);
     if (ait == attachment_cache_.end()) return;
 
     for (const auto &att : ait->second) {
         // Find the mesh
-        std::string subKey = std::to_string(current_level_) + ":building:" + att.modelId;
+        std::string subKey = std::to_string(current_level_) + ":" + prefix + att.modelId;
         auto sit = mesh_cache_.find(subKey);
         if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) {
             subKey = std::to_string(current_level_) + ":object:" + att.modelId;
@@ -777,7 +781,7 @@ void Renderer_Objects::DrawAttachmentsRecursive(
             // Still recurse into children — they may be non-window
             std::string childKey = parentModelId + ">" + att.modelId;
             if (drawn.insert(childKey).second) {
-                DrawAttachmentsRecursive(att.modelId, childWorldMat, isTransparentPass,
+                DrawAttachmentsRecursive(att.modelId, isBuilding, childWorldMat, isTransparentPass,
                                           loc_model, loc_dirlight, loc_ambient,
                                           loc_useTex, loc_tex, loc_alpha, drawn);
             }
@@ -834,11 +838,15 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         // Recurse into this attachment's own children
         std::string childKey = parentModelId + ">" + att.modelId;
         if (drawn.insert(childKey).second) {
-            DrawAttachmentsRecursive(att.modelId, childWorldMat, isTransparentPass,
+            DrawAttachmentsRecursive(att.modelId, isBuilding, childWorldMat, isTransparentPass,
                                       loc_model, loc_dirlight, loc_ambient,
                                       loc_useTex, loc_tex, loc_alpha, drawn);
         }
     }
+}
+
+bool Renderer_Objects::IsVehicleType(const std::string& type) {
+    return type == "Car" || type == "Heli" || type == "Plane" || type == "Train";
 }
 
 // ─── GetOrLoadMesh ────────────────────────────────────────────────────────────

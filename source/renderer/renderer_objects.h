@@ -54,10 +54,11 @@ private:
     bool portal_distances_loaded_ = false;
 
     void LoadAttachmentsRecursive(const std::string& modelId, bool isBuilding, std::unordered_set<std::string>& visited);
-    void DrawAttachmentsRecursive(const std::string& parentModelId, const glm::mat4& parentWorldMat,
+    void DrawAttachmentsRecursive(const std::string& parentModelId, bool isBuilding, const glm::mat4& parentWorldMat,
                                    bool isTransparentPass, GLint loc_model, GLint loc_dirlight,
                                    GLint loc_ambient, GLint loc_useTex, GLint loc_tex, GLint loc_alpha,
                                    std::unordered_set<std::string>& drawn);
+    static bool IsVehicleType(const std::string& type);
     void EnsurePortalDistancesLoaded();
     void EnsureWindowModelIdsLoaded();
     void DrawSelectionBox(const LevelObject& obj, GLuint ubo_mats, const glm::vec4& color);
