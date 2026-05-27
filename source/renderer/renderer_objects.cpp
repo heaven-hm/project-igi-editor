@@ -583,110 +583,28 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             isCloseEnough = (distToCamera <= (portalDistance * WORLD_UNITS_PER_METER));
         }
 
-        // ── Render ATTA sub-models ────────────────────────────────────────────
+        // ── Render ATTA sub-models (recursively) ─────────────────────────────
         if (obj.isBuilding && isCloseEnough) {
             std::string attCacheKey = std::to_string(current_level_) + ":building:" + obj.modelId;
-            auto ait = attachment_cache_.find(attCacheKey);
-            if (ait != attachment_cache_.end()) {
+            if (attachment_cache_.find(attCacheKey) != attachment_cache_.end()) {
                 glEnable(GL_POLYGON_OFFSET_FILL);
                 glPolygonOffset(-2.0f, -2.0f); // Prevent z-fighting with hull walls
 
-                for (const auto &att : ait->second) {
-                    std::string subKey = std::to_string(current_level_) + ":building:" + att.modelId;
-                    auto sit = mesh_cache_.find(subKey);
-                    if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) {
-                        subKey = std::to_string(current_level_) + ":object:" + att.modelId;
-                        sit = mesh_cache_.find(subKey);
-                    }
-                    if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) continue;
-                    const Mesh &subMesh = sit->second;
+                // Build the root building's unscaled world matrix (translate + rotate)
+                glm::mat4 parentRot(1.0f);
+                parentRot = glm::rotate(parentRot, (float)obj.rot.z, glm::vec3(0,0,1));
+                parentRot = glm::rotate(parentRot, (float)obj.rot.x, glm::vec3(1,0,0));
+                parentRot = glm::rotate(parentRot, (float)obj.rot.y, glm::vec3(0,1,0));
 
-                    // Rebuild parent rotation (same IGI order: Yaw/Z, Pitch/X, Roll/Y).
-                    glm::mat4 parentRot(1.0f);
-                    parentRot = glm::rotate(parentRot, (float)obj.rot.z, glm::vec3(0,0,1));
-                    parentRot = glm::rotate(parentRot, (float)obj.rot.x, glm::vec3(1,0,0));
-                    parentRot = glm::rotate(parentRot, (float)obj.rot.y, glm::vec3(0,1,0));
+                glm::mat4 rootWorldMat(1.0f);
+                rootWorldMat = glm::translate(rootWorldMat, glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z));
+                rootWorldMat = rootWorldMat * parentRot;
 
-                    // att.px/py/pz is the sub-model origin offset from the parent building's local
-                    // origin, in raw game units. The editor snaps the parent to terrainZ + snap_z_offset,
-                    // so sub-models must track that same snapped position: parent.pos + att_offset.
-                    glm::vec3 localOff(att.px, att.py, att.pz);
-                    glm::vec3 worldOff = glm::vec3(parentRot * glm::vec4(localOff, 0.f));
-                    glm::vec3 wpos(
-                        (float)obj.pos.x + worldOff.x,
-                        (float)obj.pos.y + worldOff.y,
-                        (float)obj.pos.z + worldOff.z
-                    );
+                std::unordered_set<std::string> drawn;
+                DrawAttachmentsRecursive(obj.modelId, rootWorldMat, isTransparentPass,
+                                          loc_model, loc_dirlight, loc_ambient,
+                                          loc_useTex, loc_tex, loc_alpha, drawn);
 
-                    // ATTA r00..r08 is a DirectX row-major 3x3 matrix relative to parent.
-                    // Convert to GLM column-major: each DirectX row → GLM column.
-                    // World rotation = parentRot * attLocalRot.
-                    glm::mat4 attLocalRot(
-                        att.r[0], att.r[1], att.r[2], 0.f,
-                        att.r[3], att.r[4], att.r[5], 0.f,
-                        att.r[6], att.r[7], att.r[8], 0.f,
-                        0.f,      0.f,      0.f,      1.f
-                    );
-
-                    glm::mat4 attModel(1.0f);
-                    attModel = glm::translate(attModel, wpos);
-                    attModel = attModel * parentRot * attLocalRot;
-                    attModel = glm::scale(attModel, glm::vec3(40.96f));
-
-                    glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(attModel));
-
-                    // Is this ATTA sub-model a window/glass? Apply transparency.
-                    const bool attIsWindow = window_model_ids_.count(att.modelId) > 0;
-                    if (attIsWindow != isTransparentPass) continue;
-
-                    if (attIsWindow) {
-                        glEnable(GL_BLEND);
-                        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                        glUniform1f(loc_alpha, 0.4f);
-                    } else {
-                        glUniform1f(loc_alpha, 1.0f);
-                    }
-
-                    // Draw sub-model submeshes
-                    if (!subMesh.subMeshes.empty()) {
-                        for (const auto &sub : subMesh.subMeshes) {
-                            if (sub.VAO == 0 || sub.vertexCount == 0) continue;
-                            if (sub.textureID > 0) {
-                                glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                                glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
-                                glUniform1i(loc_useTex, 1);
-                                glActiveTexture(GL_TEXTURE0);
-                                glBindTexture(GL_TEXTURE_2D, sub.textureID);
-                                glUniform1i(loc_tex, 0);
-                            } else {
-                                glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                                glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
-                                glUniform1i(loc_useTex, 0);
-                            }
-                            glBindVertexArray(sub.VAO);
-                            glDrawArrays(GL_TRIANGLES, 0, sub.vertexCount);
-                        }
-                        glBindVertexArray(0);
-                    } else if (subMesh.textureID > 0) {
-                        glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                        glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
-                        glUniform1i(loc_useTex, 1);
-                        GL_BindTexture2D(0, subMesh.textureID);
-                        glUniform1i(loc_tex, 0);
-                        renderModel(subMesh);
-                    } else {
-                        glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                        glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
-                        glUniform1i(loc_useTex, 0);
-                        renderModel(subMesh);
-                    }
-
-                    if (attIsWindow) {
-                        glDisable(GL_BLEND);
-                        glUniform1f(loc_alpha, 1.0f);
-                    }
-                }
-                
                 glDisable(GL_POLYGON_OFFSET_FILL);
             }
         }
@@ -725,6 +643,204 @@ glm::vec3 Renderer_Objects::GetMeshExtents(const std::string& modelId, bool isBu
     return mesh.halfExtents;
 }
 
+// ─── LoadAttachmentsRecursive ────────────────────────────────────────────────
+// Recursively scans the ATTA section of modelId's MEF file, caches each
+// sub-model mesh AND its own attachment records, then recurses into children.
+// The visited set prevents infinite loops on circular ATTA references.
+void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool isBuilding,
+                                                 std::unordered_set<std::string>& visited) {
+    if (!visited.insert(modelId).second) return; // cycle guard
+
+    std::string cacheKey = std::to_string(current_level_) + ":" +
+                           (isBuilding ? "building:" : "object:") + modelId;
+
+    if (attachment_cache_.find(cacheKey) != attachment_cache_.end()) return;
+
+    std::string filepath = FindModelFile(modelId, isBuilding);
+    if (filepath.empty()) {
+        attachment_cache_[cacheKey] = {};
+        return;
+    }
+
+    std::vector<AttachInfo> attaches;
+    try {
+        ParsedGeometry geo = ParseMefFile(filepath);
+        for (const auto& a : geo.mefAttachments) {
+            std::string aname(a.name, strnlen(a.name, 16));
+            if (aname.empty()) continue;
+
+            AttachInfo info;
+            info.modelId = aname;
+            info.px = a.px; info.py = a.py; info.pz = a.pz;
+            info.r[0]=a.r00; info.r[1]=a.r01; info.r[2]=a.r02;
+            info.r[3]=a.r03; info.r[4]=a.r04; info.r[5]=a.r05;
+            info.r[6]=a.r06; info.r[7]=a.r07; info.r[8]=a.r08;
+            attaches.push_back(info);
+
+            Logger::Get().Log(LogLevel::INFO,
+                "[Renderer_Objects] Attachment '" + aname + "' of '" + modelId +
+                "' pos=(" + std::to_string(a.px) + "," + std::to_string(a.py) +
+                "," + std::to_string(a.pz) + ")");
+
+            // Pre-warm the sub-model mesh
+            std::string subFile = FindModelFile(aname, isBuilding);
+            if (subFile.empty()) {
+                Logger::Get().Log(LogLevel::WARNING,
+                    "[Renderer_Objects] Attachment sub-model NOT FOUND: " + aname);
+            } else {
+                std::string subKey = std::to_string(current_level_) + ":" +
+                                     (isBuilding ? "building:" : "object:") + aname;
+                if (mesh_cache_.find(subKey) == mesh_cache_.end()) {
+                    try {
+                        Mesh subMesh = loadObjModel(subFile, "");
+                        ApplyTexturesToMesh(subMesh, aname, modelId);
+                        mesh_cache_[subKey] = subMesh;
+                        Logger::Get().Log(LogLevel::INFO,
+                            "[Renderer_Objects] Attachment sub-model loaded: " + aname +
+                            " (" + std::to_string(subMesh.vertexCount) + " verts)");
+                    } catch (const std::exception &se) {
+                        Logger::Get().Log(LogLevel::ERR,
+                            "[Renderer_Objects] Attachment sub-model load FAILED: " + aname + ": " + se.what());
+                        Mesh empty; mesh_cache_[subKey] = empty;
+                    }
+                }
+                // Recurse: parse this child's own ATTA section
+                LoadAttachmentsRecursive(aname, isBuilding, visited);
+            }
+        }
+    } catch (const std::exception &pe) {
+        Logger::Get().Log(LogLevel::WARNING,
+            "[Renderer_Objects] Could not parse ATTA from '" + filepath + "': " + pe.what());
+    }
+
+    attachment_cache_[cacheKey] = std::move(attaches);
+    Logger::Get().Log(LogLevel::INFO,
+        "[Renderer_Objects] Attachments for '" + modelId + "': " +
+        std::to_string(attachment_cache_[cacheKey].size()));
+}
+
+// ─── DrawAttachmentsRecursive ────────────────────────────────────────────────
+// Draws all ATTA children of parentModelId, then recurses into each child's
+// own attachments. parentWorldMat is the UN-SCALED world transform of the parent
+// (translate + rotate only), so children can position themselves relative to it.
+// The 40.96 scale is applied only at the leaf draw call.
+void Renderer_Objects::DrawAttachmentsRecursive(
+    const std::string& parentModelId, const glm::mat4& parentWorldMat,
+    bool isTransparentPass, GLint loc_model, GLint loc_dirlight,
+    GLint loc_ambient, GLint loc_useTex, GLint loc_tex, GLint loc_alpha,
+    std::unordered_set<std::string>& drawn)
+{
+    std::string attCacheKey = std::to_string(current_level_) + ":building:" + parentModelId;
+    auto ait = attachment_cache_.find(attCacheKey);
+    if (ait == attachment_cache_.end()) return;
+
+    for (const auto &att : ait->second) {
+        // Find the mesh
+        std::string subKey = std::to_string(current_level_) + ":building:" + att.modelId;
+        auto sit = mesh_cache_.find(subKey);
+        if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) {
+            subKey = std::to_string(current_level_) + ":object:" + att.modelId;
+            sit = mesh_cache_.find(subKey);
+        }
+        if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) continue;
+        const Mesh &subMesh = sit->second;
+
+        // Build the ATTA local rotation matrix (DirectX row-major → GLM column-major)
+        glm::mat4 attLocalRot(
+            att.r[0], att.r[1], att.r[2], 0.f,
+            att.r[3], att.r[4], att.r[5], 0.f,
+            att.r[6], att.r[7], att.r[8], 0.f,
+            0.f,      0.f,      0.f,      1.f
+        );
+
+        // ATTA offset is relative to parent — transform through parent's world matrix
+        glm::vec3 localOff(att.px, att.py, att.pz);
+        glm::vec3 worldPos = glm::vec3(parentWorldMat * glm::vec4(localOff, 1.f));
+
+        // Extract parent rotation (upper-left 3x3 of the unscaled parent mat)
+        glm::mat4 parentRot = parentWorldMat;
+        parentRot[3] = glm::vec4(0.f, 0.f, 0.f, 1.f); // zero out translation
+
+        // Unscaled world matrix for this attachment (used by children)
+        glm::mat4 childWorldMat(1.0f);
+        childWorldMat = glm::translate(childWorldMat, worldPos);
+        childWorldMat = childWorldMat * parentRot * attLocalRot;
+
+        // Scaled model matrix for actual GL draw
+        glm::mat4 attModel = glm::scale(childWorldMat, glm::vec3(40.96f));
+
+        glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(attModel));
+
+        // Window/glass transparency check
+        const bool attIsWindow = window_model_ids_.count(att.modelId) > 0;
+        if (attIsWindow != isTransparentPass) {
+            // Still recurse into children — they may be non-window
+            std::string childKey = parentModelId + ">" + att.modelId;
+            if (drawn.insert(childKey).second) {
+                DrawAttachmentsRecursive(att.modelId, childWorldMat, isTransparentPass,
+                                          loc_model, loc_dirlight, loc_ambient,
+                                          loc_useTex, loc_tex, loc_alpha, drawn);
+            }
+            continue;
+        }
+
+        if (attIsWindow) {
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glUniform1f(loc_alpha, 0.4f);
+        } else {
+            glUniform1f(loc_alpha, 1.0f);
+        }
+
+        // Draw sub-model submeshes
+        if (!subMesh.subMeshes.empty()) {
+            for (const auto &sub : subMesh.subMeshes) {
+                if (sub.VAO == 0 || sub.vertexCount == 0) continue;
+                if (sub.textureID > 0) {
+                    glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
+                    glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+                    glUniform1i(loc_useTex, 1);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, sub.textureID);
+                    glUniform1i(loc_tex, 0);
+                } else {
+                    glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
+                    glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+                    glUniform1i(loc_useTex, 0);
+                }
+                glBindVertexArray(sub.VAO);
+                glDrawArrays(GL_TRIANGLES, 0, sub.vertexCount);
+            }
+            glBindVertexArray(0);
+        } else if (subMesh.textureID > 0) {
+            glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
+            glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+            glUniform1i(loc_useTex, 1);
+            GL_BindTexture2D(0, subMesh.textureID);
+            glUniform1i(loc_tex, 0);
+            renderModel(subMesh);
+        } else {
+            glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
+            glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+            glUniform1i(loc_useTex, 0);
+            renderModel(subMesh);
+        }
+
+        if (attIsWindow) {
+            glDisable(GL_BLEND);
+            glUniform1f(loc_alpha, 1.0f);
+        }
+
+        // Recurse into this attachment's own children
+        std::string childKey = parentModelId + ">" + att.modelId;
+        if (drawn.insert(childKey).second) {
+            DrawAttachmentsRecursive(att.modelId, childWorldMat, isTransparentPass,
+                                      loc_model, loc_dirlight, loc_ambient,
+                                      loc_useTex, loc_tex, loc_alpha, drawn);
+        }
+    }
+}
+
 // ─── GetOrLoadMesh ────────────────────────────────────────────────────────────
 Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding) {
     std::string cacheKey = std::to_string(current_level_) + ":" + (isBuilding ? "building:" : "object:") + modelId;
@@ -760,63 +876,9 @@ Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding
         mesh_cache_[cacheKey] = mesh;
         Logger::Get().Log(LogLevel::DEBUG, "[Renderer_Objects] Success: Loaded model '" + modelId + "' from " + filepath + " (" + std::to_string(mesh.vertexCount) + " vertices)");
 
-        // Parse ATTA records for buildings and pre-load sub-model meshes.
-        // Key includes level so switching levels re-loads sub-models under the new level prefix.
-        std::string attCacheKey = cacheKey; // already "{level}:building:{modelId}"
-        if (attachment_cache_.find(attCacheKey) == attachment_cache_.end()) {
-            try {
-                ParsedGeometry geo = ParseMefFile(filepath);
-                std::vector<AttachInfo> attaches;
-                for (const auto &a : geo.mefAttachments) {
-                    std::string aname(a.name, strnlen(a.name, 16));
-                    if (aname.empty()) continue;
-
-                    AttachInfo info;
-                    info.modelId = aname;
-                    info.px = a.px; info.py = a.py; info.pz = a.pz;
-                    info.r[0]=a.r00; info.r[1]=a.r01; info.r[2]=a.r02;
-                    info.r[3]=a.r03; info.r[4]=a.r04; info.r[5]=a.r05;
-                    info.r[6]=a.r06; info.r[7]=a.r07; info.r[8]=a.r08;
-                    attaches.push_back(info);
-
-                    Logger::Get().Log(LogLevel::INFO,
-                        "[Renderer_Objects] Attachment '" + aname + "' of '" + modelId +
-                        "' pos=(" + std::to_string(a.px) + "," + std::to_string(a.py) + "," + std::to_string(a.pz) + ")");
-
-                    // Pre-warm the sub-model (textures included), but don't recurse into its attachments
-                    std::string subFile = FindModelFile(aname, isBuilding);
-                    if (subFile.empty()) {
-                        Logger::Get().Log(LogLevel::WARNING,
-                            "[Renderer_Objects] Attachment sub-model NOT FOUND: " + aname);
-                    } else {
-                        std::string subKey = std::to_string(current_level_) + ":" +
-                                             (isBuilding ? "building:" : "object:") + aname;
-                        if (mesh_cache_.find(subKey) == mesh_cache_.end()) {
-                            try {
-                                Mesh subMesh = loadObjModel(subFile, "");
-                                ApplyTexturesToMesh(subMesh, aname, modelId);
-                                mesh_cache_[subKey] = subMesh;
-                                Logger::Get().Log(LogLevel::INFO,
-                                    "[Renderer_Objects] Attachment sub-model loaded: " + aname +
-                                    " (" + std::to_string(subMesh.vertexCount) + " verts)");
-                            } catch (const std::exception &se) {
-                                Logger::Get().Log(LogLevel::ERR,
-                                    "[Renderer_Objects] Attachment sub-model load FAILED: " + aname + ": " + se.what());
-                                Mesh empty; mesh_cache_[subKey] = empty;
-                            }
-                        }
-                    }
-                }
-                attachment_cache_[attCacheKey] = std::move(attaches);
-                Logger::Get().Log(LogLevel::INFO,
-                    "[Renderer_Objects] Attachments for '" + modelId + "': " +
-                    std::to_string(attachment_cache_[attCacheKey].size()));
-            } catch (const std::exception &pe) {
-                Logger::Get().Log(LogLevel::WARNING,
-                    "[Renderer_Objects] Could not parse ATTA from '" + filepath + "': " + pe.what());
-                attachment_cache_[attCacheKey] = {};
-            }
-        }
+        // Recursively parse ATTA records for this model and all nested children.
+        std::unordered_set<std::string> visited;
+        LoadAttachmentsRecursive(modelId, isBuilding, visited);
 
         return mesh_cache_[cacheKey];
 
