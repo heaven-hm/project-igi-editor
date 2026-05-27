@@ -228,6 +228,36 @@ Reads and extracts proprietary game assets stored within `.res` archives.
 
 ---
 
+### 📊 Game Data File Parser (`--dat`)
+
+Parses Project IGI database and game object definition archives (`.dat`), outputting JSON or plaintext structures with advanced filtering.
+
+* **Parse DAT and Output JSON to Console**:
+  ```powershell
+  .\bin\Release\igi1ed.exe --dat object_data.dat
+  ```
+  *Decodes the database and formats object records as JSON printed directly to stdout.*
+
+* **Export DAT JSON to File**:
+  ```powershell
+  .\bin\Release\igi1ed.exe --dat object_data.dat --output out.json
+  ```
+  *Writes the structured JSON payload directly to the specified destination path.*
+
+* **Filter by Model Name**:
+  ```powershell
+  .\bin\Release\igi1ed.exe --dat object_data.dat --filter MODEL_NAME
+  ```
+  *Extracts and returns only entries containing the specified model name prefix or query.*
+
+* **Plain-text Report Mode**:
+  ```powershell
+  .\bin\Release\igi1ed.exe --dat object_data.dat --text [--output out.txt]
+  ```
+  *Outputs a clean, human-readable tabular plaintext report instead of JSON representation.*
+
+---
+
 ### 🛠️ Resource Extraction Automation
 
 To streamline modding setup across the 14 levels, the editor features an automated extraction utility.
@@ -237,3 +267,26 @@ To streamline modding setup across the 14 levels, the editor features an automat
   .\bin\Release\igi1ed.exe --extract-level <level_number> [<out_dir>]
   ```
   *Automates asset unpacking: extracts 3D meshes from the level's `.res` file, gathers texture mappings from `.tex`, copies Quadtree structures, and populates the models, textures, and terrain folders into the output directory (defaults to `levels/level<num>`).*
+
+---
+
+### 🧪 Automated Level Verification & Testing Suite (`--verify-level`)
+
+Runs high-speed integration testing across game levels to compare compiled QVM instructions (ground truth) against the editor output logs (`igi1ed.log`) for verification.
+
+* **Basic Verification**:
+  ```powershell
+  .\bin\Release\igi1ed.exe --verify-level --level 1 --level 2
+  ```
+  *Launches and executes comparison checks across the specified levels.*
+
+* **Available Flags and Customization**:
+  * `--skip-launch`: Bypasses launching the editor again and runs checks using existing logs.
+  * `--timeout <seconds>`: Force-kills the editor after the specified runtime limit (default is `0` which waits indefinitely).
+  * `--game-path <path>`: Specifies custom path to the original Project IGI installation directory.
+  * `--log <path>`: Overrides the target editor log file path to check.
+  * `--report-json <file>`: Writes an aggregated JSON report containing verification metrics.
+  * `--report-md <file>`: Generates a beautiful markdown summary report for CI pipeline reporting.
+  * `--report-dir <dir>`: Writes individual JSON and Markdown verification reports for each tested level to the specified directory.
+  * `--delay <seconds>`: Time interval between level checks (defaults to `5` seconds).
+

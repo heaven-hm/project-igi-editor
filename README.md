@@ -102,7 +102,7 @@ With the release of our premium modding features, we have expanded our workspace
 The **IGI Editor** can be run as both a fully featured interactive 3D graphical suite and a high-performance, headless command-line asset tool:
 
 *   **GUI Editor Mode**: Launch the graphical user interface to edit level data. Supports options like `-level <num>` (1-14), custom dimensions (`-w`, `-h`), ground snapping (`-stick_to_ground`), and selective rendering bitmasks (`-draw_parts`).
-*   **Headless CLI Mode**: Perform high-speed operations directly from your terminal. Parsers are provided for 3D meshes (`--mef`), script compiles (`--qsc`), reverse engineering bytecode (`--qvm`), extracting resource libraries (`--res`), textures (`--mtp`, `--tex`), navigation systems (`--graph`), and terrain geometries (`--terrain`).
+*   **Headless CLI Mode**: Perform high-speed operations directly from your terminal. Parsers are provided for 3D meshes (`--mef`), script compiles (`--qsc`), reverse engineering bytecode (`--qvm`), extracting resource libraries (`--res`), textures (`--mtp`, `--tex`), navigation systems (`--graph`), terrain geometries (`--terrain`), database archives (`--dat`), and automated level integrations (`--verify-level`).
 
 For a comprehensive list of all CLI commands, export options, selective rendering bitmask combinations, keyboard hotkeys, and hands-on examples, please check our detailed guide:
 👉 **[CLI & GUI Reference Guide](docs/CLI.md)**
@@ -145,7 +145,7 @@ With the successful release of **Version 2.0.0**, core features like the **Nativ
 ## 💻 Getting Started
 
 ### Prerequisites
-- **OS**: Windows (x64)
+- **OS**: Windows (x86)
 - **Compiler**: MSVC (Visual Studio 2022 recommended)
 - **Build System**: CMake
 - **QEditor**: Required for QSC/QVM compilation and decompilation.
@@ -246,12 +246,12 @@ If you want to use this data, respect fellow researchers and give proper credits
 
 - **[Yoejin Light](https://vk.com/id436486682)** 🌟 - _MTP, Models structure_ and information.
 - **[Dimon Krevedko](https://vk.com/dimonkrevedko)** 🌟 - **Graphs and Nodes** structure and information.
-- **[Artiom Rotari](https://github.com/NEWME0)** 🌟 - _DConv Tools for Decompiler_ and **Scripts**.
-- **[ORWA S](https://www.youtube.com/@totalwartimelapses6359)** 🌟 - **Graphs Area and Nodes** compilation of information.
-- **[GM123](https://www.youtube.com/@gm1233)** 🌟 - **Detailed Models Information**.
+- **[Artiom Rotari](https://github.com/NEWME0)** 🌟 - _DConv Tools for Decompiler_ and **Scripts** (For Native Game file formats QVM/MEF/TEX and more).
+- **[ORWA S](https://www.youtube.com/@totalwartimelapses6359)** 🌟 - **Graphs Area and Nodes** compilation of information, and beta testing this out.
+- **[GM123](https://www.youtube.com/@gm1233)** 🌟 - **Detailed Models Information** & Detailed documentation on 3D Models and Tools.
 - **[Dark](https://www.youtube.com/@CRONOQUILLOFFICIAL)** 🌟 - **Contributed on Various Projects and files (Resources, QVM, QSC etc) and UI/UX Designs**.
 - **[Ferit Coder](https://www.youtube.com/channel/UCpn_gZMkFVBUAe9SJK9hYQA)** 🌟 - **Helped with IGI 2 ToolKit Maps/Models conversion to IGI 1**.
-- **[Neo](https://next.nexusmods.com/profile/xaeroneo?gameId=5664)** 🌟 - **Helped with all 3D Models/Textures of all Objects/AI without that would not have been possible to create this.**
+- **[Neo](https://next.nexusmods.com/profile/xaeroneo?gameId=5664)** 🌟 - **Helped with all 3D Models/Textures of all Objects/AI without that would not have been possible to create this.** Beta testing and helped to improve this project more in IGI 2 ed style.
 
 ---
 
