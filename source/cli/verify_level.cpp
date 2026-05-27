@@ -381,6 +381,9 @@ static void CrossRef(LevelReport::Category& cat,
             });
             consumed[*cl - &logged[0]] = true;
             cat.pos_mismatch.push_back({exp, **cl});
+            if (matchOri && (**cl).ori_logged && !OriMatch(**cl, exp)) {
+                cat.ori_mismatch.push_back({exp, **cl});
+            }
             continue;
         }
 
