@@ -427,6 +427,41 @@ void main() {
 }
 )";
 
+// ─── Picking Shader Sources ───────────────────────────────────────────────────
+static const char* PICK_VERT_SRC = R"(
+#version 330 core
+layout(location = 0) in vec3 a_pos;
+layout(location = 1) in vec3 a_normal;
+layout(location = 2) in vec2 a_uv;
+
+layout(std140) uniform Matrices {
+    mat4 u_unused1;
+    mat4 u_unused2;
+    mat4 u_mvp;
+};
+
+uniform mat4 u_model;
+
+void main() {
+    gl_Position = u_mvp * u_model * vec4(a_pos, 1.0);
+}
+)";
+
+static const char* PICK_FRAG_SRC = R"(
+#version 330 core
+uniform int u_object_id;
+out vec4 fragColor;
+void main() {
+    int id = u_object_id;
+    fragColor = vec4(
+        float((id >> 16) & 0xFF) / 255.0,
+        float((id >>  8) & 0xFF) / 255.0,
+        float( id        & 0xFF) / 255.0,
+        1.0
+    );
+}
+)";
+
 // ─── Shader Compile Helper ────────────────────────────────────────────────────
 static GLuint CompileShader(GLenum type, const char* src) {
     GLuint s = glCreateShader(type);
@@ -469,6 +504,31 @@ static GLuint BuildShaderProgram() {
     return prog;
 }
 
+static GLuint BuildPickShaderProgram() {
+    GLuint vert = CompileShader(GL_VERTEX_SHADER,   PICK_VERT_SRC);
+    GLuint frag = CompileShader(GL_FRAGMENT_SHADER, PICK_FRAG_SRC);
+    if (!vert || !frag) return 0;
+
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, vert);
+    glAttachShader(prog, frag);
+    glLinkProgram(prog);
+
+    GLint ok = 0;
+    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512];
+        glGetProgramInfoLog(prog, 512, nullptr, log);
+        std::cerr << "[PickShader] Link error: " << log << "\n";
+        glDeleteProgram(prog);
+        prog = 0;
+    }
+
+    glDeleteShader(vert);
+    glDeleteShader(frag);
+    return prog;
+}
+
 // ─── Constructor / Destructor ─────────────────────────────────────────────────
 Renderer_Objects::Renderer_Objects() : shader_program_(0), ubo_binding_point_(0), selection_vao_(0), selection_vbo_(0) {}
 
@@ -495,6 +555,17 @@ bool Renderer_Objects::Init() {
         Logger::Get().Log(LogLevel::WARNING, "[Renderer_Objects] WARNING: UBO 'Matrices' block not found.");
     }
 
+
+    // Picking shader
+    pick_shader_prog_ = BuildPickShaderProgram();
+    if (!pick_shader_prog_) {
+        Logger::Get().Log(LogLevel::WARNING, "[Renderer_Objects] Failed to build picking shader.");
+    } else {
+        GLuint blk = glGetUniformBlockIndex(pick_shader_prog_, "Matrices");
+        if (blk != GL_INVALID_INDEX)
+            glUniformBlockBinding(pick_shader_prog_, blk, ubo_binding_point_);
+    }
+    // FBO created on first use (size unknown at init time)
 
     Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Init OK.");
 
@@ -565,6 +636,61 @@ void Renderer_Objects::Shutdown() {
         glDeleteBuffers(1, &sphere_vbo_);
         sphere_vbo_ = 0;
     }
+    if (pick_fbo_) {
+        glDeleteFramebuffers(1, &pick_fbo_);
+        pick_fbo_ = 0;
+    }
+    if (pick_color_tex_) {
+        glDeleteTextures(1, &pick_color_tex_);
+        pick_color_tex_ = 0;
+    }
+    if (pick_depth_rb_) {
+        glDeleteRenderbuffers(1, &pick_depth_rb_);
+        pick_depth_rb_ = 0;
+    }
+    if (pick_shader_prog_) {
+        glDeleteProgram(pick_shader_prog_);
+        pick_shader_prog_ = 0;
+    }
+    pick_fbo_w_ = 0;
+    pick_fbo_h_ = 0;
+}
+
+// ─── InitPickingFBO ───────────────────────────────────────────────────────────
+void Renderer_Objects::InitPickingFBO(int w, int h) {
+    // Delete existing resources
+    if (pick_fbo_)       { glDeleteFramebuffers(1,  &pick_fbo_);       pick_fbo_ = 0; }
+    if (pick_color_tex_) { glDeleteTextures(1,       &pick_color_tex_); pick_color_tex_ = 0; }
+    if (pick_depth_rb_)  { glDeleteRenderbuffers(1,  &pick_depth_rb_);  pick_depth_rb_ = 0; }
+
+    // Color texture (RGB8 — ID encoded as RGB)
+    glGenTextures(1, &pick_color_tex_);
+    glBindTexture(GL_TEXTURE_2D, pick_color_tex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    // Depth renderbuffer
+    glGenRenderbuffers(1, &pick_depth_rb_);
+    glBindRenderbuffer(GL_RENDERBUFFER, pick_depth_rb_);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+    // Framebuffer
+    glGenFramebuffers(1, &pick_fbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, pick_fbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pick_color_tex_, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, pick_depth_rb_);
+
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        Logger::Get().Log(LogLevel::ERR, "[Renderer_Objects] Picking FBO incomplete: " + std::to_string(status));
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    pick_fbo_w_ = w;
+    pick_fbo_h_ = h;
 }
 
 // ─── Draw ─────────────────────────────────────────────────────────────────────
