@@ -26,6 +26,11 @@ public:
     void ClearCaches();
 
     void Draw(GLuint ubo_mats, bool overlay_wireframe, const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts, const glm::vec3& camera_pos, bool show_magic_obj_spheres = false);
+    int PickObjectAtScreen(int x, int y, int w, int h,
+                           GLuint ubo_mats,
+                           const std::vector<LevelObject>& objects,
+                           int draw_parts,
+                           const glm::vec3& camera_pos);
     static bool IsSkippedModelId(const std::string& modelId);
     glm::vec3 GetMeshExtents(const std::string& modelId, bool isBuilding);
     float GetMeshZOffset(const std::string& modelId, bool isBuilding);
@@ -62,6 +67,14 @@ private:
     GLuint sphere_vbo_ = 0;
     int sphere_vertex_count_ = 0;
 
+    // GPU color picking FBO
+    GLuint pick_fbo_          = 0;
+    GLuint pick_color_tex_    = 0;
+    GLuint pick_depth_rb_     = 0;
+    GLuint pick_shader_prog_  = 0;
+    int    pick_fbo_w_        = 0;
+    int    pick_fbo_h_        = 0;
+
     void LoadAttachmentsRecursive(const std::string& modelId, bool isBuilding, std::unordered_set<std::string>& visited);
     void DrawAttachmentsRecursive(const std::string& parentModelId, bool isBuilding, const glm::mat4& parentWorldMat,
                                    bool isTransparentPass, GLint loc_model, GLint loc_dirlight,
@@ -89,4 +102,9 @@ private:
     GLuint GetOrLoadTexture(const std::string& textureId);
     void ApplyTexturesToMesh(Mesh& mesh, const std::string& modelId, const std::string& parentModelId = "");
     void InitSelectionBox();
+    void InitPickingFBO(int w, int h);
+    void DrawForPicking(GLuint ubo_mats,
+                        const std::vector<LevelObject>& objects,
+                        int draw_parts,
+                        const glm::vec3& camera_pos);
 };
