@@ -804,6 +804,37 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
     glDisable(GL_CULL_FACE);
 }
 
+// ─── PickObjectAtScreen ───────────────────────────────────────────────────────
+int Renderer_Objects::PickObjectAtScreen(int x, int y, int w, int h,
+                                          GLuint ubo_mats,
+                                          const std::vector<LevelObject>& objects,
+                                          int draw_parts,
+                                          const glm::vec3& camera_pos)
+{
+    if (!pick_shader_prog_ || w <= 0 || h <= 0) return -1;
+
+    // Resize FBO if window size changed
+    if (w != pick_fbo_w_ || h != pick_fbo_h_) {
+        InitPickingFBO(w, h);
+    }
+    if (!pick_fbo_) return -1;
+
+    DrawForPicking(ubo_mats, objects, draw_parts, camera_pos);
+
+    // Read back the single pixel under the cursor.
+    // OpenGL origin is bottom-left; screen coords are top-left → flip Y.
+    uint8_t pixel[3] = {0, 0, 0};
+    glBindFramebuffer(GL_FRAMEBUFFER, pick_fbo_);
+    glReadPixels(x, h - y - 1, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, pixel);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    int id = (static_cast<int>(pixel[0]) << 16) |
+             (static_cast<int>(pixel[1]) <<  8) |
+              static_cast<int>(pixel[2]);
+
+    return (id == 0) ? -1 : id - 1;
+}
+
 // ─── Draw ─────────────────────────────────────────────────────────────────────
 void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                             const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts,
