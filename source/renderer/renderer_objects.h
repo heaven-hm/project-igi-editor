@@ -25,7 +25,7 @@ public:
     void SetLevel(int level) { current_level_ = level; }
     void ClearCaches();
 
-    void Draw(GLuint ubo_mats, bool overlay_wireframe, const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts, const glm::vec3& camera_pos);
+    void Draw(GLuint ubo_mats, bool overlay_wireframe, const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts, const glm::vec3& camera_pos, bool show_magic_obj_spheres = false);
     static bool IsSkippedModelId(const std::string& modelId);
     glm::vec3 GetMeshExtents(const std::string& modelId, bool isBuilding);
     float GetMeshZOffset(const std::string& modelId, bool isBuilding);
@@ -56,6 +56,12 @@ private:
     std::unordered_set<std::string> deathzone_ids_;
     bool deathzone_ids_loaded_ = false;
 
+    std::set<std::string> magicobj_ids_;
+    bool magicobj_ids_loaded_ = false;
+    GLuint sphere_vao_ = 0;
+    GLuint sphere_vbo_ = 0;
+    int sphere_vertex_count_ = 0;
+
     void LoadAttachmentsRecursive(const std::string& modelId, bool isBuilding, std::unordered_set<std::string>& visited);
     void DrawAttachmentsRecursive(const std::string& parentModelId, bool isBuilding, const glm::mat4& parentWorldMat,
                                    bool isTransparentPass, GLint loc_model, GLint loc_dirlight,
@@ -65,6 +71,9 @@ private:
     void EnsurePortalDistancesLoaded();
     void EnsureWindowModelIdsLoaded();
     void EnsureDeathZoneIdsLoaded();
+    void EnsureMagicObjIdsLoaded();
+    void InitSphereMesh();
+    void DrawMagicObjSpheres(const std::vector<LevelObject>& objects, GLuint ubo_mats);
     void DrawSelectionBox(const LevelObject& obj, GLuint ubo_mats, const glm::vec4& color);
     Mesh CreateCubeMesh();
     Mesh CreateTextMesh(const std::string& text);

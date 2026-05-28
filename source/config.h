@@ -56,6 +56,7 @@ struct ConfigData {
     KeyBinding keyToggleGame;
     KeyBinding keySaveState;
     KeyBinding keyToggleSaveStateOnExit;
+    KeyBinding keyToggleMagicObj;
 
     // NEW: Task Controls
     KeyBinding keyCreateNewTask;

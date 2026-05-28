@@ -243,6 +243,7 @@ void Config::Load() {
                 else if (eventName == "AnimTaskGoToCursor") data_.keyGoToCursor = ParseKeyBinding(binding);
                 else if (eventName == "AnimTaskToggleSyncPlayback") data_.keySyncPlayback = ParseKeyBinding(binding);
                 else if (eventName == "ToggleConsole") data_.keyDebug = ParseKeyBinding(binding);
+                else if (eventName == "TaskMagicObjToggle") data_.keyToggleMagicObj = ParseKeyBinding(binding);
             }
             return;
         }

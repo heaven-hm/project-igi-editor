@@ -177,6 +177,171 @@ void Renderer_Objects::EnsureDeathZoneIdsLoaded() {
         " TASKTYPE_DEATHZONE model IDs from magicobj.qvm");
 }
 
+// ─── EnsureMagicObjIdsLoaded ──────────────────────────────────────────────────
+void Renderer_Objects::EnsureMagicObjIdsLoaded() {
+    if (magicobj_ids_loaded_) return;
+    magicobj_ids_loaded_ = true;
+
+    const std::string qvmPath = Utils::GetIGIRootPath() + "\\magicobj\\magicobj.qvm";
+    if (!std::filesystem::exists(qvmPath)) return;
+
+    QVMFile qvm = QVM_Parse(qvmPath);
+    if (!qvm.valid) return;
+
+    const std::string src = QVM_DecompileToString(qvm);
+    std::istringstream ss(src);
+    std::string line;
+    while (std::getline(ss, line)) {
+        if (line.find("DefineMagicObj") == std::string::npos) continue;
+        const size_t q1 = line.find('"');
+        if (q1 == std::string::npos) continue;
+        const size_t q2 = line.find('"', q1 + 1);
+        if (q2 == std::string::npos) continue;
+        magicobj_ids_.insert(line.substr(q1 + 1, q2 - q1 - 1));
+    }
+}
+
+// ─── InitSphereMesh ───────────────────────────────────────────────────────────
+// Builds a solid unit UV sphere using GL_TRIANGLES. Normal == position on a unit
+// sphere, which gives correct Phong shading without extra math.
+void Renderer_Objects::InitSphereMesh() {
+    const int LAT = 12;
+    const int LON = 24;
+    std::vector<float> verts;
+    verts.reserve(LAT * LON * 6 * 8); // 2 triangles per quad, 3 verts each, 8 floats
+
+    auto addVert = [&](float x, float y, float z) {
+        verts.push_back(x); verts.push_back(y); verts.push_back(z);
+        verts.push_back(x); verts.push_back(y); verts.push_back(z); // normal = position for unit sphere
+        verts.push_back(0.0f); verts.push_back(0.0f);
+    };
+
+    for (int i = 0; i < LAT; ++i) {
+        float lat0 = glm::pi<float>() * (-0.5f + (float)i / LAT);
+        float lat1 = glm::pi<float>() * (-0.5f + (float)(i + 1) / LAT);
+        float sin0 = std::sin(lat0), cos0 = std::cos(lat0);
+        float sin1 = std::sin(lat1), cos1 = std::cos(lat1);
+
+        for (int j = 0; j < LON; ++j) {
+            float lon0 = 2.0f * glm::pi<float>() * (float)j / LON;
+            float lon1 = 2.0f * glm::pi<float>() * (float)(j + 1) / LON;
+            float clon0 = std::cos(lon0), slon0 = std::sin(lon0);
+            float clon1 = std::cos(lon1), slon1 = std::sin(lon1);
+
+            float x00 = cos0*clon0, y00 = cos0*slon0, z00 = sin0;
+            float x01 = cos0*clon1, y01 = cos0*slon1, z01 = sin0;
+            float x10 = cos1*clon0, y10 = cos1*slon0, z10 = sin1;
+            float x11 = cos1*clon1, y11 = cos1*slon1, z11 = sin1;
+
+            addVert(x00, y00, z00); addVert(x10, y10, z10); addVert(x11, y11, z11);
+            addVert(x00, y00, z00); addVert(x11, y11, z11); addVert(x01, y01, z01);
+        }
+    }
+
+    sphere_vertex_count_ = (int)(verts.size() / 8);
+    glGenVertexArrays(1, &sphere_vao_);
+    glGenBuffers(1, &sphere_vbo_);
+    glBindVertexArray(sphere_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, sphere_vbo_);
+    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glBindVertexArray(0);
+}
+
+// ─── DrawMagicObjSpheres ──────────────────────────────────────────────────────
+// Draws a solid red sphere at each MagicObject ATTA attachment position.
+void Renderer_Objects::DrawMagicObjSpheres(const std::vector<LevelObject>& objects, GLuint ubo_mats) {
+    EnsureMagicObjIdsLoaded();
+    if (magicobj_ids_.empty()) return;
+
+    if (sphere_vao_ == 0) InitSphereMesh();
+    if (sphere_vao_ == 0) return;
+
+    glUseProgram(shader_program_);
+    glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+    GLint loc_model     = glGetUniformLocation(shader_program_, "u_model");
+    GLint loc_dirlight  = glGetUniformLocation(shader_program_, "u_dirlight");
+    GLint loc_ambient   = glGetUniformLocation(shader_program_, "u_ambient");
+    GLint loc_useTex    = glGetUniformLocation(shader_program_, "u_useTexture");
+    GLint loc_alpha     = glGetUniformLocation(shader_program_, "u_alpha");
+    GLint loc_baseColor = glGetUniformLocation(shader_program_, "u_baseColor");
+
+    glUniform1i(loc_useTex, 0);
+    glUniform1f(loc_alpha, 1.0f);
+    glUniform3f(loc_dirlight, 0.5f, 0.5f, 0.5f);
+    glUniform3f(loc_ambient,  0.5f, 0.5f, 0.5f);
+    glUniform4f(loc_baseColor, 1.0f, 0.0f, 0.0f, 1.0f); // red
+
+    // Sphere radius = 0.3 meters in world-unit space
+    const float SPHERE_SCALE = WORLD_UNITS_PER_METER * 0.3f;
+
+    auto drawSphere = [&](const glm::vec3& worldPos) {
+        glm::mat4 sphereMat = glm::translate(glm::mat4(1.0f), worldPos);
+        sphereMat = glm::scale(sphereMat, glm::vec3(SPHERE_SCALE));
+        glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(sphereMat));
+        glBindVertexArray(sphere_vao_);
+        glDrawArrays(GL_TRIANGLES, 0, sphere_vertex_count_);
+    };
+
+    for (const auto& obj : objects) {
+        if (obj.deleted || obj.modelId.empty()) continue;
+
+        glm::mat4 parentRot(1.0f);
+        parentRot = glm::rotate(parentRot, (float)obj.rot.z, glm::vec3(0, 0, 1));
+        parentRot = glm::rotate(parentRot, (float)obj.rot.x, glm::vec3(1, 0, 0));
+        parentRot = glm::rotate(parentRot, (float)obj.rot.y, glm::vec3(0, 1, 0));
+
+        glm::mat4 rootWorldMat(1.0f);
+        rootWorldMat = glm::translate(rootWorldMat, glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z));
+        rootWorldMat = rootWorldMat * parentRot;
+
+        // ── ATTA magic objects ───────────────────────────────────────────────
+        std::string prefix = obj.isBuilding ? "building:" : "object:";
+        std::string attKey = std::to_string(current_level_) + ":" + prefix + obj.modelId;
+        auto ait = attachment_cache_.find(attKey);
+        if (ait != attachment_cache_.end()) {
+            for (const auto& att : ait->second) {
+                if (!magicobj_ids_.count(att.modelId)) continue;
+                glm::vec3 localOff(att.px, att.py, att.pz);
+                glm::vec3 worldPos = glm::vec3(rootWorldMat * glm::vec4(localOff, 1.0f));
+                drawSphere(worldPos);
+            }
+        }
+
+        // ── XTVM magic vertices ──────────────────────────────────────────────
+        // magicVertices are stored in mesh-local space (divided by 40.96).
+        // Reconstruct world position using the full scaled model matrix.
+        std::string meshKey = std::to_string(current_level_) + ":" + prefix + obj.modelId;
+        auto mit = mesh_cache_.find(meshKey);
+        if (mit != mesh_cache_.end()) {
+            const Mesh& mesh = mit->second;
+            if (!mesh.magicVertices.empty()) {
+                glm::mat4 modelMat = rootWorldMat * glm::scale(glm::mat4(1.0f), glm::vec3(40.96f));
+                for (const auto& mv : mesh.magicVertices) {
+                    // skip null entries (all-zero position)
+                    if (mv.x == 0.0f && mv.y == 0.0f && mv.z == 0.0f) continue;
+                    glm::vec3 worldPos = glm::vec3(modelMat * glm::vec4(mv, 1.0f));
+                    drawSphere(worldPos);
+                }
+            }
+        }
+    }
+
+    glBindVertexArray(0);
+    glUseProgram(0);
+}
+
 static bool IsWeaponModel(const std::string& modelId) {
     if (modelId.empty()) return false;
     if (modelId.size() >= 4 && modelId[0] == '1' && 
@@ -392,12 +557,20 @@ void Renderer_Objects::Shutdown() {
         glDeleteBuffers(1, &selection_vbo_);
         selection_vbo_ = 0;
     }
+    if (sphere_vao_) {
+        glDeleteVertexArrays(1, &sphere_vao_);
+        sphere_vao_ = 0;
+    }
+    if (sphere_vbo_) {
+        glDeleteBuffers(1, &sphere_vbo_);
+        sphere_vbo_ = 0;
+    }
 }
 
 // ─── Draw ─────────────────────────────────────────────────────────────────────
 void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                             const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts,
-                            const glm::vec3& camera_pos)
+                            const glm::vec3& camera_pos, bool show_magic_obj_spheres)
 {
     // Define the flags (must match renderer.h)
     const int DRAW_OBJECTS = 4;
@@ -698,6 +871,10 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
     // Unbind shader
     glUseProgram(0);
+
+    if (show_magic_obj_spheres) {
+        DrawMagicObjSpheres(objects, ubo_mats);
+    }
 }
 
 float Renderer_Objects::GetMeshZOffset(const std::string& modelId, bool isBuilding) {

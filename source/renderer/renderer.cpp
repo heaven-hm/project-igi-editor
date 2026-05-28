@@ -180,7 +180,8 @@ void Renderer::Draw(const draw_params_s &params,
     objects_.Draw(ubo_mats_, params.overlay_wireframe_,
                   params.level_objects_->GetObjects(),
                   params.selected_object_index_, task_tree_view.hover_object_index_,
-                  params.draw_parts_, params.view_define_->pos_);
+                  params.draw_parts_, params.view_define_->pos_,
+                  params.show_magic_obj_spheres_);
     splines_.Draw(params.level_objects_->GetObjects(), ubo_mats_,
                   objects_.GetShaderProgram());
   }

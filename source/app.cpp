@@ -105,6 +105,7 @@ App::App():
 	show_hud_(true),
 	show_debug_(false),
 	show_help_(false),
+	show_magic_obj_spheres_(false),
 	tree_scroll_offset_(0),
 	tree_decl_expanded_(false),
 	status_message_(),
@@ -966,6 +967,12 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		return;
 	}
 
+	// Magic Object sphere toggle
+	if (Utils::IsKeyBindingPressed(config.keyToggleMagicObj)) {
+		show_magic_obj_spheres_ = !show_magic_obj_spheres_;
+		return;
+	}
+
 	// Quit
 	if (Utils::IsKeyBindingPressed(config.keyQuit)) {
 		exit(0);
@@ -1465,6 +1472,11 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		show_debug_ = !show_debug_;
 	}
 
+	// Magic Object sphere toggle
+	if (Utils::IsKeyBindingPressed(config.keyToggleMagicObj)) {
+		show_magic_obj_spheres_ = !show_magic_obj_spheres_;
+	}
+
 	// Quit
 	if (Utils::IsKeyBindingPressed(config.keyQuit)) {
 		exit(0);
@@ -1878,6 +1890,7 @@ void App::Frame(float delta_seconds) {
 		};
 		draw_params_.level_objects_ = &level_.GetLevelObjects();
 		draw_params_.selected_object_index_ = selected_object_index_;
+		draw_params_.show_magic_obj_spheres_ = show_magic_obj_spheres_;
 		renderer_.Draw(draw_params_, task_tree_view);
 
 		glutSwapBuffers();
@@ -1930,6 +1943,7 @@ void App::Frame(float delta_seconds) {
 	draw_params_.num_terrain_render_chunk_ = update_params.num_terrain_render_chunk_;
 	draw_params_.level_objects_ = &level_.GetLevelObjects();
 	draw_params_.selected_object_index_ = selected_object_index_;
+	draw_params_.show_magic_obj_spheres_ = show_magic_obj_spheres_;
 
 
 	float ground_z = 0.0f;

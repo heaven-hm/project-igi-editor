@@ -40,6 +40,7 @@ public:
 		int					num_terrain_render_chunk_;
 		const class LevelObjects* level_objects_;
 		int					selected_object_index_;
+		bool				show_magic_obj_spheres_;
 
 	};
 
