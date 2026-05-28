@@ -22,8 +22,10 @@ struct Mesh {
     float zOffset;
     float mainZOffset; // zOffset from textured submeshes only (for terrain snap)
     float* vertexData;
+    bool fromRenderMesh = false; // true = XTRV/DNER (proper UVs); false = XTVC/ECFC fallback (fabricated UVs)
     std::vector<SubMesh> subMeshes;
     std::vector<SubMesh> portalMeshes;
+    std::vector<glm::vec3> magicVertices;
 
     Mesh() : VAO(0), VBO(0), IBO(0), vertexCount(0), indexCount(0), textureID(0), center(0.0f), zOffset(0.0f), mainZOffset(0.0f), vertexData(nullptr) {}
 };

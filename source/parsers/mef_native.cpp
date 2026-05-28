@@ -621,7 +621,7 @@ std::vector<XtvmVertex> ParseXtvmVerts(const std::vector<uint8_t>& bytes, const 
         verts[i].px      = ReadValue<float>  (bytes, base + 0);
         verts[i].py      = ReadValue<float>  (bytes, base + 4);
         verts[i].pz      = ReadValue<float>  (bytes, base + 8);
-        verts[i].unknown = ReadValue<int32_t>(bytes, base + 12);
+        verts[i].magicType = ReadValue<int32_t>(bytes, base + 12);
     }
     return verts;
 }
@@ -1039,3 +1039,4 @@ ParsedGeometry ParseMefFile(const std::string& filepath) {
     const std::vector<ChunkInfo> chunks = ParseIlffChunks(bytes, filepath);
     return ParseMefGeometry(bytes, chunks, filepath);
 }
+

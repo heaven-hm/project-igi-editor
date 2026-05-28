@@ -1,6 +1,6 @@
-# IGI 1 File Format Reference
+# IGI File Format Reference
 
-> Technical documentation of the binary file formats used by *Project I.G.I.: I'm Going In* (2000, Innerloop Studios).
+> Technical documentation of the binary file formats used by *Project I.G.I.: I'm Going In* (2000) and *IGI 2: Covert Strike* (2003), both by Innerloop Studios.
 > Derived from the parser implementations in [project-igi-editor](https://github.com/Jones-HM/project-igi-editor).
 
 ---
@@ -15,6 +15,7 @@
 6. [MTP -- Model-Texture Package](#6-mtp----model-texture-package)
 7. [DAT -- Asset List](#7-dat----asset-list)
 8. [QSC -- Script Source](#8-qsc----script-source)
+9. [MagicObject System](#9-magicobject-system)
 
 ---
 
@@ -71,15 +72,24 @@ constexpr float kNativeMefImportScale = 1.0f / 40.96f;
 
 A typical MEF file contains these chunks (order may vary):
 
-| FourCC | Name                | Description                              |
-|--------|---------------------|------------------------------------------|
-| `HSEM` | Mesh Info           | Model metadata including model type      |
-| `XTRV` | Vertices (render)   | Interleaved vertex data for rendering    |
-| `DNER` | Render blocks       | Triangle indices + per-block metadata    |
-| `ECAF` | Face indices         | Separate index buffer (used by Type 1)   |
-| `D3DR` | D3D Render info     | Face/mesh/vertex counts                  |
-| `XTVC` | Collision vertices  | Collision mesh vertices (16 bytes each)  |
-| `ECFC` | Collision faces     | Collision mesh face indices (8 bytes each)|
+| FourCC | Name                | Description                                               |
+|--------|---------------------|-----------------------------------------------------------|
+| `HSEM` | Mesh Info           | Model metadata including model type                       |
+| `XTRV` | Vertices (render)   | Interleaved vertex data for rendering                     |
+| `DNER` | Render blocks       | Triangle indices + per-block metadata                     |
+| `ECAF` | Face indices        | Separate index buffer (used by Type 1 bone models)        |
+| `D3DR` | D3D Render info     | Face/mesh/vertex counts                                   |
+| `XTVC` | Collision vertices  | Collision mesh vertices (16 bytes each, IGI 1)            |
+| `ECFC` | Collision faces     | Collision mesh face indices (8 bytes each, IGI 1)         |
+| `TAMC` | Material config     | Per-face material properties (opacity, diffuse, portal)   |
+| `ATTA` | Attachments         | Sub-model attachment points with transform matrix (68 bytes each) |
+| `XTVM` | Magic vertices      | Special-purpose vertices for game events (16 bytes each)  |
+| `REIH` | Bone hierarchy      | Bone parent/child relationships and rest-pose pivots      |
+| `MANB` | Bone names          | Bone name strings (16 bytes each, null-padded)            |
+| `TROP` | Portal records      | Portal zone entries (20 bytes each)                       |
+| `XVTP` | Portal vertices     | Portal mesh vertex positions (12 bytes each)              |
+| `CFTP` | Portal faces        | Portal mesh triangle indices (12 bytes each)              |
+| `PMTL` | Portal materials    | Material IDs for portal zones (16 bytes each)             |
 
 ### 2.2 HSEM Chunk -- Mesh Info
 
@@ -300,7 +310,47 @@ Vertex count: `XTVC.size / 16`. UVs are synthesized as `(x * 0.1, z * 0.1)`.
 
 Face count: `ECFC.size / 8`.
 
-### 2.8 Parsing Algorithm Summary
+### 2.8 ATTA Chunk -- Attachment Points (68 bytes each)
+
+ATTA records place named sub-models onto a parent model with a local position and 3x3 rotation matrix. Sub-models can be static visual parts or MagicObjects with runtime behavior (see [Section 9](#9-magicobject-system)).
+
+| Offset | Size | Type     | Field     | Description                                        |
+|--------|------|----------|-----------|----------------------------------------------------|
+| 0x00   | 16   | char[16] | name      | Sub-model name (null-padded, e.g. `"600_02_1"`)    |
+| 0x10   | 4    | float32  | px        | Local position X (raw MEF units, NOT scaled)       |
+| 0x14   | 4    | float32  | py        | Local position Y                                   |
+| 0x18   | 4    | float32  | pz        | Local position Z                                   |
+| 0x1C   | 4    | float32  | r00       | Rotation matrix row 0, col 0                       |
+| 0x20   | 4    | float32  | r01       | Rotation matrix row 0, col 1                       |
+| 0x24   | 4    | float32  | r02       | Rotation matrix row 0, col 2                       |
+| 0x28   | 4    | float32  | r03       | Rotation matrix row 1, col 0                       |
+| 0x2C   | 4    | float32  | r04       | Rotation matrix row 1, col 1                       |
+| 0x30   | 4    | float32  | r05       | Rotation matrix row 1, col 2                       |
+| 0x34   | 4    | float32  | r06       | Rotation matrix row 2, col 0                       |
+| 0x38   | 4    | float32  | r07       | Rotation matrix row 2, col 1                       |
+| 0x3C   | 4    | float32  | r08       | Rotation matrix row 2, col 2                       |
+| 0x40   | 4    | int32    | boneId    | Parent bone index (-1 = not bone-attached)         |
+
+**Total: 68 bytes per record.** Count: `ATTA.size / 68`.
+
+Positions are in raw MEF units (divide by 40.96 to get meters). The parent model contains one ATTA record per logical sub-model slot; the same sub-model name can appear multiple times at different offsets.
+
+### 2.9 XTVM Chunk -- Magic Vertices (16 bytes each)
+
+XTVM records mark special-purpose positions within a model used by the game engine for events: gun fire origins, ladder interaction zones, particle emitters, etc. These are *not* rendered — they are invisible game logic hooks.
+
+| Offset | Size | Type    | Field       | Description                                                      |
+|--------|------|---------|-------------|------------------------------------------------------------------|
+| 0x00   | 4    | float32 | px          | Position X (raw MEF units, NOT scaled)                           |
+| 0x04   | 4    | float32 | py          | Position Y                                                       |
+| 0x08   | 4    | float32 | pz          | Position Z                                                       |
+| 0x0C   | 4    | int32   | magicType   | Magic vertex type ID (unconfirmed; see TASKTYPE constants below) |
+
+**Total: 16 bytes per vertex.** Count: `XTVM.size / 16`.
+
+The `magicType` field meaning is unconfirmed from binary analysis. It likely maps to a `TASKTYPE_*` constant indicating what engine system uses this vertex (gun clip position, ladder zone, etc.). Many entries have `magicType == 0`.
+
+### 2.10 Parsing Algorithm Summary
 
 ```
 1. Read ILFF header; validate "ILFF" magic and size
@@ -312,10 +362,12 @@ Face count: `ECFC.size / 8`.
    a. Type 1 with ECAF + valid D3DR -> split bone parse (DNER records + ECAF indices)
    b. Otherwise -> packed DNER parse (inline indices per block)
 7. If no render geometry found, fall back to XTVC/ECFC collision mesh
-8. Scale all positions by 1.0/40.96
+8. Parse ATTA for sub-model attachment points
+9. Parse XTVM for magic vertex positions
+10. Scale all render positions by 1.0/40.96
 ```
 
-### 2.9 Text-Based MEF Format (Exported)
+### 2.11 Text-Based MEF Format (Exported)
 
 The editor also supports a text-based MEF representation (parsed by `mef_parser.cpp`). This is a line-oriented script format:
 
@@ -853,6 +905,132 @@ Task(1, "patrol",
 
 ---
 
+## 9. MagicObject System
+
+MagicObjects are mesh sub-parts with runtime behavior. They are the engine's system for giving interactivity to parts of a 3D model — a door that swings, glass that shatters, a ladder you can climb, helicopter rotors that spin.
+
+The system is split across two data sources that the engine combines at load time:
+
+| Data Source          | Role                                                        |
+|----------------------|-------------------------------------------------------------|
+| `magicobjconfig.qsc` | Defines the **behavior** (what type of interactive object)  |
+| Parent model ATTA    | Defines the **placement** (transform in the parent mesh)    |
+
+### 9.1 MagicObject Config Files
+
+Two formats exist depending on game version:
+
+**IGI 1** — `magicobjconfig.qsc` uses `Task_New`:
+```qsc
+Task_New(-1, "MagicObjConfig",
+    "name",       // lookup key — matches ATTA entry name
+    "model_id",   // which .mef mesh to use
+    TASKTYPE_XXX  // what behavior to apply
+);
+```
+
+**IGI 2** — `magicobj.qvm` (compiled from `magicobj.qsc`) uses `DefineMagicObj`:
+```qsc
+DefineMagicObj("model_id", "model_id", TASKTYPE_XXX);
+// Some task types have extra parameters:
+DefineMagicObj("614_02_1", "614_02_1", TASKTYPE_AISTATIONARYGUN, "614_03_1", 361, 15, -4, 10000, 15, 15, "tank_turret", 0, 6);
+DefineMagicObj("610_02_1", "610_02_1", TASKTYPE_CARDOOR, 0, 30, -118);
+DefineMagicObj("700_05_1", "700_05_1", TASKTYPE_HELIDOOR, 1, 0.6, 2.65);
+```
+
+The engine checks every ATTA sub-model name against this registry at spawn time. If found, it spawns a MagicObject with the configured behavior; if not found, it spawns a static visual sub-part.
+
+The **parent** vehicle models (`614_01_1`, `622_01_1`, `700_01_1`) are NOT listed in magicobj — they are plain parent meshes. Only their ATTA sub-models (turrets, wheels, rotors, doors) are registered as MagicObjects.
+
+`editormagicobj.qvm` is a parallel file used by the level editor only — it shipped empty in the retail game.
+
+### 9.2 Task Types
+
+179 total MagicObj entries across all levels, using 15 distinct task types:
+
+| TASKTYPE               | Count | Description                                                                 |
+|------------------------|-------|-----------------------------------------------------------------------------|
+| `SHADOWVOLUME`         | 72    | Simplified geometry for stencil shadow casting. Most common — nearly every weapon and prop has one. Rendered separately from the main mesh. |
+| `GLASS`                | 64    | Breakable glass panels. Shatters on bullet impact or explosion.             |
+| `LADDER`               | 15    | Climbable surface. Player can interact to climb up/down.                   |
+| `DEATHZONE`            | 5     | Invisible kill volume. Instant death on contact (helicopter blades, fall zones). Models: `killbox`, `Killair`, `603_13`, `603_14`, `610_04`. |
+| `WHEEL`                | 5     | Rotating wheel/tire. Spins based on vehicle movement. Models: `600_05`, `600_06`, `616_02`, `661_02`, `663_02`. |
+| `AISTATIONARYGUN`      | 4     | Mounted gun position. AI or player can man it. Models: `313_09` (tripod gun), `661_03`, `700_01`, `720_06` (heli gun). |
+| `GRENADEPIN`           | 3     | Grenade pin that detaches on throw. Used by explosive, smoke, and flashbang grenades. |
+| `ROTOR`                | 3     | Helicopter rotor blade. Spins continuously. Models: `711_01`, `711_02`, `712_01`. |
+| `HITZONE`              | 2     | Damageable area (e.g. vehicle fuel tank). Has max damage and smoke threshold. Models: `709_02`, `709_03`. |
+| `CARDOOR`              | 1     | Hinged vehicle door. Rotation axis, 30 deg/sec speed, −118 deg max angle. Model: `610_02`. |
+| `DRAWER`               | 1     | Openable drawer. Model: `221_02`.                                           |
+| `RPGROCKET`            | 1     | RPG rocket projectile in flight. Model: `140_02`.                          |
+| `BOMBBACKPACK`         | 1     | Explosive backpack. Model: `113_02`.                                        |
+| `WEAPONMAGICOBJ`       | 1     | Generic weapon attachment point. `model=none` (virtual, no mesh).          |
+| `PRIMARYMAGICOBJ`      | 1     | Generic primary attachment point. `model=none` (virtual, no mesh).         |
+
+**Shadow volumes dominate:** 72 of 179 entries (40%) are `SHADOWVOLUME`. In the early 2000s, stencil shadow volumes were the standard real-time shadow technique. The engine needed a separate simplified mesh to project shadows — using the full-detail model was too expensive. These shadow meshes are stored as ATTA sub-parts; `magicobjconfig` tells the engine "this sub-part is a shadow volume, don't render it normally."
+
+### 9.3 XTVM -- Magic Vertices vs MagicObjects
+
+XTVM magic vertices and the MagicObject system serve different purposes and are **independent**:
+
+| Feature        | XTVM Magic Vertices                             | ATTA MagicObjects                              |
+|----------------|-------------------------------------------------|------------------------------------------------|
+| Storage        | XTVM chunk in parent `.mef`                     | ATTA chunk + `magicobjconfig.qsc`              |
+| What it is     | A 3D position within the model                  | A separate sub-mesh with behavior              |
+| Purpose        | Engine event hook (gun fire origin, etc.)        | Interactive sub-object (door, glass, rotor...) |
+| Rendering      | Not rendered — invisible to player              | Has its own `.mef` mesh, may render            |
+| Relationship   | No direct relationship to ATTA entries          | Referenced by ATTA name in parent model        |
+
+A model can have both: e.g., an AK47 has XTVM magic vertices for muzzle/clip positions *and* an ATTA sub-model registered as `SHADOWVOLUME`.
+
+### 9.4 Examples
+
+#### Guard Tower (600 family)
+
+```
+600_01_1.mef  (main structure — building mesh)
+│
+├── ATTA "600_02_1"  → magicobjconfig TASKTYPE_GLASS     (breakable window)
+├── ATTA "600_03_1"  → magicobjconfig TASKTYPE_GLASS     (another window)
+├── ATTA "600_04_1"  → magicobjconfig TASKTYPE_GLASS     (×2, two more panels)
+├── ATTA "600_05_1"  → magicobjconfig TASKTYPE_WHEEL     (rotating parts, ×2)
+├── ATTA "600_06_1"  → magicobjconfig TASKTYPE_WHEEL     (more rotating parts, ×4)
+├── ATTA "killbox"   → magicobjconfig TASKTYPE_DEATHZONE (invisible kill volume)
+├── ATTA "truckshade" → NOT in magicobjconfig            (static shadow mesh)
+│
+└── XTVM: 8 magic vertices  (independent — unknown purpose)
+```
+
+#### AK47 (107 family)
+
+```
+107_01_1.mef  (gun body)
+│
+├── ATTA "107_02_1"  → NOT in magicobjconfig   (scope/sight — static visual)
+├── ATTA "107_03_1"  → NOT in magicobjconfig   (magazine — static visual)
+├── ATTA "107_04_1"  → magicobjconfig TASKTYPE_SHADOWVOLUME
+│                      (simplified shadow mesh for stencil shadow rendering)
+│
+└── XTVM: 4 magic vertices  (2 active positions, 2 null/zero entries)
+
+107_05_1  → also in magicobjconfig TASKTYPE_SHADOWVOLUME
+            (not referenced by 107_01_1 ATTA — used by LOD variants)
+```
+
+### 9.5 Engine Load Sequence
+
+```
+1. Load parent mesh (e.g. 600_01_1.mef)
+2. Parse ATTA chunk → list of sub-model names + transforms
+3. For each ATTA entry:
+   a. Check name against magicobjconfig registry
+   b. If found  → spawn MagicObject(model, transform, taskType)
+   c. If not found → spawn static visual sub-part at transform
+4. Parse XTVM chunk → register magic vertex positions for engine events
+   (gun clip positions, ladder interaction zones, etc.)
+```
+
+---
+
 ## Appendix A: FourCC Reference
 
 | FourCC | Hex (LE)   | Context   | Description                     |
@@ -865,6 +1043,11 @@ Task(1, "patrol",
 | D3DR   | 0x52443344 | MEF       | D3D render info                 |
 | XTVC   | 0x43565458 | MEF       | Collision vertices              |
 | ECFC   | 0x43464345 | MEF       | Collision faces                 |
+| ATTA   | 0x41545441 | MEF       | Attachment points               |
+| XTVM   | 0x4D565458 | MEF       | Magic vertices                  |
+| REIH   | 0x48494552 | MEF       | Bone hierarchy                  |
+| MANB   | 0x424E414D | MEF       | Bone names                      |
+| TAMC   | 0x434D4154 | MEF       | Material config                 |
 | IRES   | 0x53455249 | RES       | Resource archive format ID      |
 | NAME   | 0x454D414E | RES       | Resource name chunk             |
 | BODY   | 0x59444F42 | RES       | Resource body chunk             |

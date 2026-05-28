@@ -474,17 +474,28 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         // underground container shells — skip rendering them entirely. The ATTA sub-models
         // supply all visible geometry; rendering a hash-colored hull on top obscures them.
         bool skipHullRender = false;
-        if (obj.isBuilding) {
-            bool hasAnyTexture = (mesh.textureID > 0);
-            if (!hasAnyTexture) {
-                for (const auto& sub : mesh.subMeshes) {
-                    if (sub.textureID > 0) { hasAnyTexture = true; break; }
-                }
+        bool hasAnyTexture = (mesh.textureID > 0);
+        if (!hasAnyTexture) {
+            for (const auto& sub : mesh.subMeshes) {
+                if (sub.textureID > 0) { hasAnyTexture = true; break; }
             }
-            if (!hasAnyTexture) {
-                const std::string attKey = std::to_string(current_level_) + ":building:" + obj.modelId;
-                skipHullRender = attachment_cache_.count(attKey) > 0;
-            }
+        }
+        
+        // Skip the hull when it was built from collision fallback geometry (XTVC/ECFC —
+        // no proper UV coordinates). These hulls render as flat-colored boxes even when a
+        // texture is assigned, because UVs are fabricated as (x*0.1, z*0.1). If the model
+        // has ATTA sub-models they supply the actual visual geometry; skip the hull so they
+        // are visible. This covers dynamic vehicles / magic objects (614_01_1, 622_01_1,
+        // 700_01_1, etc.) whose main mesh is a collision shell.
+        if (!mesh.fromRenderMesh) {
+            std::string prefix = obj.isBuilding ? "building:" : "object:";
+            std::string attKey = std::to_string(current_level_) + ":" + prefix + obj.modelId;
+            skipHullRender = attachment_cache_.count(attKey) > 0;
+        }
+        // Also skip building shells that have no textures at all (underground containers).
+        if (!hasAnyTexture && obj.isBuilding && !skipHullRender) {
+            std::string attKey = std::to_string(current_level_) + ":building:" + obj.modelId;
+            skipHullRender = attachment_cache_.count(attKey) > 0;
         }
 
         // Is this a window/glass model? If so, render the whole mesh semi-transparent.
@@ -584,11 +595,12 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         }
 
         // ── Render ATTA sub-models (recursively) ─────────────────────────────
-        // Buildings and vehicles (Car, Heli, Plane, Train) can have ATTA sub-models.
-        bool hasAttachments = obj.isBuilding || IsVehicleType(obj.type);
+        // Any object type (Buildings, Vehicles, Magic Models, Doors, Weapons, etc.) can have ATTA sub-models.
+        std::string prefix = obj.isBuilding ? "building:" : "object:";
+        std::string attCacheKey = std::to_string(current_level_) + ":" + prefix + obj.modelId;
+        bool hasAttachments = attachment_cache_.find(attCacheKey) != attachment_cache_.end();
+        
         if (hasAttachments && isCloseEnough) {
-            std::string prefix = obj.isBuilding ? "building:" : "object:";
-            std::string attCacheKey = std::to_string(current_level_) + ":" + prefix + obj.modelId;
             if (attachment_cache_.find(attCacheKey) != attachment_cache_.end()) {
                 glEnable(GL_POLYGON_OFFSET_FILL);
                 glPolygonOffset(-2.0f, -2.0f); // Prevent z-fighting with hull walls
@@ -770,6 +782,19 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         childWorldMat = glm::translate(childWorldMat, worldPos);
         childWorldMat = childWorldMat * parentRot * attLocalRot;
 
+        // Skip sub-models that have only collision fallback geometry (no XTRV/DNER render
+        // vertices). These render as misshapen boxes with fabricated UVs.  Still recurse
+        // into their children — those may have proper render geometry.
+        if (!subMesh.fromRenderMesh) {
+            std::string childKey = parentModelId + ">" + att.modelId;
+            if (drawn.insert(childKey).second) {
+                DrawAttachmentsRecursive(att.modelId, isBuilding, childWorldMat, isTransparentPass,
+                                         loc_model, loc_dirlight, loc_ambient,
+                                         loc_useTex, loc_tex, loc_alpha, drawn);
+            }
+            continue;
+        }
+
         // Scaled model matrix for actual GL draw
         glm::mat4 attModel = glm::scale(childWorldMat, glm::vec3(40.96f));
 
@@ -887,6 +912,43 @@ Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding
         // Recursively parse ATTA records for this model and all nested children.
         std::unordered_set<std::string> visited;
         LoadAttachmentsRecursive(modelId, isBuilding, visited);
+
+        // If the hull has no texture but ATTA sub-models do, inherit the first available
+        // ATTA texture for the hull — this covers vehicles/magic objects whose collision
+        // shell has no DAT entry but whose interior parts share the same texture sheet.
+        {
+            Mesh& cached = mesh_cache_[cacheKey];
+            bool hullHasTex = (cached.textureID > 0);
+            if (!hullHasTex) {
+                for (const auto& sub : cached.subMeshes) {
+                    if (sub.textureID > 0) { hullHasTex = true; break; }
+                }
+            }
+            if (!hullHasTex) {
+                std::string prefix = isBuilding ? "building:" : "object:";
+                std::string attKey = std::to_string(current_level_) + ":" + prefix + modelId;
+                GLuint inheritedTex = 0;
+                auto ait = attachment_cache_.find(attKey);
+                if (ait != attachment_cache_.end()) {
+                    for (const auto& att : ait->second) {
+                        std::string subKey = std::to_string(current_level_) + ":" + prefix + att.modelId;
+                        auto sit = mesh_cache_.find(subKey);
+                        if (sit != mesh_cache_.end()) {
+                            for (const auto& sub : sit->second.subMeshes) {
+                                if (sub.textureID > 0) { inheritedTex = sub.textureID; break; }
+                            }
+                        }
+                        if (inheritedTex) break;
+                    }
+                }
+                if (inheritedTex) {
+                    for (auto& sub : cached.subMeshes) sub.textureID = inheritedTex;
+                    cached.textureID = inheritedTex;
+                    Logger::Get().Log(LogLevel::INFO,
+                        "[TEX Native] Hull '" + modelId + "' has no texture; inherited from ATTA sub-model glId=" + std::to_string(inheritedTex));
+                }
+            }
+        }
 
         return mesh_cache_[cacheKey];
 
@@ -1171,12 +1233,7 @@ GLuint Renderer_Objects::GetOrLoadTexture(const std::string& textureId) {
 
 void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelId, const std::string& parentModelId) {
     std::vector<std::string> textureIds = GetTextureIdsForModel(modelId);
-
-    // If it's a DAT miss (not explicitly in dat), fallback to self name first.
     bool isDatMiss = textureIds.empty();
-    if (isDatMiss) {
-        textureIds = { modelId };
-    }
 
     // When a sub-model has no DAT entry, IGI ATTA sub-models commonly share material slots with their
     // parent building, so inherit the parent's texture list in that case.
@@ -1188,7 +1245,30 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
                 "[TEX Native] Sub-model '" + modelId + "' has no DAT entry; inheriting " +
                 std::to_string(parentIds.size()) + " texture(s) from parent '" + parentModelId + "'");
             textureIds = parentIds;
+            isDatMiss = false;
         }
+    }
+
+    // Conversely, some vehicles or magic models (_01_1) have no textures in DAT, but their interior 
+    // attachments (_02_1) DO have textures. If we still have a DAT miss, inherit from the typical child.
+    if (isDatMiss) {
+        size_t p1 = modelId.find("_01_1");
+        if (p1 != std::string::npos) {
+            std::string childId = modelId.substr(0, p1) + "_02_1";
+            std::vector<std::string> childTexIds = GetTextureIdsForModel(childId);
+            if (!childTexIds.empty()) {
+                Logger::Get().Log(LogLevel::INFO,
+                    "[TEX Native] Model '" + modelId + "' has no DAT entry; inheriting " +
+                    std::to_string(childTexIds.size()) + " texture(s) from child '" + childId + "'");
+                textureIds = childTexIds;
+                isDatMiss = false;
+            }
+        }
+    }
+
+    // If it's still a DAT miss (not explicitly in dat), fallback to self name first.
+    if (isDatMiss) {
+        textureIds = { modelId };
     }
 
     if (textureIds.empty()) {

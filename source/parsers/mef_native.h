@@ -41,9 +41,10 @@ struct XtvcVertex {
     uint32_t reserved{0};
 };
 
+// XTVM: 16 bytes per magic vertex — 12 bytes position (px,py,pz) + 4 bytes magic type (unconfirmed)
 struct XtvmVertex {
     float px{0.f}, py{0.f}, pz{0.f};
-    int32_t unknown{0};
+    int32_t magicType{0}; // magic vertex type ID (TASKTYPE_GUNCLIP, TASKTYPE_LADDER, etc.) — unconfirmed
 };
 
 struct MefAttachment {
@@ -132,6 +133,7 @@ struct ParsedGeometry {
     std::vector<EcfcFace>    ecfcFaces1;
     std::vector<TamcRecord>  tamcRecords1;
     std::vector<PortalRecord> portals;
+    std::vector<std::string> pmtlTextures; // Textures explicitly requested in the MEF
 };
 
 // Parse a binary MEF file and return all geometry + bone data.

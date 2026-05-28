@@ -28,6 +28,11 @@ Mesh BuildMeshFromGeometry(const ParsedGeometry& geometry, const std::string& fi
     const bool useVertexNormals = (geometry.modelType == 1);
 
     Mesh mesh;
+    
+    // Copy magic vertices if they exist
+    for (const auto& xv : geometry.xtvmVerts) {
+        mesh.magicVertices.push_back(glm::vec3(xv.px, xv.py, xv.pz) * kMefNativeScale);
+    }
 
     auto buildSubMesh = [&](size_t triangleStart, size_t triangleCount) -> std::optional<SubMesh> {
         std::vector<float> verts;
@@ -295,6 +300,7 @@ Mesh BuildMeshFromGeometry(const ParsedGeometry& geometry, const std::string& fi
     mesh.VAO = mesh.subMeshes.front().VAO;
     mesh.VBO = mesh.subMeshes.front().VBO;
     mesh.textureID = 0;
+    mesh.fromRenderMesh = geometry.fromRenderMesh;
     mesh.halfExtents = (max_p - min_p) * 0.5f;
     mesh.center = (max_p + min_p) * 0.5f;
     // Native MEF stays in the game's coordinate space, where Z is up.
