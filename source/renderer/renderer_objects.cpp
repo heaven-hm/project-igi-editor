@@ -724,6 +724,7 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
 
     // Set picking render state
     glBindFramebuffer(GL_FRAMEBUFFER, pick_fbo_);
+    glViewport(0, 0, pick_fbo_w_, pick_fbo_h_);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
