@@ -134,6 +134,49 @@ void Renderer_Objects::EnsureWindowModelIdsLoaded() {
         " window/glass model IDs from IGIModels.json");
 }
 
+// ─── EnsureDeathZoneIdsLoaded ──────────────────────────────────────────────────
+// Parses magicobj.qvm (via the QVM decompiler) and collects model IDs registered
+// as TASKTYPE_DEATHZONE. These are invisible trigger zones attached to vehicles/
+// trains via ATTA; they must not be rendered as visual sub-meshes.
+void Renderer_Objects::EnsureDeathZoneIdsLoaded() {
+    if (deathzone_ids_loaded_) return;
+    deathzone_ids_loaded_ = true;
+
+    const std::string qvmPath = Utils::GetIGIRootPath() + "\\magicobj\\magicobj.qvm";
+    if (!std::filesystem::exists(qvmPath)) {
+        Logger::Get().Log(LogLevel::WARNING,
+            "[Renderer_Objects] magicobj.qvm not found at: " + qvmPath);
+        return;
+    }
+
+    QVMFile qvm = QVM_Parse(qvmPath);
+    if (!qvm.valid) {
+        Logger::Get().Log(LogLevel::WARNING,
+            "[Renderer_Objects] Failed to parse magicobj.qvm: " + qvm.error);
+        return;
+    }
+
+    const std::string src = QVM_DecompileToString(qvm);
+
+    // Parse lines of the form:
+    //   DefineMagicObj("model_id", "model_id", TASKTYPE_DEATHZONE);
+    std::istringstream ss(src);
+    std::string line;
+    while (std::getline(ss, line)) {
+        if (line.find("TASKTYPE_DEATHZONE") == std::string::npos) continue;
+        // Extract the first quoted string (the model ID)
+        const size_t q1 = line.find('"');
+        if (q1 == std::string::npos) continue;
+        const size_t q2 = line.find('"', q1 + 1);
+        if (q2 == std::string::npos) continue;
+        deathzone_ids_.insert(line.substr(q1 + 1, q2 - q1 - 1));
+    }
+
+    Logger::Get().Log(LogLevel::INFO,
+        "[Renderer_Objects] Loaded " + std::to_string(deathzone_ids_.size()) +
+        " TASKTYPE_DEATHZONE model IDs from magicobj.qvm");
+}
+
 bool Renderer_Objects::IsSkippedModelId(const std::string& modelId) {
     if (modelId.empty()) return false;
     return modelId == "colbox" || modelId == "colbox2" || modelId == "colbox4" || modelId == "colbox66";
@@ -481,16 +524,12 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             }
         }
         
-        // Skip the hull when it was built from collision fallback geometry (XTVC/ECFC —
-        // no proper UV coordinates). These hulls render as flat-colored boxes even when a
-        // texture is assigned, because UVs are fabricated as (x*0.1, z*0.1). If the model
-        // has ATTA sub-models they supply the actual visual geometry; skip the hull so they
-        // are visible. This covers dynamic vehicles / magic objects (614_01_1, 622_01_1,
-        // 700_01_1, etc.) whose main mesh is a collision shell.
+        // Skip any model built from collision fallback geometry (XTVC/ECFC — no XTRV/DNER
+        // render vertices). These produce misshapen meshes with fabricated UVs and render
+        // as flat-colored or wrongly-tiled boxes. Covers vehicle hulls, train cargo objects,
+        // and any other collision-only model regardless of whether it has ATTA children.
         if (!mesh.fromRenderMesh) {
-            std::string prefix = obj.isBuilding ? "building:" : "object:";
-            std::string attKey = std::to_string(current_level_) + ":" + prefix + obj.modelId;
-            skipHullRender = attachment_cache_.count(attKey) > 0;
+            skipHullRender = true;
         }
         // Also skip building shells that have no textures at all (underground containers).
         if (!hasAnyTexture && obj.isBuilding && !skipHullRender) {
@@ -761,6 +800,11 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) continue;
         const Mesh &subMesh = sit->second;
 
+        // Skip ATTA sub-models that are TASKTYPE_DEATHZONE magic objects — they are
+        // invisible trigger/boarding zones, not visual geometry.
+        EnsureDeathZoneIdsLoaded();
+        if (deathzone_ids_.count(att.modelId)) continue;
+
         // Build the ATTA local rotation matrix (DirectX row-major → GLM column-major)
         glm::mat4 attLocalRot(
             att.r[0], att.r[1], att.r[2], 0.f,
@@ -793,6 +837,24 @@ void Renderer_Objects::DrawAttachmentsRecursive(
                                          loc_useTex, loc_tex, loc_alpha, drawn);
             }
             continue;
+        }
+
+        // Skip untextured sub-models (trigger zones, boarding areas, collision triggers)
+        // — they'd appear as featureless white/gray slabs with no visual value.
+        {
+            bool subHasTex = false;
+            for (const auto& s : subMesh.subMeshes) {
+                if (s.textureID > 0) { subHasTex = true; break; }
+            }
+            if (!subHasTex && !subMesh.subMeshes.empty()) {
+                std::string childKey = parentModelId + ">" + att.modelId;
+                if (drawn.insert(childKey).second) {
+                    DrawAttachmentsRecursive(att.modelId, isBuilding, childWorldMat, isTransparentPass,
+                                             loc_model, loc_dirlight, loc_ambient,
+                                             loc_useTex, loc_tex, loc_alpha, drawn);
+                }
+                continue;
+            }
         }
 
         // Scaled model matrix for actual GL draw

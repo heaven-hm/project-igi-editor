@@ -53,6 +53,9 @@ private:
     std::map<std::string, float> portal_distances_;
     bool portal_distances_loaded_ = false;
 
+    std::unordered_set<std::string> deathzone_ids_;
+    bool deathzone_ids_loaded_ = false;
+
     void LoadAttachmentsRecursive(const std::string& modelId, bool isBuilding, std::unordered_set<std::string>& visited);
     void DrawAttachmentsRecursive(const std::string& parentModelId, bool isBuilding, const glm::mat4& parentWorldMat,
                                    bool isTransparentPass, GLint loc_model, GLint loc_dirlight,
@@ -61,6 +64,7 @@ private:
     static bool IsVehicleType(const std::string& type);
     void EnsurePortalDistancesLoaded();
     void EnsureWindowModelIdsLoaded();
+    void EnsureDeathZoneIdsLoaded();
     void DrawSelectionBox(const LevelObject& obj, GLuint ubo_mats, const glm::vec4& color);
     Mesh CreateCubeMesh();
     Mesh CreateTextMesh(const std::string& text);
