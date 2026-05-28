@@ -796,6 +796,7 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
     }
 
     glBindVertexArray(0);
+    glUseProgram(0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     // Restore state
