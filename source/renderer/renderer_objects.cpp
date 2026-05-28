@@ -725,19 +725,22 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         if (!mesh.fromRenderMesh) {
             skipHullRender = true;
         }
-        // Also skip building shells that have no textures at all (underground containers).
+        // Underground building containers: buildings with no own textures but with ATTA children.
+        // Render them semi-transparent in the transparent pass so the interior is visible.
+        bool isUndergroundContainer = false;
         if (!hasAnyTexture && obj.isBuilding && !skipHullRender) {
             std::string attKey = std::to_string(current_level_) + ":building:" + obj.modelId;
-            skipHullRender = attachment_cache_.count(attKey) > 0;
+            isUndergroundContainer = attachment_cache_.count(attKey) > 0;
         }
 
         // Is this a window/glass model? If so, render the whole mesh semi-transparent.
         const bool isWindowModel = window_model_ids_.count(obj.modelId) > 0;
-        if (!skipHullRender && isWindowModel == isTransparentPass) {
-            if (isWindowModel) {
+        const bool isTransparentObject = isWindowModel || isUndergroundContainer;
+        if (!skipHullRender && isTransparentObject == isTransparentPass) {
+            if (isTransparentObject) {
                 glEnable(GL_BLEND);
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                glUniform1f(loc_alpha, 0.4f);
+                glUniform1f(loc_alpha, isUndergroundContainer ? 0.25f : 0.4f);
             }
 
             // Pull hull surfaces slightly toward camera to prevent Z-fighting with terrain.
@@ -763,6 +766,12 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                     if (sub.VAO == 0 || sub.vertexCount == 0) continue;
                     (void)mixedMesh; // render all submeshes — floors/stories must not be skipped
 
+                    if (sub.alphaMode == 2) {
+                        glEnable(GL_BLEND);
+                        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                        glUniform1f(loc_alpha, sub.baseColorFactor.a);
+                    }
+
                     if (sub.textureID > 0) {
                         // Textured submesh: neutral lighting so texture looks natural
                         glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
@@ -785,6 +794,11 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
                     glBindVertexArray(sub.VAO);
                     glDrawArrays(GL_TRIANGLES, 0, sub.vertexCount);
+
+                    if (sub.alphaMode == 2) {
+                        glDisable(GL_BLEND);
+                        glUniform1f(loc_alpha, 1.0f);
+                    }
                 }
                 glBindVertexArray(0);
             } else {
@@ -807,7 +821,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 renderModel(mesh);
             }
 
-            if (isWindowModel) {
+            if (isTransparentObject) {
                 glDisable(GL_BLEND);
                 glUniform1f(loc_alpha, 1.0f);
             }
@@ -1087,6 +1101,13 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         if (!subMesh.subMeshes.empty()) {
             for (const auto &sub : subMesh.subMeshes) {
                 if (sub.VAO == 0 || sub.vertexCount == 0) continue;
+
+                if (sub.alphaMode == 2) {
+                    glEnable(GL_BLEND);
+                    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                    glUniform1f(loc_alpha, sub.baseColorFactor.a);
+                }
+
                 if (sub.textureID > 0) {
                     glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
                     glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
@@ -1101,6 +1122,11 @@ void Renderer_Objects::DrawAttachmentsRecursive(
                 }
                 glBindVertexArray(sub.VAO);
                 glDrawArrays(GL_TRIANGLES, 0, sub.vertexCount);
+
+                if (sub.alphaMode == 2) {
+                    glDisable(GL_BLEND);
+                    glUniform1f(loc_alpha, 1.0f);
+                }
             }
             glBindVertexArray(0);
         } else if (subMesh.textureID > 0) {

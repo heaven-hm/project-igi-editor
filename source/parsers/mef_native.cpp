@@ -328,7 +328,7 @@ std::vector<std::array<uint32_t, 3>> ParsePackedRenderTriangles(
 
         const size_t blockTriangleCount = triangles.size() - blockTriangleStart;
         if (blockTriangleCount > 0) {
-            outBlocks.push_back({ blockTriangleStart, blockTriangleCount, materialSlot });
+            outBlocks.push_back({ blockTriangleStart, blockTriangleCount, materialSlot, 1.0f });
         }
 
         ++blockCount;
