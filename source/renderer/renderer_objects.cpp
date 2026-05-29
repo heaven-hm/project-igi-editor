@@ -1269,7 +1269,8 @@ void Renderer_Objects::DrawAttachmentsRecursive(
     const std::string& parentModelId, bool isBuilding, const glm::mat4& parentWorldMat,
     bool isTransparentPass, GLint loc_model, GLint loc_dirlight,
     GLint loc_ambient, GLint loc_useTex, GLint loc_tex, GLint loc_alpha,
-    std::unordered_set<std::string>& drawn)
+    std::unordered_set<std::string>& drawn,
+    glm::vec3 leafScale)
 {
     // Skip rendering attachments for any weapon model
     if (IsWeaponModel(parentModelId)) return;
@@ -1325,31 +1326,31 @@ void Renderer_Objects::DrawAttachmentsRecursive(
             if (drawn.insert(childKey).second) {
                 DrawAttachmentsRecursive(att.modelId, isBuilding, childWorldMat, isTransparentPass,
                                          loc_model, loc_dirlight, loc_ambient,
-                                         loc_useTex, loc_tex, loc_alpha, drawn);
+                                         loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
             }
             continue;
         }
 
         // Skip untextured sub-models (trigger zones, boarding areas, collision triggers)
-        // — they'd appear as featureless white/gray slabs with no visual value.
+        // — they'd appear as featureless dark/gray slabs with no visual value.
         {
-            bool subHasTex = false;
+            bool subHasTex = (subMesh.textureID > 0);
             for (const auto& s : subMesh.subMeshes) {
                 if (s.textureID > 0) { subHasTex = true; break; }
             }
-            if (!subHasTex && !subMesh.subMeshes.empty()) {
+            if (!subHasTex) {
                 std::string childKey = parentModelId + ">" + att.modelId;
                 if (drawn.insert(childKey).second) {
                     DrawAttachmentsRecursive(att.modelId, isBuilding, childWorldMat, isTransparentPass,
                                              loc_model, loc_dirlight, loc_ambient,
-                                             loc_useTex, loc_tex, loc_alpha, drawn);
+                                             loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
                 }
                 continue;
             }
         }
 
-        // Scaled model matrix for actual GL draw
-        glm::mat4 attModel = glm::scale(childWorldMat, glm::vec3(40.96f));
+        // Scaled model matrix: X uses leafScale.x (intervalLen for splines, 40.96 for buildings)
+        glm::mat4 attModel = glm::scale(childWorldMat, leafScale);
 
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(attModel));
 
@@ -1377,7 +1378,7 @@ void Renderer_Objects::DrawAttachmentsRecursive(
             if (drawn.insert(childKey).second) {
                 DrawAttachmentsRecursive(att.modelId, isBuilding, childWorldMat, isTransparentPass,
                                           loc_model, loc_dirlight, loc_ambient,
-                                          loc_useTex, loc_tex, loc_alpha, drawn);
+                                          loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
             }
             continue;
         }
@@ -1434,11 +1435,6 @@ void Renderer_Objects::DrawAttachmentsRecursive(
             GL_BindTexture2D(0, subMesh.textureID);
             glUniform1i(loc_tex, 0);
             renderModel(subMesh);
-        } else {
-            glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-            glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
-            glUniform1i(loc_useTex, 0);
-            renderModel(subMesh);
         }
 
         if (attIsWindow) {
@@ -1451,7 +1447,7 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         if (drawn.insert(childKey).second) {
             DrawAttachmentsRecursive(att.modelId, isBuilding, childWorldMat, isTransparentPass,
                                       loc_model, loc_dirlight, loc_ambient,
-                                      loc_useTex, loc_tex, loc_alpha, drawn);
+                                      loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
         }
     }
 }
@@ -2424,13 +2420,14 @@ void main() {
 }
 
 // ─── DrawAttachmentsForSpline ─────────────────────────────────────────────────
-// Public entry point called by Renderer_Splines once per tile.
-// unscaledWorldMat = translate + rotate for this tile position (no 40.96 scale).
-// Switches to the objects shader, renders ATTA children (opaque then transparent),
-// then leaves program 0 bound — caller must restore its own shader.
+// Public entry point called by Renderer_Splines once per SEGMENT INTERVAL.
+// unscaledWorldMat = translate + rotate at the segment midpoint (no scale).
+// leafScale.x = intervalLen (stretch ATTA to cover the full segment in X).
+// leafScale.y/z = 40.96 (normal world scale for width/height).
 void Renderer_Objects::DrawAttachmentsForSpline(
     const std::string& modelId, bool isBuilding,
-    const glm::mat4& unscaledWorldMat, GLuint ubo_mats)
+    const glm::mat4& unscaledWorldMat, GLuint ubo_mats,
+    glm::vec3 leafScale)
 {
     EnsureWindowModelIdsLoaded();
 
@@ -2453,16 +2450,17 @@ void Renderer_Objects::DrawAttachmentsForSpline(
     {
         std::unordered_set<std::string> drawn;
         DrawAttachmentsRecursive(modelId, isBuilding, unscaledWorldMat, /*isTransparentPass=*/false,
-                                 loc_model, loc_dirlight, loc_ambient, loc_useTex, loc_tex, loc_alpha, drawn);
+                                 loc_model, loc_dirlight, loc_ambient, loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
     }
 
     // Transparent pass (windows / glass)
     {
         std::unordered_set<std::string> drawn;
         DrawAttachmentsRecursive(modelId, isBuilding, unscaledWorldMat, /*isTransparentPass=*/true,
-                                 loc_model, loc_dirlight, loc_ambient, loc_useTex, loc_tex, loc_alpha, drawn);
+                                 loc_model, loc_dirlight, loc_ambient, loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
     }
 
     glDisable(GL_POLYGON_OFFSET_FILL);
     glUseProgram(0);
 }
+

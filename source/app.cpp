@@ -288,6 +288,9 @@ void App::LoadLevel(int level_no) {
 
 		renderer_.SetLevel(level_no);
 		renderer_.BeginLoadLevel();
+		renderer_.SetSplineTerrainQuery([this](double x, double y, float& z) {
+			return level_.GetTerrainZ(x, y, z);
+		});
 
 		Level::load_params_s level_load_params_s = {
 			.level_no_ = level_no,

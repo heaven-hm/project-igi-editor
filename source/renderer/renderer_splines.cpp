@@ -110,38 +110,68 @@ void Renderer_Splines::DrawSplineSegment(
     if (t0len > intervalLen) tan0 *= intervalLen / t0len;
     if (t1len > intervalLen) tan1 *= intervalLen / t1len;
 
-    float localX = mesh.center.x + mesh.halfExtents.x;
-    if (localX < 1.f) localX = 1.f;
+    // Tile geometry span in model X. minX is the model's near edge; localLen is the
+    // full X extent. A natural (unstretched) tile spans localLen * 40.96 in world units.
     const float LENGTH_SCALE = 40.96f;
-    float tileWorldLen = localX * LENGTH_SCALE;
+    float minX     = mesh.center.x - mesh.halfExtents.x;
+    float localLen = mesh.halfExtents.x * 2.0f;
+    if (localLen < 1.f) localLen = 1.f;
+    float tileWorldLen = localLen * LENGTH_SCALE;
 
-    int steps = std::max(1, (int)std::ceil(intervalLen / tileWorldLen));
+    // Choose the tile count that lands closest to the natural tile length, then stretch
+    // each tile in X to fill its share of the segment exactly. This guarantees tiles
+    // butt end-to-end with no gaps or overlaps (the game's "Snap Length" behavior).
+    int steps = std::max(1, (int)std::lround(intervalLen / tileWorldLen));
     steps = std::min(steps, 64);
 
+    const glm::vec3 worldZ(0.f, 0.f, 1.f);
+
     for (int i = 0; i < steps; ++i) {
-        float t      = (float)i       / (float)steps;
-        float t_next = (float)(i + 1) / (float)steps;
+        float ta = (float)i       / (float)steps;
+        float tb = (float)(i + 1) / (float)steps;
 
-        glm::vec3 pos     = HermitePoint(t,      p0, p1, tan0, tan1);
-        glm::vec3 nextPos = HermitePoint(t_next, p0, p1, tan0, tan1);
+        // Tile endpoints sampled on the Hermite curve.
+        glm::vec3 a = HermitePoint(ta, p0, p1, tan0, tan1);
+        glm::vec3 b = HermitePoint(tb, p0, p1, tan0, tan1);
 
-        if (glm::distance(pos, nextPos) < 0.001f) {
-            pos     = glm::mix(p0, p1, t);
-            nextPos = glm::mix(p0, p1, t_next);
+        // Terrain snap both endpoints: flat track rides up onto terrain when the curve
+        // dips below it; elevated/bridge tiles (curve already above terrain) are untouched.
+        // Snapping the actual endpoints — not a single sample — keeps adjacent tiles joined.
+        if (terrain_z_fn_) {
+            float tz = 0.f;
+            if (terrain_z_fn_((double)a.x, (double)a.y, tz) && tz > a.z) a.z = tz;
+            if (terrain_z_fn_((double)b.x, (double)b.y, tz) && tz > b.z) b.z = tz;
         }
 
-        glm::vec3 tangent = glm::normalize(nextPos - pos);
+        // Orient the tile along the chord a→b. Pitch comes from the actual placed
+        // endpoints, so the tile follows terrain/grade and connects seamlessly to its
+        // neighbours. (Chord direction, not the instantaneous tangent, prevents the
+        // curve overshoot that made earlier builds look near-vertical.)
+        glm::vec3 chord = b - a;
+        float chordLen = glm::length(chord);
+        if (chordLen < 0.001f) continue;
+        glm::vec3 forward = chord / chordLen;
 
-        float gamma = std::atan2(tangent.y, tangent.x);
-        float horiz = std::sqrt(tangent.x * tangent.x + tangent.y * tangent.y);
-        float pitch  = std::atan2(tangent.z, horiz);
+        glm::vec3 right = glm::cross(worldZ, forward);
+        if (glm::length(right) < 0.001f)               // near-vertical fallback
+            right = glm::cross(glm::vec3(1.f, 0.f, 0.f), forward);
+        right = glm::normalize(right);
+        glm::vec3 up = glm::cross(forward, right);
 
-        // unscaledModel = translate + rotate only (no 40.96 scale) — passed to attachment renderer
-        glm::mat4 unscaledModel = glm::translate(glm::mat4(1.f), pos);
-        unscaledModel = glm::rotate(unscaledModel, gamma,  glm::vec3(0.f, 0.f, 1.f));
-        unscaledModel = glm::rotate(unscaledModel, -pitch, glm::vec3(0.f, 1.f, 0.f));
+        glm::mat4 rotMat(1.f);
+        rotMat[0] = glm::vec4(forward, 0.f);           // local X → track direction
+        rotMat[1] = glm::vec4(right,   0.f);           // local Y → track width
+        rotMat[2] = glm::vec4(up,      0.f);           // local Z → track up
 
-        glm::mat4 model = glm::scale(unscaledModel, glm::vec3(LENGTH_SCALE, LENGTH_SCALE, LENGTH_SCALE));
+        // Stretch X so the tile's localLen exactly covers chordLen; Y/Z keep their
+        // natural scale so the cross-section (width/height) is undistorted.
+        float sx = chordLen / localLen;
+
+        // Place so the model's near edge (local minX) lands on point a.
+        glm::vec3 pos = a - forward * (sx * minX);
+
+        glm::mat4 unscaledModel = glm::translate(glm::mat4(1.f), pos) * rotMat;
+        glm::mat4 model = glm::scale(unscaledModel, glm::vec3(sx, LENGTH_SCALE, LENGTH_SCALE));
 
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
 
@@ -164,11 +194,10 @@ void Renderer_Splines::DrawSplineSegment(
         }
         glBindVertexArray(0);
 
-        // Draw ATTA sub-models (rails, details) for this tile position.
-        // DrawAttachmentsForSpline switches to the objects shader internally and
-        // leaves program 0 on exit, so restore the spline shader and all GL state
-        // that the attachment rendering may have dirtied.
-        obj_renderer_.DrawAttachmentsForSpline(segModelId, /*isBuilding=*/false, unscaledModel, ubo_mats);
+        // Rails/details (ATTA) use the same orientation and the same X stretch so they
+        // stay aligned with the stretched deck tile.
+        obj_renderer_.DrawAttachmentsForSpline(segModelId, /*isBuilding=*/false, unscaledModel, ubo_mats,
+                                               glm::vec3(sx, LENGTH_SCALE, LENGTH_SCALE));
         glUseProgram(shader_program);
         glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo_mats);
         glDepthFunc(GL_LESS);
@@ -177,3 +206,4 @@ void Renderer_Splines::DrawSplineSegment(
         glDisable(GL_POLYGON_OFFSET_FILL);
     }
 }
+

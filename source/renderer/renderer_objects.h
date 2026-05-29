@@ -37,7 +37,8 @@ public:
     Mesh GetOrLoadMesh(const std::string& modelId, bool isBuilding);
     GLuint GetShaderProgram() const { return shader_program_; }
     void DrawAttachmentsForSpline(const std::string& modelId, bool isBuilding,
-                                  const glm::mat4& unscaledWorldMat, GLuint ubo_mats);
+                                  const glm::mat4& unscaledWorldMat, GLuint ubo_mats,
+                                  glm::vec3 leafScale = glm::vec3(40.96f));
 
 private:
     int current_level_ = 1;
@@ -81,7 +82,8 @@ private:
     void DrawAttachmentsRecursive(const std::string& parentModelId, bool isBuilding, const glm::mat4& parentWorldMat,
                                    bool isTransparentPass, GLint loc_model, GLint loc_dirlight,
                                    GLint loc_ambient, GLint loc_useTex, GLint loc_tex, GLint loc_alpha,
-                                   std::unordered_set<std::string>& drawn);
+                                   std::unordered_set<std::string>& drawn,
+                                   glm::vec3 leafScale = glm::vec3(40.96f));
     static bool IsVehicleType(const std::string& type);
     void EnsurePortalDistancesLoaded();
     void EnsureWindowModelIdsLoaded();

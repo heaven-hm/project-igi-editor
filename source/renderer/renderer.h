@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include "renderer_objects.h"
 #include "renderer_splines.h"
+#include <functional>
 
 
 /*
@@ -106,6 +107,7 @@ public:
 	render_chunk_s*			GetTerrainRenderChunckBuffer();
 
 	void					Draw(const draw_params_s& params, const task_tree_view_params_s& task_tree_view);
+    void                    SetSplineTerrainQuery(std::function<bool(double, double, float&)> fn) { splines_.SetTerrainQuery(std::move(fn)); }
 	glm::vec3				GetMeshExtents(const std::string& modelId, bool isBuilding) { return objects_.GetMeshExtents(modelId, isBuilding); }
 	float					GetMeshZOffset(const std::string& modelId, bool isBuilding) { return objects_.GetMeshZOffset(modelId, isBuilding); }
 	int						PickObjectAtScreen(int x, int y, int w, int h,
