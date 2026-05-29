@@ -1,11 +1,14 @@
 /******************************************************************************
  * @file    tex_parser.cpp
- * @brief   TEX (LOOP) texture parser for IGI-1 .tex / .spr / .pic files
+ * @brief   TEX (LOOP) texture parser — reimplemented from Python reference
+ *          tools/dconv/format/tex.py  +  tools/dconv/plugins/tex/convert.py
  *
- * Binary layout derived from the reference Python parser:
- *   tools/dconv/format/tex.py  (IGI MEF CONV project)
- *
- * All multi-byte integers are little-endian.
+ * Key design points (matching the Python):
+ *   • Raw pixel bytes are stored as-is; no channel conversion.
+ *   • TGA PixelDepth = DEPTH[mode] * 8  (16 for RGB565, 32 for ARGB8888).
+ *   • TGA ImageDescriptor = ALPHA[mode] | 0x10 | 0x20
+ *       mirrorX(0x10) = left-to-right, mirrorY(0x20) = top-to-bottom.
+ *   • TGA 2.0 footer ("TRUEVISION-XFILE.\0") is written.
  *****************************************************************************/
 
 #include "tex_parser.h"
@@ -13,206 +16,113 @@
 
 #include <fstream>
 #include <cstring>
-#include <algorithm>
 #include <filesystem>
 
 // ---------------------------------------------------------------------------
-// Internal helpers
+// Constants (match Python DEPTH / ALPHA dicts)
 // ---------------------------------------------------------------------------
 
 namespace {
 
-// Read a plain value from a binary stream. Returns false on short read.
-template<typename T>
-bool ReadValue(std::ifstream& f, T& out) {
-    return static_cast<bool>(f.read(reinterpret_cast<char*>(&out), sizeof(T)));
-}
-
-// Read a raw block of bytes. Returns false on short read.
-bool ReadBytes(std::ifstream& f, void* dst, std::size_t n) {
-    return static_cast<bool>(f.read(reinterpret_cast<char*>(dst), static_cast<std::streamsize>(n)));
-}
-
-// Bytes-per-pixel for a given mode.
 uint32_t DepthForMode(uint32_t mode) {
     switch (mode) {
-        case 2:  return 2; // RGB565
-        case 3:  return 4; // ARGB8888
-        case 67: return 4; // ARGB8888
+        case  2: return 2;   // RGB565
+        case  3: return 4;   // ARGB8888
+        case 67: return 4;   // ARGB8888
+        default: return 0;
+    }
+}
+
+uint32_t AlphaForMode(uint32_t mode) {
+    switch (mode) {
+        case  2: return 1;
+        case  3: return 8;
+        case 67: return 8;
         default: return 0;
     }
 }
 
 // ---------------------------------------------------------------------------
-// Pixel decoding
+// File helpers
 // ---------------------------------------------------------------------------
 
-// Decode a raw bitmap into BGRA8888 pixels.
-// rawData  : pointer to raw pixel bytes
-// rawSize  : number of raw bytes (must equal w*h*depth)
-// mode     : pixel mode (2, 3, or 67)
-// Returns a vector of BGRA bytes (4 * w * h bytes), or empty on error.
-std::vector<uint8_t> DecodeBitmap(const uint8_t* rawData, std::size_t rawSize,
-                                  uint32_t w, uint32_t h, uint32_t mode) {
-    const uint32_t depth = DepthForMode(mode);
-    if (depth == 0) return {};
-    if (rawSize < static_cast<std::size_t>(w) * h * depth) return {};
+template<typename T>
+bool Rd(std::ifstream& f, T& v) {
+    return static_cast<bool>(f.read(reinterpret_cast<char*>(&v), sizeof(T)));
+}
 
-    std::vector<uint8_t> bgra(static_cast<std::size_t>(w) * h * 4);
-    const uint8_t* src = rawData;
-    uint8_t*       dst = bgra.data();
-
-    const std::size_t pixelCount = static_cast<std::size_t>(w) * h;
-
-    if (mode == 2) {
-        // RGB565 → BGRA8888
-        for (std::size_t i = 0; i < pixelCount; ++i) {
-            uint16_t px = static_cast<uint16_t>(src[0]) |
-                          (static_cast<uint16_t>(src[1]) << 8);
-            src += 2;
-
-            uint8_t r = static_cast<uint8_t>((px >> 11) << 3);
-            uint8_t g = static_cast<uint8_t>(((px >> 5) & 0x3Fu) << 2);
-            uint8_t b = static_cast<uint8_t>((px & 0x1Fu) << 3);
-
-            dst[0] = b;
-            dst[1] = g;
-            dst[2] = r;
-            dst[3] = 255;
-            dst += 4;
-        }
-    } else {
-        // ARGB8888 stored as [B, G, R, A] in file → BGRA output (already in order)
-        // Python reference reads bytes directly; the channel order in the file is
-        // interpreted as ARGB when viewed as a 32-bit LE integer, which means the
-        // byte layout on disk is: B G R A  (index 0..3).
-        // Our output format is also BGRA, so we can copy straight through.
-        std::memcpy(dst, src, pixelCount * 4);
-    }
-
-    return bgra;
+bool RdBytes(std::ifstream& f, void* dst, std::size_t n) {
+    return static_cast<bool>(f.read(reinterpret_cast<char*>(dst), static_cast<std::streamsize>(n)));
 }
 
 // ---------------------------------------------------------------------------
-// Low-level structure readers
+// Loop06 skip helper
+// Loop06 header layout ('4s1I4H2I' = 24 bytes):
+//   signature(4)  version(4)  _0(2) _1(2) _2(2) _3(2)  count_x(4)  count_y(4)
+// Followed by count_x * count_y * Item06 (16 bytes each).
 // ---------------------------------------------------------------------------
-
-// Loop06 header: signature(4) version(4) _0(2) _1(2) _2(2) _3(2) count_x(4) count_y(4) = 24 bytes
-// Followed by count_x*count_y Item06 records of 16 bytes each.
-// We only need to know how many bytes to skip.
-bool SkipLoop06(std::ifstream& f) {
-    // Read the fixed 24-byte Loop06 header
-    uint8_t hdr[24];
-    if (!ReadBytes(f, hdr, 24)) return false;
-
-    // Verify signature
-    if (std::memcmp(hdr, "LOOP", 4) != 0) return false;
-
-    // count_x is at bytes 16-19, count_y at bytes 20-23 (both uint32 LE)
-    uint32_t count_x, count_y;
-    std::memcpy(&count_x, hdr + 16, 4);
-    std::memcpy(&count_y, hdr + 20, 4);
-
-    // Each Item06 = 16 bytes (4 uint32s)
-    const std::size_t skip = static_cast<std::size_t>(count_x) * count_y * 16;
-    f.seekg(static_cast<std::streamoff>(skip), std::ios::cur);
-    return f.good();
+void SkipLoop06(std::ifstream& f) {
+    // skip sig(4) + version(4) + four shorts(8) = 16 bytes to reach counts
+    f.seekg(16, std::ios::cur);
+    uint32_t count_x = 0, count_y = 0;
+    if (!Rd(f, count_x) || !Rd(f, count_y)) return;
+    f.seekg(static_cast<std::streamoff>(count_x) * count_y * 16, std::ios::cur);
 }
 
 // ---------------------------------------------------------------------------
 // Version parsers
 // ---------------------------------------------------------------------------
 
-// Loop02 layout (total header = 24 bytes, file starts at offset 0):
-//   signature  4s   "LOOP"
-//   version    I    2
-//   _1         I
-//   _2         I
-//   width_line H
-//   width      H
-//   height     H
-//   mode       H
-// Then: width * height * depth raw pixel bytes
-bool ParseVersion2(std::ifstream& f, TEXFile& out) {
-    // We are at offset 0; read the whole 24-byte header.
-    uint8_t hdr[24];
-    if (!ReadBytes(f, hdr, 24)) {
-        out.error = "v2: short read on header";
-        return false;
-    }
+// Loop02 header ('4s3I4H' = 24 bytes):
+//   signature(4)  version(4)  _1(4)  _2(4)
+//   width_line(2)  width(2)  height(2)  mode(2)
+// Bitmap: width * height * DEPTH[mode] raw bytes.
+bool ParseV2(std::ifstream& f, TEXFile& tex) {
+    f.seekg(0, std::ios::beg);
 
+    uint8_t hdr[24];
+    if (!RdBytes(f, hdr, 24)) { tex.error = "v2: short header"; return false; }
+
+    // width_line is at offset 16 — ignored.  width is at 18, height at 20, mode at 22.
     uint16_t width, height, mode;
-    std::memcpy(&width,  hdr + 16, 2);
-    std::memcpy(&height, hdr + 18, 2);
+    std::memcpy(&width,  hdr + 18, 2);
+    std::memcpy(&height, hdr + 20, 2);
     std::memcpy(&mode,   hdr + 22, 2);
 
     const uint32_t depth = DepthForMode(mode);
-    if (depth == 0) {
-        out.error = "v2: unknown pixel mode " + std::to_string(mode);
-        return false;
-    }
+    if (depth == 0) { tex.error = "v2: unsupported mode " + std::to_string(mode); return false; }
 
-    const std::size_t rawSize = static_cast<std::size_t>(width) * height * depth;
-    std::vector<uint8_t> raw(rawSize);
-    if (!ReadBytes(f, raw.data(), rawSize)) {
-        out.error = "v2: short read on pixel data";
-        return false;
-    }
-
+    const std::size_t sz = static_cast<std::size_t>(width) * height * depth;
     TEXImage img;
     img.width  = width;
     img.height = height;
     img.mode   = mode;
-    img.pixels = DecodeBitmap(raw.data(), rawSize, width, height, mode);
-    if (img.pixels.empty()) {
-        out.error = "v2: pixel decode failed";
-        return false;
-    }
+    img.pixels.resize(sz);
+    if (!RdBytes(f, img.pixels.data(), sz)) { tex.error = "v2: short bitmap"; return false; }
 
-    out.images.push_back(std::move(img));
+    tex.version = 2;
+    tex.images.push_back(std::move(img));
     return true;
 }
 
-// Loop07 / Loop09 share the same 52-byte outer header layout:
-//   signature  4s   "LOOP"
-//   version    I    7 or 9
-//   _0..._4    5I
-//   offset     I
-//   count      I
-//   _5         I
-//   width      I    (top-level, used per-bitmap)
-//   height     I
-//   mode       I
-// Total: 4+12*4 = 52 bytes
-//
-// Then:
-//   v7: count * Item07 (40 bytes each)
-//   v9: count * Item09 (32 bytes each)
-//
-// Then: count raw bitmaps of (width * height * depth) bytes each
-// Then: Loop06 block (skipped)
-bool ParseVersion7or9(std::ifstream& f, uint32_t version, TEXFile& out) {
+// Loop07 / Loop09 outer header ('4s12I' = 52 bytes):
+//   signature(4)  version  _0 _1 _2 _3 _4  offset  count  _5  width  height  mode
+//   (all uint32)
+// Then: count * Item07(40 B) or Item09(32 B)  [skipped]
+// Then: count * (width * height * DEPTH[mode])  raw bitmaps
+// Then: Loop06  [skipped]
+bool ParseV7or9(std::ifstream& f, uint32_t ver, TEXFile& tex) {
+    f.seekg(0, std::ios::beg);
+
     uint8_t hdr[52];
-    if (!ReadBytes(f, hdr, 52)) {
-        out.error = "v" + std::to_string(version) + ": short read on outer header";
-        return false;
+    if (!RdBytes(f, hdr, 52)) {
+        tex.error = "v" + std::to_string(ver) + ": short header"; return false;
     }
 
-    // Fields at fixed offsets within the 52-byte header (all uint32 LE):
-    // [0-3]   signature
-    // [4-7]   version
-    // [8-11]  _0
-    // [12-15] _1
-    // [16-19] _2
-    // [20-23] _3
-    // [24-27] _4
-    // [28-31] offset
-    // [32-35] count
-    // [36-39] _5
-    // [40-43] width
-    // [44-47] height
-    // [48-51] mode
-
+    // Offsets within the 52-byte header (all uint32 LE):
+    //   [0-3]  sig     [4-7]  version  [8-11] _0  [12-15] _1  [16-19] _2
+    //  [20-23] _3     [24-27] _4      [28-31] offset  [32-35] count
+    //  [36-39] _5     [40-43] width   [44-47] height  [48-51] mode
     uint32_t count, width, height, mode;
     std::memcpy(&count,  hdr + 32, 4);
     std::memcpy(&width,  hdr + 40, 4);
@@ -220,164 +130,143 @@ bool ParseVersion7or9(std::ifstream& f, uint32_t version, TEXFile& out) {
     std::memcpy(&mode,   hdr + 48, 4);
 
     if (count == 0 || count > 4096) {
-        out.error = "v" + std::to_string(version) + ": implausible count=" + std::to_string(count);
+        tex.error = "v" + std::to_string(ver) + ": bad count=" + std::to_string(count);
         return false;
     }
-
     const uint32_t depth = DepthForMode(mode);
     if (depth == 0) {
-        out.error = "v" + std::to_string(version) + ": unknown pixel mode=" + std::to_string(mode);
+        tex.error = "v" + std::to_string(ver) + ": unsupported mode=" + std::to_string(mode);
         return false;
     }
 
-    // Skip item table: v7=40 bytes/item, v9=32 bytes/item
-    const std::size_t itemSize   = (version == 7) ? 40u : 32u;
-    const std::size_t tableBytes = itemSize * count;
-    f.seekg(static_cast<std::streamoff>(tableBytes), std::ios::cur);
-    if (!f.good()) {
-        out.error = "v" + std::to_string(version) + ": seek past item table failed";
-        return false;
-    }
+    // Skip item table: Item07=40 B, Item09=32 B
+    const std::size_t itemBytes = count * (ver == 7 ? 40u : 32u);
+    f.seekg(static_cast<std::streamoff>(itemBytes), std::ios::cur);
 
-    // Read count bitmaps
-    const std::size_t rawSize = static_cast<std::size_t>(width) * height * depth;
+    // Read raw bitmaps
+    const std::size_t bmpSz = static_cast<std::size_t>(width) * height * depth;
+    tex.version = ver;
     for (uint32_t i = 0; i < count; ++i) {
-        std::vector<uint8_t> raw(rawSize);
-        if (!ReadBytes(f, raw.data(), rawSize)) {
-            out.error = "v" + std::to_string(version) + ": short read on bitmap " + std::to_string(i);
-            return false;
-        }
-
         TEXImage img;
         img.width  = width;
         img.height = height;
         img.mode   = mode;
-        img.pixels = DecodeBitmap(raw.data(), rawSize, width, height, mode);
-        if (img.pixels.empty()) {
-            out.error = "v" + std::to_string(version) + ": pixel decode failed for bitmap " + std::to_string(i);
+        img.pixels.resize(bmpSz);
+        if (!RdBytes(f, img.pixels.data(), bmpSz)) {
+            tex.error = "v" + std::to_string(ver) + ": short bitmap " + std::to_string(i);
             return false;
         }
-
-        out.images.push_back(std::move(img));
+        tex.images.push_back(std::move(img));
     }
 
-    // Skip the trailing Loop06 block
-    SkipLoop06(f);
-
+    SkipLoop06(f); // trailing Loop06 — non-fatal
     return true;
 }
 
-// Loop11 layout (32-byte header):
-//   signature  4s   "LOOP"
-//   version    I    11
-//   mode       I
-//   multi      I
-//   _0         H
-//   _1         H
-//   _2         H
-//   _3         H
-//   width      H
-//   height     H
-//   depth      H    (unused by us; mipmap count comes from reading until EOF)
-// Total: 4+4*4+6*2 = 32 bytes
-//
-// Then: up to 10 mipmap bitmaps (each half the previous dimensions).
-// Each bitmap size = (width>>i) * (height>>i) * depth_bytes.
-// Reading stops when a read returns 0 bytes.
-bool ParseVersion11(std::ifstream& f, TEXFile& out) {
-    uint8_t hdr[32];
-    if (!ReadBytes(f, hdr, 32)) {
-        out.error = "v11: short read on header";
-        return false;
-    }
+// Loop11 header ('4s4I6H' = 32 bytes):
+//   signature(4)  version(I)  mode(I)  multi(I)  _0(I)
+//   _1(H)  _2(H)  _3(H)  width(H)  height(H)  depth(H)
+// Followed by up to 10 mipmap bitmaps; each level i:
+//   size = (width >> i) * (height >> i) * DEPTH[mode]
+//   stop when read returns 0 bytes.
+bool ParseV11(std::ifstream& f, TEXFile& tex) {
+    f.seekg(0, std::ios::beg);
 
-    // Layout:
-    // [0-3]   signature
-    // [4-7]   version
-    // [8-11]  mode   (uint32)
-    // [12-15] multi  (uint32)
-    // [16-17] _0     (uint16)
-    // [18-19] _1     (uint16)
-    // [20-21] _2     (uint16)
-    // [22-23] _3     (uint16)
-    // [24-25] width  (uint16)
-    // [26-27] height (uint16)
-    // [28-29] depth  (uint16)  -- field name in Python, not bytes-per-pixel
-    // [30-31] padding
+    uint8_t hdr[32];
+    if (!RdBytes(f, hdr, 32)) { tex.error = "v11: short header"; return false; }
+
+    // mode at [8-11] (uint32), width at [26-27] (uint16), height at [28-29] (uint16)
+    // Wait — let me recount '4s4I6H':
+    //  [0-3]  sig(4s)
+    //  [4-7]  version(I)
+    //  [8-11] mode(I)
+    // [12-15] multi(I)
+    // [16-19] _0(I)
+    // [20-21] _1(H)
+    // [22-23] _2(H)
+    // [24-25] _3(H)
+    // [26-27] width(H)   ← NOTE: Python slots say _3,width,height,depth as last 4 of 6H
+    // Wait: 6H gives 6 shorts.  After 4 ints we have: _1(H) _2(H) _3(H) width(H) height(H) depth(H)
+    // That's only 5 named fields for 6 values; re-check Python slots:
+    //   _0, _1, _2, _3 belong to the INTS? No: slots = sig,version,mode,multi,_0,_1,_2,_3,width,height,depth
+    //   '4s4I6H' → 1+4+6=11 values → sig,version,mode,multi,_0 from 4s+4I, then _1,_2,_3,width,height,depth from 6H
+    // Byte offsets:
+    //  [0-3]  sig      [4-7] version   [8-11] mode   [12-15] multi   [16-19] _0
+    //  [20-21] _1      [22-23] _2      [24-25] _3    [26-27] width   [28-29] height  [30-31] depth(H)
 
     uint32_t mode;
     uint16_t width, height;
-    std::memcpy(&mode,   hdr + 8,  4);
-    std::memcpy(&width,  hdr + 24, 2);
-    std::memcpy(&height, hdr + 26, 2);
+    std::memcpy(&mode,   hdr +  8, 4);
+    std::memcpy(&width,  hdr + 26, 2);
+    std::memcpy(&height, hdr + 28, 2);
 
-    const uint32_t depthBytes = DepthForMode(mode);
-    if (depthBytes == 0) {
-        out.error = "v11: unknown pixel mode=" + std::to_string(mode);
-        return false;
-    }
+    const uint32_t depth = DepthForMode(mode);
+    if (depth == 0) { tex.error = "v11: unsupported mode=" + std::to_string(mode); return false; }
 
+    tex.version = 11;
     for (int i = 0; i < 10; ++i) {
-        const uint32_t mw = (width  > 0) ? (width  >> i) : 0;
-        const uint32_t mh = (height > 0) ? (height >> i) : 0;
+        const uint32_t mw = static_cast<uint32_t>(width)  >> i;
+        const uint32_t mh = static_cast<uint32_t>(height) >> i;
         if (mw == 0 || mh == 0) break;
 
-        const std::size_t rawSize = static_cast<std::size_t>(mw) * mh * depthBytes;
-        std::vector<uint8_t> raw(rawSize);
-
-        // Python: if len(d) == 0: break  — so a zero-length read ends the loop
-        const std::streamsize bytesRead = f.read(reinterpret_cast<char*>(raw.data()),
-                                                  static_cast<std::streamsize>(rawSize)).gcount();
-        if (bytesRead == 0) break;
-
-        // Partial reads are treated as a complete mipmap (match Python behaviour).
-        const std::size_t actualSize = static_cast<std::size_t>(bytesRead);
-
+        const std::size_t sz = static_cast<std::size_t>(mw) * mh * depth;
         TEXImage img;
         img.width  = mw;
         img.height = mh;
         img.mode   = mode;
-        img.pixels = DecodeBitmap(raw.data(), actualSize, mw, mh, mode);
-        if (img.pixels.empty()) {
-            // Non-fatal: just stop here
-            break;
-        }
+        img.pixels.resize(sz);
 
-        out.images.push_back(std::move(img));
+        const std::streamsize got =
+            f.read(reinterpret_cast<char*>(img.pixels.data()),
+                   static_cast<std::streamsize>(sz)).gcount();
+        if (got == 0) break;                    // Python: "if len(d) == 0: break"
+
+        img.pixels.resize(static_cast<std::size_t>(got));
+        tex.images.push_back(std::move(img));
     }
 
-    return !out.images.empty();
+    return !tex.images.empty();
 }
 
 // ---------------------------------------------------------------------------
-// TGA writer
+// TGA writer (matches Python tga.py / convert.py)
 // ---------------------------------------------------------------------------
 
 bool WriteTGA(const std::string& path, const TEXImage& img) {
     std::ofstream f(path, std::ios::binary);
     if (!f) return false;
 
-    const uint16_t w = static_cast<uint16_t>(img.width);
-    const uint16_t h = static_cast<uint16_t>(img.height);
+    const uint32_t depth = DepthForMode(img.mode);
+    const uint32_t alpha = AlphaForMode(img.mode);
+    if (depth == 0) return false;
 
-    // 18-byte TGA header
+    const uint8_t pixDepth = static_cast<uint8_t>(depth * 8);
+    // ImageDescriptor: alpha-bits | mirrorX(0x10) | mirrorY(0x20)
+    //   → matches Python setImageDescriptor(True, True, ALPHA[mode])
+    const uint8_t imgDesc = static_cast<uint8_t>(alpha | 0x10 | 0x20);
+
+    // 18-byte TGA header (ImageType=2: uncompressed true-color)
     uint8_t hdr[18] = {};
-    hdr[0]  = 0;    // ID length
-    hdr[1]  = 0;    // no colormap
-    hdr[2]  = 2;    // uncompressed true-color
-    // hdr[3..7]: colormap spec, all zero
-    // hdr[8..9]: x-origin = 0
-    // hdr[10..11]: y-origin = 0
-    hdr[12] = static_cast<uint8_t>(w & 0xFF);
-    hdr[13] = static_cast<uint8_t>((w >> 8) & 0xFF);
-    hdr[14] = static_cast<uint8_t>(h & 0xFF);
-    hdr[15] = static_cast<uint8_t>((h >> 8) & 0xFF);
-    hdr[16] = 32;   // bits per pixel (always BGRA 32-bit)
-    hdr[17] = 0x20; // image descriptor: top-left origin
+    hdr[2]  = 2;
+    hdr[12] = static_cast<uint8_t>(img.width  & 0xFF);
+    hdr[13] = static_cast<uint8_t>((img.width  >> 8) & 0xFF);
+    hdr[14] = static_cast<uint8_t>(img.height & 0xFF);
+    hdr[15] = static_cast<uint8_t>((img.height >> 8) & 0xFF);
+    hdr[16] = pixDepth;
+    hdr[17] = imgDesc;
 
     f.write(reinterpret_cast<const char*>(hdr), 18);
+
+    // Raw pixel data — no conversion (Python passes bitmaps[i] directly)
     f.write(reinterpret_cast<const char*>(img.pixels.data()),
             static_cast<std::streamsize>(img.pixels.size()));
+
+    // TGA 2.0 footer: ExtOffset(4) + DevOffset(4) + "TRUEVISION-XFILE.\0"(18) = 26 bytes
+    // Matches Python: fp.write(struct.pack('=2I18B', 0, 0, *b'TRUEVISION-XFILE.\x00'))
+    const uint32_t zero = 0;
+    f.write(reinterpret_cast<const char*>(&zero), 4);
+    f.write(reinterpret_cast<const char*>(&zero), 4);
+    f.write("TRUEVISION-XFILE.\0", 18);
 
     return f.good();
 }
@@ -392,99 +281,88 @@ TEXFile TEX_Parse(const std::string& filepath) {
     TEXFile result;
 
     std::ifstream f(filepath, std::ios::binary);
-    if (!f) {
-        result.error = "Cannot open file: " + filepath;
-        Logger::Get().Log(LogLevel::ERR, "[TEX] " + result.error);
+    if (!f.is_open()) {
+        result.error = "Cannot open: " + filepath;
         return result;
     }
 
-    // Read 8-byte preamble: signature(4) + version(4)
-    uint8_t preamble[8];
-    if (!ReadBytes(f, preamble, 8)) {
-        result.error = "File too small to contain LOOP header: " + filepath;
-        Logger::Get().Log(LogLevel::ERR, "[TEX] " + result.error);
+    // Peek at signature + version (8 bytes)
+    uint8_t sig[4]; uint32_t version;
+    if (!RdBytes(f, sig, 4) || !Rd(f, version)) {
+        result.error = "Too small to be a TEX file";
         return result;
     }
-
-    if (std::memcmp(preamble, "LOOP", 4) != 0) {
-        result.error = "Not a LOOP/TEX file (bad signature): " + filepath;
-        Logger::Get().Log(LogLevel::ERR, "[TEX] " + result.error);
+    if (std::memcmp(sig, "LOOP", 4) != 0) {
+        result.error = "Not a LOOP file (bad signature)";
         return result;
     }
-
-    uint32_t version;
-    std::memcpy(&version, preamble + 4, 4);
-    result.version = version;
-
     if (version != 2 && version != 7 && version != 9 && version != 11) {
-        result.error = "Unsupported TEX version " + std::to_string(version) + ": " + filepath;
-        Logger::Get().Log(LogLevel::ERR, "[TEX] " + result.error);
+        result.error = "Unsupported LOOP version " + std::to_string(version);
         return result;
     }
-
-    // Rewind to start (each version parser reads from offset 0)
-    f.seekg(0, std::ios::beg);
 
     bool ok = false;
     switch (version) {
-        case 2:  ok = ParseVersion2(f, result);             break;
-        case 7:  ok = ParseVersion7or9(f, 7, result);       break;
-        case 9:  ok = ParseVersion7or9(f, 9, result);       break;
-        case 11: ok = ParseVersion11(f, result);            break;
+        case  2: ok = ParseV2(f, result);            break;
+        case  7: ok = ParseV7or9(f, 7,  result);     break;
+        case  9: ok = ParseV7or9(f, 9,  result);     break;
+        case 11: ok = ParseV11(f, result);            break;
     }
 
-    if (!ok) {
-        Logger::Get().Log(LogLevel::ERR, "[TEX] Parse failed for " + filepath + ": " + result.error);
-        return result;
+    if (ok) {
+        result.valid = true;
+        Logger::Get().Log(LogLevel::INFO,
+            "[TEX] Parsed '" + filepath + "' v" + std::to_string(version) +
+            " images=" + std::to_string(result.images.size()));
+    } else {
+        Logger::Get().Log(LogLevel::ERR,
+            "[TEX] Parse failed '" + filepath + "': " + result.error);
     }
 
-    result.valid = true;
-    Logger::Get().Log(LogLevel::INFO,
-        "[TEX] Parsed v" + std::to_string(version) +
-        " (" + std::to_string(result.images.size()) + " image(s)): " + filepath);
     return result;
 }
 
-int TEX_ExportTGA(const TEXFile& tex, const std::string& filepath, const std::string& outdir) {
+int TEX_ExportTGA(const TEXFile& tex, const std::string& filepath,
+                  const std::string& outdir) {
     if (!tex.valid || tex.images.empty()) {
-        Logger::Get().Log(LogLevel::WARNING, "[TEX] ExportTGA called on invalid/empty TEXFile");
+        Logger::Get().Log(LogLevel::WARNING,
+                          "[TEX] ExportTGA called on invalid/empty TEXFile");
         return 0;
     }
 
-    // Derive base name from filepath (no extension)
     std::filesystem::path src(filepath);
     const std::string base = src.stem().string();
-
-    // Ensure output directory exists
-    std::error_code ec;
-    std::filesystem::create_directories(outdir, ec);
-    if (ec) {
-        Logger::Get().Log(LogLevel::ERR, "[TEX] Cannot create output directory: " + outdir);
-        return 0;
-    }
-
-    const bool multipleImages = tex.images.size() > 1;
     int written = 0;
 
     for (std::size_t i = 0; i < tex.images.size(); ++i) {
-        std::string filename;
-        if (multipleImages) {
-            char suffix[8];
-            std::snprintf(suffix, sizeof(suffix), "_%02zu", i);
-            filename = base + suffix + ".tga";
+        std::string name;
+        if (tex.version == 11 && i > 0) {
+            // mipmap levels: .%00.tga, .%01.tga, ...
+            char buf[8]; std::snprintf(buf, sizeof(buf), ".%%%02zu", i);
+            name = base + buf + ".tga";
+        } else if ((tex.version == 7 || tex.version == 9) &&
+                   tex.images.size() > 1) {
+            // sub-images: .#00.tga, .#01.tga, ...
+            char buf[8]; std::snprintf(buf, sizeof(buf), ".#%02zu", i);
+            name = base + buf + ".tga";
         } else {
-            filename = base + "_00.tga";
+            name = base + ".tga";
         }
 
-        const std::string outpath = (std::filesystem::path(outdir) / filename).string();
+        const std::string outpath =
+            (std::filesystem::path(outdir) / name).string();
 
         if (WriteTGA(outpath, tex.images[i])) {
             ++written;
             Logger::Get().Log(LogLevel::INFO, "[TEX] Exported: " + outpath);
         } else {
-            Logger::Get().Log(LogLevel::ERR, "[TEX] Failed to write: " + outpath);
+            Logger::Get().Log(LogLevel::ERR,  "[TEX] Failed: "   + outpath);
         }
     }
 
     return written;
+}
+
+bool TEX_WriteTGA(const std::string& path, const TEXImage& img) {
+    return WriteTGA(path, img);
 }

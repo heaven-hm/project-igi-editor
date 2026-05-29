@@ -1,52 +1,218 @@
 #include "mef_exporter.h"
+#include "dat_parser.h"
+#include "tex_parser.h"
 #include "../logger.h"
 #include <fstream>
 #include <iomanip>
+#include <filesystem>
 #include <set>
+#include <vector>
 
-namespace MefExporter {
+namespace {
 
-bool ExportToObj(const ParsedGeometry &geometry, const std::string &outpath) {
-  std::ofstream f(outpath);
-  if (!f.is_open()) {
-    Logger::Get().Log(LogLevel::ERR,
-                      "[MefExporter] Failed to open output file: " + outpath);
-    return false;
+// Collect unique renderBlock material slots in first-encounter order.
+std::vector<int> CollectMaterialSlots(const ParsedGeometry &geometry) {
+  std::set<int> seen;
+  std::vector<int> ordered;
+  if (!geometry.renderBlocks.empty()) {
+    for (const auto &b : geometry.renderBlocks)
+      if (seen.insert(b.materialSlot).second)
+        ordered.push_back(b.materialSlot);
+  } else {
+    ordered.push_back(0);
   }
+  return ordered;
+}
 
+// Write the OBJ body to an already-open stream.
+void WriteObjBody(std::ostream &f, const ParsedGeometry &geometry,
+                  const std::string &mtlFilename) {
   f << "# IGI Editor MEF -> OBJ Export\n";
   f << "# Vertices: " << geometry.vertices.size() << "\n";
   f << "# Triangles: " << geometry.triangles.size() << "\n";
   f << "# Layout: " << geometry.renderLayout << "\n\n";
+  f << "mtllib " << mtlFilename << "\n\n";
 
-  // Write vertices (Z-up coordinate space from game)
-  for (const auto &v : geometry.vertices) {
-    f << "v " << std::fixed << std::setprecision(6) << v.pos.x << " " << v.pos.y
-      << " " << v.pos.z << "\n";
-  }
+  f << std::fixed << std::setprecision(6);
 
-  // Write UVs
-  for (const auto &v : geometry.vertices) {
-    // v.uv.y is flipped for OpenGL/OBJ expectation
-    f << "vt " << std::fixed << std::setprecision(6) << v.uv.x << " "
-      << (1.0f - v.uv.y) << "\n";
-  }
+  for (const auto &v : geometry.vertices)
+    f << "v " << v.pos.x << " " << v.pos.y << " " << v.pos.z << "\n";
 
-  // Write object name
+  // v.uv.y flipped for OpenGL/OBJ convention
+  for (const auto &v : geometry.vertices)
+    f << "vt " << v.uv.x << " " << (1.0f - v.uv.y) << "\n";
+
   f << "\no model_mesh\n";
 
-  // Write faces (1-indexed)
-  for (const auto &tri : geometry.triangles) {
-    uint32_t a = tri[0] + 1;
-    uint32_t b = tri[1] + 1;
-    uint32_t c = tri[2] + 1;
-    f << "f " << a << "/" << a << " " << b << "/" << b << " " << c << "/" << c
-      << "\n";
+  if (!geometry.renderBlocks.empty()) {
+    int currentMat = -1;
+    for (const auto &block : geometry.renderBlocks) {
+      if (block.materialSlot != currentMat) {
+        currentMat = block.materialSlot;
+        f << "\nusemtl mat_" << currentMat << "\n";
+      }
+      for (size_t i = 0; i < block.triangleCount; ++i) {
+        const auto &tri = geometry.triangles[block.triangleStart + i];
+        uint32_t a = tri[0] + 1, b = tri[1] + 1, c = tri[2] + 1;
+        f << "f " << a << "/" << a << " " << b << "/" << b
+          << " " << c << "/" << c << "\n";
+      }
+    }
+  } else {
+    f << "\nusemtl mat_0\n";
+    for (const auto &tri : geometry.triangles) {
+      uint32_t a = tri[0] + 1, b = tri[1] + 1, c = tri[2] + 1;
+      f << "f " << a << "/" << a << " " << b << "/" << b
+        << " " << c << "/" << c << "\n";
+    }
+  }
+}
+
+// Write the MTL body to an already-open stream.
+// texNames[matIdx] is the TGA filename to reference for that slot.
+// If texNames is shorter than a slot index, fall back to "mat_N.tga".
+void WriteMtlBody(std::ostream &m, const ParsedGeometry &geometry,
+                  const std::vector<std::string> &texNames) {
+  m << "# IGI Editor MEF -> MTL Export\n";
+  for (int matIdx : CollectMaterialSlots(geometry)) {
+    m << "\nnewmtl mat_" << matIdx << "\n";
+    if (matIdx >= 0 && matIdx < static_cast<int>(texNames.size()) &&
+        !texNames[matIdx].empty())
+      m << "map_Kd " << texNames[matIdx] << "\n";
+    else
+      m << "map_Kd mat_" << matIdx << ".tga\n";
+  }
+}
+
+} // anonymous namespace
+
+namespace MefExporter {
+
+bool ExportToObj(const ParsedGeometry &geometry, const std::string &outpath) {
+  // Derive MTL filename (same stem as OBJ)
+  auto sepPos = outpath.find_last_of("/\\");
+  std::string filename =
+      (sepPos != std::string::npos) ? outpath.substr(sepPos + 1) : outpath;
+  auto dotPos = filename.rfind('.');
+  std::string stem =
+      (dotPos != std::string::npos) ? filename.substr(0, dotPos) : filename;
+  std::string mtlFilename = stem + ".mtl";
+  std::string mtlPath = (sepPos != std::string::npos)
+                            ? outpath.substr(0, sepPos + 1) + mtlFilename
+                            : mtlFilename;
+
+  std::ofstream f(outpath);
+  if (!f.is_open()) {
+    Logger::Get().Log(LogLevel::ERR,
+                      "[MefExporter] Failed to open OBJ: " + outpath);
+    return false;
+  }
+  WriteObjBody(f, geometry, mtlFilename);
+  f.close();
+
+  // Placeholder texture names (pmtlTextures populated if DAT data was injected)
+  std::vector<std::string> texNames(geometry.pmtlTextures.begin(),
+                                    geometry.pmtlTextures.end());
+  std::ofstream m(mtlPath);
+  if (m.is_open()) {
+    WriteMtlBody(m, geometry, texNames);
+    m.close();
   }
 
-  f.close();
   Logger::Get().Log(LogLevel::INFO,
-                    "[MefExporter] Successfully exported to: " + outpath);
+                    "[MefExporter] Exported OBJ to: " + outpath);
+  return true;
+}
+
+bool ExportToObjBundle(const ParsedGeometry &geometry,
+                       const std::string &modelStem,
+                       const std::string &outDir,
+                       const std::string &datPath,
+                       const std::string &texDir) {
+  namespace fs = std::filesystem;
+
+  // 1. Create bundle folder: outDir/modelStem/
+  fs::path bundleDir = fs::path(outDir) / modelStem;
+  std::error_code ec;
+  fs::create_directories(bundleDir, ec);
+  if (ec) {
+    Logger::Get().Log(LogLevel::ERR,
+                      "[MefExporter] Cannot create bundle dir: " +
+                          bundleDir.string() + " — " + ec.message());
+    return false;
+  }
+
+  // 2. Resolve texture list from DAT
+  std::vector<std::string> datTextures;
+  if (!datPath.empty()) {
+    DATFile dat = DAT_Parse(datPath);
+    for (const auto &entry : dat.models) {
+      if (entry.modelName == modelStem ||
+          entry.modelName.find(modelStem) != std::string::npos) {
+        datTextures = entry.textures;
+        Logger::Get().Log(
+            LogLevel::INFO,
+            "[MefExporter] DAT: model '" + entry.modelName + "' has " +
+                std::to_string(datTextures.size()) + " texture(s)");
+        break;
+      }
+    }
+    if (datTextures.empty())
+      Logger::Get().Log(LogLevel::WARNING,
+                        "[MefExporter] Model '" + modelStem +
+                            "' not found in DAT; textures will be placeholders");
+  }
+
+  // 3. Convert .tex → mat_N.tga and build the MTL texture name list
+  std::vector<std::string> texNames(datTextures.size());
+  for (size_t i = 0; i < datTextures.size(); ++i) {
+    std::string tgaName = "mat_" + std::to_string(i) + ".tga";
+    texNames[i] = tgaName;
+
+    if (!texDir.empty()) {
+      fs::path texFile = fs::path(texDir) / (datTextures[i] + ".tex");
+      TEXFile tex = TEX_Parse(texFile.string());
+      if (tex.valid && !tex.images.empty()) {
+        std::string tgaPath = (bundleDir / tgaName).string();
+        if (TEX_WriteTGA(tgaPath, tex.images[0]))
+          Logger::Get().Log(LogLevel::INFO,
+                            "[MefExporter] Wrote " + tgaName + " from " +
+                                datTextures[i] + ".tex");
+        else
+          Logger::Get().Log(LogLevel::WARNING,
+                            "[MefExporter] Failed to write " + tgaPath);
+      } else {
+        Logger::Get().Log(LogLevel::WARNING,
+                          "[MefExporter] TEX not found/invalid: " +
+                              texFile.string());
+      }
+    }
+  }
+
+  // 4. Write OBJ
+  std::string objPath = (bundleDir / (modelStem + ".obj")).string();
+  std::ofstream f(objPath);
+  if (!f.is_open()) {
+    Logger::Get().Log(LogLevel::ERR,
+                      "[MefExporter] Cannot open OBJ: " + objPath);
+    return false;
+  }
+  WriteObjBody(f, geometry, modelStem + ".mtl");
+  f.close();
+
+  // 5. Write MTL
+  std::string mtlPath = (bundleDir / (modelStem + ".mtl")).string();
+  std::ofstream m(mtlPath);
+  if (!m.is_open()) {
+    Logger::Get().Log(LogLevel::ERR,
+                      "[MefExporter] Cannot open MTL: " + mtlPath);
+    return false;
+  }
+  WriteMtlBody(m, geometry, texNames);
+  m.close();
+
+  Logger::Get().Log(LogLevel::INFO,
+                    "[MefExporter] Bundle exported to: " + bundleDir.string());
   return true;
 }
 
@@ -59,20 +225,22 @@ bool ExportToMefAscii(const ParsedGeometry &geometry,
     return false;
   }
 
+  f << std::fixed << std::setprecision(4);
+
   f << "NewObject(\"model_mesh\");\n";
 
-  // Emit one Material() + MaterialShininess() per entry in geometry.tamcRecords
+  // Emit one Material() + MaterialShininess() per TAMC entry.
+  // Use white diffuse (1,1,1) so textures render at full brightness.
+  // TAMC opacity==0 means fully opaque — passing it as diffuse.r would make
+  // the mesh render black, which is the "broken" symptom.
   if (!geometry.tamcRecords.empty()) {
     for (size_t i = 0; i < geometry.tamcRecords.size(); ++i) {
-      float opacity = geometry.tamcRecords[i].opacity;
-      f << std::fixed << std::setprecision(4);
-      f << "Material(" << i << ", \"mat_" << i << "\", " << opacity
-        << ", 0.0, 0.0, 0.1, 0.1, 0.1, 0.9, 0.9, 0.9, 0.0, 0.0, 0.0, 1);\n";
+      f << "Material(" << i << ", \"mat_" << i
+        << "\", 1.0, 1.0, 1.0, 0.5, 0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1);\n";
       f << "MaterialShininess(" << i << ", 0.0);\n";
     }
   } else {
-    f << "Material(0, \"mat_0\", 1.0, 0.0, 0.0, 0.1, 0.1, 0.1, 0.9, 0.9, 0.9, "
-         "0.0, 0.0, 0.0, 1);\n";
+    f << "Material(0, \"mat_0\", 1.0, 1.0, 1.0, 0.5, 0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1);\n";
     f << "MaterialShininess(0, 0.0);\n";
   }
 

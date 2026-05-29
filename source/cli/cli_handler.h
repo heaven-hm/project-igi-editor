@@ -30,6 +30,10 @@ private:
                             const std::string &outpath);
   static int ExportMEFToAscii(const std::string &filepath,
                               const std::string &outpath);
+  static int ExportMEFBundle(const std::string &filepath,
+                             const std::string &outDir,
+                             const std::string &datPath,
+                             const std::string &texDir);
   static int ParseQVM(const std::string &filepath, bool decompile,
                       const std::string &outpath);
   static int LexQSC(const std::string &inpath);

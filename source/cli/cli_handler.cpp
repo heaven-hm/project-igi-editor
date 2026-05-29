@@ -66,6 +66,8 @@ void CLIHandler::PrintHelp() {
          "format\n"
       << "  --mef <file.mef> --export-mef <out.mef> Export MEF model to ASCII "
          "MEF format\n"
+      << "  --mef <file.mef> --export-bundle <outdir> --dat <file.dat> --texdir <dir>\n"
+         "                                         Export OBJ+MTL+TGA bundle folder\n"
       << "  --qsc <file.qsc> --compile <out.qvm>   Compile QSC to QVM (native "
          "in-process)\n"
       << "  --qsc <file.qsc> --lex                 Lex QSC and print tokens\n"
@@ -128,6 +130,22 @@ int CLIHandler::Process(int argc, char **argv) {
       } else if (i + 1 < argc && std::string(argv[i + 1]) == "--export-mef" &&
                  i + 2 < argc) {
         return ExportMEFToAscii(filepath, argv[i + 2]);
+      } else if (i + 1 < argc && std::string(argv[i + 1]) == "--export-bundle" &&
+                 i + 2 < argc) {
+        std::string outDir = argv[i + 2];
+        i += 2;
+        std::string datPath, texDir;
+        while (i + 1 < argc) {
+          std::string next = argv[i + 1];
+          if (next == "--dat" && i + 2 < argc) {
+            datPath = argv[i + 2]; i += 2;
+          } else if (next == "--texdir" && i + 2 < argc) {
+            texDir = argv[i + 2]; i += 2;
+          } else {
+            break;
+          }
+        }
+        return ExportMEFBundle(filepath, outDir, datPath, texDir);
       }
       return ParseMEF(filepath);
     } else if (arg == "--mtp" && i + 1 < argc) {
@@ -353,6 +371,35 @@ int CLIHandler::ExportMEFToAscii(const std::string &filepath,
   } catch (const std::exception &e) {
     Logger::Get().Log(LogLevel::ERR,
                       "[CLI] Failed to export MEF: " + std::string(e.what()));
+    return 1;
+  }
+}
+
+int CLIHandler::ExportMEFBundle(const std::string &filepath,
+                                const std::string &outDir,
+                                const std::string &datPath,
+                                const std::string &texDir) {
+  Logger::Get().Log(LogLevel::INFO,
+                    "[CLI] Exporting MEF bundle: " + filepath +
+                        " -> " + outDir);
+  try {
+    ParsedGeometry geometry = ParseMefFile(filepath);
+
+    // Derive model stem from the MEF filename (e.g. "014_01_1" from ".../014_01_1.mef")
+    std::filesystem::path mefPath(filepath);
+    std::string modelStem = mefPath.stem().string();
+
+    if (MefExporter::ExportToObjBundle(geometry, modelStem, outDir,
+                                       datPath, texDir)) {
+      std::cout << "[CLI] Bundle exported to: "
+                << (std::filesystem::path(outDir) / modelStem).string() << "\n";
+      return 0;
+    }
+    return 1;
+  } catch (const std::exception &e) {
+    Logger::Get().Log(LogLevel::ERR,
+                      "[CLI] Failed to export bundle: " +
+                          std::string(e.what()));
     return 1;
   }
 }

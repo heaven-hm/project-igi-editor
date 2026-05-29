@@ -22,8 +22,8 @@
 struct TEXImage {
     uint32_t width  = 0;
     uint32_t height = 0;
-    uint32_t mode   = 2;        // 2=RGB565, 3=ARGB8888, 67=ARGB8888
-    std::vector<uint8_t> pixels; // decoded BGRA8888 (4 bytes per pixel)
+    uint32_t mode   = 2;         // 2=RGB565, 3=ARGB8888, 67=ARGB8888
+    std::vector<uint8_t> pixels; // raw bytes from file (mode 2 = 2 B/px, mode 3/67 = 4 B/px)
 };
 
 struct TEXFile {
@@ -40,3 +40,7 @@ TEXFile TEX_Parse(const std::string& filepath);
 // Names: <basename>_00.tga, <basename>_01.tga, etc. (just _00.tga if 1 image).
 // Returns number of files written.
 int TEX_ExportTGA(const TEXFile& tex, const std::string& filepath, const std::string& outdir);
+
+// Write a single TEXImage as a TGA file to an explicit path.
+// Returns true on success.
+bool TEX_WriteTGA(const std::string& path, const TEXImage& img);
