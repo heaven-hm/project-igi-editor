@@ -130,21 +130,15 @@ void Renderer_Splines::DrawSplineSegment(
         float ta = (float)i       / (float)steps;
         float tb = (float)(i + 1) / (float)steps;
 
-        // Tile endpoints sampled on the Hermite curve.
+        // Tile endpoints sampled on the Hermite curve. Tiles stay at their authored
+        // (data) Z — the game does NOT lift track onto terrain; where the track dips
+        // below the surface it is simply hidden by the terrain (e.g. track entering a
+        // cutting/under a hill). Snapping to terrain wrongly exposed those buried runs.
         glm::vec3 a = HermitePoint(ta, p0, p1, tan0, tan1);
         glm::vec3 b = HermitePoint(tb, p0, p1, tan0, tan1);
 
-        // Terrain snap both endpoints: flat track rides up onto terrain when the curve
-        // dips below it; elevated/bridge tiles (curve already above terrain) are untouched.
-        // Snapping the actual endpoints — not a single sample — keeps adjacent tiles joined.
-        if (terrain_z_fn_) {
-            float tz = 0.f;
-            if (terrain_z_fn_((double)a.x, (double)a.y, tz) && tz > a.z) a.z = tz;
-            if (terrain_z_fn_((double)b.x, (double)b.y, tz) && tz > b.z) b.z = tz;
-        }
-
         // Orient the tile along the chord a→b. Pitch comes from the actual placed
-        // endpoints, so the tile follows terrain/grade and connects seamlessly to its
+        // endpoints, so the tile follows the grade and connects seamlessly to its
         // neighbours. (Chord direction, not the instantaneous tangent, prevents the
         // curve overshoot that made earlier builds look near-vertical.)
         glm::vec3 chord = b - a;
