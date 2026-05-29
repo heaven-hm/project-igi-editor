@@ -105,6 +105,7 @@ struct ParsedGeometry {
         size_t triangleStart = 0;
         size_t triangleCount = 0;
         int materialSlot = 0;
+        float opacity = 1.0f;
     };
 
     std::vector<RenderVertex> vertices;

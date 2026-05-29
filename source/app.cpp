@@ -282,6 +282,10 @@ void App::LoadLevel(int level_no) {
 			}
 		}
 		
+		selected_object_index_ = -1;
+		hover_object_index_ = -1;
+		status_message_.clear();
+
 		renderer_.SetLevel(level_no);
 		renderer_.BeginLoadLevel();
 
@@ -696,8 +700,12 @@ void App::Input_OnMotion(int x, int y) {
 			int cx = window_state_.viewport_width_ >> 1;
 			int cy = window_state_.viewport_height_ >> 1;
 			hover_object_index_ = PickObjectAtScreenPos(cx, cy);
+			last_pick_x_ = cx;
+			last_pick_y_ = cy;
 		} else {
 			hover_object_index_ = PickObjectAtScreenPos(x, y);
+			last_pick_x_ = x;
+			last_pick_y_ = y;
 		}
 	}
 
@@ -1907,7 +1915,11 @@ void App::Frame(float delta_seconds) {
 	}
 
 	UpdateViewDefine();
-	hover_object_index_ = PickObjectAtScreenPos(mouse_state_.prior_x_, mouse_state_.prior_y_);
+	if (mouse_state_.prior_x_ != last_pick_x_ || mouse_state_.prior_y_ != last_pick_y_) {
+		hover_object_index_ = PickObjectAtScreenPos(mouse_state_.prior_x_, mouse_state_.prior_y_);
+		last_pick_x_ = mouse_state_.prior_x_;
+		last_pick_y_ = mouse_state_.prior_y_;
+	}
 
 	vert_flat_sky_layer_s * fsl_vb = renderer_.MapFlatSkyLayersVB();
 	vert_pos_a_uv_s* terrain_vb = renderer_.MapTerrainVB();

@@ -597,6 +597,12 @@ void Renderer_Objects::ClearCaches() {
     portal_distances_.clear();
     portal_distances_loaded_ = false;
     logged_draw_buildings_.clear();
+    model_level_map_.clear();
+    texture_level_map_.clear();
+    deathzone_ids_.clear();
+    deathzone_ids_loaded_ = false;
+    magicobj_ids_.clear();
+    magicobj_ids_loaded_ = false;
 }
 
 // ─── Shutdown ─────────────────────────────────────────────────────────────────

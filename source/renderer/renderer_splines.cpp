@@ -29,7 +29,8 @@ void Renderer_Splines::Draw(
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     glDepthMask(GL_TRUE);
-    glDisable(GL_CULL_FACE);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
     glDisable(GL_BLEND);
 
     for (const auto& obj : objects) {
@@ -68,6 +69,7 @@ void Renderer_Splines::Draw(
         }
     }
 
+    glDisable(GL_CULL_FACE);
     glUseProgram(0);
 }
 
@@ -111,7 +113,7 @@ void Renderer_Splines::DrawSplineSegment(
 
     float localX = mesh.center.x + mesh.halfExtents.x;
     if (localX < 1.f) localX = 1.f;
-    const float LENGTH_SCALE = 4.096f;
+    const float LENGTH_SCALE = 40.96f;
     float tileWorldLen = localX * LENGTH_SCALE;
 
     int steps = std::max(1, (int)std::ceil(intervalLen / tileWorldLen));
@@ -138,7 +140,7 @@ void Renderer_Splines::DrawSplineSegment(
         glm::mat4 model = glm::translate(glm::mat4(1.f), pos);
         model = glm::rotate(model, gamma,  glm::vec3(0.f, 0.f, 1.f));  // yaw around world Z
         model = glm::rotate(model, -pitch, glm::vec3(0.f, 1.f, 0.f)); // pitch around local Y
-        model = glm::scale(model, glm::vec3(LENGTH_SCALE, 40.96f, 40.96f));
+        model = glm::scale(model, glm::vec3(LENGTH_SCALE, LENGTH_SCALE, LENGTH_SCALE));
 
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
 

@@ -122,7 +122,7 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 
 	Logger::Get().Log(LogLevel::INFO, "[Level] Decompiling objects.qvm for level " + std::to_string(params.level_no_));
 	DecompileObjects(params.level_no_);
-	Str_SPrintf(filename, 1024, "%s\\objects.qsc", exeDir.c_str());
+	Str_SPrintf(filename, 1024, "%s\\content\\qed\\temp\\objects.qsc", exeDir.c_str());
 
 	qsc_path_ = filename;
 
@@ -186,7 +186,8 @@ void Level::DecompileObjects(int levelNo) {
 
 	std::string exeDir = GetExeDirectory();
 	char destPath[1024];
-	Str_SPrintf(destPath, 1024, "%s\\objects.qsc", exeDir.c_str());
+	std::filesystem::create_directories(exeDir + "\\content\\qed\\temp");
+	Str_SPrintf(destPath, 1024, "%s\\content\\qed\\temp\\objects.qsc", exeDir.c_str());
 
 	try {
 		// Use internal C++ decompiler
@@ -221,7 +222,7 @@ bool Level::FilesDiffer(const std::string& file1, const std::string& file2) {
 
 void Level::CompileCurrentQSC(int level_no) {
 	std::string exeDir = GetExeDirectory();
-	std::string editorQSC = exeDir + "\\objects.qsc";
+	std::string editorQSC = exeDir + "\\content\\qed\\temp\\objects.qsc";
 
 	if (!std::filesystem::exists(editorQSC)) {
 		Logger::Get().Log(LogLevel::ERR, "[Level] FAILED: Source QSC not found: " + editorQSC);
@@ -307,7 +308,7 @@ void Level::Update(update_params_s& params) {
 
 void Level::SaveObjectsLocalOnly() {
 	std::string exeDir = GetExeDirectory();
-	std::string localQsc = exeDir + "\\objects.qsc";
+	std::string localQsc = exeDir + "\\content\\qed\\temp\\objects.qsc";
 	Logger::Get().Log(LogLevel::INFO, "[Level] Saving local live QSC to: " + localQsc);
 	level_objects_.SaveToQSC(localQsc);
 }
@@ -323,7 +324,7 @@ void Level::SaveChanges() {
 
 void Level::SaveAndReloadObjects() {
 	std::string exeDir = GetExeDirectory();
-	std::string localQsc = exeDir + "\\objects.qsc";
+	std::string localQsc = exeDir + "\\content\\qed\\temp\\objects.qsc";
 
 	// Helper to get a unique tree path for an object to preserve expansion state
 	auto GetObjectTreePath = [](const std::vector<LevelObject>& objects, int idx) -> std::string {

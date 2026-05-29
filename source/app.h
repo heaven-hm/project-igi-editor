@@ -129,6 +129,8 @@ private:
 	int						edit_brush_;
 	int						selected_object_index_;
 	int						hover_object_index_;	// Object under mouse cursor
+	int						last_pick_x_ = -9999;
+	int						last_pick_y_ = -9999;
 	bool					show_hud_;
 	bool					show_debug_;
 	bool					show_help_;
