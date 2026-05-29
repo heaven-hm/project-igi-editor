@@ -695,18 +695,7 @@ void App::Input_OnMotion(int x, int y) {
 		hover_object_index_ = -1; // Suppress 3D tooltips while over UI
 	} else {
 		hover_tree_index_ = -1;
-		// Priority 2: 3D Object Hover
-		if (enableCameraMode) {
-			int cx = window_state_.viewport_width_ >> 1;
-			int cy = window_state_.viewport_height_ >> 1;
-			hover_object_index_ = PickObjectAtScreenPos(cx, cy);
-			last_pick_x_ = cx;
-			last_pick_y_ = cy;
-		} else {
-			hover_object_index_ = PickObjectAtScreenPos(x, y);
-			last_pick_x_ = x;
-			last_pick_y_ = y;
-		}
+		// Priority 2: 3D Object Hover — deferred to Frame() to avoid blocking GPU sync on every mouse event
 	}
 
 	if (window_state_.cursor_visible_) {
@@ -1863,7 +1852,11 @@ void App::Frame(float delta_seconds) {
 	if (pause_mode_) {
 		// Skip all updates when paused, just render
 		UpdateViewDefine();
-		hover_object_index_ = PickObjectAtScreenPos(mouse_state_.prior_x_, mouse_state_.prior_y_);
+		if (mouse_state_.prior_x_ != last_pick_x_ || mouse_state_.prior_y_ != last_pick_y_) {
+			hover_object_index_ = PickObjectAtScreenPos(mouse_state_.prior_x_, mouse_state_.prior_y_);
+			last_pick_x_ = mouse_state_.prior_x_;
+			last_pick_y_ = mouse_state_.prior_y_;
+		}
 		float ground_z = 0.0f;
 		level_.GetTerrainZ(viewer_.pos_.x, viewer_.pos_.y, ground_z);
 		Renderer::task_tree_view_params_s task_tree_view = {

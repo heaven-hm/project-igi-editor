@@ -1302,8 +1302,10 @@ void Renderer_Objects::DrawAttachmentsRecursive(
             0.f,      0.f,      0.f,      1.f
         );
 
-        // ATTA offset is relative to parent — transform through parent's world matrix
-        glm::vec3 localOff(att.px, att.py, att.pz);
+        // ATTA px/py/pz are in raw game units (same scale as REIH bone pivots — NOT
+        // pre-divided by 40.96). The parentWorldMat has no scale factor, so we must
+        // convert to world units before transforming through it.
+        glm::vec3 localOff(att.px * 40.96f, att.py * 40.96f, att.pz * 40.96f);
         glm::vec3 worldPos = glm::vec3(parentWorldMat * glm::vec4(localOff, 1.f));
 
         // Extract parent rotation (upper-left 3x3 of the unscaled parent mat)
@@ -2397,5 +2399,49 @@ void main() {
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glEnable(GL_CULL_FACE);
     glBindVertexArray(0);
+    glUseProgram(0);
+}
+
+// ─── DrawAttachmentsForSpline ─────────────────────────────────────────────────
+// Public entry point called by Renderer_Splines once per tile.
+// unscaledWorldMat = translate + rotate for this tile position (no 40.96 scale).
+// Switches to the objects shader, renders ATTA children (opaque then transparent),
+// then leaves program 0 bound — caller must restore its own shader.
+void Renderer_Objects::DrawAttachmentsForSpline(
+    const std::string& modelId, bool isBuilding,
+    const glm::mat4& unscaledWorldMat, GLuint ubo_mats)
+{
+    EnsureWindowModelIdsLoaded();
+
+    glUseProgram(shader_program_);
+    glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
+
+    GLint loc_model    = glGetUniformLocation(shader_program_, "u_model");
+    GLint loc_dirlight = glGetUniformLocation(shader_program_, "u_dirlight");
+    GLint loc_ambient  = glGetUniformLocation(shader_program_, "u_ambient");
+    GLint loc_useTex   = glGetUniformLocation(shader_program_, "u_useTexture");
+    GLint loc_tex      = glGetUniformLocation(shader_program_, "u_texture");
+    GLint loc_alpha    = glGetUniformLocation(shader_program_, "u_alpha");
+
+    glUniform1f(loc_alpha, 1.0f);
+
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-2.0f, -2.0f);
+
+    // Opaque pass
+    {
+        std::unordered_set<std::string> drawn;
+        DrawAttachmentsRecursive(modelId, isBuilding, unscaledWorldMat, /*isTransparentPass=*/false,
+                                 loc_model, loc_dirlight, loc_ambient, loc_useTex, loc_tex, loc_alpha, drawn);
+    }
+
+    // Transparent pass (windows / glass)
+    {
+        std::unordered_set<std::string> drawn;
+        DrawAttachmentsRecursive(modelId, isBuilding, unscaledWorldMat, /*isTransparentPass=*/true,
+                                 loc_model, loc_dirlight, loc_ambient, loc_useTex, loc_tex, loc_alpha, drawn);
+    }
+
+    glDisable(GL_POLYGON_OFFSET_FILL);
     glUseProgram(0);
 }
