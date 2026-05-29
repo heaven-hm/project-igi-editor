@@ -36,6 +36,8 @@ public:
     float GetMeshZOffset(const std::string& modelId, bool isBuilding);
     Mesh GetOrLoadMesh(const std::string& modelId, bool isBuilding);
     GLuint GetShaderProgram() const { return shader_program_; }
+    void DrawAttachmentsForSpline(const std::string& modelId, bool isBuilding,
+                                  const glm::mat4& unscaledWorldMat, GLuint ubo_mats);
 
 private:
     int current_level_ = 1;

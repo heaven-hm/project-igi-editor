@@ -137,10 +137,12 @@ void Renderer_Splines::DrawSplineSegment(
         float horiz = std::sqrt(tangent.x * tangent.x + tangent.y * tangent.y);
         float pitch  = std::atan2(tangent.z, horiz);
 
-        glm::mat4 model = glm::translate(glm::mat4(1.f), pos);
-        model = glm::rotate(model, gamma,  glm::vec3(0.f, 0.f, 1.f));  // yaw around world Z
-        model = glm::rotate(model, -pitch, glm::vec3(0.f, 1.f, 0.f)); // pitch around local Y
-        model = glm::scale(model, glm::vec3(LENGTH_SCALE, LENGTH_SCALE, LENGTH_SCALE));
+        // unscaledModel = translate + rotate only (no 40.96 scale) — passed to attachment renderer
+        glm::mat4 unscaledModel = glm::translate(glm::mat4(1.f), pos);
+        unscaledModel = glm::rotate(unscaledModel, gamma,  glm::vec3(0.f, 0.f, 1.f));
+        unscaledModel = glm::rotate(unscaledModel, -pitch, glm::vec3(0.f, 1.f, 0.f));
+
+        glm::mat4 model = glm::scale(unscaledModel, glm::vec3(LENGTH_SCALE, LENGTH_SCALE, LENGTH_SCALE));
 
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
 
@@ -162,5 +164,11 @@ void Renderer_Splines::DrawSplineSegment(
             glDrawArrays(GL_TRIANGLES, 0, sub.vertexCount);
         }
         glBindVertexArray(0);
+
+        // Draw ATTA sub-models (rails, details) for this tile position.
+        // DrawAttachmentsForSpline switches to the objects shader internally and
+        // leaves program 0 on exit, so restore the spline shader afterwards.
+        obj_renderer_.DrawAttachmentsForSpline(segModelId, /*isBuilding=*/false, unscaledModel, ubo_mats);
+        glUseProgram(shader_program);
     }
 }
