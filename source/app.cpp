@@ -339,7 +339,20 @@ void App::LoadLevel(int level_no) {
 				Logger::Get().Log(LogLevel::INFO, "[App] Applied AI rotation override (horizontal only) for " + obj.name + " (" + obj.type + ")");
 			}
 		}
-		
+
+		// Emit one [VERIFY] log line per object so verify_level can cross-reference.
+		for (const auto& obj : level_.GetLevelObjects().GetObjects()) {
+			Logger::Get().Log(LogLevel::INFO,
+				"[VERIFY] ID=" + obj.modelId +
+				", Type=" + obj.type +
+				", Name=" + obj.name +
+				", Pos=" + std::to_string(obj.pos.x) + "," + std::to_string(obj.pos.y) + "," + std::to_string(obj.pos.z) +
+				", Ori=" + std::to_string(obj.rot.x) + "," + std::to_string(obj.rot.y) + "," + std::to_string(obj.rot.z) +
+				", Tex=" + obj.modelId +
+				", Model=" + obj.modelId
+			);
+		}
+
 		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
 		Logger::Get().Log(LogLevel::INFO, "[App] LoadLevel() COMPLETE for level " + std::to_string(level_no));
 		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");

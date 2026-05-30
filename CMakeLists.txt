@@ -37,6 +37,9 @@ endif()
 file(GLOB SOURCES "source/*.h" "source/*.cpp")
 file(GLOB SOURCES_LEVEL "source/level/*.*")
 file(GLOB SOURCES_RENDERER "source/renderer/*.*")
+
+# Explicitly add new level source files the glob might not catch immediately
+list(APPEND SOURCES_LEVEL "source/level/task_schema.cpp" "source/level/task_schema.h")
 file(GLOB SHADERS_41 "shaders/41/*.*")
 file(GLOB SHADERS_45 "shaders/45/*.*")
 
@@ -123,5 +126,30 @@ if (WIN32)
   )
 else()
   target_link_libraries(igi-editor PRIVATE glut GL GLEW)
+endif()
+
+# ---------------------------------------------------------------------------
+# verify_level CLI - standalone cross-reference tool (no OpenGL/GLUT deps)
+# ---------------------------------------------------------------------------
+add_executable(verify_level
+    source/cli/verify_level.cpp
+    source/level/task_schema.cpp
+)
+
+target_include_directories(verify_level PRIVATE ${PROJECT_SOURCE_DIR}/source)
+target_include_directories(verify_level PRIVATE ${PROJECT_SOURCE_DIR}/third_party/glm-1.0.1)
+target_include_directories(verify_level PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
+
+set_target_properties(verify_level PROPERTIES
+    CXX_STANDARD 20
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG   "${PROJECT_SOURCE_DIR}/bin/Debug"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${PROJECT_SOURCE_DIR}/bin/Release"
+)
+
+if (MSVC)
+    target_compile_options(verify_level PRIVATE "/bigobj")
+    set_target_properties(verify_level PROPERTIES
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
+    )
 endif()
 
