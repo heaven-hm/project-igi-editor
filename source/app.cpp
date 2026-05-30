@@ -216,8 +216,8 @@ bool App::Init(int argc, char** argv) {
 
 
 	// Set initial cursor state
-	LoadCustomCursor("content\\qed\\TerrainEditIcon_Pointer.spr");
-	glutSetCursor(custom_cursor_loaded_ ? GLUT_CURSOR_NONE : GLUT_CURSOR_LEFT_ARROW);
+	LoadAllCursors();
+	glutSetCursor(cursor_loaded_count_ > 0 ? GLUT_CURSOR_NONE : GLUT_CURSOR_LEFT_ARROW);
 
 	// Cache editor HWND for minimize/restore around game launch
 	editor_hwnd_ = Utils::FindWindow("IGI Editor v" + Utils::GetVersionString());
@@ -259,18 +259,18 @@ void App::Shutdown() {
 	}
 }
 
-// ── C1: Custom SPR cursor ─────────────────────────────────────────────────────
+// ── C1: Custom SPR cursor — multi-mode ────────────────────────────────────────
 
-void App::LoadCustomCursor(const char* spr_path) {
-	TEXFile tex = TEX_Parse(spr_path);
-	if (!tex.valid || tex.images.empty()) return;
+static GLuint LoadOneSpr(const char* path, int& w, int& h) {
+	TEXFile tex = TEX_Parse(path);
+	if (!tex.valid || tex.images.empty()) return 0;
 	const TEXImage& img = tex.images[0];
 
 	std::vector<uint8_t> rgba;
 	if (img.mode == 2) { // RGB565 — no alpha channel
 		rgba.reserve(img.width * img.height * 4);
 		for (size_t i = 0; i + 1 < img.pixels.size(); i += 2) {
-			uint16_t p = img.pixels[i] | (img.pixels[i + 1] << 8);
+			uint16_t p = img.pixels[i] | ((uint16_t)img.pixels[i + 1] << 8);
 			rgba.push_back(((p >> 11) & 0x1F) << 3);
 			rgba.push_back(((p >> 5)  & 0x3F) << 2);
 			rgba.push_back( (p        & 0x1F) << 3);
@@ -279,9 +279,9 @@ void App::LoadCustomCursor(const char* spr_path) {
 	} else { // ARGB8888 (modes 3, 67) — swizzle BGRA → RGBA
 		rgba.resize(img.pixels.size());
 		for (size_t i = 0; i + 3 < img.pixels.size(); i += 4) {
-			rgba[i + 0] = img.pixels[i + 2]; // R
+			rgba[i + 0] = img.pixels[i + 2]; // R ← B
 			rgba[i + 1] = img.pixels[i + 1]; // G
-			rgba[i + 2] = img.pixels[i + 0]; // B
+			rgba[i + 2] = img.pixels[i + 0]; // B ← R
 			rgba[i + 3] = img.pixels[i + 3]; // A
 		}
 	}
@@ -290,18 +290,66 @@ void App::LoadCustomCursor(const char* spr_path) {
 	pic.width_  = (int)img.width;
 	pic.height_ = (int)img.height;
 	pic.pixels_ = rgba.data();
-	cursor_tex_id_ = GL_RegisterTexture(&pic, GL_CLAMP_TO_EDGE, GL_LINEAR, GL_LINEAR, false);
-	cursor_tex_w_  = (int)img.width;
-	cursor_tex_h_  = (int)img.height;
-	custom_cursor_loaded_ = true;
+	w = (int)img.width;
+	h = (int)img.height;
+	return GL_RegisterTexture(&pic, GL_CLAMP_TO_EDGE, GL_LINEAR, GL_LINEAR, false);
+}
+
+void App::LoadAllCursors() {
+	// Order must match CursorMode enum values (0..9)
+	const char* paths[NUM_CURSORS] = {
+		"content\\qed\\TerrainEditIcon_Pointer.spr",     // 0 Default
+		"content\\qed\\highlighttool.spr",               // 1 Hover
+		"content\\qed\\activetool.spr",                  // 2 Selected
+		"content\\qed\\TerrainEditIcon_Lift.spr",        // 3 TerrainLift
+		"content\\qed\\TerrainEditIcon_Lower.spr",       // 4 TerrainLower
+		"content\\qed\\TerrainEditIcon_Flatten.spr",     // 5 TerrainFlatten
+		"content\\qed\\TerrainEditIcon_FlattenLine.spr", // 6 TerrainFlattenLine
+		"content\\qed\\TerrainEditIcon_Drop.spr",        // 7 TerrainDrop
+		"content\\qed\\TerrainEditIcon_Soften.spr",      // 8 TerrainSoften
+		"content\\qed\\inactivetool.spr",                // 9 Inactive
+	};
+	cursor_loaded_count_ = 0;
+	for (int i = 0; i < NUM_CURSORS; ++i) {
+		cursor_tex_ids_[i] = LoadOneSpr(paths[i], cursor_tex_ws_[i], cursor_tex_hs_[i]);
+		if (cursor_tex_ids_[i]) cursor_loaded_count_++;
+	}
+}
+
+void App::UpdateCursorMode() {
+	if (terrain_edit_enabled_) {
+		// Map edit_brush_ (0=raise/lift, 1=lower) to terrain cursor modes
+		// BRUSH_RAISE=0 → TerrainLift, BRUSH_LOWER=1 → TerrainLower
+		if (edit_brush_ == 0)
+			current_cursor_mode_ = CursorMode::TerrainLift;
+		else
+			current_cursor_mode_ = CursorMode::TerrainLower;
+		return;
+	}
+	if (selected_object_index_ >= 0) {
+		current_cursor_mode_ = CursorMode::Selected;
+		return;
+	}
+	if (hover_object_index_ >= 0) {
+		current_cursor_mode_ = CursorMode::Hover;
+		return;
+	}
+	current_cursor_mode_ = CursorMode::Default;
 }
 
 void App::DrawCustomCursor() {
-	if (!custom_cursor_loaded_ || !cursor_tex_id_) return;
+	UpdateCursorMode();
+	int idx = (int)current_cursor_mode_;
+	if (idx < 0 || idx >= NUM_CURSORS || !cursor_tex_ids_[idx]) {
+		idx = 0; // fallback to Default
+		if (!cursor_tex_ids_[0]) return;
+	}
 	int mx = mouse_state_.prior_x_;
 	int my = mouse_state_.prior_y_;
 	int vw = window_state_.viewport_width_;
 	int vh = window_state_.viewport_height_;
+	int w  = cursor_tex_ws_[idx];
+	int h  = cursor_tex_hs_[idx];
 
 	glDisable(GL_DEPTH_TEST);
 	glEnable(GL_BLEND);
@@ -310,13 +358,13 @@ void App::DrawCustomCursor() {
 	glOrtho(0, vw, vh, 0, -1, 1);
 	glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
 	glEnable(GL_TEXTURE_2D);
-	glBindTexture(GL_TEXTURE_2D, cursor_tex_id_);
-	glColor4f(1, 1, 1, 1);
+	glBindTexture(GL_TEXTURE_2D, cursor_tex_ids_[idx]);
+	glColor4f(1.f, 1.f, 1.f, 1.f);
 	glBegin(GL_QUADS);
-	  glTexCoord2f(0, 0); glVertex2i(mx,               my);
-	  glTexCoord2f(1, 0); glVertex2i(mx + cursor_tex_w_, my);
-	  glTexCoord2f(1, 1); glVertex2i(mx + cursor_tex_w_, my + cursor_tex_h_);
-	  glTexCoord2f(0, 1); glVertex2i(mx,               my + cursor_tex_h_);
+	  glTexCoord2f(0, 0); glVertex2i(mx,     my);
+	  glTexCoord2f(1, 0); glVertex2i(mx + w, my);
+	  glTexCoord2f(1, 1); glVertex2i(mx + w, my + h);
+	  glTexCoord2f(0, 1); glVertex2i(mx,     my + h);
 	glEnd();
 	glDisable(GL_TEXTURE_2D);
 	glMatrixMode(GL_MODELVIEW);  glPopMatrix();

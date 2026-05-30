@@ -158,13 +158,28 @@ private:
 	std::vector<std::string>	edit_undo_stack_;
 	std::vector<std::string>	edit_redo_stack_;
 
-	// C1: Custom SPR cursor
-	GLuint					cursor_tex_id_        = 0;
-	int						cursor_tex_w_         = 0;
-	int						cursor_tex_h_         = 0;
-	bool					custom_cursor_loaded_ = false;
-	void					LoadCustomCursor(const char* spr_path);
-	void					DrawCustomCursor();
+	// C1: Custom SPR cursor — multi-mode
+	enum class CursorMode {
+		Default       = 0,  // No selection, no terrain edit → Pointer
+		Hover         = 1,  // Hovering over an object → highlighttool
+		Selected      = 2,  // Object selected (edit mode) → activetool
+		TerrainLift   = 3,  // edit_brush_ == BRUSH_RAISE
+		TerrainLower  = 4,  // edit_brush_ == BRUSH_LOWER
+		TerrainFlatten     = 5,
+		TerrainFlattenLine = 6,
+		TerrainDrop        = 7,
+		TerrainSoften      = 8,
+		Inactive      = 9,  // inactivetool.spr
+	};
+	static const int        NUM_CURSORS           = 10;
+	GLuint                  cursor_tex_ids_[NUM_CURSORS]  = {};
+	int                     cursor_tex_ws_[NUM_CURSORS]   = {};
+	int                     cursor_tex_hs_[NUM_CURSORS]   = {};
+	int                     cursor_loaded_count_          = 0;
+	CursorMode              current_cursor_mode_          = CursorMode::Default;
+	void                    LoadAllCursors();
+	void                    UpdateCursorMode();
+	void                    DrawCustomCursor();
 
 	// C2: Typed task property editor
 	bool					prop_editor_open_      = false;
