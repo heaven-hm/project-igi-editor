@@ -1109,6 +1109,8 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		DeleteSelectedTask();
 		return;
 	}
+
+	DispatchEventBindings();
 }
 
 void App::Input_OnSpecialUp(int key, int x, int y) {
@@ -1636,6 +1638,179 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 
 	// HandleMarkerInput(key);
 
+	DispatchEventBindings();
+}
+
+void App::DispatchEventBindings() {
+	// Guard: skip dispatch while any text-input modal is open
+	if (task_picker_open_ || task_editor_open_) return;
+
+	auto& eventBindings = Config::Get().eventBindings_;
+
+	auto Check = [&](const std::string& name) -> bool {
+		auto it = eventBindings.find(name);
+		if (it == eventBindings.end()) return false;
+		return Utils::IsKeyBindingPressed(it->second);
+	};
+
+	// ---- Camera ----
+	if (Check("CameraEnable")) { /* handled by existing named binding */ }
+	if (Check("CameraMoveForward")) { /* handled by existing named binding */ }
+	if (Check("CameraMoveBackward")) { /* handled by existing named binding */ }
+	if (Check("CameraAdjustRadius")) { /* handled by existing named binding */ }
+	if (Check("CameraResetRadius")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraResetRadius not implemented"); }
+	if (Check("CameraLookDown")) { /* handled by existing named binding */ }
+	if (Check("CameraCopyPosition")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraCopyPosition not implemented"); }
+	if (Check("CameraCopyOrientation")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraCopyOrientation not implemented"); }
+	if (Check("CameraSnapToObject")) {
+		if (selected_object_index_ >= 0) {
+			auto& objects = level_.GetLevelObjects().GetObjects();
+			if (selected_object_index_ < (int)objects.size()) {
+				PushUndoState();
+				input_.keys_ |= MK_MANIP_O;
+				if (selected_object_index_ >= 0) UpdateMarkerManipulation();
+				input_.keys_ &= ~MK_MANIP_O;
+			}
+		}
+	}
+	if (Check("CameraSnapToObjectWithRadius")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraSnapToObjectWithRadius not implemented"); }
+	if (Check("CameraSnapToGround")) {
+		if (selected_object_index_ >= 0) {
+			auto& objects = level_.GetLevelObjects().GetObjects();
+			if (selected_object_index_ < (int)objects.size()) {
+				auto& obj = objects[selected_object_index_];
+				if (!Utils::IsUndergroundModel(obj.name, obj.modelId)) {
+					float terrainZ = 0.0f;
+					if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ)) {
+						float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
+						obj.pos.z = (double)terrainZ + (double)(zOffset * 40.96f * obj.scale);
+						obj.modified = true;
+						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+						Logger::Get().Log(LogLevel::INFO, "[App] CameraSnapToGround: Snapped object to ground");
+					}
+				}
+			}
+		}
+	}
+	if (Check("CameraStrafe")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraStrafe not implemented"); }
+	if (Check("CameraStrafeFree")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraStrafeFree not implemented"); }
+	if (Check("CameraStrafeLeft")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraStrafeLeft not implemented"); }
+	if (Check("CameraStrafeRight")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraStrafeRight not implemented"); }
+
+	// ---- Tasks ----
+	if (Check("TaskMoveUp")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskMoveUp not implemented"); }
+	if (Check("TaskMoveDown")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskMoveDown not implemented"); }
+	if (Check("TaskMoveHigher")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskMoveHigher not implemented"); }
+	if (Check("TaskMoveLower")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskMoveLower not implemented"); }
+	if (Check("TaskNew")) { CreateNewTask(); }
+	if (Check("TaskNewFirstChild")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskNewFirstChild not implemented"); }
+	if (Check("TaskNewCameraRelative")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskNewCameraRelative not implemented"); }
+	if (Check("TaskCopy")) { CopySelectedTask(false); }
+	if (Check("TaskCopyRecursive")) { CopySelectedTask(true); }
+	if (Check("TaskPaste")) { PasteTask(); }
+	if (Check("TaskSendEvent")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskSendEvent not implemented"); }
+	if (Check("TaskSendEventRecursive")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskSendEventRecursive not implemented"); }
+	if (Check("TaskFind")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFind not implemented"); }
+	if (Check("TaskFindTextInTask")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFindTextInTask not implemented"); }
+	if (Check("TaskFindByTaskID")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFindByTaskID not implemented"); }
+	if (Check("TaskFindByTaskNote")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFindByTaskNote not implemented"); }
+	if (Check("TaskFindAgain")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFindAgain not implemented"); }
+	if (Check("TaskSetID")) { AssignTaskID(); }
+	if (Check("TaskRebuildTree")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskRebuildTree not implemented"); }
+	if (Check("TaskMakeTemplate")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskMakeTemplate not implemented"); }
+	if (Check("TaskSortChildren")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskSortChildren not implemented"); }
+	if (Check("TaskDelete")) { DeleteSelectedTask(); }
+
+	// ---- AnimTask ----
+	if (Check("AnimTaskIncreaseKeyframeInterpolation")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskIncreaseKeyframeInterpolation not implemented"); }
+	if (Check("AnimTaskDecreaseKeyframeInterpolation")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskDecreaseKeyframeInterpolation not implemented"); }
+	if (Check("AnimTaskToggleCameraRelative")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskToggleCameraRelative not implemented"); }
+	if (Check("AnimTaskGoToCursor")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskGoToCursor not implemented"); }
+	if (Check("AnimTaskToggleWindowHidden")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskToggleWindowHidden not implemented"); }
+	if (Check("AnimTaskStartRecording")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskStartRecording not implemented"); }
+	if (Check("AnimTaskGoToTop")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskGoToTop not implemented"); }
+	if (Check("AnimTaskToggleSyncPlayback")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskToggleSyncPlayback not implemented"); }
+
+	// ---- Timer ----
+	if (Check("TimerIncreaseSpeed")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerIncreaseSpeed not implemented"); }
+	if (Check("TimerDecreaseSpeed")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerDecreaseSpeed not implemented"); }
+	if (Check("TimerReset")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerReset not implemented"); }
+	if (Check("TimerStartStop")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerStartStop not implemented"); }
+
+	// ---- Manipulate ----
+	if (Check("Manipulate")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] Manipulate not implemented"); }
+	if (Check("ManipulatePositionXY")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulatePositionXY not implemented"); }
+	if (Check("ManipulatePositionXZ")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulatePositionXZ not implemented"); }
+	if (Check("ManipulatePositionSnapToGround")) {
+		if (selected_object_index_ >= 0) {
+			auto& objects = level_.GetLevelObjects().GetObjects();
+			if (selected_object_index_ < (int)objects.size()) {
+				auto& obj = objects[selected_object_index_];
+				if (!Utils::IsUndergroundModel(obj.name, obj.modelId)) {
+					float terrainZ = 0.0f;
+					if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ)) {
+						float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
+						obj.pos.z = (double)terrainZ + (double)(zOffset * 40.96f * obj.scale);
+						obj.modified = true;
+						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+						Logger::Get().Log(LogLevel::INFO, "[App] ManipulatePositionSnapToGround: Snapped object to ground");
+					}
+				}
+			}
+		}
+	}
+	if (Check("ManipulatePositionSnapToObject")) {
+		if (selected_object_index_ >= 0) {
+			auto& objects = level_.GetLevelObjects().GetObjects();
+			if (selected_object_index_ < (int)objects.size()) {
+				PushUndoState();
+				input_.keys_ |= MK_MANIP_O;
+				if (selected_object_index_ >= 0) UpdateMarkerManipulation();
+				input_.keys_ &= ~MK_MANIP_O;
+			}
+		}
+	}
+	if (Check("ManipulateOrientationAlpha")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateOrientationAlpha not implemented"); }
+	if (Check("ManipulateOrientationBeta")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateOrientationBeta not implemented"); }
+	if (Check("ManipulateOrientationGamma")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateOrientationGamma not implemented"); }
+	if (Check("ManipulateOrientationReset")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateOrientationReset not implemented"); }
+
+	// ---- GraphNode ----
+	if (Check("ScaleGraphNode")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ScaleGraphNode not implemented"); }
+	if (Check("ScaleGraphNodeHalfe")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ScaleGraphNodeHalfe not implemented"); }
+	if (Check("ScaleGraphNodeDouble")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ScaleGraphNodeDouble not implemented"); }
+	if (Check("CreateGraphNode")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CreateGraphNode not implemented"); }
+	if (Check("DeleteGraphNode")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] DeleteGraphNode not implemented"); }
+
+	// ---- Other ----
+	if (Check("ToggleDisplay")) { noclip_mode_ = !noclip_mode_; }
+	if (Check("ToggleMouseInverted")) { Config::Get().invertMouse = !Config::Get().invertMouse; }
+	if (Check("ToggleDebugText")) { show_debug_ = !show_debug_; }
+	if (Check("ToggleTaskTypeView")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ToggleTaskTypeView not implemented"); }
+	if (Check("ToggleGame")) { LaunchGame(); }
+	if (Check("ToggleTaskNoteDisplay")) { Config::Get().displayTaskNote = !Config::Get().displayTaskNote; }
+	if (Check("ToggleQEDRunEvent")) { Config::Get().runEvent = !Config::Get().runEvent; }
+	if (Check("ToggleSaveStateOnExit")) {
+		Config::Get().saveConfigOnExit = !Config::Get().saveConfigOnExit;
+		status_message_ = Config::Get().saveConfigOnExit ? "Save on exit: ON" : "Save on exit: OFF";
+	}
+	if (Check("SaveState")) { SaveCurrentLevel(); }
+	if (Check("SaveObjectFile")) { SaveCurrentLevel(); }
+	if (Check("SaveSubTaskObjectFile")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] SaveSubTaskObjectFile not implemented"); }
+	if (Check("SaveSubTaskObjectFileParent")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] SaveSubTaskObjectFileParent not implemented"); }
+	if (Check("LoadSubTaskObjectFile")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] LoadSubTaskObjectFile not implemented"); }
+	if (Check("SnapToGroundRecursive")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] SnapToGroundRecursive not implemented"); }
+	if (Check("ToggleConsole")) { show_debug_ = !show_debug_; }
+	if (Check("ConsoleIncreaseAutoActivateLevel")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ConsoleIncreaseAutoActivateLevel not implemented"); }
+	if (Check("ConsoleDecreaseAutoActivateLevel")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ConsoleDecreaseAutoActivateLevel not implemented"); }
+	if (Check("AutoComplete")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AutoComplete not implemented"); }
+	if (Check("AutoCompleteTaskName")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AutoCompleteTaskName not implemented"); }
+	if (Check("AutoCompleteModelName")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AutoCompleteModelName not implemented"); }
+	if (Check("Undo")) { Undo(); }
+	if (Check("Redo")) { Redo(); }
+	if (Check("ReloadSettings")) { Config::Init(); Logger::Get().Log(LogLevel::INFO, "[App] Settings reloaded from QED config"); }
+	if (Check("ToggleObjects")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ToggleObjects not implemented"); }
+	if (Check("TaskMagicObjToggle")) { show_magic_obj_spheres_ = !show_magic_obj_spheres_; }
 }
 
 

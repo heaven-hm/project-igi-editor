@@ -28,6 +28,15 @@ static KeyBinding ParseKeyBinding(const std::string& binding) {
     std::string upper = binding;
     std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
 
+    // Treat <CONTROL> as an alias for <CTRL>
+    {
+        size_t pos = upper.find("CONTROL");
+        while (pos != std::string::npos) {
+            upper.replace(pos, 7, "CTRL");
+            pos = upper.find("CONTROL", pos + 4);
+        }
+    }
+
     if (upper.find("CTRL") != std::string::npos) kb.ctrl = true;
     if (upper.find("SHIFT") != std::string::npos) kb.shift = true;
     if (upper.find("ALT") != std::string::npos) kb.alt = true;
@@ -51,6 +60,18 @@ static KeyBinding ParseKeyBinding(const std::string& binding) {
     else if (keyPart == "DELETE") kb.vkCode = VK_DELETE;
     else if (keyPart == "HOME") kb.vkCode = VK_HOME;
     else if (keyPart == "SPACE") kb.vkCode = VK_SPACE;
+    else if (keyPart == "PAGEUP")   kb.vkCode = VK_PRIOR;
+    else if (keyPart == "PAGEDOWN") kb.vkCode = VK_NEXT;
+    else if (keyPart == "LEFT")     kb.vkCode = VK_LEFT;
+    else if (keyPart == "RIGHT")    kb.vkCode = VK_RIGHT;
+    else if (keyPart == "UP")       kb.vkCode = VK_UP;
+    else if (keyPart == "DOWN")     kb.vkCode = VK_DOWN;
+    else if (keyPart == "DECIMAL")  kb.vkCode = VK_DECIMAL;
+    else if (keyPart == "DIVIDE")   kb.vkCode = VK_DIVIDE;
+    else if (keyPart == "MULTIPLY") kb.vkCode = VK_MULTIPLY;
+    else if (keyPart == "PLUS" || keyPart == "ADD")      kb.vkCode = VK_OEM_PLUS;
+    else if (keyPart == "MINUS" || keyPart == "SUBTRACT") kb.vkCode = VK_OEM_MINUS;
+    else if (keyPart == "LEFTMOUSEBUTTON") kb.vkCode = VK_LBUTTON;
     else if (keyPart.length() == 1) {
         kb.vkCode = VkKeyScanA(keyPart[0]) & 0xFF;
     }
@@ -219,31 +240,35 @@ void Config::Load() {
                 std::replace(binding.begin(), binding.end(), '>', '+');
                 if (!binding.empty() && binding.back() == '+') binding.pop_back();
                 binding.erase(std::remove(binding.begin(), binding.end(), ' '), binding.end());
-                if (eventName == "SaveObjectFile") data_.keySave = ParseKeyBinding(binding);
-                else if (eventName == "ReloadSettings") data_.keyReloadSettings = ParseKeyBinding(binding);
-                else if (eventName == "Undo") data_.keyUndo = ParseKeyBinding(binding);
-                else if (eventName == "Redo") data_.keyRedo = ParseKeyBinding(binding);
-                else if (eventName == "CameraEnable") data_.keyEnableCamera = ParseKeyBinding(binding);
-                else if (eventName == "CameraMoveForward") data_.keyMoveCameraForward = ParseKeyBinding(binding);
-                else if (eventName == "CameraMoveBackward") data_.keyMoveCameraBackward = ParseKeyBinding(binding);
-                else if (eventName == "CameraAdjustRadius") data_.keyAdjustCameraRadius = ParseKeyBinding(binding);
-                else if (eventName == "CameraLookDown") data_.keyLookDown = ParseKeyBinding(binding);
-                else if (eventName == "CameraSnapToObject") data_.keySnapToObject = ParseKeyBinding(binding);
-                else if (eventName == "CameraSnapToGround") data_.keySnapToGround = ParseKeyBinding(binding);
-                else if (eventName == "ToggleDisplay") data_.keyClipMode = ParseKeyBinding(binding);
-                else if (eventName == "ToggleGame")    data_.keyToggleGame = ParseKeyBinding(binding);
-                else if (eventName == "SaveState")     data_.keySaveState = ParseKeyBinding(binding);
-                else if (eventName == "ToggleSaveStateOnExit") data_.keyToggleSaveStateOnExit = ParseKeyBinding(binding);
-                else if (eventName == "TaskNew") data_.keyCreateNewTask = ParseKeyBinding(binding);
-                else if (eventName == "TaskCopy") data_.keyCopyTask = ParseKeyBinding(binding);
-                else if (eventName == "TaskPaste") data_.keyPasteTask = ParseKeyBinding(binding);
-                else if (eventName == "DeleteTask") data_.keyDeleteTask = ParseKeyBinding(binding);
-                else if (eventName == "TaskSetID") data_.keyAssignTaskID = ParseKeyBinding(binding);
-                else if (eventName == "AnimTaskStartRecording") data_.keyStartRecording = ParseKeyBinding(binding);
-                else if (eventName == "AnimTaskGoToCursor") data_.keyGoToCursor = ParseKeyBinding(binding);
-                else if (eventName == "AnimTaskToggleSyncPlayback") data_.keySyncPlayback = ParseKeyBinding(binding);
-                else if (eventName == "ToggleConsole") data_.keyDebug = ParseKeyBinding(binding);
-                else if (eventName == "TaskMagicObjToggle") data_.keyToggleMagicObj = ParseKeyBinding(binding);
+                KeyBinding parsed = ParseKeyBinding(binding);
+                // Route to named fields (keep existing behaviour)
+                if (eventName == "SaveObjectFile") data_.keySave = parsed;
+                else if (eventName == "ReloadSettings") data_.keyReloadSettings = parsed;
+                else if (eventName == "Undo") data_.keyUndo = parsed;
+                else if (eventName == "Redo") data_.keyRedo = parsed;
+                else if (eventName == "CameraEnable") data_.keyEnableCamera = parsed;
+                else if (eventName == "CameraMoveForward") data_.keyMoveCameraForward = parsed;
+                else if (eventName == "CameraMoveBackward") data_.keyMoveCameraBackward = parsed;
+                else if (eventName == "CameraAdjustRadius") data_.keyAdjustCameraRadius = parsed;
+                else if (eventName == "CameraLookDown") data_.keyLookDown = parsed;
+                else if (eventName == "CameraSnapToObject") data_.keySnapToObject = parsed;
+                else if (eventName == "CameraSnapToGround") data_.keySnapToGround = parsed;
+                else if (eventName == "ToggleDisplay") data_.keyClipMode = parsed;
+                else if (eventName == "ToggleGame")    data_.keyToggleGame = parsed;
+                else if (eventName == "SaveState")     data_.keySaveState = parsed;
+                else if (eventName == "ToggleSaveStateOnExit") data_.keyToggleSaveStateOnExit = parsed;
+                else if (eventName == "TaskNew") data_.keyCreateNewTask = parsed;
+                else if (eventName == "TaskCopy") data_.keyCopyTask = parsed;
+                else if (eventName == "TaskPaste") data_.keyPasteTask = parsed;
+                else if (eventName == "DeleteTask") data_.keyDeleteTask = parsed;
+                else if (eventName == "TaskSetID") data_.keyAssignTaskID = parsed;
+                else if (eventName == "AnimTaskStartRecording") data_.keyStartRecording = parsed;
+                else if (eventName == "AnimTaskGoToCursor") data_.keyGoToCursor = parsed;
+                else if (eventName == "AnimTaskToggleSyncPlayback") data_.keySyncPlayback = parsed;
+                else if (eventName == "ToggleConsole") data_.keyDebug = parsed;
+                else if (eventName == "TaskMagicObjToggle") data_.keyToggleMagicObj = parsed;
+                // Store every parsed binding into the event map
+                data_.eventBindings_[eventName] = parsed;
             }
             return;
         }

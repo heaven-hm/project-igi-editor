@@ -228,6 +228,7 @@ private:
 	bool                    manipulation_dirty_ = false;
 
 	void					Frame(float delta_seconds);
+	void					DispatchEventBindings();
 
 	void					ProcessInput(float delta_seconds);
 	bool					CheckCollision(const glm::vec3& next_pos);

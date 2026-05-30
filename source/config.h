@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 struct KeyBinding {
     int vkCode; // Windows virtual key code
@@ -105,6 +106,9 @@ struct ConfigData {
     float cameraRadiusX, cameraRadiusY;
     float cameraPosX, cameraPosY, cameraPosZ;
     float cameraMatX, cameraMatY, cameraMatZ;
+
+    // Full event bindings map (all ~120 events loaded from config)
+    std::unordered_map<std::string, KeyBinding> eventBindings_;
 };
 
 class Config {
