@@ -200,23 +200,26 @@ FntFont FNT_Parse(const std::string& filepath) {
         }
     }
 
-    // --- Build glyph map. ANMF[i] metrics, TRAN[i] = codepoint. ---
-    for (uint32_t i = 0; i < numGlyphs; ++i) {
-        const uint8_t* g = anmf + (size_t)i * 40;
+    // --- Build glyph map. ---
+    // TRAN is indexed by CODEPOINT (256 entries) and stores the glyph index into
+    // ANMF: glyphs[code] = ANMF[TRAN[code]].  Glyph index 0 is the reserved
+    // notdef slot (control chars map to it), so a TRAN value of 0 means "no glyph".
+    const int tranCount = (int)(tranLen / 2);
+    for (int code = 0; code < tranCount; ++code) {
+        uint16_t gi = ReadU16LE(tran + (size_t)code * 2);
+        if (gi == 0 || gi >= numGlyphs) {
+            continue; // no glyph for this codepoint
+        }
+
+        const uint8_t* g = anmf + (size_t)gi * 40;
         float v_top  = ReadF32LE(g + 0);
         float u_left = ReadF32LE(g + 4);
         uint16_t width    = ReadU16LE(g + 22);
         uint16_t height   = ReadU16LE(g + 24);
         uint16_t advance  = ReadU16LE(g + 26);
 
-        int code = (int)ReadU16LE(tran + (size_t)i * 2);
-        if (code == 0) {
-            continue; // unmapped slot
-        }
-
-        // The stored u_right/v_bottom are not reliable glyph bounds (v_bottom can
-        // span well past the glyph), so derive the UV rect from the glyph's pixel
-        // width/height anchored at (u_left, v_top).
+        // u_right/v_bottom in the file are unreliable glyph bounds, so derive the
+        // UV rect from the glyph's pixel width/height anchored at (u_left, v_top).
         FntGlyph glyph;
         glyph.u0 = u_left;
         glyph.v0 = v_top;

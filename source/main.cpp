@@ -160,6 +160,22 @@ static void UpdateScaleMenuText();
 static void OnIdle() {
   g_app.OnIdle();
 
+  // Dynamic right-button menu: detach when an object is under the cursor so the
+  // right-click reaches Input_OnMouse (opens the property panel); re-attach over
+  // empty space so the normal GLUT context menu appears.
+  {
+    static bool s_right_menu_attached = true;
+    bool wantPanel = g_app.GetHoverObjectIndex() >= 0;
+    if (wantPanel && s_right_menu_attached) {
+      glutDetachMenu(GLUT_RIGHT_BUTTON);
+      s_right_menu_attached = false;
+    } else if (!wantPanel && !s_right_menu_attached) {
+      glutSetMenu(g_main_menu);
+      glutAttachMenu(GLUT_RIGHT_BUTTON);
+      s_right_menu_attached = true;
+    }
+  }
+
   // update menu text
   if (g_update_menu_flags) {
     if (g_update_menu_flags & UPDATE_MENU_OVERLAY_WIREFRAME) {

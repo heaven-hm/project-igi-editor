@@ -58,6 +58,9 @@ public:
 	bool					GetShowHUD() const;
 	void					SetShowHUD(bool show);
 
+	int						GetHoverObjectIndex() const { return hover_object_index_; }
+	bool					GetPropEditorOpen() const { return prop_editor_open_; }
+
 	bool					GetOverlayWireframe() const;
 	int						GetDrawParts() const;
 	int						GetTerrainDrawOptions() const;
