@@ -24,11 +24,15 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
             add(s[t], "Orientation", "Real32x9",  6);
             add(s[t], "Model",       "String16",  9);
         }
-        // HumanSoldier types: pos@3, heading(1 float)@6, model@7
+        // HumanSoldier types: pos@3, gamma(1 float)@6, model@7, then AI params 8..11
         for (const char* t : {"HumanSoldier","HumanSoldierFemale","HumanPlayer"}) {
-            add(s[t], "Position", "ObjectPos", 3);
-            add(s[t], "Heading",  "Real32",    6);
-            add(s[t], "Model",    "String16",  7);
+            add(s[t], "Position",        "ObjectPos", 3);
+            add(s[t], "Gamma",           "Real32",    6);
+            add(s[t], "Model",           "String16",  7);
+            add(s[t], "Team",            "Int32",     8);
+            add(s[t], "Weapon",          "VarString", 9);
+            add(s[t], "Bone Heirachy",   "Int32",     10);
+            add(s[t], "Stand Animation", "Int32",     11);
         }
         // Door: pos@3, (3 unknown physics args @6), ori@9, model@12
         { auto& sc = s["Door"];

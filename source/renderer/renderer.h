@@ -7,9 +7,140 @@
 
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include "renderer_objects.h"
 #include "renderer_splines.h"
+#include "../level/task_schema.h"
 #include <functional>
+
+/*
+================================================================================
+ Property-panel layout — single source of truth shared by the renderer (drawing)
+ and the input handler (hit-testing). All rects are in SCREEN top-down pixels
+ (same coordinate space as GLUT mouse x,y). The renderer converts to GL bottom-up
+ by gl_y = viewport_h - screen_y.
+================================================================================
+*/
+namespace PropPanel {
+
+enum class WidgetKind {
+    NoteBox,       // editable note (obj.name)
+    PosPad,        // 2D X/Y pad
+    PosZSlider,    // vertical Z slider
+    SnapGround,    // button
+    SnapObject,    // button
+    OriSlider,     // horizontal orientation slider (Real32x9 component)
+    NumSlider,     // horizontal numeric slider (Int/Real/Angle)
+    StringBox,     // editable text box (String*/VarString)
+    Checkbox,      // bool8 / PushButton
+};
+
+struct Widget {
+    WidgetKind kind;
+    int x1, y1, x2, y2;   // screen top-down rect
+    int fieldIndex = -1;  // schema field index (-1 for note/snap)
+    int comp       = 0;   // sub-component (0=X/Alpha/R, 1=Y/Beta/G, 2=Z/Gamma/B)
+};
+
+struct Layout {
+    int panel_x = 8, panel_y = 8, panel_w = 320, panel_h = 0;
+    std::vector<Widget> widgets;
+};
+
+// Layout constants (kept in one place so draw + hit-test agree exactly).
+static constexpr int kLeft       = 8;
+static constexpr int kTop        = 8;
+static constexpr int kWidth      = 320;
+static constexpr int kPad        = 8;
+static constexpr int kRowH       = 15;   // text line height (matches draw_text spacing)
+static constexpr int kBoxH       = 16;   // editable box / slider row height
+static constexpr int kPadSize    = 92;   // 2D pad square
+static constexpr int kZSliderW   = 14;   // vertical Z slider width
+
+// Build the layout for one task type's schema. `is_multi` types (ObjectPos /
+// Real32x9 / RGB) expand to multiple sub-rows. Returns rows' y positions implicitly
+// via widget rects; panel_h is the total height.
+inline Layout BuildLayout(const TaskSchemaNS::TaskSchema& schema) {
+    using namespace TaskSchemaNS;
+    Layout L;
+    L.panel_x = kLeft; L.panel_y = kTop; L.panel_w = kWidth;
+
+    int y = kTop + kPad;
+    y += kRowH;            // "QTasktype: <type>"  (read-only)
+    y += kRowH;            // "QTask Note (QTaskNote):"
+    // Note box
+    L.widgets.push_back({WidgetKind::NoteBox, kLeft + kPad, y, kLeft + kWidth - kPad, y + kBoxH, -1, 0});
+    y += kBoxH + 6;
+
+    for (int fi = 0; fi < (int)schema.size(); ++fi) {
+        const FieldDef& fd = schema[fi];
+        const std::string& tn = fd.typeName;
+        bool is_pos  = (tn == "ObjectPos" || tn == "Real32x3" || tn == "Real64x3");
+        bool is_ori  = (tn == "Real32x9");
+        bool is_rgb  = (tn == "RGB" || tn == "Colour");
+        bool is_str  = (tn.find("String") != std::string::npos || tn == "VarString" ||
+                        tn == "EnumString32" || tn == "DropDownCombo");
+        bool is_bool = (tn == "bool8" || tn == "PushButton");
+        bool is_ro   = (tn == "Graph" || tn == "AnimData" || tn == "TrainPos1D");
+
+        y += kRowH;  // field header line
+
+        if (is_pos) {
+            // X/Y/Z value rows
+            int rows_top = y;
+            y += 3 * kRowH;
+            // 2D pad (left) + vertical Z slider (right of pad)
+            int pad_x1 = kLeft + kPad;
+            int pad_y1 = y;
+            L.widgets.push_back({WidgetKind::PosPad, pad_x1, pad_y1,
+                                 pad_x1 + kPadSize, pad_y1 + kPadSize, fi, 0});
+            int zs_x1 = pad_x1 + kPadSize + 10;
+            L.widgets.push_back({WidgetKind::PosZSlider, zs_x1, pad_y1,
+                                 zs_x1 + kZSliderW, pad_y1 + kPadSize, fi, 2});
+            y += kPadSize + 6;
+            // Snap buttons
+            int bw = (kWidth - 2 * kPad - 8) / 2;
+            L.widgets.push_back({WidgetKind::SnapGround, kLeft + kPad, y,
+                                 kLeft + kPad + bw, y + kBoxH, -1, 0});
+            L.widgets.push_back({WidgetKind::SnapObject, kLeft + kPad + bw + 8, y,
+                                 kLeft + kPad + bw + 8 + bw, y + kBoxH, -1, 0});
+            y += kBoxH + 4;
+            y += kRowH;  // "Altitude: ... meter"
+            (void)rows_top;
+        } else if (is_ori || is_rgb) {
+            for (int c = 0; c < 3; ++c) {
+                int sx1 = kLeft + kPad + 64;
+                int sx2 = kLeft + kWidth - kPad;
+                L.widgets.push_back({WidgetKind::OriSlider, sx1, y, sx2, y + kBoxH, fi, c});
+                y += kBoxH;
+            }
+        } else if (is_str) {
+            // VarString is taller (multi-line)
+            int h = (tn == "VarString") ? kBoxH * 3 : kBoxH;
+            L.widgets.push_back({WidgetKind::StringBox, kLeft + kPad, y,
+                                 kLeft + kWidth - kPad, y + h, fi, 0});
+            y += h + 2;
+        } else if (is_bool) {
+            L.widgets.push_back({WidgetKind::Checkbox, kLeft + kPad, y,
+                                 kLeft + kPad + 14, y + 14, fi, 0});
+            y += kBoxH;
+        } else if (is_ro) {
+            y += kRowH;  // read-only grey value line, no widget
+        } else {
+            // numeric slider (Int/Real/Angle/Degrees)
+            int sx1 = kLeft + kPad + 64;
+            int sx2 = kLeft + kWidth - kPad;
+            L.widgets.push_back({WidgetKind::NumSlider, sx1, y, sx2, y + kBoxH, fi, 0});
+            y += kBoxH;
+        }
+        y += 4;  // gap between fields
+    }
+
+    L.panel_h = (y + kPad) - kTop;
+    return L;
+}
+
+} // namespace PropPanel
 
 
 /*

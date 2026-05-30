@@ -185,8 +185,10 @@ private:
 	bool					prop_editor_open_      = false;
 	int						prop_field_index_      = -1;
 	float					prop_drag_start_val_   = 0.f;
+	float					prop_drag_start_val2_  = 0.f;   // second axis (2D pad Y)
 	int						prop_drag_start_x_     = 0;
-	int						prop_text_edit_field_  = -1;
+	int						prop_drag_start_y_     = 0;
+	int						prop_text_edit_field_  = -1;    // -2 = editing note
 	std::string				prop_text_buf_;
 
 	// C3: Ctrl+F find

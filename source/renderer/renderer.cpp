@@ -398,7 +398,8 @@ void Renderer::Draw(const draw_params_s &params,
     int line_y = 30;
 
     // --- TreeView HUD Implementation ---
-    if (task_tree_view.level_objects_) {
+    // Hidden while the property panel occupies the left strip.
+    if (task_tree_view.level_objects_ && !task_tree_view.prop_editor_open_) {
       const auto &objects = task_tree_view.level_objects_->GetObjects();
       int tree_x = 20;
       int tree_y = 30; // Starting Y for tree
@@ -1521,7 +1522,7 @@ void Renderer::Draw(const draw_params_s &params,
       line_y -= 20;
     }
 
-    // ── C2: Typed task property editor (right-click to open, left side) ────────
+    // ── C2: IGI2-style property panel (left side, replaces tree) ───────────────
     if (task_tree_view.prop_editor_open_ && task_tree_view.selected_object_index_ >= 0 && task_tree_view.level_objects_) {
       const auto& objects = task_tree_view.level_objects_->GetObjects();
       int sel = task_tree_view.selected_object_index_;
@@ -1531,306 +1532,216 @@ void Renderer::Draw(const draw_params_s &params,
         auto schema_it = schemas.find(obj.type);
         if (schema_it != schemas.end()) {
           const TaskSchema& schema = schema_it->second;
-          int vw = params.view_define_->viewport_width_;
           int vh = params.view_define_->viewport_height_;
 
-          // Layout constants
-          const int panel_w   = 260;
-          const int val_row_h = 16;   // height of each value row
-          const int hdr_row_h = 15;   // height of each field-header row
-          const int top_hdr_h = 32;   // panel header (type + note)
-          const int pad        = 6;
-          const int slider_sz  = 6;
+          PropPanel::Layout L = PropPanel::BuildLayout(schema);
 
-          // Count rows: each field gets 1 header line + N value rows
-          int total_content_h = top_hdr_h;
-          for (const auto& fd : schema) {
-            bool is_multi = (fd.typeName == "ObjectPos" || fd.typeName == "Real32x9" ||
-                             fd.typeName == "Real32x3"  || fd.typeName == "Real64x3" ||
-                             fd.typeName == "RGB"       || fd.typeName == "Colour");
-            int nsub = is_multi ? 3 : 1;
-            total_content_h += hdr_row_h + nsub * val_row_h;
-          }
-          total_content_h += pad;
+          // GL y for a screen-top-down y.
+          auto gl_y = [&](int sy) { return vh - sy; };
+          // Filled quad in screen coords.
+          auto quad = [&](int x1, int sy1, int x2, int sy2, float r, float g, float b, float a) {
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glColor4f(r, g, b, a);
+            int gy1 = gl_y(sy1), gy2 = gl_y(sy2);
+            glBegin(GL_QUADS);
+            glVertex2i(x1, gy1); glVertex2i(x2, gy1);
+            glVertex2i(x2, gy2); glVertex2i(x1, gy2);
+            glEnd();
+            glDisable(GL_BLEND);
+          };
+          auto border = [&](int x1, int sy1, int x2, int sy2, float r, float g, float b) {
+            glColor3f(r, g, b);
+            int gy1 = gl_y(sy1), gy2 = gl_y(sy2);
+            glBegin(GL_LINE_LOOP);
+            glVertex2i(x1, gy1); glVertex2i(x2, gy1);
+            glVertex2i(x2, gy2); glVertex2i(x1, gy2);
+            glEnd();
+          };
 
-          int panel_h   = total_content_h;
-          int gl_left   = 5;                       // left side, below task tree
-          int gl_bottom = vh / 2 - panel_h / 2;   // vertically centered in lower half
-          if (gl_bottom < 5) gl_bottom = 5;
+          auto tok = [&](int idx) -> std::string {
+            return (idx >= 0 && idx < (int)obj.argTokens.size()) ? obj.argTokens[idx] : std::string("-");
+          };
 
-          // Semi-transparent dark background
-          glEnable(GL_BLEND);
-          glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-          glColor4f(0.0f, 0.0f, 0.0f, 0.75f);
-          glBegin(GL_QUADS);
-          glVertex2i(gl_left,           gl_bottom);
-          glVertex2i(gl_left + panel_w, gl_bottom);
-          glVertex2i(gl_left + panel_w, gl_bottom + panel_h);
-          glVertex2i(gl_left,           gl_bottom + panel_h);
-          glEnd();
+          // Opaque panel background covering the left strip + border.
+          quad(L.panel_x, L.panel_y, L.panel_x + L.panel_w, L.panel_y + L.panel_h,
+               0.06f, 0.06f, 0.09f, 0.97f);
+          border(L.panel_x, L.panel_y, L.panel_x + L.panel_w, L.panel_y + L.panel_h,
+                 0.30f, 0.30f, 0.55f);
 
-          // Blue-grey border
-          glColor4f(0.3f, 0.3f, 0.6f, 1.0f);
-          glLineWidth(1.0f);
-          glBegin(GL_LINE_LOOP);
-          glVertex2i(gl_left,           gl_bottom);
-          glVertex2i(gl_left + panel_w, gl_bottom);
-          glVertex2i(gl_left + panel_w, gl_bottom + panel_h);
-          glVertex2i(gl_left,           gl_bottom + panel_h);
-          glEnd();
-          glDisable(GL_BLEND);
-
-          // Cursor position in screen top-down coordinates
-          // draw_text(x, screen_y, ...) => renders at GL y = vh - screen_y
-          // Panel top (screen-top-down) = vh - (gl_bottom + panel_h)
-          int screen_top = vh - (gl_bottom + panel_h);
-
-          // Panel header: type + ID
+          // Header text — track running screen y to mirror the layout.
+          int ty = L.panel_y + PropPanel::kPad;
           char hdr[160];
           snprintf(hdr, sizeof(hdr), "QTasktype: %s", obj.type.c_str());
-          draw_text(gl_left + pad, screen_top + 12, hdr, 1.0f, 1.0f, 1.0f);
+          draw_text(L.panel_x + PropPanel::kPad, ty + 11, hdr, 1.0f, 1.0f, 1.0f);
+          ty += PropPanel::kRowH;
+          draw_text(L.panel_x + PropPanel::kPad, ty + 11, "QTask Note (QTaskNote):", 0.6f, 0.6f, 0.6f);
+          ty += PropPanel::kRowH;
 
-          // Note line (name)
-          if (!obj.name.empty()) {
-            char note_hdr[128];
-            snprintf(note_hdr, sizeof(note_hdr), "Note: %s", obj.name.c_str());
-            draw_text(gl_left + pad, screen_top + 24, note_hdr, 0.7f, 0.9f, 0.7f);
-          }
-
-          // Separator line under header
+          // Walk widgets; field headers + value labels are derived from layout y.
+          // Note box (first widget).
           {
-            int sep_gl_y = gl_bottom + panel_h - top_hdr_h;
-            glColor4f(0.3f, 0.3f, 0.6f, 0.7f);
-            glBegin(GL_LINES);
-            glVertex2i(gl_left + 2,           sep_gl_y);
-            glVertex2i(gl_left + panel_w - 2, sep_gl_y);
-            glEnd();
+            const auto& w = L.widgets[0];
+            bool editing = (task_tree_view.prop_text_edit_field_ == -2);
+            quad(w.x1, w.y1, w.x2, w.y2, 0.12f, 0.12f, 0.18f, 1.0f);
+            border(w.x1, w.y1, w.x2, w.y2, editing ? 1.0f : 0.45f,
+                   editing ? 1.0f : 0.45f, editing ? 1.0f : 0.65f);
+            std::string nv = editing ? (task_tree_view.prop_text_buf_ + "_") : obj.name;
+            if (nv.size() > 40) nv = nv.substr(0, 40);
+            draw_text(w.x1 + 3, w.y1 + 12, nv.c_str(), 1.0f, 1.0f, 1.0f);
           }
 
-          // Field rows — track current GL y from top
-          int cur_gl_y = gl_bottom + panel_h - top_hdr_h; // starts just below separator
-
+          // Per-field rendering driven by the same layout pass.
+          int wi = 1; // widget cursor (0 was the note)
+          int y  = L.widgets[0].y2 + 6;
           for (int fi = 0; fi < (int)schema.size(); ++fi) {
             const FieldDef& fd = schema[fi];
-            bool is_multi  = (fd.typeName == "ObjectPos" || fd.typeName == "Real32x9" ||
-                              fd.typeName == "Real32x3"  || fd.typeName == "Real64x3" ||
-                              fd.typeName == "RGB"       || fd.typeName == "Colour");
-            bool is_string = (fd.typeName.find("String") != std::string::npos ||
-                              fd.typeName == "VarString" || fd.typeName == "EnumString32" ||
-                              fd.typeName == "DropDownCombo");
-            bool is_bool   = (fd.typeName == "bool8" || fd.typeName == "PushButton");
-            bool is_ro     = (fd.typeName == "Graph" || fd.typeName == "AnimData" ||
-                              fd.typeName == "TrainPos1D");
-            int nsub = is_multi ? 3 : 1;
+            const std::string& tn = fd.typeName;
+            bool is_pos  = (tn == "ObjectPos" || tn == "Real32x3" || tn == "Real64x3");
+            bool is_ori  = (tn == "Real32x9");
+            bool is_rgb  = (tn == "RGB" || tn == "Colour");
+            bool is_str  = (tn.find("String") != std::string::npos || tn == "VarString" ||
+                            tn == "EnumString32" || tn == "DropDownCombo");
+            bool is_bool = (tn == "bool8" || tn == "PushButton");
+            bool is_ro   = (tn == "Graph" || tn == "AnimData" || tn == "TrainPos1D");
 
-            // Sub-type annotation for field header
-            const char* sub_type = "";
-            if (fd.typeName == "ObjectPos")     sub_type = "(Real64x3)";
-            else if (fd.typeName.find("String") != std::string::npos ||
-                     fd.typeName == "VarString" || fd.typeName == "EnumString32" ||
-                     fd.typeName == "DropDownCombo") sub_type = "(FixedString)";
+            // Field header line "Name (Type)(sub):"
+            const char* sub = "";
+            if (tn == "ObjectPos") sub = "(Real64x3)";
+            else if (is_str)       sub = "(FixedString)";
+            else if (tn == "Real32" && (fd.name == "Gamma" || fd.name == "Heading")) sub = "(Angle)";
+            char fhdr[160];
+            if (sub[0]) snprintf(fhdr, sizeof(fhdr), "%s (%s)%s:", fd.name.c_str(), tn.c_str(), sub);
+            else        snprintf(fhdr, sizeof(fhdr), "%s (%s):", fd.name.c_str(), tn.c_str());
+            draw_text(L.panel_x + PropPanel::kPad, y + 11, fhdr, 0.6f, 0.6f, 0.6f);
+            y += PropPanel::kRowH;
 
-            // Field header line: "FieldName (TypeName)(SubType):"
-            cur_gl_y -= hdr_row_h;
-            {
-              int screen_y = vh - cur_gl_y - hdr_row_h + 3;
-              char fhdr[128];
-              if (sub_type[0])
-                snprintf(fhdr, sizeof(fhdr), "%s (%s)%s:", fd.name.c_str(), fd.typeName.c_str(), sub_type);
-              else
-                snprintf(fhdr, sizeof(fhdr), "%s (%s):", fd.name.c_str(), fd.typeName.c_str());
-              draw_text(gl_left + pad, screen_y, fhdr, 0.5f, 0.5f, 0.5f);
-            }
-
-            // Sub-component labels
-            const char* sub_labels[3] = {"X", "Y", "Z"};
-            if (fd.typeName == "Real32x9") {
-              sub_labels[0] = "Alpha"; sub_labels[1] = "Beta"; sub_labels[2] = "Gamma";
-            }
-            if (fd.typeName == "RGB" || fd.typeName == "Colour") {
-              sub_labels[0] = "R"; sub_labels[1] = "G"; sub_labels[2] = "B";
-            }
-
-            for (int c = 0; c < nsub; ++c) {
-              cur_gl_y -= val_row_h;
-              int row_screen_y = vh - cur_gl_y - val_row_h + 2; // top-down for draw_text
-
-              bool active = (task_tree_view.prop_field_index_    == fi * 3 + c) ||
-                            (task_tree_view.prop_text_edit_field_ == fi * 3 + c);
-
-              // Active row highlight
-              if (active) {
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                glColor4f(0.25f, 0.25f, 0.6f, 0.45f);
-                glBegin(GL_QUADS);
-                glVertex2i(gl_left + 2,           cur_gl_y);
-                glVertex2i(gl_left + panel_w - 2, cur_gl_y);
-                glVertex2i(gl_left + panel_w - 2, cur_gl_y + val_row_h);
-                glVertex2i(gl_left + 2,           cur_gl_y + val_row_h);
-                glEnd();
-                glDisable(GL_BLEND);
+            if (is_pos) {
+              // X/Y/Z rows
+              const char* lab[3] = {"X", "Y", "Z"};
+              for (int c = 0; c < 3; ++c) {
+                char vb[96];
+                snprintf(vb, sizeof(vb), "%s: %s", lab[c], tok(fd.argOffset + c).c_str());
+                draw_text(L.panel_x + PropPanel::kPad + 4, y + 11, vb, 0.9f, 0.9f, 0.9f);
+                y += PropPanel::kRowH;
               }
-
-              // Resolve value string
-              int argIdx = fd.argOffset + c;
-              std::string val_str;
-              if (argIdx < (int)obj.argTokens.size())
-                val_str = obj.argTokens[argIdx];
-              else
-                val_str = "-";
-
-              // If text-editing this field, override with edit buffer + cursor
-              if (task_tree_view.prop_text_edit_field_ == fi * 3 + c)
-                val_str = task_tree_view.prop_text_buf_ + "_";
-
-              // Truncate for display
-              if (val_str.size() > 18)
-                val_str = val_str.substr(0, 15) + "...";
-
-              if (is_bool) {
-                // Boolean: checkbox rectangle + TRUE/FALSE text
-                int bx = gl_left + pad;
-                int by = cur_gl_y + (val_row_h - 8) / 2;
-                bool bval = false;
-                try { bval = (std::stoi(val_str) != 0); } catch(...) {}
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                if (bval) {
-                  glColor4f(0.2f, 0.9f, 0.2f, 0.85f);
-                  glBegin(GL_QUADS);
-                  glVertex2i(bx, by); glVertex2i(bx+8, by);
-                  glVertex2i(bx+8, by+8); glVertex2i(bx, by+8);
-                  glEnd();
-                }
-                glColor3f(0.9f, 0.9f, 0.9f);
-                glBegin(GL_LINE_LOOP);
-                glVertex2i(bx, by); glVertex2i(bx+8, by);
-                glVertex2i(bx+8, by+8); glVertex2i(bx, by+8);
-                glEnd();
-                glDisable(GL_BLEND);
-                char bstr[32];
-                snprintf(bstr, sizeof(bstr), " %s", bval ? "TRUE" : "FALSE");
-                draw_text(gl_left + pad + 10, row_screen_y, bstr, 0.3f, 1.0f, 0.3f);
-
-              } else if (is_ro) {
-                // Read-only blob: show grey text, no slider
-                draw_text(gl_left + pad + 8, row_screen_y, val_str.c_str(), 0.5f, 0.5f, 0.5f);
-
-              } else if (is_string) {
-                // String: bordered text-box appearance
-                int bx1 = gl_left + pad;
-                int bx2 = gl_left + panel_w - pad;
-                int by1 = cur_gl_y + 1;
-                int by2 = cur_gl_y + val_row_h - 1;
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                glColor4f(0.12f, 0.12f, 0.18f, 0.9f);
-                glBegin(GL_QUADS);
-                glVertex2i(bx1, by1); glVertex2i(bx2, by1);
-                glVertex2i(bx2, by2); glVertex2i(bx1, by2);
-                glEnd();
-                float br = active ? 0.8f : 0.45f;
-                float bg_ = active ? 0.8f : 0.45f;
-                float bb = active ? 1.0f : 0.65f;
-                glColor3f(br, bg_, bb);
-                glBegin(GL_LINE_LOOP);
-                glVertex2i(bx1, by1); glVertex2i(bx2, by1);
-                glVertex2i(bx2, by2); glVertex2i(bx1, by2);
-                glEnd();
-                glDisable(GL_BLEND);
-                draw_text(gl_left + pad + 2, row_screen_y, val_str.c_str(), 1.0f, 1.0f, 1.0f);
-
-              } else if (fd.typeName == "ObjectPos" || fd.typeName == "Real32x3" ||
-                         fd.typeName == "Real64x3") {
-                // Position: text input box — label + bordered editable box
-                char lbl[32];
-                snprintf(lbl, sizeof(lbl), "  %s:", sub_labels[c]);
-                draw_text(gl_left + pad, row_screen_y, lbl, 0.8f, 0.8f, 0.8f);
-                int lbl_w = 32;
-                int bx1 = gl_left + pad + lbl_w;
-                int bx2 = gl_left + panel_w - pad;
-                int by1 = cur_gl_y + 1;
-                int by2 = cur_gl_y + val_row_h - 1;
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                glColor4f(0.08f, 0.08f, 0.14f, 0.95f);
-                glBegin(GL_QUADS);
-                glVertex2i(bx1, by1); glVertex2i(bx2, by1);
-                glVertex2i(bx2, by2); glVertex2i(bx1, by2);
-                glEnd();
-                float bc = active ? 1.0f : 0.55f;
-                glColor3f(bc, bc, active ? 1.0f : bc);
-                glBegin(GL_LINE_LOOP);
-                glVertex2i(bx1, by1); glVertex2i(bx2, by1);
-                glVertex2i(bx2, by2); glVertex2i(bx1, by2);
-                glEnd();
-                glDisable(GL_BLEND);
-                std::string display_val = val_str;
-                if (task_tree_view.prop_text_edit_field_ == fi * 3 + c)
-                  display_val = task_tree_view.prop_text_buf_ + "_";
-                draw_text(bx1 + 2, row_screen_y, display_val.c_str(), 1.0f, 1.0f, 0.7f);
-
-              } else if (fd.typeName == "Real32x9") {
-                // Orientation: slider with track bar — Alpha/Beta/Gamma
-                char lbl[32];
-                snprintf(lbl, sizeof(lbl), "  %s:", sub_labels[c]);
-                draw_text(gl_left + pad, row_screen_y, lbl, 0.8f, 0.8f, 0.8f);
-                // Value text
-                int lbl_w = 46;
-                draw_text(gl_left + pad + lbl_w, row_screen_y, val_str.c_str(), 1.0f, 1.0f, 1.0f);
-                // Slider track
-                int track_x1 = gl_left + panel_w - pad - 80;
-                int track_x2 = gl_left + panel_w - pad;
-                int track_cy = cur_gl_y + val_row_h / 2;
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                glColor4f(0.2f, 0.2f, 0.3f, 0.8f);
-                glBegin(GL_QUADS);
-                glVertex2i(track_x1, track_cy-2); glVertex2i(track_x2, track_cy-2);
-                glVertex2i(track_x2, track_cy+2); glVertex2i(track_x1, track_cy+2);
-                glEnd();
-                glColor3f(0.5f, 0.5f, 0.7f);
-                glBegin(GL_LINE_LOOP);
-                glVertex2i(track_x1, track_cy-2); glVertex2i(track_x2, track_cy-2);
-                glVertex2i(track_x2, track_cy+2); glVertex2i(track_x1, track_cy+2);
-                glEnd();
-                // Thumb: map value [-pi, pi] to track width
-                float fval = 0.f;
-                try { fval = std::stof(val_str); } catch(...) {}
-                float norm = (fval + 3.14159f) / (2.f * 3.14159f);
-                norm = std::max(0.f, std::min(1.f, norm));
-                int thumb_x = track_x1 + (int)(norm * (track_x2 - track_x1 - 6));
-                bool dragging = (task_tree_view.prop_field_index_ == fi * 3 + c);
-                glColor3f(dragging ? 1.0f : 0.9f, dragging ? 1.0f : 0.9f, dragging ? 0.0f : 0.9f);
-                glBegin(GL_QUADS);
-                glVertex2i(thumb_x,   track_cy-4); glVertex2i(thumb_x+6, track_cy-4);
-                glVertex2i(thumb_x+6, track_cy+4); glVertex2i(thumb_x,   track_cy+4);
-                glEnd();
-                glDisable(GL_BLEND);
-
-              } else {
-                // Other numeric: "Label: value  [■]" with drag handle
-                char num_buf[80];
-                if (nsub > 1)
-                  snprintf(num_buf, sizeof(num_buf), "  %s: %s", sub_labels[c], val_str.c_str());
-                else
-                  snprintf(num_buf, sizeof(num_buf), "  %s", val_str.c_str());
-                draw_text(gl_left + pad, row_screen_y, num_buf, 1.0f, 1.0f, 1.0f);
-                // Small drag handle
-                int sx = gl_left + panel_w - pad - slider_sz - 2;
-                int sy = cur_gl_y + (val_row_h - slider_sz) / 2;
-                bool dragging = (task_tree_view.prop_field_index_ == fi * 3 + c);
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                glColor4f(dragging ? 1.0f : 1.0f, dragging ? 1.0f : 1.0f, dragging ? 0.0f : 1.0f, 0.85f);
-                glBegin(GL_QUADS);
-                glVertex2i(sx, sy); glVertex2i(sx+slider_sz, sy);
-                glVertex2i(sx+slider_sz, sy+slider_sz); glVertex2i(sx, sy+slider_sz);
-                glEnd();
-                glDisable(GL_BLEND);
+              // 2D pad
+              const auto& pad = L.widgets[wi++];
+              quad(pad.x1, pad.y1, pad.x2, pad.y2, 0.10f, 0.10f, 0.16f, 1.0f);
+              border(pad.x1, pad.y1, pad.x2, pad.y2, 0.45f, 0.45f, 0.65f);
+              // handle at centre (X horizontal, Y vertical within a ±window)
+              {
+                double px = 0, py = 0;
+                try { px = std::stod(tok(fd.argOffset + 0)); } catch(...) {}
+                try { py = std::stod(tok(fd.argOffset + 1)); } catch(...) {}
+                const double win = 50.0; // ± window mapped across the pad
+                int cx = pad.x1 + (pad.x2 - pad.x1) / 2;
+                int cy = pad.y1 + (pad.y2 - pad.y1) / 2;
+                int hx = cx + (int)(std::max(-1.0, std::min(1.0, (px - std::floor(px / win) * win - win / 2) / (win / 2))) * (pad.x2 - pad.x1) / 2);
+                int hy = cy - (int)(std::max(-1.0, std::min(1.0, (py - std::floor(py / win) * win - win / 2) / (win / 2))) * (pad.y2 - pad.y1) / 2);
+                bool drag = (task_tree_view.prop_field_index_ == fi * 3 + 0 ||
+                             task_tree_view.prop_field_index_ == fi * 3 + 1);
+                quad(hx - 4, hy - 4, hx + 4, hy + 4, drag ? 1.0f : 0.9f, drag ? 1.0f : 0.9f, drag ? 0.0f : 0.3f, 1.0f);
               }
+              // Z vertical slider
+              const auto& zs = L.widgets[wi++];
+              quad(zs.x1, zs.y1, zs.x2, zs.y2, 0.10f, 0.10f, 0.16f, 1.0f);
+              border(zs.x1, zs.y1, zs.x2, zs.y2, 0.45f, 0.45f, 0.65f);
+              {
+                double pz = 0; try { pz = std::stod(tok(fd.argOffset + 2)); } catch(...) {}
+                const double zwin = 50.0;
+                double f = (pz - std::floor(pz / zwin) * zwin) / zwin; // 0..1
+                int th = zs.y2 - (int)(f * (zs.y2 - zs.y1));
+                bool drag = (task_tree_view.prop_field_index_ == fi * 3 + 2);
+                quad(zs.x1, th - 3, zs.x2, th + 3, drag ? 1.0f : 0.9f, drag ? 1.0f : 0.9f, drag ? 0.0f : 0.3f, 1.0f);
+              }
+              y = pad.y2 + 6;
+              // Snap buttons
+              const auto& bg = L.widgets[wi++];
+              const auto& bo = L.widgets[wi++];
+              quad(bg.x1, bg.y1, bg.x2, bg.y2, 0.18f, 0.20f, 0.30f, 1.0f);
+              border(bg.x1, bg.y1, bg.x2, bg.y2, 0.5f, 0.55f, 0.7f);
+              draw_text(bg.x1 + 6, bg.y1 + 12, "Snap to ground", 0.9f, 0.9f, 1.0f);
+              quad(bo.x1, bo.y1, bo.x2, bo.y2, 0.18f, 0.20f, 0.30f, 1.0f);
+              border(bo.x1, bo.y1, bo.x2, bo.y2, 0.5f, 0.55f, 0.7f);
+              draw_text(bo.x1 + 6, bo.y1 + 12, "Snap to object", 0.9f, 0.9f, 1.0f);
+              y = bg.y2 + 4;
+              // Altitude readout (obj.pos.z as meters — terrain height not available here)
+              {
+                char ab[80];
+                snprintf(ab, sizeof(ab), "Altitude: %.6f meter", obj.pos.z);
+                draw_text(L.panel_x + PropPanel::kPad, y + 11, ab, 0.8f, 0.8f, 0.6f);
+                y += PropPanel::kRowH;
+              }
+            } else if (is_ori || is_rgb) {
+              const char* lab[3] = {"Alpha", "Beta", "Gamma"};
+              const char* rgbl[3] = {"R", "G", "B"};
+              for (int c = 0; c < 3; ++c) {
+                const auto& w = L.widgets[wi++];
+                draw_text(L.panel_x + PropPanel::kPad, w.y1 + 12,
+                          is_rgb ? rgbl[c] : lab[c], 0.85f, 0.85f, 0.85f);
+                draw_text(L.panel_x + PropPanel::kPad + 40, w.y1 + 12,
+                          tok(fd.argOffset + c).c_str(), 1.0f, 1.0f, 1.0f);
+                // track
+                int cy = (w.y1 + w.y2) / 2;
+                quad(w.x1, cy - 2, w.x2, cy + 2, 0.2f, 0.2f, 0.3f, 1.0f);
+                border(w.x1, cy - 2, w.x2, cy + 2, 0.5f, 0.5f, 0.7f);
+                float v = 0.f; try { v = std::stof(tok(fd.argOffset + c)); } catch(...) {}
+                float norm = is_rgb ? std::max(0.f, std::min(1.f, v / 255.f))
+                                    : std::max(0.f, std::min(1.f, (v + 3.14159f) / (2.f * 3.14159f)));
+                int tx = w.x1 + (int)(norm * (w.x2 - w.x1 - 6));
+                bool drag = (task_tree_view.prop_field_index_ == fi * 3 + c);
+                quad(tx, cy - 5, tx + 6, cy + 5, drag ? 1.0f : 0.9f, drag ? 1.0f : 0.9f, drag ? 0.0f : 0.9f, 1.0f);
+                y = w.y2;
+              }
+            } else if (is_str) {
+              const auto& w = L.widgets[wi++];
+              bool editing = (task_tree_view.prop_text_edit_field_ == fi * 3 + 0);
+              quad(w.x1, w.y1, w.x2, w.y2, 0.12f, 0.12f, 0.18f, 1.0f);
+              border(w.x1, w.y1, w.x2, w.y2, editing ? 1.0f : 0.45f,
+                     editing ? 1.0f : 0.45f, editing ? 1.0f : 0.65f);
+              std::string sv = editing ? (task_tree_view.prop_text_buf_ + "_") : tok(fd.argOffset);
+              // Wrap text for tall (VarString) boxes.
+              int max_chars = (w.x2 - w.x1 - 6) / 7;
+              int line = 0;
+              int box_lines = (w.y2 - w.y1) / PropPanel::kBoxH;
+              for (size_t p = 0; p < sv.size() && line < std::max(1, box_lines); p += max_chars, ++line) {
+                std::string seg = sv.substr(p, max_chars);
+                draw_text(w.x1 + 3, w.y1 + 12 + line * PropPanel::kBoxH, seg.c_str(), 1.0f, 1.0f, 1.0f);
+              }
+              if (sv.empty())
+                draw_text(w.x1 + 3, w.y1 + 12, "", 1.0f, 1.0f, 1.0f);
+              y = w.y2 + 2;
+            } else if (is_bool) {
+              const auto& w = L.widgets[wi++];
+              bool bv = false; try { bv = (std::stoi(tok(fd.argOffset)) != 0); } catch(...) {}
+              quad(w.x1, w.y1, w.x2, w.y2, 0.10f, 0.10f, 0.16f, 1.0f);
+              if (bv) quad(w.x1 + 2, w.y1 + 2, w.x2 - 2, w.y2 - 2, 0.2f, 0.9f, 0.2f, 1.0f);
+              border(w.x1, w.y1, w.x2, w.y2, 0.85f, 0.85f, 0.85f);
+              draw_text(w.x2 + 6, w.y1 + 11, bv ? "TRUE" : "FALSE", 0.3f, 1.0f, 0.3f);
+              y = w.y2;
+            } else if (is_ro) {
+              std::string v = tok(fd.argOffset);
+              if (v.size() > 38) v = v.substr(0, 35) + "...";
+              draw_text(L.panel_x + PropPanel::kPad + 4, y + 11, v.c_str(), 0.5f, 0.5f, 0.5f);
+              y += PropPanel::kRowH;
+            } else {
+              // numeric slider (Int/Real/Angle/Degrees)
+              const auto& w = L.widgets[wi++];
+              draw_text(L.panel_x + PropPanel::kPad, w.y1 + 12,
+                        tok(fd.argOffset).c_str(), 1.0f, 1.0f, 1.0f);
+              int cy = (w.y1 + w.y2) / 2;
+              quad(w.x1, cy - 2, w.x2, cy + 2, 0.2f, 0.2f, 0.3f, 1.0f);
+              border(w.x1, cy - 2, w.x2, cy + 2, 0.5f, 0.5f, 0.7f);
+              float v = 0.f; try { v = std::stof(tok(fd.argOffset)); } catch(...) {}
+              // map a ±100 window onto the track
+              float norm = std::max(0.f, std::min(1.f, (v - std::floor(v / 200.f) * 200.f) / 200.f));
+              int tx = w.x1 + (int)(norm * (w.x2 - w.x1 - 6));
+              bool drag = (task_tree_view.prop_field_index_ == fi * 3 + 0);
+              quad(tx, cy - 5, tx + 6, cy + 5, drag ? 1.0f : 0.9f, drag ? 1.0f : 0.9f, drag ? 0.0f : 0.9f, 1.0f);
+              y = w.y2;
             }
+            y += 4;
           }
         }
       }

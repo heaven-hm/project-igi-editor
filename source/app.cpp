@@ -771,80 +771,74 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 				}
 			}
 
-			// C2: Property editor click handling
+			// C2: Property editor click handling (IGI2-style left panel)
 			if (prop_editor_open_ && selected_object_index_ >= 0) {
-				const auto& objects = level_.GetLevelObjects().GetObjects();
+				auto& objects = level_.GetLevelObjects().GetObjects();
 				if (selected_object_index_ < (int)objects.size()) {
-					const auto& obj = objects[selected_object_index_];
+					LevelObject& obj = objects[selected_object_index_];
 					const auto& schemas = GetBuiltinSchemas();
 					auto it = schemas.find(obj.type);
 					if (it != schemas.end()) {
 						const TaskSchema& schema = it->second;
-						int vw = window_state_.viewport_width_;
-						int vh = window_state_.viewport_height_;
-						int panel_w = 280;
-						int row_h   = 18;
-						int header_h = 38;
-						int total_rows = 0;
-						for (const auto& fd : schema) {
-							if (fd.typeName == "ObjectPos" || fd.typeName == "Real32x9" ||
-							    fd.typeName == "Real32x3"  || fd.typeName == "Real64x3" ||
-							    fd.typeName == "RGB"       || fd.typeName == "Colour")
-								total_rows += 4; // header line + 3 component rows
-							else
-								total_rows += 2; // field header + value row
-						}
-						int panel_h = header_h + total_rows * row_h + 12;
-						int panel_x = 5; // left side
-						int panel_y = (int)(vh * 0.45f); // below tree view
-
-						if (x >= panel_x && x <= panel_x + panel_w &&
-						    y >= panel_y && y <= panel_y + panel_h) {
-							int row_clicked = (y - panel_y - header_h) / row_h;
-							// Map row to field/component
-							int row_idx = 0;
-							for (int fi = 0; fi < (int)schema.size(); ++fi) {
-								const FieldDef& fd = schema[fi];
-								bool is_multi = (fd.typeName == "ObjectPos" || fd.typeName == "Real32x9" ||
-								                 fd.typeName == "Real32x3"  || fd.typeName == "Real64x3" ||
-								                 fd.typeName == "RGB"       || fd.typeName == "Colour");
-								int sub = is_multi ? 3 : 1;
-								if (row_clicked >= row_idx && row_clicked < row_idx + sub) {
-									int comp = row_clicked - row_idx;
-									int argIdx = fd.argOffset + comp;
-									bool is_string = (fd.typeName.find("String") != std::string::npos ||
-									                  fd.typeName == "VarString" ||
-									                  fd.typeName == "EnumString32" ||
-									                  fd.typeName == "DropDownCombo");
-									bool is_bool = (fd.typeName == "bool8" || fd.typeName == "PushButton");
-									if (is_bool && argIdx < (int)obj.argTokens.size()) {
-										auto& mobj = level_.GetLevelObjects().GetObjects()[selected_object_index_];
-										if (argIdx < (int)mobj.argTokens.size()) {
-											int cur = 0;
-											try { cur = std::stoi(mobj.argTokens[argIdx]); } catch(...) {}
-											mobj.argTokens[argIdx] = (cur == 0) ? "1" : "0";
-											mobj.modified = true;
-											level_.GetLevelObjects().UpdateCoordinatesInLine(mobj);
-										}
-									} else if (is_string || fd.typeName == "ObjectPos" ||
-									           fd.typeName == "Real32x3" || fd.typeName == "Real64x3") {
-										// Position and string fields use text input box
-										prop_text_edit_field_ = fi * 3 + comp;
-										prop_text_buf_ = (argIdx < (int)obj.argTokens.size()) ? obj.argTokens[argIdx] : "";
-									} else {
-										// Orientation sliders and other numeric: drag
-										prop_field_index_    = fi * 3 + comp;
-										prop_drag_start_x_   = x;
-										float cur_val = 0.f;
-										if (argIdx < (int)obj.argTokens.size()) {
-											try { cur_val = std::stof(obj.argTokens[argIdx]); } catch(...) {}
-										}
-										prop_drag_start_val_ = cur_val;
-									}
-									return;
+						PropPanel::Layout L = PropPanel::BuildLayout(schema);
+						// Clicks inside the panel are consumed by the panel.
+						if (x >= L.panel_x && x <= L.panel_x + L.panel_w &&
+						    y >= L.panel_y && y <= L.panel_y + L.panel_h) {
+							auto inRect = [&](const PropPanel::Widget& w) {
+								return x >= w.x1 && x <= w.x2 && y >= w.y1 && y <= w.y2;
+							};
+							auto tokOf = [&](int idx) -> float {
+								if (idx >= 0 && idx < (int)obj.argTokens.size()) {
+									try { return std::stof(obj.argTokens[idx]); } catch(...) {}
 								}
-								row_idx += sub;
+								return 0.f;
+							};
+							for (const auto& w : L.widgets) {
+								if (!inRect(w)) continue;
+								using K = PropPanel::WidgetKind;
+								if (w.kind == K::NoteBox) {
+									prop_text_edit_field_ = -2; // sentinel: editing note
+									prop_text_buf_ = obj.name;
+								} else if (w.kind == K::SnapGround) {
+									PushUndoState();
+									input_.keys_ |= MK_MANIP_S;
+									UpdateMarkerManipulation();
+									input_.keys_ &= ~MK_MANIP_S;
+								} else if (w.kind == K::SnapObject) {
+									PushUndoState();
+									input_.keys_ |= MK_MANIP_O;
+									UpdateMarkerManipulation();
+									input_.keys_ &= ~MK_MANIP_O;
+								} else if (w.kind == K::StringBox) {
+									prop_text_edit_field_ = w.fieldIndex * 3 + w.comp;
+									int argIdx = schema[w.fieldIndex].argOffset + w.comp;
+									prop_text_buf_ = (argIdx < (int)obj.argTokens.size()) ? obj.argTokens[argIdx] : "";
+								} else if (w.kind == K::Checkbox) {
+									int argIdx = schema[w.fieldIndex].argOffset + w.comp;
+									if (argIdx < (int)obj.argTokens.size()) {
+										int cur = 0; try { cur = std::stoi(obj.argTokens[argIdx]); } catch(...) {}
+										obj.argTokens[argIdx] = (cur == 0) ? "1" : "0";
+										obj.modified = true;
+										level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+									}
+								} else if (w.kind == K::PosPad) {
+									// drag X and Y simultaneously — store field, use comp=0 marker
+									prop_field_index_  = w.fieldIndex * 3 + 0;
+									prop_drag_start_x_ = x;
+									prop_drag_start_y_ = y;
+									int off = schema[w.fieldIndex].argOffset;
+									prop_drag_start_val_  = tokOf(off + 0);
+									prop_drag_start_val2_ = tokOf(off + 1);
+								} else {
+									// PosZSlider / OriSlider / NumSlider — single-value drag
+									prop_field_index_  = w.fieldIndex * 3 + w.comp;
+									prop_drag_start_x_ = x;
+									prop_drag_start_y_ = y;
+									prop_drag_start_val_ = tokOf(schema[w.fieldIndex].argOffset + w.comp);
+								}
+								return;
 							}
+							return; // click landed on panel chrome — consume
 						}
 					}
 				}
@@ -991,7 +985,7 @@ void App::Input_OnMotion(int x, int y) {
 		edit_selection_end_ = edit_cursor_pos_;
 	}
 
-	// C2: Property editor drag
+	// C2: Property editor drag (2D pad / Z slider / orientation+numeric sliders)
 	if (prop_field_index_ >= 0 && !enableCameraMode && selected_object_index_ >= 0) {
 		auto& objects = level_.GetLevelObjects().GetObjects();
 		if (selected_object_index_ < (int)objects.size()) {
@@ -1000,20 +994,55 @@ void App::Input_OnMotion(int x, int y) {
 			auto it = schemas.find(obj.type);
 			if (it != schemas.end()) {
 				const TaskSchema& schema = it->second;
-				// Decode prop_field_index_ back to field/component
-				int fi    = prop_field_index_ / 3;
-				int comp  = prop_field_index_ % 3;
+				int fi   = prop_field_index_ / 3;
+				int comp = prop_field_index_ % 3;
 				if (fi < (int)schema.size()) {
 					const FieldDef& fd = schema[fi];
-					bool is_ori = (fd.typeName == "Real32x9");
-					float sensitivity = is_ori ? 0.01f : 0.1f;
-					int delta = x - prop_drag_start_x_;
-					float new_val = prop_drag_start_val_ + delta * sensitivity;
-					int argIdx = fd.argOffset + comp;
-					if (argIdx < (int)obj.argTokens.size()) {
-						char buf[64];
-						snprintf(buf, sizeof(buf), "%.4f", new_val);
-						obj.argTokens[argIdx] = buf;
+					const std::string& tn = fd.typeName;
+					bool is_pos = (tn == "ObjectPos" || tn == "Real32x3" || tn == "Real64x3");
+					bool is_ori = (tn == "Real32x9");
+					int dxp = x - prop_drag_start_x_;
+					int dyp = y - prop_drag_start_y_;
+					auto writeArg = [&](int idx, float v) {
+						if (idx >= 0 && idx < (int)obj.argTokens.size()) {
+							char buf[64]; snprintf(buf, sizeof(buf), "%.6f", v);
+							obj.argTokens[idx] = buf;
+						}
+					};
+					if (is_pos && comp == 0) {
+						// 2D pad: X horizontal, Y vertical (screen-down => world -Y)
+						const float sens = 0.5f;
+						writeArg(fd.argOffset + 0, prop_drag_start_val_  + dxp * sens);
+						writeArg(fd.argOffset + 1, prop_drag_start_val2_ - dyp * sens);
+						obj.pos.x = obj.argTokens.size() > (size_t)(fd.argOffset)   ? std::atof(obj.argTokens[fd.argOffset].c_str())   : obj.pos.x;
+						obj.pos.y = obj.argTokens.size() > (size_t)(fd.argOffset+1) ? std::atof(obj.argTokens[fd.argOffset+1].c_str()) : obj.pos.y;
+						obj.modified = true;
+						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+					} else if (is_pos && comp == 2) {
+						// Z vertical slider: dragging up increases Z
+						const float sens = 0.5f;
+						float nz = prop_drag_start_val_ - dyp * sens;
+						writeArg(fd.argOffset + 2, nz);
+						obj.pos.z = nz;
+						obj.modified = true;
+						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+					} else {
+						// Orientation / numeric horizontal slider.
+						float sens = is_ori ? 0.01f : (tn == "Int16" || tn == "Int32" || tn == "EnumInt32" ? 0.1f : 0.05f);
+						float nv = prop_drag_start_val_ + dxp * sens;
+						int argIdx = fd.argOffset + comp;
+						bool isInt = (tn == "Int16" || tn == "Int32" || tn == "EnumInt32");
+						if (argIdx >= 0 && argIdx < (int)obj.argTokens.size()) {
+							char buf[64];
+							if (isInt) snprintf(buf, sizeof(buf), "%d", (int)std::lround(nv));
+							else       snprintf(buf, sizeof(buf), "%.6f", nv);
+							obj.argTokens[argIdx] = buf;
+						}
+						if (is_ori) { // mirror to obj.rot (Alpha/Beta/Gamma -> x/y/z)
+							if      (comp == 0) obj.rot.x = nv;
+							else if (comp == 1) obj.rot.y = nv;
+							else                obj.rot.z = nv;
+						}
 						obj.modified = true;
 						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
 					}
@@ -1416,7 +1445,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	auto& config = Config::Get();
 
 	// C2: Property text editor input
-	if (prop_text_edit_field_ >= 0) {
+	if (prop_text_edit_field_ != -1) {
 		if (key == 27) { // ESC — cancel
 			prop_text_edit_field_ = -1;
 			return;
@@ -1426,18 +1455,26 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 				auto& objects = level_.GetLevelObjects().GetObjects();
 				if (selected_object_index_ < (int)objects.size()) {
 					auto& obj = objects[selected_object_index_];
-					const auto& schemas = GetBuiltinSchemas();
-					auto it = schemas.find(obj.type);
-					if (it != schemas.end()) {
-						const TaskSchema& schema = it->second;
-						int fi   = prop_text_edit_field_ / 3;
-						int comp = prop_text_edit_field_ % 3;
-						if (fi < (int)schema.size()) {
-							int argIdx = schema[fi].argOffset + comp;
-							if (argIdx < (int)obj.argTokens.size()) {
-								obj.argTokens[argIdx] = prop_text_buf_;
-								obj.modified = true;
-								level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+					if (prop_text_edit_field_ == -2) {
+						// Note edit: write to obj.name (and arg[2] if present).
+						obj.name = prop_text_buf_;
+						if (obj.argTokens.size() > 2) obj.argTokens[2] = prop_text_buf_;
+						obj.modified = true;
+						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+					} else {
+						const auto& schemas = GetBuiltinSchemas();
+						auto it = schemas.find(obj.type);
+						if (it != schemas.end()) {
+							const TaskSchema& schema = it->second;
+							int fi   = prop_text_edit_field_ / 3;
+							int comp = prop_text_edit_field_ % 3;
+							if (fi < (int)schema.size()) {
+								int argIdx = schema[fi].argOffset + comp;
+								if (argIdx < (int)obj.argTokens.size()) {
+									obj.argTokens[argIdx] = prop_text_buf_;
+									obj.modified = true;
+									level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+								}
 							}
 						}
 					}
@@ -1832,6 +1869,12 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	}
 
 	if (key == 27) { // ESC
+		if (prop_editor_open_) { // close the property panel first
+			prop_editor_open_ = false;
+			prop_field_index_ = -1;
+			prop_text_edit_field_ = -1;
+			return;
+		}
 		TogglePauseMenu();
 		return;
 	}
