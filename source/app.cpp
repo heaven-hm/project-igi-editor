@@ -1234,6 +1234,9 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		DeleteSelectedTask();
 		return;
 	}
+
+	// Dispatch any event bindings not already handled above
+	DispatchEventBindings();
 }
 
 void App::Input_OnSpecialUp(int key, int x, int y) {
@@ -1624,6 +1627,147 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 
 	// HandleMarkerInput(key);
 
+	// Dispatch any event bindings not already handled above
+	DispatchEventBindings();
+}
+
+// Central keybinding dispatcher: iterates eventBindings_ and fires real handlers or stubs.
+// Called at the END of Input_OnKeyboard and Input_OnSpecial (after all named checks), so
+// already-handled keys have returned before reaching this point — no double-firing.
+void App::DispatchEventBindings() {
+	// Guard: don't fire shortcuts while a text-input modal is open
+	if (task_editor_open_) return;
+
+	auto& cfg = Config::Get();
+	const auto& bindings = cfg.eventBindings_;
+
+	// Helper lambda to check if an event binding is pressed
+	auto pressed = [](const std::unordered_map<std::string, KeyBinding>& m, const std::string& name) -> bool {
+		auto it = m.find(name);
+		if (it == m.end()) return false;
+		return Utils::IsKeyBindingPressed(it->second);
+	};
+
+	// ---- Camera ----
+	// CameraClipMode -> noclip_mode_ toggle (already handled via keyClipMode in Input_OnSpecial, skip)
+	// CameraSnapToGround / CameraSnapToObject -> handled via named fields; covered by stub if extra names used
+	if (pressed(bindings, "CameraSnapToGround")) {
+		if (selected_object_index_ >= 0) {
+			auto& objects = level_.GetLevelObjects().GetObjects();
+			if (selected_object_index_ < (int)objects.size()) {
+				auto& obj = objects[selected_object_index_];
+				if (!Utils::IsUndergroundModel(obj.name, obj.modelId)) {
+					float terrainZ = 0.0f;
+					if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ)) {
+						float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
+						obj.pos.z = (double)terrainZ + (double)(zOffset * 40.96f * obj.scale);
+						Logger::Get().Log(LogLevel::INFO, "[App] [Keybind] CameraSnapToGround applied");
+					}
+				}
+			}
+		}
+	}
+	if (pressed(bindings, "CameraSnapToObject")) {
+		// MK_MANIP_O path — same as 'O' key handler
+		input_.keys_ |= MK_MANIP_O;
+		if (selected_object_index_ >= 0) UpdateMarkerManipulation();
+		input_.keys_ &= ~MK_MANIP_O;
+	}
+	// Stubs for camera events with no backing method
+	if (pressed(bindings, "CameraStrafeLeft"))   Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraStrafeLeft not implemented");
+	if (pressed(bindings, "CameraStrafeRight"))  Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraStrafeRight not implemented");
+	if (pressed(bindings, "CameraRollLeft"))     Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraRollLeft not implemented");
+	if (pressed(bindings, "CameraRollRight"))    Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraRollRight not implemented");
+	if (pressed(bindings, "CameraLookUp"))       Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraLookUp not implemented");
+	if (pressed(bindings, "CameraLookDown"))     Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraLookDown not implemented");
+	if (pressed(bindings, "CameraSpeedUp"))      Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraSpeedUp not implemented");
+	if (pressed(bindings, "CameraSpeedDown"))    Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraSpeedDown not implemented");
+	if (pressed(bindings, "CameraToggleFly"))    Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraToggleFly not implemented");
+	if (pressed(bindings, "CameraToggleNoclip")) Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraToggleNoclip not implemented");
+	if (pressed(bindings, "CameraZoomIn"))       Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraZoomIn not implemented");
+	if (pressed(bindings, "CameraZoomOut"))      Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraZoomOut not implemented");
+	if (pressed(bindings, "CameraReset"))        Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraReset not implemented");
+
+	// ---- Tasks (real handlers) ----
+	if (pressed(bindings, "TaskNew"))            CreateNewTask();
+	if (pressed(bindings, "TaskCopy"))           CopySelectedTask(false);
+	if (pressed(bindings, "TaskCopyRecursive"))  CopySelectedTask(true);
+	if (pressed(bindings, "TaskPaste"))          PasteTask();
+	if (pressed(bindings, "TaskDelete"))         DeleteSelectedTask();
+	if (pressed(bindings, "TaskSetID"))          AssignTaskID();
+
+	// Task stubs
+	if (pressed(bindings, "TaskMoveUp"))         Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskMoveUp not implemented");
+	if (pressed(bindings, "TaskMoveDown"))       Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskMoveDown not implemented");
+	if (pressed(bindings, "TaskMoveLeft"))       Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskMoveLeft not implemented");
+	if (pressed(bindings, "TaskMoveRight"))      Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskMoveRight not implemented");
+	if (pressed(bindings, "TaskFind"))           Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFind not implemented");
+	if (pressed(bindings, "TaskMakeTemplate"))   Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskMakeTemplate not implemented");
+	if (pressed(bindings, "TaskSort"))           Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskSort not implemented");
+	if (pressed(bindings, "TaskEdit"))           Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskEdit not implemented");
+	if (pressed(bindings, "TaskExpand"))         Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskExpand not implemented");
+	if (pressed(bindings, "TaskCollapse"))       Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskCollapse not implemented");
+
+	// ---- AnimTask stubs ----
+	if (pressed(bindings, "AnimTaskStartRecording"))  Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskStartRecording not implemented");
+	if (pressed(bindings, "AnimTaskStopRecording"))   Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskStopRecording not implemented");
+	if (pressed(bindings, "AnimTaskGoToCursor"))      Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskGoToCursor not implemented");
+	if (pressed(bindings, "AnimTaskSyncPlayback"))    Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskSyncPlayback not implemented");
+	if (pressed(bindings, "AnimTaskPlay"))            Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskPlay not implemented");
+	if (pressed(bindings, "AnimTaskPause"))           Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskPause not implemented");
+	if (pressed(bindings, "AnimTaskStop"))            Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskStop not implemented");
+	if (pressed(bindings, "AnimTaskNextFrame"))       Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskNextFrame not implemented");
+	if (pressed(bindings, "AnimTaskPrevFrame"))       Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskPrevFrame not implemented");
+	if (pressed(bindings, "AnimTaskGoToStart"))       Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskGoToStart not implemented");
+	if (pressed(bindings, "AnimTaskGoToEnd"))         Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskGoToEnd not implemented");
+	if (pressed(bindings, "AnimTaskAddKeyframe"))     Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskAddKeyframe not implemented");
+	if (pressed(bindings, "AnimTaskDeleteKeyframe"))  Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskDeleteKeyframe not implemented");
+
+	// ---- Timer stubs ----
+	if (pressed(bindings, "TimerStart"))   Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerStart not implemented");
+	if (pressed(bindings, "TimerStop"))    Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerStop not implemented");
+	if (pressed(bindings, "TimerReset"))   Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerReset not implemented");
+	if (pressed(bindings, "TimerPause"))   Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerPause not implemented");
+	if (pressed(bindings, "TimerResume"))  Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerResume not implemented");
+
+	// ---- Manipulate ----
+	if (pressed(bindings, "ManipulateMoveXY"))  Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateMoveXY not implemented");
+	if (pressed(bindings, "ManipulateMoveXZ"))  Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateMoveXZ not implemented");
+	if (pressed(bindings, "ManipulateRotateAlpha")) Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateRotateAlpha not implemented");
+	if (pressed(bindings, "ManipulateRotateBeta"))  Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateRotateBeta not implemented");
+	if (pressed(bindings, "ManipulateRotateGamma")) Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateRotateGamma not implemented");
+	if (pressed(bindings, "ManipulateResetOri"))    Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateResetOri not implemented");
+	if (pressed(bindings, "ManipulateResetPos"))    Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateResetPos not implemented");
+
+	// ---- Graph Node stubs ----
+	if (pressed(bindings, "GraphNodeAdd"))         Logger::Get().Log(LogLevel::INFO, "[Keybind] GraphNodeAdd not implemented");
+	if (pressed(bindings, "GraphNodeDelete"))       Logger::Get().Log(LogLevel::INFO, "[Keybind] GraphNodeDelete not implemented");
+	if (pressed(bindings, "GraphNodeConnect"))      Logger::Get().Log(LogLevel::INFO, "[Keybind] GraphNodeConnect not implemented");
+	if (pressed(bindings, "GraphNodeDisconnect"))   Logger::Get().Log(LogLevel::INFO, "[Keybind] GraphNodeDisconnect not implemented");
+	if (pressed(bindings, "GraphNodeMoveUp"))       Logger::Get().Log(LogLevel::INFO, "[Keybind] GraphNodeMoveUp not implemented");
+	if (pressed(bindings, "GraphNodeMoveDown"))     Logger::Get().Log(LogLevel::INFO, "[Keybind] GraphNodeMoveDown not implemented");
+	if (pressed(bindings, "GraphNodeSelect"))       Logger::Get().Log(LogLevel::INFO, "[Keybind] GraphNodeSelect not implemented");
+	if (pressed(bindings, "GraphNodeCopy"))         Logger::Get().Log(LogLevel::INFO, "[Keybind] GraphNodeCopy not implemented");
+	if (pressed(bindings, "GraphNodePaste"))        Logger::Get().Log(LogLevel::INFO, "[Keybind] GraphNodePaste not implemented");
+
+	// ---- Misc: real handlers ----
+	// Note: Undo/Redo here are global-scope stubs; task-editor undo/redo is handled inside the editor modal
+	if (pressed(bindings, "Undo"))            Logger::Get().Log(LogLevel::INFO, "[Keybind] Undo not implemented outside task editor");
+	if (pressed(bindings, "Redo"))            Logger::Get().Log(LogLevel::INFO, "[Keybind] Redo not implemented outside task editor");
+	if (pressed(bindings, "ReloadSettings"))  Config::Init();
+	if (pressed(bindings, "SaveObjectFile"))  SaveCurrentLevel();
+	if (pressed(bindings, "ToggleDebug"))     show_debug_ = !show_debug_;
+	if (pressed(bindings, "ToggleHUD"))       show_hud_ = !show_hud_;
+	if (pressed(bindings, "ToggleHelp"))      show_help_ = !show_help_;
+	if (pressed(bindings, "ToggleWireframe")) ToggleOverlayWireframe();
+
+	// ---- Other stubs ----
+	if (pressed(bindings, "ToggleGame"))    Logger::Get().Log(LogLevel::INFO, "[Keybind] ToggleGame not implemented");
+	if (pressed(bindings, "ToggleConsole")) Logger::Get().Log(LogLevel::INFO, "[Keybind] ToggleConsole not implemented");
+	if (pressed(bindings, "ToggleDisplay")) Logger::Get().Log(LogLevel::INFO, "[Keybind] ToggleDisplay not implemented");
+	if (pressed(bindings, "MagicObjToggle")) Logger::Get().Log(LogLevel::INFO, "[Keybind] MagicObjToggle not implemented");
+	if (pressed(bindings, "SnapToGround"))  Logger::Get().Log(LogLevel::INFO, "[Keybind] SnapToGround not implemented");
+	if (pressed(bindings, "SnapToObject"))  Logger::Get().Log(LogLevel::INFO, "[Keybind] SnapToObject not implemented");
 }
 
 

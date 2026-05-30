@@ -105,8 +105,8 @@ static KeyBinding ParseKeyBinding(const std::string& binding) {
     std::string upper = binding;
     std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
 
-    // Parse modifiers
-    if (upper.find("CTRL") != std::string::npos) kb.ctrl = true;
+    // Parse modifiers ("CONTROL" is treated as an alias of "CTRL")
+    if (upper.find("CTRL") != std::string::npos || upper.find("CONTROL") != std::string::npos) kb.ctrl = true;
     if (upper.find("SHIFT") != std::string::npos) kb.shift = true;
     if (upper.find("ALT") != std::string::npos) kb.alt = true;
 
@@ -131,6 +131,23 @@ static KeyBinding ParseKeyBinding(const std::string& binding) {
     else if (keyPart == "DELETE") kb.vkCode = VK_DELETE;
     else if (keyPart == "HOME") kb.vkCode = VK_HOME;
     else if (keyPart == "SPACE") kb.vkCode = VK_SPACE;
+    else if (keyPart == "PAGEUP" || keyPart == "PAGE_UP") kb.vkCode = VK_PRIOR;
+    else if (keyPart == "PAGEDOWN" || keyPart == "PAGE_DOWN") kb.vkCode = VK_NEXT;
+    else if (keyPart == "LEFT") kb.vkCode = VK_LEFT;
+    else if (keyPart == "RIGHT") kb.vkCode = VK_RIGHT;
+    else if (keyPart == "UP") kb.vkCode = VK_UP;
+    else if (keyPart == "DOWN") kb.vkCode = VK_DOWN;
+    else if (keyPart == "END") kb.vkCode = VK_END;
+    else if (keyPart == "DECIMAL") kb.vkCode = VK_DECIMAL;
+    else if (keyPart == "DIVIDE") kb.vkCode = VK_DIVIDE;
+    else if (keyPart == "MULTIPLY") kb.vkCode = VK_MULTIPLY;
+    else if (keyPart == "PLUS" || keyPart == "ADD") kb.vkCode = VK_ADD;
+    else if (keyPart == "MINUS" || keyPart == "SUBTRACT") kb.vkCode = VK_SUBTRACT;
+    else if (keyPart == "LEFTMOUSEBUTTON") kb.vkCode = VK_LBUTTON;
+    else if (keyPart == "RIGHTMOUSEBUTTON") kb.vkCode = VK_RBUTTON;
+    else if (keyPart == "ESCAPE" || keyPart == "ESC") kb.vkCode = VK_ESCAPE;
+    else if (keyPart == "ENTER" || keyPart == "RETURN") kb.vkCode = VK_RETURN;
+    else if (keyPart == "TAB") kb.vkCode = VK_TAB;
     else if (keyPart.length() == 1) {
         // Single character key
         kb.vkCode = VkKeyScanA(keyPart[0]) & 0xFF;
@@ -203,39 +220,40 @@ void Config::Load() {
                 else if (key == "FontColorG") data_.fontColorG = std::stoi(val);
                 else if (key == "FontColorB") data_.fontColorB = std::stoi(val);
             } else if (section == "Keybindings") {
-                if (key == "Save") data_.keySave = ParseKeyBinding(val);
-                else if (key == "ResetLevel") data_.keyResetLevel = ParseKeyBinding(val);
-                else if (key == "Debug") data_.keyDebug = ParseKeyBinding(val);
-                else if (key == "Quit") data_.keyQuit = ParseKeyBinding(val);
-                else if (key == "Help") data_.keyHelp = ParseKeyBinding(val);
-                else if (key == "ResetScript") data_.keyResetScript = ParseKeyBinding(val);
-                
-                // NEW: Camera
-                else if (key == "EnableCamera") data_.keyEnableCamera = ParseKeyBinding(val);
-                else if (key == "MoveCameraForward") data_.keyMoveCameraForward = ParseKeyBinding(val);
-                else if (key == "MoveCameraBackward") data_.keyMoveCameraBackward = ParseKeyBinding(val);
-                else if (key == "AdjustCameraRadius") data_.keyAdjustCameraRadius = ParseKeyBinding(val);
-                else if (key == "LookDown") data_.keyLookDown = ParseKeyBinding(val);
-                else if (key == "SnapToObject") data_.keySnapToObject = ParseKeyBinding(val);
-                else if (key == "SnapToGround") data_.keySnapToGround = ParseKeyBinding(val);
-                else if (key == "ClipMode") data_.keyClipMode = ParseKeyBinding(val);
+                // Parse once, store in the generic map AND route to named fields
+                KeyBinding parsed = ParseKeyBinding(val);
+                data_.eventBindings_[key] = parsed;
 
-                // NEW: Task
-                else if (key == "CreateNewTask") data_.keyCreateNewTask = ParseKeyBinding(val);
-                else if (key == "CopyTask") data_.keyCopyTask = ParseKeyBinding(val);
-                else if (key == "PasteTask") data_.keyPasteTask = ParseKeyBinding(val);
-                else if (key == "DeleteTask") data_.keyDeleteTask = ParseKeyBinding(val);
-                else if (key == "AssignTaskID") data_.keyAssignTaskID = ParseKeyBinding(val);
+                if (key == "Save") data_.keySave = parsed;
+                else if (key == "ResetLevel") data_.keyResetLevel = parsed;
+                else if (key == "Debug") data_.keyDebug = parsed;
+                else if (key == "Quit") data_.keyQuit = parsed;
+                else if (key == "Help") data_.keyHelp = parsed;
+                else if (key == "ResetScript") data_.keyResetScript = parsed;
+                // Camera
+                else if (key == "EnableCamera") data_.keyEnableCamera = parsed;
+                else if (key == "MoveCameraForward") data_.keyMoveCameraForward = parsed;
+                else if (key == "MoveCameraBackward") data_.keyMoveCameraBackward = parsed;
+                else if (key == "AdjustCameraRadius") data_.keyAdjustCameraRadius = parsed;
+                else if (key == "LookDown") data_.keyLookDown = parsed;
+                else if (key == "SnapToObject") data_.keySnapToObject = parsed;
+                else if (key == "SnapToGround") data_.keySnapToGround = parsed;
+                else if (key == "ClipMode") data_.keyClipMode = parsed;
+                // Task
+                else if (key == "CreateNewTask") data_.keyCreateNewTask = parsed;
+                else if (key == "CopyTask") data_.keyCopyTask = parsed;
+                else if (key == "PasteTask") data_.keyPasteTask = parsed;
+                else if (key == "DeleteTask") data_.keyDeleteTask = parsed;
+                else if (key == "AssignTaskID") data_.keyAssignTaskID = parsed;
+                // Animation
+                else if (key == "StartRecording") data_.keyStartRecording = parsed;
+                else if (key == "GoToCursor") data_.keyGoToCursor = parsed;
+                else if (key == "SyncPlayback") data_.keySyncPlayback = parsed;
 
-                // NEW: Animation
-                else if (key == "StartRecording") data_.keyStartRecording = ParseKeyBinding(val);
-                else if (key == "GoToCursor") data_.keyGoToCursor = ParseKeyBinding(val);
-                else if (key == "SyncPlayback") data_.keySyncPlayback = ParseKeyBinding(val);
-
-                // NEW: Misc
-                else if (key == "Undo") data_.keyUndo = ParseKeyBinding(val);
-                else if (key == "Redo") data_.keyRedo = ParseKeyBinding(val);
-                else if (key == "ReloadSettings") data_.keyReloadSettings = ParseKeyBinding(val);
+                // Misc
+                else if (key == "Undo") data_.keyUndo = parsed;
+                else if (key == "Redo") data_.keyRedo = parsed;
+                else if (key == "ReloadSettings") data_.keyReloadSettings = parsed;
             }
         }
     }

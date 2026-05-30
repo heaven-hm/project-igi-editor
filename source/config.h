@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 struct KeyBinding {
     int vkCode; // Windows virtual key code
@@ -81,6 +82,9 @@ struct ConfigData {
     KeyBinding keyUndo;
     KeyBinding keyRedo;
     KeyBinding keyReloadSettings;
+
+    // ALL event bindings keyed by event name (populated from [Keybindings] section)
+    std::unordered_map<std::string, KeyBinding> eventBindings_;
 };
 
 class Config {

@@ -208,6 +208,7 @@ private:
 	void					Frame(float delta_seconds);
 
 	void					ProcessInput(float delta_seconds);
+	void					DispatchEventBindings();
 	bool					CheckCollision(const glm::vec3& next_pos);
 	void					SnapObjectsToTerrain();
 
