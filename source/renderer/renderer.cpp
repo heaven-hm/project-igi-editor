@@ -15,7 +15,91 @@
 
 #include <freeglut.h>
 #include "../level/task_schema.h"
+#include "../parsers/fnt_parser.h"
 using namespace TaskSchemaNS;
+
+/*
+================================================================================
+ Editor bitmap font (content/qed/editor.fnt) for HUD text
+================================================================================
+*/
+static FntFont g_editorFont;
+static GLuint  g_editorFontTex = 0;
+static bool    g_editorFontTried = false;
+
+// Lazily load + upload the editor font atlas on first HUD draw.
+static void EnsureEditorFont() {
+  if (g_editorFontTried) {
+    return;
+  }
+  g_editorFontTried = true;
+
+  g_editorFont = FNT_Parse("content\\qed\\editor.fnt");
+  if (!g_editorFont.valid) {
+    return;
+  }
+
+  pic_s pic;
+  pic.width_  = g_editorFont.texWidth;
+  pic.height_ = g_editorFont.texHeight;
+  pic.pixels_ = g_editorFont.rgba.data();
+  // CLAMP + NEAREST so the small pixel font stays crisp (no blur/scaling).
+  g_editorFontTex = GL_RegisterTexture(&pic, GL_CLAMP_TO_EDGE, GL_NEAREST, GL_NEAREST, false);
+}
+
+// Draw a string with the editor bitmap font in the HUD ortho space (y=0 bottom).
+// y_gl is the gl-space y of the top of the first text line; glyphs extend
+// downward from there. '\n' starts a new line.
+static void DrawFontText(int x, int y_gl, const char* str, float r, float g, float b) {
+  if (!g_editorFont.valid || !g_editorFontTex) {
+    return;
+  }
+
+  const float texW = (float)g_editorFont.texWidth;
+  (void)texW;
+  const int spaceAdvance = g_editorFont.lineHeight > 0 ? g_editorFont.lineHeight / 2 : 4;
+
+  glEnable(GL_TEXTURE_2D);
+  glBindTexture(GL_TEXTURE_2D, g_editorFontTex);
+  glColor3f(r, g, b);
+
+  int pen_x = x;
+  int pen_y = y_gl; // top of current line in gl space (y up)
+
+  glBegin(GL_QUADS);
+  for (const char* p = str; *p; ++p) {
+    unsigned char c = (unsigned char)*p;
+    if (c == '\n') {
+      pen_x = x;
+      pen_y -= g_editorFont.lineHeight;
+      continue;
+    }
+
+    auto it = g_editorFont.glyphs.find((int)c);
+    if (it == g_editorFont.glyphs.end()) {
+      pen_x += spaceAdvance; // unknown char -> advance like a space
+      continue;
+    }
+
+    const FntGlyph& gl = it->second;
+    float x0 = (float)pen_x;
+    float x1 = (float)(pen_x + gl.width);
+    float yTop = (float)pen_y;             // y up: top of glyph
+    float yBot = (float)(pen_y - gl.height);
+
+    // Atlas V grows downward; gl V grows upward -> top of glyph uses v0.
+    glTexCoord2f(gl.u0, gl.v0); glVertex2f(x0, yTop);
+    glTexCoord2f(gl.u1, gl.v0); glVertex2f(x1, yTop);
+    glTexCoord2f(gl.u1, gl.v1); glVertex2f(x1, yBot);
+    glTexCoord2f(gl.u0, gl.v1); glVertex2f(x0, yBot);
+
+    pen_x += gl.advance;
+  }
+  glEnd();
+
+  glBindTexture(GL_TEXTURE_2D, 0);
+  glDisable(GL_TEXTURE_2D);
+}
 
 /*
 ================================================================================
@@ -215,8 +299,27 @@ void Renderer::Draw(const draw_params_s &params,
     glPushMatrix();
     glLoadIdentity();
 
+    EnsureEditorFont();
+
     auto draw_text = [&](int x, int y, const char *str, float r, float g,
                          float b) {
+      if (g_editorFont.valid && g_editorFontTex) {
+        // Editor bitmap font path. y is top-down; convert each line's top to
+        // gl space (y=0 bottom) and let glyphs extend downward.
+        std::stringstream ss(str);
+        std::string line;
+        int line_y = y;
+        while (std::getline(ss, line)) {
+          int y_gl = params.view_define_->viewport_height_ - line_y;
+          // 1px black shadow for readability, then the requested color.
+          DrawFontText(x + 1, y_gl - 1, line.c_str(), 0.0f, 0.0f, 0.0f);
+          DrawFontText(x, y_gl, line.c_str(), r, g, b);
+          line_y += 15; // Vertical spacing
+        }
+        return;
+      }
+
+      // Fallback: GLUT bitmap font.
       std::stringstream ss(str);
       std::string line;
       int line_y = y;
