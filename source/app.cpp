@@ -318,22 +318,16 @@ void App::LoadAllCursors() {
 
 void App::UpdateCursorMode() {
 	if (terrain_edit_enabled_) {
-		// Map edit_brush_ (0=raise/lift, 1=lower) to terrain cursor modes
-		// BRUSH_RAISE=0 → TerrainLift, BRUSH_LOWER=1 → TerrainLower
+		// Drop is the neutral terrain cursor; Lift/Lower for raise/lower brush
 		if (edit_brush_ == 0)
-			current_cursor_mode_ = CursorMode::TerrainLift;
+			current_cursor_mode_ = CursorMode::TerrainLift;  // BRUSH_RAISE
+		else if (edit_brush_ == 1)
+			current_cursor_mode_ = CursorMode::TerrainLower; // BRUSH_LOWER
 		else
-			current_cursor_mode_ = CursorMode::TerrainLower;
+			current_cursor_mode_ = CursorMode::TerrainDrop;  // any other terrain mode
 		return;
 	}
-	if (selected_object_index_ >= 0) {
-		current_cursor_mode_ = CursorMode::Selected;
-		return;
-	}
-	if (hover_object_index_ >= 0) {
-		current_cursor_mode_ = CursorMode::Hover;
-		return;
-	}
+	// Default/hover/selected all use the Pointer cursor
 	current_cursor_mode_ = CursorMode::Default;
 }
 
@@ -775,21 +769,21 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 						const TaskSchema& schema = it->second;
 						int vw = window_state_.viewport_width_;
 						int vh = window_state_.viewport_height_;
-						int panel_w = 250;
-						int row_h   = 16;
-						int header_h = 20;
+						int panel_w = 280;
+						int row_h   = 18;
+						int header_h = 38;
 						int total_rows = 0;
 						for (const auto& fd : schema) {
 							if (fd.typeName == "ObjectPos" || fd.typeName == "Real32x9" ||
 							    fd.typeName == "Real32x3"  || fd.typeName == "Real64x3" ||
 							    fd.typeName == "RGB"       || fd.typeName == "Colour")
-								total_rows += 3;
+								total_rows += 4; // header line + 3 component rows
 							else
-								total_rows += 1;
+								total_rows += 2; // field header + value row
 						}
-						int panel_h = header_h + total_rows * row_h + 8;
-						int panel_x = vw - panel_w - 5;
-						int panel_y = vh - panel_h - 5; // top-down y
+						int panel_h = header_h + total_rows * row_h + 12;
+						int panel_x = 5; // left side
+						int panel_y = (int)(vh * 0.45f); // below tree view
 
 						if (x >= panel_x && x <= panel_x + panel_w &&
 						    y >= panel_y && y <= panel_y + panel_h) {
@@ -819,11 +813,13 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 											mobj.modified = true;
 											level_.GetLevelObjects().UpdateCoordinatesInLine(mobj);
 										}
-									} else if (is_string) {
+									} else if (is_string || fd.typeName == "ObjectPos" ||
+									           fd.typeName == "Real32x3" || fd.typeName == "Real64x3") {
+										// Position and string fields use text input box
 										prop_text_edit_field_ = fi * 3 + comp;
 										prop_text_buf_ = (argIdx < (int)obj.argTokens.size()) ? obj.argTokens[argIdx] : "";
 									} else {
-										// Numeric drag
+										// Orientation sliders and other numeric: drag
 										prop_field_index_    = fi * 3 + comp;
 										prop_drag_start_x_   = x;
 										float cur_val = 0.f;
@@ -897,9 +893,23 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 		}
 	}
 
-	// Update cursor instantly on click/release
+	// Right-click: open property editor for the object under cursor
+	if (button == GLUT_RIGHT_BUTTON && state == GLUT_DOWN && !pause_mode_ && !enableCameraMode) {
+		int target = hover_object_index_ >= 0 ? hover_object_index_ : selected_object_index_;
+		if (target >= 0) {
+			selected_object_index_ = target;
+			prop_editor_open_ = true;
+		} else {
+			prop_editor_open_ = false;
+		}
+	}
+
+	// Update cursor instantly on click/release — keep NONE if SPR cursor is active
 	if (window_state_.cursor_visible_ && !pause_mode_) {
-		glutSetCursor(enableCameraMode ? GLUT_CURSOR_NONE : GLUT_CURSOR_LEFT_ARROW);
+		if (cursor_loaded_count_ == 0)
+			glutSetCursor(enableCameraMode ? GLUT_CURSOR_NONE : GLUT_CURSOR_LEFT_ARROW);
+		else
+			glutSetCursor(GLUT_CURSOR_NONE);
 	}
 }
 
@@ -924,11 +934,11 @@ void App::Input_OnMotion(int x, int y) {
 	}
 
 	if (window_state_.cursor_visible_) {
-		if (enableCameraMode) {
+		if (enableCameraMode)
 			glutSetCursor(GLUT_CURSOR_NONE);
-		} else {
+		else if (cursor_loaded_count_ == 0)
 			glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
-		}
+		// else: SPR cursor active — keep GLUT_CURSOR_NONE
 	}
 
 	if (window_state_.cursor_visible_ && !enableCameraMode) {
@@ -2565,11 +2575,14 @@ void App::ProcessInput(float delta_seconds) {
 	
 	bool enableCameraMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
 	
-	// Update cursor based on mode
+	// Update cursor based on mode — keep NONE if SPR cursor is active
 	if (pause_mode_) {
-		glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
+		if (cursor_loaded_count_ == 0) glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
+		else glutSetCursor(GLUT_CURSOR_NONE);
 	} else {
-		glutSetCursor(enableCameraMode ? GLUT_CURSOR_NONE : GLUT_CURSOR_LEFT_ARROW);
+		if (enableCameraMode) glutSetCursor(GLUT_CURSOR_NONE);
+		else if (cursor_loaded_count_ == 0) glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
+		else glutSetCursor(GLUT_CURSOR_NONE);
 	}
 
 	if (!edit_mode_ || enableCameraMode) {
@@ -2871,16 +2884,15 @@ void App::TogglePauseMenu() {
 	// Hiding the cursor permanently caused the "mouse stuck" bug after resuming.
 	window_state_.cursor_visible_ = true;
 	if (pause_mode_) {
-		// Opening pause menu: show arrow cursor and clear any accumulated deltas
-		glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
+		// Opening pause menu
+		glutSetCursor(cursor_loaded_count_ > 0 ? GLUT_CURSOR_NONE : GLUT_CURSOR_LEFT_ARROW);
 	} else {
 		// Closing pause menu: reset mouse state so no stale drag occurs
 		input_.mouse_delta_x_ = 0;
 		input_.mouse_delta_y_ = 0;
 		mouse_state_.left_button_down_ = false;
 		skip_input_on_motion_once_ = false;
-		// Cursor type will be set correctly on next Input_OnMotion call
-		glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
+		glutSetCursor(cursor_loaded_count_ > 0 ? GLUT_CURSOR_NONE : GLUT_CURSOR_LEFT_ARROW);
 	}
 }
 

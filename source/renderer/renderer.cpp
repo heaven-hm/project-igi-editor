@@ -1418,8 +1418,8 @@ void Renderer::Draw(const draw_params_s &params,
       line_y -= 20;
     }
 
-    // ── C2: Typed task property editor ─────────────────────────────────────────
-    if (task_tree_view.selected_object_index_ >= 0 && task_tree_view.level_objects_) {
+    // ── C2: Typed task property editor (right-click to open, left side) ────────
+    if (task_tree_view.prop_editor_open_ && task_tree_view.selected_object_index_ >= 0 && task_tree_view.level_objects_) {
       const auto& objects = task_tree_view.level_objects_->GetObjects();
       int sel = task_tree_view.selected_object_index_;
       if (sel < (int)objects.size()) {
@@ -1451,8 +1451,9 @@ void Renderer::Draw(const draw_params_s &params,
           total_content_h += pad;
 
           int panel_h   = total_content_h;
-          int gl_left   = vw - panel_w - 10;
-          int gl_bottom = 10;  // GL bottom-up from bottom edge
+          int gl_left   = 5;                       // left side, below task tree
+          int gl_bottom = vh / 2 - panel_h / 2;   // vertically centered in lower half
+          if (gl_bottom < 5) gl_bottom = 5;
 
           // Semi-transparent dark background
           glEnable(GL_BLEND);
@@ -1637,30 +1638,92 @@ void Renderer::Draw(const draw_params_s &params,
                 glDisable(GL_BLEND);
                 draw_text(gl_left + pad + 2, row_screen_y, val_str.c_str(), 1.0f, 1.0f, 1.0f);
 
+              } else if (fd.typeName == "ObjectPos" || fd.typeName == "Real32x3" ||
+                         fd.typeName == "Real64x3") {
+                // Position: text input box — label + bordered editable box
+                char lbl[32];
+                snprintf(lbl, sizeof(lbl), "  %s:", sub_labels[c]);
+                draw_text(gl_left + pad, row_screen_y, lbl, 0.8f, 0.8f, 0.8f);
+                int lbl_w = 32;
+                int bx1 = gl_left + pad + lbl_w;
+                int bx2 = gl_left + panel_w - pad;
+                int by1 = cur_gl_y + 1;
+                int by2 = cur_gl_y + val_row_h - 1;
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glColor4f(0.08f, 0.08f, 0.14f, 0.95f);
+                glBegin(GL_QUADS);
+                glVertex2i(bx1, by1); glVertex2i(bx2, by1);
+                glVertex2i(bx2, by2); glVertex2i(bx1, by2);
+                glEnd();
+                float bc = active ? 1.0f : 0.55f;
+                glColor3f(bc, bc, active ? 1.0f : bc);
+                glBegin(GL_LINE_LOOP);
+                glVertex2i(bx1, by1); glVertex2i(bx2, by1);
+                glVertex2i(bx2, by2); glVertex2i(bx1, by2);
+                glEnd();
+                glDisable(GL_BLEND);
+                std::string display_val = val_str;
+                if (task_tree_view.prop_text_edit_field_ == fi * 3 + c)
+                  display_val = task_tree_view.prop_text_buf_ + "_";
+                draw_text(bx1 + 2, row_screen_y, display_val.c_str(), 1.0f, 1.0f, 0.7f);
+
+              } else if (fd.typeName == "Real32x9") {
+                // Orientation: slider with track bar — Alpha/Beta/Gamma
+                char lbl[32];
+                snprintf(lbl, sizeof(lbl), "  %s:", sub_labels[c]);
+                draw_text(gl_left + pad, row_screen_y, lbl, 0.8f, 0.8f, 0.8f);
+                // Value text
+                int lbl_w = 46;
+                draw_text(gl_left + pad + lbl_w, row_screen_y, val_str.c_str(), 1.0f, 1.0f, 1.0f);
+                // Slider track
+                int track_x1 = gl_left + panel_w - pad - 80;
+                int track_x2 = gl_left + panel_w - pad;
+                int track_cy = cur_gl_y + val_row_h / 2;
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glColor4f(0.2f, 0.2f, 0.3f, 0.8f);
+                glBegin(GL_QUADS);
+                glVertex2i(track_x1, track_cy-2); glVertex2i(track_x2, track_cy-2);
+                glVertex2i(track_x2, track_cy+2); glVertex2i(track_x1, track_cy+2);
+                glEnd();
+                glColor3f(0.5f, 0.5f, 0.7f);
+                glBegin(GL_LINE_LOOP);
+                glVertex2i(track_x1, track_cy-2); glVertex2i(track_x2, track_cy-2);
+                glVertex2i(track_x2, track_cy+2); glVertex2i(track_x1, track_cy+2);
+                glEnd();
+                // Thumb: map value [-pi, pi] to track width
+                float fval = 0.f;
+                try { fval = std::stof(val_str); } catch(...) {}
+                float norm = (fval + 3.14159f) / (2.f * 3.14159f);
+                norm = std::max(0.f, std::min(1.f, norm));
+                int thumb_x = track_x1 + (int)(norm * (track_x2 - track_x1 - 6));
+                bool dragging = (task_tree_view.prop_field_index_ == fi * 3 + c);
+                glColor3f(dragging ? 1.0f : 0.9f, dragging ? 1.0f : 0.9f, dragging ? 0.0f : 0.9f);
+                glBegin(GL_QUADS);
+                glVertex2i(thumb_x,   track_cy-4); glVertex2i(thumb_x+6, track_cy-4);
+                glVertex2i(thumb_x+6, track_cy+4); glVertex2i(thumb_x,   track_cy+4);
+                glEnd();
+                glDisable(GL_BLEND);
+
               } else {
-                // Numeric: "Label: value  [■]"
+                // Other numeric: "Label: value  [■]" with drag handle
                 char num_buf[80];
                 if (nsub > 1)
                   snprintf(num_buf, sizeof(num_buf), "  %s: %s", sub_labels[c], val_str.c_str());
                 else
                   snprintf(num_buf, sizeof(num_buf), "  %s", val_str.c_str());
                 draw_text(gl_left + pad, row_screen_y, num_buf, 1.0f, 1.0f, 1.0f);
-
-                // Slider handle square (6x6) to the right of the value
+                // Small drag handle
                 int sx = gl_left + panel_w - pad - slider_sz - 2;
                 int sy = cur_gl_y + (val_row_h - slider_sz) / 2;
                 bool dragging = (task_tree_view.prop_field_index_ == fi * 3 + c);
                 glEnable(GL_BLEND);
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                if (dragging)
-                  glColor4f(1.0f, 1.0f, 0.0f, 1.0f); // yellow when dragging
-                else
-                  glColor4f(1.0f, 1.0f, 1.0f, 0.85f);
+                glColor4f(dragging ? 1.0f : 1.0f, dragging ? 1.0f : 1.0f, dragging ? 0.0f : 1.0f, 0.85f);
                 glBegin(GL_QUADS);
-                glVertex2i(sx,            sy);
-                glVertex2i(sx + slider_sz, sy);
-                glVertex2i(sx + slider_sz, sy + slider_sz);
-                glVertex2i(sx,            sy + slider_sz);
+                glVertex2i(sx, sy); glVertex2i(sx+slider_sz, sy);
+                glVertex2i(sx+slider_sz, sy+slider_sz); glVertex2i(sx, sy+slider_sz);
                 glEnd();
                 glDisable(GL_BLEND);
               }
