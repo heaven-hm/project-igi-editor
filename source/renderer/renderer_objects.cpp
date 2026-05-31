@@ -1128,12 +1128,25 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
         // Is this a window/glass model? If so, render the whole mesh semi-transparent.
         const bool isWindowModel = window_model_ids_.count(obj.modelId) > 0;
-        // AI characters render fully opaque in the normal pass. Their ARGB8888
-        // sub-meshes (sunglasses lenses) are blended individually via per-submesh
-        // alphaMode (see texture assignment below) — NOT by forcing the whole
-        // model into the transparent pass, which distorted every AI face/body.
         const bool isTransparentObject = isWindowModel || isUndergroundContainer;
-        if (!skipHullRender && isTransparentObject == isTransparentPass) {
+
+        // Does this model have any ARGB sub-meshes (alphaMode==2)?  Those must
+        // render in the transparent pass so they properly blend over the background
+        // with depth-writes disabled. Opaque sub-meshes of the same model still
+        // render in the opaque pass — mixed models (guard tower, fence posts) draw
+        // in BOTH passes, skipping the wrong-pass sub-meshes each time.
+        bool hasArgbSubMeshes = false;
+        for (const auto& sub : mesh.subMeshes) {
+            if (sub.alphaMode == 2) { hasArgbSubMeshes = true; break; }
+        }
+        // A model belongs in this pass if: it's a uniform transparent/opaque
+        // object that matches the pass, OR it has mixed sub-meshes and we draw
+        // it in both passes (filtering per-sub-mesh below).
+        const bool drawInThisPass = !skipHullRender && (
+            isTransparentObject == isTransparentPass ||
+            (hasArgbSubMeshes && !isTransparentObject)
+        );
+        if (drawInThisPass) {
             if (isTransparentObject) {
                 glEnable(GL_BLEND);
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1162,6 +1175,14 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 for (const auto& sub : mesh.subMeshes) {
                     if (sub.VAO == 0 || sub.vertexCount == 0) continue;
                     (void)mixedMesh; // render all submeshes — floors/stories must not be skipped
+
+                    // For mixed models: ARGB sub-meshes only in transparent pass,
+                    // opaque sub-meshes only in opaque pass (unless the whole model
+                    // is a transparent object, in which case all sub-meshes go through).
+                    if (!isTransparentObject && hasArgbSubMeshes) {
+                        if (isTransparentPass && sub.alphaMode != 2) continue;
+                        if (!isTransparentPass && sub.alphaMode == 2) continue;
+                    }
 
                     if (sub.alphaMode == 2) {
                         glEnable(GL_BLEND);
