@@ -1719,20 +1719,38 @@ void Renderer::Draw(const draw_params_s &params,
                 y += PropPanel::kRowH;
               }
             } else if (is_ori) {
-              const char* lab[3] = {"Alpha", "Beta", "Gamma"};
-              for (int c = 0; c < 3; ++c) {
+              // Count how many OriSlider widgets belong to this field (1 for AI-only Gamma, 3 otherwise).
+              int ori_count = 0;
+              {
+                int tmp = wi;
+                while (tmp < (int)L.widgets.size() &&
+                       L.widgets[tmp].fieldIndex == fi &&
+                       L.widgets[tmp].kind == PropPanel::WidgetKind::OriSlider)
+                  ++tmp;
+                ori_count = tmp - wi;
+              }
+              const char* lab[3] = {"A", "B", "G"};
+              for (int ci = 0; ci < ori_count; ++ci) {
                 const auto& w = L.widgets[wi++];
+                // Short label on the far left
                 draw_text(L.panel_x + PropPanel::kPad, w.y1 + 12, lab[w.comp], 1.0f, 0.9f, 0.2f);
-                draw_text(L.panel_x + PropPanel::kPad + 40, w.y1 + 12,
-                          tok(fd.argOffset + w.comp).c_str(), 1.0f, 1.0f, 0.85f);
+                // Slider track ends 72px before right edge to leave room for value text
                 int cy = (w.y1 + w.y2) / 2;
-                quad(w.x1, cy - 2, w.x2, cy + 2, 0.0f, 0.0f, 0.0f, 0.40f);
-                border(w.x1, cy - 2, w.x2, cy + 2, 1.0f, 1.0f, 1.0f);
-                float v = 0.f; try { v = std::stof(tok(fd.argOffset + w.comp)); } catch(...) {}
+                int track_x2 = w.x2 - 72;
+                quad(w.x1, cy - 2, track_x2, cy + 2, 0.0f, 0.0f, 0.0f, 0.40f);
+                border(w.x1, cy - 2, track_x2, cy + 2, 1.0f, 1.0f, 1.0f);
+                // Slider thumb
+                float v = 0.f;
+                if (task_tree_view.prop_text_edit_field_ == fi * 3 + w.comp)
+                  try { v = std::stof(task_tree_view.prop_text_buf_); } catch(...) {}
+                else
+                  try { v = std::stof(tok(fd.argOffset + w.comp)); } catch(...) {}
                 float norm = std::max(0.f, std::min(1.f, (v + 3.14159f) / (2.f * 3.14159f)));
-                int tx = w.x1 + (int)(norm * (w.x2 - w.x1 - 6));
+                int tx = w.x1 + (int)(norm * (track_x2 - w.x1 - 6));
                 bool drag = (task_tree_view.prop_field_index_ == fi * 3 + w.comp);
                 quad(tx, cy - 5, tx + 6, cy + 5, 1.0f, drag ? 0.95f : 0.85f, drag ? 0.2f : 0.0f, 1.0f);
+                // Value text to the right of the slider
+                draw_text(track_x2 + 4, w.y1 + 12, tok(fd.argOffset + w.comp).c_str(), 1.0f, 1.0f, 0.85f);
                 y = w.y2;
               }
             } else if (is_rgb) {
