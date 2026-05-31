@@ -2466,6 +2466,16 @@ std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isB
         return result;
     }
 
+    // 5. Search the flat IGI content/models directory produced by --extract-level.
+    //    All levels are extracted to a single flat dir (D:/IGI1/content/models/) alongside
+    //    the common/ and level1/ subdirs, so this covers levels 2-14 model MEFs.
+    const std::string igiContentModels = Utils::GetIGIRootPath() + "\\content\\models";
+    result = searchOneDirExact(igiContentModels);
+    if (!result.empty()) {
+        Logger::Get().Log(LogLevel::DEBUG, "[Renderer_Objects] Model found in IGI content/models flat dir (Exact): " + result);
+        return result;
+    }
+
     // ─── PHASE 2: FUZZY FALLBACK (Only run if exact match fails everywhere) ───
 
     // 1. Current level local

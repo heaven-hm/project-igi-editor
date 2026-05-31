@@ -786,7 +786,9 @@ int CLIHandler::ExtractLevelResources(int levelNo, const std::string &outDir) {
 
   namespace fs = std::filesystem;
   try {
+    fs::create_directories(outDir + "\\models\\level" + std::to_string(levelNo));
     fs::create_directories(outDir + "\\models");
+    fs::create_directories(outDir + "\\textures\\level" + std::to_string(levelNo));
     fs::create_directories(outDir + "\\textures");
     fs::create_directories(outDir + "\\terrain");
   } catch (const std::exception &e) {
@@ -811,7 +813,8 @@ int CLIHandler::ExtractLevelResources(int levelNo, const std::string &outDir) {
         size_t slash = name.find_last_of("/\\");
         std::string filename =
             (slash != std::string::npos) ? name.substr(slash + 1) : name;
-        std::string destPath = outDir + "\\models\\" + filename;
+        // Write to levelN subdir so FindModelFile's per-level search finds it.
+        std::string destPath = outDir + "\\models\\level" + std::to_string(levelNo) + "\\" + filename;
         std::ofstream f(destPath, std::ios::binary);
         if (f) {
           f.write(reinterpret_cast<const char *>(entry.data.data()),
@@ -833,7 +836,7 @@ int CLIHandler::ExtractLevelResources(int levelNo, const std::string &outDir) {
       for (const auto &entry : fs::directory_iterator(modelsDir)) {
         if (entry.path().extension() == ".mef") {
           std::string dest =
-              outDir + "\\models\\" + entry.path().filename().string();
+              outDir + "\\models\\level" + std::to_string(levelNo) + "\\" + entry.path().filename().string();
           fs::copy_file(entry.path(), dest,
                         fs::copy_options::overwrite_existing);
           totalExtracted++;
@@ -845,21 +848,43 @@ int CLIHandler::ExtractLevelResources(int levelNo, const std::string &outDir) {
     }
   }
 
-  // --- Copy loose .tex files from textures folder ---
+  // --- Extract textures: loose .tex files OR from textures .res archive ---
   int texCount = 0;
   std::string texDir = levelPath + "\\textures";
+  // Prefer a per-level subdirectory so FindTextureFile's levelN search works.
+  std::string texOutDir = outDir + "\\textures\\level" + std::to_string(levelNo);
+  fs::create_directories(texOutDir);
+
   if (fs::exists(texDir)) {
-    for (const auto &entry : fs::directory_iterator(texDir)) {
-      if (entry.path().extension() == ".tex") {
-        std::string dest =
-            outDir + "\\textures\\" + entry.path().filename().string();
-        fs::copy_file(entry.path(), dest, fs::copy_options::overwrite_existing);
-        texCount++;
+    // Try .res archive first (e.g. level6/textures/level6.res)
+    std::string texResFile = texDir + "\\level" + std::to_string(levelNo) + ".res";
+    if (fs::exists(texResFile)) {
+      RESFile texRes = RES_Parse(texResFile);
+      if (texRes.valid) {
+        for (const auto& entry : texRes.entries) {
+          size_t slash = entry.name.find_last_of("/\\");
+          std::string filename = (slash != std::string::npos) ? entry.name.substr(slash + 1) : entry.name;
+          if (filename.size() < 4) continue;
+          std::string ext = filename.substr(filename.size() - 4);
+          for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+          if (ext != ".tex") continue;
+          std::string destPath = texOutDir + "\\" + filename;
+          std::ofstream f(destPath, std::ios::binary);
+          if (f) { f.write(reinterpret_cast<const char*>(entry.data.data()), entry.data.size()); texCount++; }
+        }
+        Logger::Get().Log(LogLevel::INFO, "[CLI] Extracted " + std::to_string(texCount) + " TEX files from " + texResFile);
       }
+    } else {
+      // Fallback: copy loose .tex files
+      for (const auto& entry : fs::directory_iterator(texDir)) {
+        if (entry.path().extension() == ".tex") {
+          std::string dest = texOutDir + "\\" + entry.path().filename().string();
+          fs::copy_file(entry.path(), dest, fs::copy_options::overwrite_existing);
+          texCount++;
+        }
+      }
+      Logger::Get().Log(LogLevel::INFO, "[CLI] Copied " + std::to_string(texCount) + " TEX files");
     }
-    Logger::Get().Log(LogLevel::INFO, "[CLI] Copied " +
-                                          std::to_string(texCount) +
-                                          " TEX files");
   }
 
   // --- Copy terrain files ---
