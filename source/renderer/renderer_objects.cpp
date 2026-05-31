@@ -2035,17 +2035,26 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
         return;
     }
 
+    // For AI character models (sunglasses-bearing), load the STRIPPED texture id
+    // so "009_09_1_argb8888" → "009_09_1.tex" (opaque body texture → solid black
+    // glasses). The _argb8888 variant is a tiny 32×32 semi-transparent overlay
+    // used by the game engine; loading it in the editor gives barely-visible lenses.
+    // Non-AI models (guard tower, lattice) need the exact _argb8888.tex for
+    // transparent rendering and keep the "exact first" preference.
+    EnsureAiModelIdsLoaded();
+    const bool isAiModel = ai_model_ids_.count(modelId) > 0;
+
     std::vector<GLuint> textures;
     textures.reserve(textureIds.size());
     for (const auto& textureId : textureIds) {
-        textures.push_back(GetOrLoadTexture(textureId));
+        const std::string loadId = (isAiModel && TextureIdHasAlpha(textureId))
+            ? StripTextureFormatSuffix(textureId)
+            : textureId;
+        textures.push_back(GetOrLoadTexture(loadId));
     }
 
     if (!mesh.subMeshes.empty()) {
         size_t assigned = 0;
-
-        // Needed below to scope ARGB lens alpha-blending to AI characters.
-        EnsureAiModelIdsLoaded();
 
         // Find the best valid (non-zero) texture to use as fallback for submeshes
         // that fall outside the DAT texture list range.
