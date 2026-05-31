@@ -130,7 +130,7 @@ void Config::CreateDefault() {
     data_.runEvent = true;
     data_.cameraLock = false;
     data_.enableBackup = false;
-    data_.useEditorFont = true;
+    data_.useEditorFont = false;
     data_.findTaskName = "";
     data_.findTaskNote = "";
     data_.findTaskID = "";

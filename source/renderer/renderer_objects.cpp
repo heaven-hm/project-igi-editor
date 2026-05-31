@@ -39,6 +39,27 @@ static std::string StripTextureFormatSuffix(const std::string& texId) {
     return texId;
 }
 
+// True if a DAT texture id is flagged with an alpha-bearing pixel format
+// (e.g. "009_09_1_argb8888"). These textures carry real per-texel transparency
+// (sunglasses lenses, visors) that must be alpha-blended; the opaque pass would
+// otherwise hard-cutout the lens (shader: discard when texColor.a < 0.5) and
+// render it as a distorted black blob. RGB565/_r5g6b5 have no alpha.
+static bool TextureIdHasAlpha(const std::string& texId) {
+    static const char* const kAlphaSuffixes[] = {
+        "_argb8888", "_argb1555", "_argb4444",
+        "_a8r8g8b8", "_a1r5g5b5", "_a4r4g4b4"
+    };
+    for (const char* suf : kAlphaSuffixes) {
+        const size_t sufLen = std::strlen(suf);
+        if (texId.size() > sufLen) {
+            std::string tail = texId.substr(texId.size() - sufLen);
+            for (auto& c : tail) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (tail == suf) return true;
+        }
+    }
+    return false;
+}
+
 
 // ─── EnsurePortalDistancesLoaded ──────────────────────────────────────────────
 void Renderer_Objects::EnsurePortalDistancesLoaded() {
@@ -434,21 +455,6 @@ static bool IsWeaponModel(const std::string& modelId) {
     return false;
 }
 
-// AI character models occupy the 000..030 model-number range in IGIModels.json
-// (e.g. 000_01_1 Jones .. 030_01_1). Only these get the semi-transparent pass so
-// their ARGB8888 alpha sub-meshes (sunglasses, etc.) blend correctly.
-static bool IsAIModel(const std::string& modelId) {
-    // Must look like NNN_..  (digits then underscore)
-    size_t i = 0;
-    int n = 0;
-    while (i < modelId.size() && modelId[i] >= '0' && modelId[i] <= '9') {
-        n = n * 10 + (modelId[i] - '0');
-        ++i;
-    }
-    if (i == 0 || i >= modelId.size() || modelId[i] != '_') return false;
-    return n >= 0 && n <= 30;
-}
-
 // METAL_DOOR_SLIDE_UP (model 506_xx) appears in levels 12/13/14 as an EditRigidObj
 // carrying a genuine multi-axis Euler tuple. It bypasses the engine's special door
 // transform and so needs a different Euler application order than other rigid objects.
@@ -523,7 +529,7 @@ void main() {
     float finalAlpha = (u_useTexture != 0 ? texColor.a : 1.0) * u_alpha;
     fragColor = vec4(light * texColor.rgb, finalAlpha);
 
-    if (u_alpha >= 0.99 && texColor.a < 0.5) discard;
+    if (u_alpha >= 0.99 && texColor.a < 0.75) discard;
     if (fragColor.a < 0.05) discard;
 }
 )";
@@ -1122,15 +1128,16 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
         // Is this a window/glass model? If so, render the whole mesh semi-transparent.
         const bool isWindowModel = window_model_ids_.count(obj.modelId) > 0;
-        // AI character models (000..030): use the transparent pass for their ARGB8888
-        // alpha sub-meshes (sunglasses) but keep the body fully opaque.
-        const bool isAIChar = IsAIModel(obj.modelId);
-        const bool isTransparentObject = isWindowModel || isUndergroundContainer || isAIChar;
+        // AI characters render fully opaque in the normal pass. Their ARGB8888
+        // sub-meshes (sunglasses lenses) are blended individually via per-submesh
+        // alphaMode (see texture assignment below) — NOT by forcing the whole
+        // model into the transparent pass, which distorted every AI face/body.
+        const bool isTransparentObject = isWindowModel || isUndergroundContainer;
         if (!skipHullRender && isTransparentObject == isTransparentPass) {
             if (isTransparentObject) {
                 glEnable(GL_BLEND);
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                glUniform1f(loc_alpha, isAIChar ? 1.0f : (isUndergroundContainer ? 0.25f : 0.4f));
+                glUniform1f(loc_alpha, isUndergroundContainer ? 0.25f : 0.4f);
             }
 
             // Pull hull surfaces slightly toward camera to prevent Z-fighting with terrain.
@@ -1163,20 +1170,14 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                     }
 
                     if (sub.textureID > 0) {
-                        if (isWindowModel) {
-                            // Window/glass: flat, orientation-independent lighting. Without this,
-                            // a pane facing the light gets diff+spec added on top of ambient and
-                            // blows out to white, while the opposite bank (ambient only) stays
-                            // gray — so the two banks look different. Killing the directional
-                            // term makes every pane render the same muted gray in all levels.
-                            // (Tune 0.45f for lighter/darker glass.)
-                            glUniform3f(loc_dirlight, 0.0f, 0.0f, 0.0f);
-                            glUniform3f(loc_ambient,  0.45f, 0.45f, 0.45f);
-                        } else {
-                            // Textured submesh: neutral lighting so texture looks natural
-                            glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                            glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
-                        }
+                        // Textured submesh: neutral lighting so the texture looks natural.
+                        // Windows/glass keep their transparency (alpha 0.4 above) but render
+                        // with the SAME normal lighting as everything else, so glass stays
+                        // clear and see-through. The earlier flat-gray override (dirlight 0 /
+                        // ambient 0.45) darkened panes into murky panels — reverted to the
+                        // pre-3986cd9 "before" look the user asked to restore.
+                        glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
+                        glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
                         glUniform1i(loc_useTex, 1);
                         glActiveTexture(GL_TEXTURE0);
                         glBindTexture(GL_TEXTURE_2D, sub.textureID);
@@ -1546,15 +1547,10 @@ void Renderer_Objects::DrawAttachmentsRecursive(
                 }
 
                 if (sub.textureID > 0) {
-                    if (attIsWindow) {
-                        // Flat, orientation-independent lighting for window/glass panes
-                        // (see top-level window path) — prevents white blowout.
-                        glUniform3f(loc_dirlight, 0.0f, 0.0f, 0.0f);
-                        glUniform3f(loc_ambient,  0.45f, 0.45f, 0.45f);
-                    } else {
-                        glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                        glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
-                    }
+                    // Same normal lighting for window/glass attachments so they stay
+                    // clear and see-through (see top-level path — flat-gray reverted).
+                    glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
+                    glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
                     glUniform1i(loc_useTex, 1);
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, sub.textureID);
@@ -2026,6 +2022,9 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
     if (!mesh.subMeshes.empty()) {
         size_t assigned = 0;
 
+        // Needed below to scope ARGB lens alpha-blending to AI characters.
+        EnsureAiModelIdsLoaded();
+
         // Find the best valid (non-zero) texture to use as fallback for submeshes
         // that fall outside the DAT texture list range.
         GLuint fallbackTexture = 0;
@@ -2106,11 +2105,22 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
             mesh.subMeshes[i].textureID = texture;
             if (texture) {
                 ++assigned;
+                // Identify the DAT texture id backing this submesh.
+                const std::string tid = (matSlot >= 0 && static_cast<size_t>(matSlot) < textureIds.size())
+                    ? textureIds[static_cast<size_t>(matSlot)]
+                    : (i < textureIds.size() ? textureIds[i] : "");
+
+                // ARGB-format textures carry real per-texel alpha (sunglasses lenses,
+                // guard tower lattice, wire fences, etc.). Mark the sub-mesh for
+                // alpha blending so the transparent pass blends it correctly instead
+                // of the opaque-pass cutout hard-discarding the semi-transparent pixels.
+                if (TextureIdHasAlpha(tid)) {
+                    mesh.subMeshes[i].alphaMode = 2;
+                    mesh.subMeshes[i].baseColorFactor.a = 0.95f;
+                }
+
                 // Per-slot visibility for sunglasses-bearing models
                 if (modelId == "009_01_1" || modelId == "014_01_1" || modelId == "014_02_1") {
-                    const std::string& tid = (matSlot >= 0 && static_cast<size_t>(matSlot) < textureIds.size())
-                        ? textureIds[static_cast<size_t>(matSlot)]
-                        : (i < textureIds.size() ? textureIds[i] : "?");
                     Logger::Get().Log(LogLevel::INFO,
                         "[TEX Native] " + modelId + " submesh[" + std::to_string(i) +
                         "] matSlot=" + std::to_string(matSlot) +

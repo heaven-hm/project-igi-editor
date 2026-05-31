@@ -94,9 +94,11 @@ inline Layout BuildLayout(const TaskSchemaNS::TaskSchema& schema) {
         y += kRowH;  // field header line
 
         if (is_pos) {
-            // X/Y/Z each: label row with an editable numeric box on the right.
+            // X/Y/Z each: label on the left with a compact editable box right after it.
+            const int pBoxX1 = kLeft + kPad + 20;     // just past the "X"/"Y"/"Z" label
+            const int pBoxX2 = pBoxX1 + 180;
             for (int c = 0; c < 3; ++c) {
-                L.widgets.push_back({WidgetKind::NumBox, boxX1, y, boxX2, y + kBoxH, fi, c});
+                L.widgets.push_back({WidgetKind::NumBox, pBoxX1, y, pBoxX2, y + kBoxH, fi, c});
                 y += kBoxH + 2;
             }
             // 2D pad (left) + vertical Z slider (right of pad)

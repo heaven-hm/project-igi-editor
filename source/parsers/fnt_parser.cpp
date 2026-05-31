@@ -219,7 +219,6 @@ FntFont FNT_Parse(const std::string& filepath) {
         float v_top  = ReadF32LE(g + 8);
         uint16_t width    = ReadU16LE(g + 22);
         uint16_t height   = ReadU16LE(g + 24);
-        uint16_t advance  = ReadU16LE(g + 26);
 
         // Derive the UV rect from the glyph's pixel size anchored at (u_left, v_top)
         // for exact pixel alignment.
@@ -230,7 +229,13 @@ FntFont FNT_Parse(const std::string& filepath) {
         glyph.v1 = v_top + (float)height / (float)texHeight;
         glyph.width   = width;
         glyph.height  = height;
-        glyph.advance = advance ? advance : (width + 1);
+        // Per docs/format_fnt.md the horizontal advance is "typically width + 1".
+        // editor.fnt / editorsm.fnt store a constant cell-height at offset 26
+        // instead of a real per-glyph advance, which monospaces a proportional
+        // font and produces the excessive/uneven gaps. Derive a tight, proportional
+        // advance from the glyph's inked width so spacing is fixed and even.
+        glyph.advance = width > 0 ? (int)width + 1
+                                  : (font.lineHeight > 0 ? font.lineHeight / 2 : 4);
 
         font.glyphs[code] = glyph;
     }

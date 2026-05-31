@@ -8,6 +8,7 @@
 #include "parsers/qvm_decompiler.h"
 #include "parsers/graph_parser.h"
 #include "parsers/terrain_files.h"
+#include "parsers/fnt_parser.h"
 #include "utils.h"
 #include "common.h"
 #include "logger.h"
@@ -375,6 +376,132 @@ static void TestExtractLevel() {
     ASSERT_TRUE(textureCount > 100, "Extracted more than 100 textures");
 }
 
+// Write an RGBA buffer to an uncompressed 32-bit TGA (top-down).
+static void WriteTGA(const std::string& path, int w, int h, const std::vector<uint8_t>& rgba) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f.is_open()) return;
+    uint8_t hdr[18] = {0};
+    hdr[2] = 2;                       // uncompressed true-color
+    hdr[12] = (uint8_t)(w & 0xff); hdr[13] = (uint8_t)((w >> 8) & 0xff);
+    hdr[14] = (uint8_t)(h & 0xff); hdr[15] = (uint8_t)((h >> 8) & 0xff);
+    hdr[16] = 32;                     // bits per pixel
+    hdr[17] = 0x28;                   // top-down, 8-bit alpha
+    f.write(reinterpret_cast<char*>(hdr), 18);
+    // TGA is BGRA.
+    for (int i = 0; i < w * h; ++i) {
+        uint8_t bgra[4] = { rgba[i*4+2], rgba[i*4+1], rgba[i*4+0], rgba[i*4+3] };
+        f.write(reinterpret_cast<char*>(bgra), 4);
+    }
+}
+
+// Software-render a string with a parsed FntFont onto an opaque RGBA canvas,
+// mirroring the renderer's per-glyph advance so the on-screen spacing can be
+// inspected as a TGA without launching the GL editor.
+static void RenderSampleToTGA(const FntFont& font, const std::string& text, const std::string& outPath) {
+    if (!font.valid) return;
+    const int pad = 4;
+    const int canvasH = font.lineHeight + pad * 2;
+    // Measure width.
+    int penW = pad;
+    for (char ch : text) {
+        auto it = font.glyphs.find((int)(unsigned char)ch);
+        if (it == font.glyphs.end()) { penW += (font.lineHeight > 0 ? font.lineHeight / 2 : 4); continue; }
+        penW += it->second.advance;
+    }
+    const int canvasW = penW + pad;
+    std::vector<uint8_t> canvas((size_t)canvasW * canvasH * 4, 0);
+    // Dark blue background so white glyph mask is visible.
+    for (size_t i = 0; i < (size_t)canvasW * canvasH; ++i) {
+        canvas[i*4+0] = 18; canvas[i*4+1] = 18; canvas[i*4+2] = 32; canvas[i*4+3] = 255;
+    }
+    int penX = pad;
+    for (char ch : text) {
+        auto it = font.glyphs.find((int)(unsigned char)ch);
+        if (it == font.glyphs.end()) { penX += (font.lineHeight > 0 ? font.lineHeight / 2 : 4); continue; }
+        const FntGlyph& g = it->second;
+        int ax = (int)(g.u0 * font.texWidth + 0.5f);
+        int ay = (int)(g.v0 * font.texHeight + 0.5f);
+        for (int gy = 0; gy < g.height; ++gy) {
+            int sy = ay + gy;
+            int dy = pad + gy;
+            if (sy < 0 || sy >= font.texHeight || dy < 0 || dy >= canvasH) continue;
+            for (int gx = 0; gx < g.width; ++gx) {
+                int sx = ax + gx;
+                int dx = penX + gx;
+                if (sx < 0 || sx >= font.texWidth || dx < 0 || dx >= canvasW) continue;
+                uint8_t a = font.rgba[((size_t)sy * font.texWidth + sx) * 4 + 3];
+                if (a == 0) continue;
+                size_t di = ((size_t)dy * canvasW + dx) * 4;
+                // Alpha-blend white glyph over background.
+                canvas[di+0] = (uint8_t)((255 * a + canvas[di+0] * (255 - a)) / 255);
+                canvas[di+1] = (uint8_t)((255 * a + canvas[di+1] * (255 - a)) / 255);
+                canvas[di+2] = (uint8_t)((255 * a + canvas[di+2] * (255 - a)) / 255);
+            }
+        }
+        penX += g.advance;
+    }
+    WriteTGA(outPath, canvasW, canvasH, canvas);
+}
+
+static void TestOneFNT(const std::string& path, const std::string& tag) {
+    ASSERT_TRUE(fs::exists(path), tag + ": file exists (" + path + ")");
+    if (!fs::exists(path)) return;
+
+    FntFont font = FNT_Parse(path);
+    ASSERT_TRUE(font.valid, tag + ": parsed successfully");
+    if (!font.valid) return;
+
+    ASSERT_TRUE(font.lineHeight > 0, tag + ": positive line height");
+    ASSERT_TRUE(font.texWidth > 0 && font.texHeight > 0, tag + ": non-empty atlas");
+
+    // Printable ASCII coverage and metric sanity.
+    int covered = 0, badAdvance = 0;
+    for (int c = 0x20; c <= 0x7e; ++c) {
+        auto it = font.glyphs.find(c);
+        if (it == font.glyphs.end()) continue;
+        ++covered;
+        const FntGlyph& g = it->second;
+        // Advance is derived as a tight, proportional width+1 (see fnt_parser).
+        // A constant advance across glyphs of differing widths is the "excessive
+        // spacing" bug; this band enforces proportional spacing.
+        if (c != 0x20 && g.width > 0) {
+            if (g.advance != g.width + 1) ++badAdvance;
+        }
+        // UVs in range.
+        ASSERT_TRUE(g.u0 >= 0.0f && g.u1 <= 1.001f && g.v0 >= 0.0f && g.v1 <= 1.001f,
+                    tag + ": glyph '" + std::string(1, (char)c) + "' UVs in range");
+    }
+    ASSERT_TRUE(covered >= 90, tag + ": covers printable ASCII (" + std::to_string(covered) + "/95)");
+    ASSERT_TRUE(badAdvance == 0, tag + ": all advances within [width, width+4] (" +
+                std::to_string(badAdvance) + " out of band)");
+
+    // Dump a few representative glyph metrics for eyeballing.
+    std::cout << "  [INFO] " << tag << " metrics (char: w/h/adv):";
+    for (char c : std::string("AWMilg")) {
+        auto it = font.glyphs.find((int)c);
+        if (it != font.glyphs.end())
+            std::cout << " " << c << ":" << it->second.width << "/" << it->second.height
+                      << "/" << it->second.advance;
+    }
+    std::cout << "\n";
+
+    // Emit atlas + a rendered sample line for visual inspection.
+    fs::create_directories("scratch\\cpp_tests\\fnt");
+    WriteTGA("scratch\\cpp_tests\\fnt\\" + tag + "_atlas.tga", font.texWidth, font.texHeight, font.rgba);
+    RenderSampleToTGA(font, "The quick brown fox 0123456789",
+                      "scratch\\cpp_tests\\fnt\\" + tag + "_sample.tga");
+    std::cout << "  [INFO] Wrote scratch\\cpp_tests\\fnt\\" << tag << "_atlas.tga and "
+              << tag << "_sample.tga\n";
+}
+
+static void TestFNT() {
+    TestOneFNT("assets\\content\\qed\\editor.fnt", "editor");
+    TestOneFNT("assets\\content\\qed\\editorsm.fnt", "editorsm");
+
+    FntFont missing = FNT_Parse("scratch\\cpp_tests\\nope.fnt");
+    ASSERT_FALSE(missing.valid, "Nonexistent FNT file should be invalid");
+}
+
 int RunAllTests() {
     std::cout << "\n==================================================\n";
     std::cout << "          IGI Editor Native C++ Unit Tests         \n";
@@ -393,6 +520,7 @@ int RunAllTests() {
     RUN_SUB_TEST("QVM Bytecode Parser & Decompiler Tests", TestQVM);
     RUN_SUB_TEST("Level Resource Extractor Tests", TestExtractLevel);
     RUN_SUB_TEST("Level load end-to-end (levels 1-3) Verification", TestLevelLoad);
+    RUN_SUB_TEST("FNT Bitmap Font Parser Tests", TestFNT);
 
     std::cout << "\n==================================================\n";
     std::cout << "Test Suite Results Summary:\n";
