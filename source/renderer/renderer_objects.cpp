@@ -2124,8 +2124,11 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
                 // ARGB-format textures carry real per-texel alpha (sunglasses lenses,
                 // guard tower lattice, wire fences, etc.). Use resolvedTexId which
                 // captures the actual texture id in ALL code paths including out-of-range
-                // global-DAT lookups (where a naive matSlot index would give the wrong id).
-                if (TextureIdHasAlpha(resolvedTexId)) {
+                // ARGB textures on non-AI models (lattice, fences, decals) need alpha
+                // blending via the transparent pass. AI model ARGB sub-meshes (sunglasses)
+                // must render OPAQUE with the cutout shader so the black lens pixels show
+                // as solid black — blending them makes them see-through.
+                if (TextureIdHasAlpha(resolvedTexId) && ai_model_ids_.count(modelId) == 0) {
                     mesh.subMeshes[i].alphaMode = 2;
                     mesh.subMeshes[i].baseColorFactor.a = 0.95f;
                 }
