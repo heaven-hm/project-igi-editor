@@ -1941,14 +1941,15 @@ GLuint Renderer_Objects::GetOrLoadTexture(const std::string& textureId) {
         return 0;
     }
 
-    // Strip pixel-format suffixes (e.g. "_argb8888") that appear in DAT entries
-    // but aren't part of the actual .tex filename on disk.
+    // Try the EXACT texture id first. The editor extracts format-suffixed files
+    // verbatim (e.g. "405_01_1_argb8888.tex" is a distinct ARGB8888/alpha file that
+    // sits alongside the opaque RGB565 "405_01_1.tex"). Loading the stripped name
+    // first would grab the opaque sibling and render glass/lattice fully opaque.
+    // Only fall back to the stripped id when no exact-suffixed file exists on disk.
+    std::string texturePath = FindTextureFile(textureId);
     const std::string strippedId = StripTextureFormatSuffix(textureId);
-
-    // Try stripped ID first, then fall back to original if different
-    std::string texturePath = FindTextureFile(strippedId);
     if (texturePath.empty() && strippedId != textureId) {
-        texturePath = FindTextureFile(textureId);
+        texturePath = FindTextureFile(strippedId);
     }
     if (texturePath.empty()) {
         Logger::Get().Log(LogLevel::WARNING, "[TEX Native] Texture search FAILED for ID: " + textureId +
