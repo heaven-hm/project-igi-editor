@@ -361,8 +361,10 @@ void App::UpdateCursorMode() {
 	// Camera mode (ALT held)
 	bool enableCameraMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
 	if (enableCameraMode) {
-		current_cursor_mode_ = CursorMode::Default;  // use default pointer, no custom camera icon
-		camera_mode_moved_ = false;  // consume flag
+		// ALT + left button held = camera look (editor_camera.spr)
+		// ALT + any movement = lateral move (editor_move.spr)
+		current_cursor_mode_ = mouse_state_.left_button_down_ ? CursorMode::Camera : CursorMode::Move;
+		camera_mode_moved_ = false;
 		return;
 	}
 	current_cursor_mode_ = CursorMode::Default;
@@ -873,9 +875,9 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 				const int menu_x = (window_state_.viewport_width_  - menu_w) / 2;
 				const int screen_menu_top = (window_state_.viewport_height_ - menu_h) / 2;
 
-				// Buttons start at screen_menu_top + 80, spaced 35px
+				// Buttons start at screen_menu_top + 85, spaced 35px
 				auto btn_hit = [&](int idx, int mouse_y) -> bool {
-					int btn_y = screen_menu_top + 80 + idx * 35;
+					int btn_y = screen_menu_top + 85 + idx * 35;
 					return (mouse_y >= btn_y - 15 && mouse_y <= btn_y + 15);
 				};
 
@@ -1091,6 +1093,7 @@ void App::Input_OnMotion(int x, int y) {
 						glm::dvec3 deltaPos = obj.pos - oldPos;
 						PropagateTransformToChildren(selected_object_index_, deltaPos, glm::dmat3(1.0), oldPos);
 						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+						viewer_.pos_ += glm::vec3(deltaPos);
 					} else if (is_pos && comp == 2) {
 						glm::dvec3 oldPos = obj.pos;
 						glm::dvec3 oldRot = obj.rot;
@@ -1104,6 +1107,7 @@ void App::Input_OnMotion(int x, int y) {
 						glm::dvec3 deltaPos = obj.pos - oldPos;
 						PropagateTransformToChildren(selected_object_index_, deltaPos, glm::dmat3(1.0), oldPos);
 						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+						viewer_.pos_ += glm::vec3(deltaPos);
 					} else {
 						glm::dvec3 oldPos = obj.pos;
 						glm::dvec3 oldRot = obj.rot;

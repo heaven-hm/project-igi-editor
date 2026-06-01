@@ -1326,9 +1326,9 @@ void Renderer::Draw(const draw_params_s &params,
       glLineWidth(1.0f);
 
       int screen_menu_top = (viewport_h - menu_h) / 2;
-      draw_text_sys(menu_x + menu_w / 2 - 45, screen_menu_top + 18, "IGI EDITOR",
+      draw_text_sys(menu_x + menu_w / 2 - 45, screen_menu_top + 30, "IGI EDITOR",
                 0.0f, 1.0f, 0.0f);
-      draw_text_sys(menu_x + menu_w / 2 - 35, screen_menu_top + 32, "PAUSED", 0.8f,
+      draw_text_sys(menu_x + menu_w / 2 - 35, screen_menu_top + 44, "PAUSED", 0.8f,
                 0.8f, 0.8f);
 
       const char *btn_labels[] = {"Resume", "Debug", "Reset Level",
@@ -1336,7 +1336,7 @@ void Renderer::Draw(const draw_params_s &params,
       const int NUM_BTNS = 5;
 
       for (int i = 0; i < NUM_BTNS; ++i) {
-        int screen_btn_y = screen_menu_top + 80 + i * 35;
+        int screen_btn_y = screen_menu_top + 85 + i * 35;
         int gl_btn_y = viewport_h - screen_btn_y;
 
         bool hovered = (task_tree_view.mouse_x_ >= menu_x &&

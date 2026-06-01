@@ -126,11 +126,8 @@ static void OnMotion(int x, int y) { g_app.Input_OnMotion(x, y); }
 static void OnMenu(int menu);
 
 static void OnSpecial(int key, int x, int y) {
-  if (key == GLUT_KEY_F2) {
-    OnMenu(MENU_OVERLAY_WIREFRAME);
-    return;
-  }
-
+  // F2 is handled in Input_OnSpecial (toggles TaskTree visibility)
+  // Wireframe can be toggled via right-click menu instead
   g_app.Input_OnSpecial(key, x, y);
 }
 
@@ -146,7 +143,10 @@ static void OnKeyboardUp(unsigned char key, int x, int y) {
   g_app.Input_OnKeyboardUp(key, x, y);
 }
 
-static void OnDisplay() { g_app.OnDisplay(); }
+static void OnDisplay() {
+  glutSetCursor(GLUT_CURSOR_NONE);  // keep system cursor hidden; SPR cursor draws it
+  g_app.OnDisplay();
+}
 
 static void UpdateOverlayWireframeMenuText();
 static void UpdateDrawPartsMenuText();
