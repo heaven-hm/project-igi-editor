@@ -863,7 +863,6 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 								}
 								return;
 							}
-							return; // click landed on panel chrome — consume
 						}
 					}
 				}
@@ -1038,29 +1037,31 @@ void App::Input_OnMotion(int x, int y) {
 						glm::dvec3 oldRot = obj.rot;
 						// 2D pad: X horizontal, Y vertical (screen-down => world -Y).
 						// IGI positions are ~40.96 units/metre; match marker-manip feel.
-						const float sens = 50000.0f;
-						writeArg(fd.argOffset + 0, prop_drag_start_val_  + dxp * sens);
-						writeArg(fd.argOffset + 1, prop_drag_start_val2_ - dyp * sens);
+						float drag_dist = std::sqrt((float)(dxp * dxp + dyp * dyp));
+						float accel = 50.0f * std::pow(std::max(1.0f, drag_dist), 0.5f);
+						float nx = prop_drag_start_val_  + (float)dxp * accel;
+						float ny = prop_drag_start_val2_ - (float)dyp * accel;
+						writeArg(fd.argOffset + 0, nx);
+						writeArg(fd.argOffset + 1, ny);
 						obj.pos.x = obj.argTokens.size() > (size_t)(fd.argOffset)   ? std::atof(obj.argTokens[fd.argOffset].c_str())   : obj.pos.x;
 						obj.pos.y = obj.argTokens.size() > (size_t)(fd.argOffset+1) ? std::atof(obj.argTokens[fd.argOffset+1].c_str()) : obj.pos.y;
 						obj.modified = true;
 						glm::dvec3 deltaPos = obj.pos - oldPos;
 						PropagateTransformToChildren(selected_object_index_, deltaPos, glm::dmat3(1.0), oldPos);
 						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
-						viewer_.pos_ += glm::vec3(deltaPos);
 					} else if (is_pos && comp == 2) {
 						glm::dvec3 oldPos = obj.pos;
 						glm::dvec3 oldRot = obj.rot;
 						// Z vertical slider: dragging up increases Z
-						const float sens = 50000.0f;
-						float nz = prop_drag_start_val_ - dyp * sens;
+						float abs_dy = std::abs((float)dyp);
+						float accel = 50.0f * std::pow(std::max(1.0f, abs_dy), 0.5f);
+						float nz = prop_drag_start_val_ - (float)dyp * accel;
 						writeArg(fd.argOffset + 2, nz);
 						obj.pos.z = nz;
 						obj.modified = true;
 						glm::dvec3 deltaPos = obj.pos - oldPos;
 						PropagateTransformToChildren(selected_object_index_, deltaPos, glm::dmat3(1.0), oldPos);
 						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
-						viewer_.pos_ += glm::vec3(deltaPos);
 					} else {
 						glm::dvec3 oldPos = obj.pos;
 						glm::dvec3 oldRot = obj.rot;
