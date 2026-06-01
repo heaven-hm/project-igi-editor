@@ -656,14 +656,15 @@ void LevelObjects::LoadModelNames() {
     }
 }
 
-std::string LevelObjects::GetModelName(const std::string& modelId) {
-    if (modelNames_.empty()) LoadModelNames();
-    if (modelNames_.count(modelId)) return modelNames_[modelId];
+std::string LevelObjects::GetModelName(const std::string& modelId) const {
+    if (modelNames_.empty()) const_cast<LevelObjects*>(this)->LoadModelNames();
+    auto it = modelNames_.find(modelId);
+    if (it != modelNames_.end()) return it->second;
     return "";
 }
 
-std::string LevelObjects::GetModelId(const std::string& modelName) {
-    if (modelNames_.empty()) LoadModelNames();
+std::string LevelObjects::GetModelId(const std::string& modelName) const {
+    if (modelNames_.empty()) const_cast<LevelObjects*>(this)->LoadModelNames();
     auto it = modelIds_.find(modelName);
     if (it != modelIds_.end()) return it->second;
     return "";

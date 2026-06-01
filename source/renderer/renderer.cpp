@@ -835,8 +835,8 @@ void Renderer::Draw(const draw_params_s &params,
       }
     }
 
-    int tooltip_x = task_tree_view.mouse_x_;
-    int tooltip_y = task_tree_view.mouse_y_ + 25;
+    int tooltip_x = task_tree_view.mouse_x_ + 20;  // right of cursor
+    int tooltip_y = task_tree_view.mouse_y_;
 
 
 
@@ -855,11 +855,13 @@ void Renderer::Draw(const draw_params_s &params,
         const auto &obj = objects[info_object_index];
 
         char buf[512];
-        std::string display_name = obj.name;
-        if (display_name.empty())
-          display_name = obj.type;
-        if (display_name.empty())
-          display_name = obj.modelId;
+        // Look up model name from IGIModels.json; fall back to task note or type
+        std::string display_name;
+        if (task_tree_view.level_objects_) {
+            display_name = task_tree_view.level_objects_->GetModelName(obj.modelId);
+        }
+        if (display_name.empty()) display_name = obj.type;
+        if (display_name.empty()) display_name = obj.modelId;
 
         std::string task_id = obj.taskId.empty() ? "-1" : obj.taskId;
 
@@ -916,8 +918,7 @@ void Renderer::Draw(const draw_params_s &params,
           text_y += 15;
 
           snprintf(buf, sizeof(buf), "%s", obj.modelId.c_str());
-          draw_text_sm(text_x, text_y, buf, obj.isBuilding ? 1.0f : 0.0f, 1.0f,
-                    0.0f);
+          draw_text_sm(text_x, text_y, buf, 0.0f, 1.0f, 0.0f);  // always green
           text_y += 15;
         }
 
@@ -1680,14 +1681,24 @@ void Renderer::Draw(const draw_params_s &params,
                   try { py = std::stod(task_tree_view.prop_text_buf_); } catch(...) {}
                 else
                   try { py = std::stod(tok(fd.argOffset + 1)); } catch(...) {}
-                const double win = 50.0; // ± window mapped across the pad
                 int cx = pad.x1 + (pad.x2 - pad.x1) / 2;
                 int cy = pad.y1 + (pad.y2 - pad.y1) / 2;
-                int hx = cx + (int)(std::max(-1.0, std::min(1.0, (px - std::floor(px / win) * win - win / 2) / (win / 2))) * (pad.x2 - pad.x1) / 2);
-                int hy = cy - (int)(std::max(-1.0, std::min(1.0, (py - std::floor(py / win) * win - win / 2) / (win / 2))) * (pad.y2 - pad.y1) / 2);
-                bool drag = (task_tree_view.prop_field_index_ == fi * 3 + 0 ||
-                             task_tree_view.prop_field_index_ == fi * 3 + 1);
-                quad(hx - 4, hy - 4, hx + 4, hy + 4, 1.0f, drag ? 0.95f : 0.85f, drag ? 0.2f : 0.0f, 1.0f);
+                int hx, hy;
+                bool is_pad_dragging = (task_tree_view.prop_field_index_ == fi * 3 + 0 ||
+                                        task_tree_view.prop_field_index_ == fi * 3 + 1);
+                if (is_pad_dragging) {
+                  // During drag: show marker at cursor position relative to pad center
+                  int half_w = (pad.x2 - pad.x1) / 2;
+                  int half_h = (pad.y2 - pad.y1) / 2;
+                  int raw_dx = task_tree_view.mouse_x_ - (pad.x1 + half_w);
+                  int raw_dy = task_tree_view.mouse_y_ - (pad.y1 + half_h);
+                  hx = cx + std::max(-half_w, std::min(half_w, raw_dx));
+                  hy = cy + std::max(-half_h, std::min(half_h, raw_dy));
+                } else {
+                  hx = cx;  // not dragging: show at center
+                  hy = cy;
+                }
+                quad(hx - 4, hy - 4, hx + 4, hy + 4, 1.0f, is_pad_dragging ? 0.95f : 0.85f, is_pad_dragging ? 0.2f : 0.0f, 1.0f);
               }
               // Z vertical slider
               const auto& zs = L.widgets[wi++];
