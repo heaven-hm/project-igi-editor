@@ -361,9 +361,7 @@ void App::UpdateCursorMode() {
 	// Camera mode (ALT held)
 	bool enableCameraMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
 	if (enableCameraMode) {
-		// Left button held = camera look (editor_camera.spr)
-		// Any movement (no left button) = lateral move (editor_move.spr)
-		current_cursor_mode_ = mouse_state_.left_button_down_ ? CursorMode::Camera : CursorMode::Move;
+		current_cursor_mode_ = CursorMode::Default;  // use default pointer, no custom camera icon
 		camera_mode_moved_ = false;  // consume flag
 		return;
 	}
