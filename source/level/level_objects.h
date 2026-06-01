@@ -74,8 +74,8 @@ public:
     void Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects);
     void Unload();
     void LoadModelNames();
-    std::string GetModelName(const std::string& modelId);
-    std::string GetModelId(const std::string& modelName);
+    std::string GetModelName(const std::string& modelId) const;
+    std::string GetModelId(const std::string& modelName) const;
     void SaveToQSC(const std::string& qscPath);
 
 
