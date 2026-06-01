@@ -219,7 +219,7 @@ bool App::Init(int argc, char** argv) {
 
 	// Set initial cursor state
 	LoadAllCursors();
-	glutSetCursor(cursor_loaded_count_ > 0 ? GLUT_CURSOR_NONE : GLUT_CURSOR_LEFT_ARROW);
+	glutSetCursor(GLUT_CURSOR_NONE);
 
 	// Cache editor HWND for minimize/restore around game launch
 	editor_hwnd_ = Utils::FindWindow("IGI Editor v" + Utils::GetVersionString());
@@ -933,10 +933,7 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 
 	// Update cursor instantly on click/release — keep NONE if SPR cursor is active
 	if (window_state_.cursor_visible_ && !pause_mode_) {
-		if (cursor_loaded_count_ == 0)
-			glutSetCursor(enableCameraMode ? GLUT_CURSOR_NONE : GLUT_CURSOR_LEFT_ARROW);
-		else
-			glutSetCursor(GLUT_CURSOR_NONE);
+		glutSetCursor(GLUT_CURSOR_NONE);
 	}
 }
 
@@ -963,11 +960,7 @@ void App::Input_OnMotion(int x, int y) {
 	}
 
 	if (window_state_.cursor_visible_) {
-		if (enableCameraMode)
-			glutSetCursor(GLUT_CURSOR_NONE);
-		else if (cursor_loaded_count_ == 0)
-			glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
-		// else: SPR cursor active — keep GLUT_CURSOR_NONE
+		glutSetCursor(GLUT_CURSOR_NONE);
 	}
 
 	if (window_state_.cursor_visible_ && !enableCameraMode) {
@@ -2542,15 +2535,8 @@ void App::ProcessInput(float delta_seconds) {
 	
 	bool enableCameraMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
 	
-	// Update cursor based on mode — keep NONE if SPR cursor is active
-	if (pause_mode_) {
-		if (cursor_loaded_count_ == 0) glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
-		else glutSetCursor(GLUT_CURSOR_NONE);
-	} else {
-		if (enableCameraMode) glutSetCursor(GLUT_CURSOR_NONE);
-		else if (cursor_loaded_count_ == 0) glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
-		else glutSetCursor(GLUT_CURSOR_NONE);
-	}
+	// Update cursor — always NONE so SPR sprite cursor is the only visible cursor
+	glutSetCursor(GLUT_CURSOR_NONE);
 
 	if (!edit_mode_ || enableCameraMode) {
 		if (orbit_active_) {
@@ -2853,14 +2839,14 @@ void App::TogglePauseMenu() {
 	window_state_.cursor_visible_ = true;
 	if (pause_mode_) {
 		// Opening pause menu
-		glutSetCursor(cursor_loaded_count_ > 0 ? GLUT_CURSOR_NONE : GLUT_CURSOR_LEFT_ARROW);
+		glutSetCursor(GLUT_CURSOR_NONE);
 	} else {
 		// Closing pause menu: reset mouse state so no stale drag occurs
 		input_.mouse_delta_x_ = 0;
 		input_.mouse_delta_y_ = 0;
 		mouse_state_.left_button_down_ = false;
 		skip_input_on_motion_once_ = false;
-		glutSetCursor(cursor_loaded_count_ > 0 ? GLUT_CURSOR_NONE : GLUT_CURSOR_LEFT_ARROW);
+		glutSetCursor(GLUT_CURSOR_NONE);
 	}
 }
 
