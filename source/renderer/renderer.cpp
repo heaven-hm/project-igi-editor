@@ -1584,7 +1584,7 @@ void Renderer::Draw(const draw_params_s &params,
               std::string seg = txt.substr(p, (multiline ? (size_t)max_chars : txt.size()));
               if (!multiline && (int)seg.size() > max_chars && !editing)
                 seg = seg.substr(0, max_chars);
-              draw_text(w.x1 + 3, w.y1 + 12 + line * PropPanel::kBoxH, seg.c_str(), 1.0f, 1.0f, 0.85f);
+              draw_text_sm(w.x1 + 3, w.y1 + 12 + line * PropPanel::kBoxH, seg.c_str(), 1.0f, 1.0f, 0.85f);
               if (txt.empty()) break;
             }
             if (editing && caret_on) {
@@ -1611,9 +1611,9 @@ void Renderer::Draw(const draw_params_s &params,
           int ty = L.panel_y + PropPanel::kPad;
           char hdr[160];
           snprintf(hdr, sizeof(hdr), "QTasktype: %s", obj.type.c_str());
-          draw_text(L.panel_x + PropPanel::kPad, ty + 11, hdr, 1.0f, 1.0f, 1.0f);
+          draw_text_sm(L.panel_x + PropPanel::kPad, ty + 11, hdr, 1.0f, 1.0f, 1.0f);
           ty += PropPanel::kRowH;
-          draw_text(L.panel_x + PropPanel::kPad, ty + 11, "QTask Note (QTaskNote):", 1.0f, 0.9f, 0.2f);
+          draw_text_sm(L.panel_x + PropPanel::kPad, ty + 11, "QTask Note (QTaskNote):", 1.0f, 0.9f, 0.2f);
           ty += PropPanel::kRowH;
 
           // Walk widgets; field headers + value labels are derived from layout y.
@@ -1650,7 +1650,7 @@ void Renderer::Draw(const draw_params_s &params,
             char fhdr[160];
             if (sub[0]) snprintf(fhdr, sizeof(fhdr), "%s (%s)%s:", fd.name.c_str(), tn.c_str(), sub);
             else        snprintf(fhdr, sizeof(fhdr), "%s (%s):", fd.name.c_str(), tn.c_str());
-            draw_text(L.panel_x + PropPanel::kPad, y + 11, fhdr, 1.0f, 0.9f, 0.2f);
+            draw_text_sm(L.panel_x + PropPanel::kPad, y + 11, fhdr, 1.0f, 0.9f, 0.2f);
             y += PropPanel::kRowH;
 
             // Helper: editable numeric box (NumBox) — label + box + caret.
@@ -1658,7 +1658,7 @@ void Renderer::Draw(const draw_params_s &params,
               int field_id = fi * 3 + w.comp;
               bool editing = (caret_field == field_id);
               if (label && label[0])
-                draw_text(L.panel_x + PropPanel::kPad, w.y1 + 12, label, 1.0f, 0.9f, 0.2f);
+                draw_text_sm(L.panel_x + PropPanel::kPad, w.y1 + 12, label, 1.0f, 0.9f, 0.2f);
               quad(w.x1, w.y1, w.x2, w.y2, 0.0f, 0.0f, 0.0f, 0.40f);
               border(w.x1, w.y1, w.x2, w.y2, 1.0f,
                      editing ? 0.95f : 1.0f, editing ? 0.2f : 1.0f);
@@ -1717,15 +1717,15 @@ void Renderer::Draw(const draw_params_s &params,
               const auto& bo = L.widgets[wi++];
               quad(bg.x1, bg.y1, bg.x2, bg.y2, 0.0f, 0.0f, 0.0f, 0.40f);
               border(bg.x1, bg.y1, bg.x2, bg.y2, 1.0f, 1.0f, 1.0f);
-              draw_text(bg.x1 + 6, bg.y1 + 12, "Snap to ground", 1.0f, 0.9f, 0.2f);
+              draw_text_sm(bg.x1 + 6, bg.y1 + 12, "Snap to ground", 1.0f, 0.9f, 0.2f);
               quad(bo.x1, bo.y1, bo.x2, bo.y2, 0.0f, 0.0f, 0.0f, 0.40f);
               border(bo.x1, bo.y1, bo.x2, bo.y2, 1.0f, 1.0f, 1.0f);
-              draw_text(bo.x1 + 6, bo.y1 + 12, "Snap to object", 1.0f, 0.9f, 0.2f);
+              draw_text_sm(bo.x1 + 6, bo.y1 + 12, "Snap to object", 1.0f, 0.9f, 0.2f);
               y = bg.y2 + 4;
               {
                 char ab[80];
                 snprintf(ab, sizeof(ab), "Altitude: %.6f meter", obj.pos.z);
-                draw_text(L.panel_x + PropPanel::kPad, y + 11, ab, 0.75f, 0.7f, 0.4f);
+                draw_text_sm(L.panel_x + PropPanel::kPad, y + 11, ab, 0.75f, 0.7f, 0.4f);
                 y += PropPanel::kRowH;
               }
             } else if (is_ori) {
@@ -1743,7 +1743,7 @@ void Renderer::Draw(const draw_params_s &params,
               for (int ci = 0; ci < ori_count; ++ci) {
                 const auto& w = L.widgets[wi++];
                 // Short label on the far left
-                draw_text(L.panel_x + PropPanel::kPad, w.y1 + 12, lab[w.comp], 1.0f, 0.9f, 0.2f);
+                draw_text_sm(L.panel_x + PropPanel::kPad, w.y1 + 12, lab[w.comp], 1.0f, 0.9f, 0.2f);
                 // Slider track ends 72px before right edge to leave room for value text
                 int cy = (w.y1 + w.y2) / 2;
                 int track_x2 = w.x2 - 72;
@@ -1760,7 +1760,7 @@ void Renderer::Draw(const draw_params_s &params,
                 bool drag = (task_tree_view.prop_field_index_ == fi * 3 + w.comp);
                 quad(tx, cy - 5, tx + 6, cy + 5, 1.0f, drag ? 0.95f : 0.85f, drag ? 0.2f : 0.0f, 1.0f);
                 // Value text to the right of the slider
-                draw_text(track_x2 + 4, w.y1 + 12, tok(fd.argOffset + w.comp).c_str(), 1.0f, 1.0f, 0.85f);
+                draw_text_sm(track_x2 + 4, w.y1 + 12, tok(fd.argOffset + w.comp).c_str(), 1.0f, 1.0f, 0.85f);
                 y = w.y2;
               }
               if (ori_count == 0) y += PropPanel::kBoxH;  // fallback if no widgets
@@ -1769,8 +1769,8 @@ void Renderer::Draw(const draw_params_s &params,
               float rgb[3] = {0,0,0};
               for (int c = 0; c < 3; ++c) {
                 const auto& w = L.widgets[wi++];
-                draw_text(L.panel_x + PropPanel::kPad, w.y1 + 12, rgbl[w.comp], 1.0f, 0.9f, 0.2f);
-                draw_text(L.panel_x + PropPanel::kPad + 24, w.y1 + 12,
+                draw_text_sm(L.panel_x + PropPanel::kPad, w.y1 + 12, rgbl[w.comp], 1.0f, 0.9f, 0.2f);
+                draw_text_sm(L.panel_x + PropPanel::kPad + 24, w.y1 + 12,
                           tok(fd.argOffset + w.comp).c_str(), 1.0f, 1.0f, 0.85f);
                 int cy = (w.y1 + w.y2) / 2;
                 quad(w.x1, cy - 2, w.x2, cy + 2, 0.0f, 0.0f, 0.0f, 0.40f);
@@ -1805,12 +1805,12 @@ void Renderer::Draw(const draw_params_s &params,
               quad(w.x1, w.y1, w.x2, w.y2, 0.0f, 0.0f, 0.0f, 0.40f);
               if (bv) quad(w.x1 + 2, w.y1 + 2, w.x2 - 2, w.y2 - 2, 1.0f, 1.0f, 1.0f, 0.9f);
               border(w.x1, w.y1, w.x2, w.y2, 1.0f, 1.0f, 1.0f);
-              draw_text(w.x2 + 6, w.y1 + 11, bv ? "TRUE" : "FALSE", 1.0f, 0.9f, 0.2f);
+              draw_text_sm(w.x2 + 6, w.y1 + 11, bv ? "TRUE" : "FALSE", 1.0f, 0.9f, 0.2f);
               y = w.y2;
             } else if (is_ro) {
               std::string v = tok(fd.argOffset);
               if (v.size() > 38) v = v.substr(0, 35) + "...";
-              draw_text(L.panel_x + PropPanel::kPad + 4, y + 11, v.c_str(), 0.75f, 0.7f, 0.4f);
+              draw_text_sm(L.panel_x + PropPanel::kPad + 4, y + 11, v.c_str(), 0.75f, 0.7f, 0.4f);
               y += PropPanel::kRowH;
             } else if (is_int) {
               const auto& w = L.widgets[wi++];
