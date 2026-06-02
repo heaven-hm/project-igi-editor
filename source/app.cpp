@@ -903,10 +903,21 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 					if (scp) {
 						const TaskSchema& schema = *scp;
 						bool is_ai = ai_model_ids_.count(obj.modelId) > 0;
-						PropPanel::Layout L = PropPanel::BuildLayout(schema, is_ai);
+						// Gather editable child task sections (same order as the renderer).
+						std::vector<std::pair<int, const TaskSchema*>> children;
+						for (int ci : obj.childrenIndices) {
+							if (ci < 0 || ci >= (int)objects.size()) continue;
+							if (objects[ci].deleted) continue;
+							const TaskSchema* cscp = GetSchema(objects[ci].type);
+							if (cscp && !cscp->empty()) children.push_back({ci, cscp});
+						}
+						PropPanel::Layout L = PropPanel::BuildLayout(schema, is_ai, children);
+						// Apply the same vertical scroll the renderer uses so hit-tests align.
+						if (prop_panel_scroll_ > 0)
+							for (auto& w : L.widgets) { w.y1 -= prop_panel_scroll_; w.y2 -= prop_panel_scroll_; }
 						// Clicks inside the panel are consumed by the panel.
 						if (x >= L.panel_x && x <= L.panel_x + L.panel_w &&
-						    y >= L.panel_y && y <= L.panel_y + L.panel_h) {
+						    y >= L.panel_y && y <= L.panel_y + (L.panel_h - prop_panel_scroll_)) {
 							// +4px tolerance on all sides for pixel-perfect feel at any DPI
 							auto inRect = [&](const PropPanel::Widget& w) {
 								return x >= w.x1 - 4 && x <= w.x2 + 4 && y >= w.y1 - 4 && y <= w.y2 + 4;
@@ -922,6 +933,33 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 							for (const auto& w : L.widgets) {
 								if (!inRect(w)) continue;
 								using K = PropPanel::WidgetKind;
+								if (w.kind == K::ChildHeader) { return; } // separator: not interactive
+								// Child task field: route the edit to the child LevelObject.
+								if (w.objIndex >= 0 && w.objIndex != selected_object_index_) {
+									if (w.objIndex >= (int)objects.size()) return;
+									LevelObject& cobj = objects[w.objIndex];
+									const TaskSchema* cscp = GetSchema(cobj.type);
+									if (!cscp || w.fieldIndex >= (int)cscp->size()) return;
+									int cArg = (*cscp)[w.fieldIndex].argOffset + w.comp;
+									if (w.kind == K::Checkbox) {
+										if (cArg >= 0 && cArg < (int)cobj.argTokens.size()) {
+											int cur = 0; try { cur = std::stoi(cobj.argTokens[cArg]); } catch(...) {}
+											cobj.argTokens[cArg] = (cur == 0) ? "1" : "0";
+											cobj.modified = true;
+											level_.GetLevelObjects().UpdateCoordinatesInLine(cobj);
+										}
+									} else { // StringBox / NumBox → text edit
+										PushUndoState();
+										prop_edit_obj_index_  = w.objIndex;
+										prop_text_edit_field_ = w.fieldIndex * 3 + w.comp;
+										prop_text_buf_ = (cArg >= 0 && cArg < (int)cobj.argTokens.size())
+										               ? StripQuotes(cobj.argTokens[cArg]) : "";
+										prop_text_caret_ = (int)prop_text_buf_.size();
+									}
+									return;
+								}
+								// Parent field: edits target the selected object.
+								prop_edit_obj_index_ = selected_object_index_;
 								if (w.kind == K::NoteBox) {
 									prop_text_edit_field_ = -2; // sentinel: editing note
 									prop_text_buf_ = obj.name;
@@ -1110,7 +1148,7 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 		int target = hover_object_index_ >= 0 ? hover_object_index_ : selected_object_index_;
 		if (target >= 0) {
 			selected_object_index_ = target;
-			prop_editor_open_ = true; prop_panel_scroll_ = 0;
+			prop_editor_open_ = true; prop_panel_scroll_ = 0; prop_text_edit_field_ = -1; prop_edit_obj_index_ = -1;
 		} else {
 			prop_editor_open_ = false;
 		}
@@ -1991,7 +2029,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 			auto& objects = level_.GetLevelObjects().GetObjects();
 			if (selected_object_index_ < (int)objects.size()) {
 				auto& obj = objects[selected_object_index_];
-				prop_editor_open_ = true; prop_panel_scroll_ = 0;
+				prop_editor_open_ = true; prop_panel_scroll_ = 0; prop_text_edit_field_ = -1; prop_edit_obj_index_ = -1;
 				if (obj.isContainer) {
 					obj.expanded = !obj.expanded;
 					Logger::Get().Log(LogLevel::INFO, "[App] Enter opened props + toggled expand for " + obj.type);
@@ -2658,6 +2696,7 @@ void App::Frame(float delta_seconds) {
 			.prop_editor_open_     = prop_editor_open_,
 			.prop_field_index_     = prop_field_index_,
 			.prop_text_edit_field_ = prop_text_edit_field_,
+			.prop_edit_obj_index_  = prop_edit_obj_index_,
 			.prop_text_buf_        = prop_text_buf_,
 			.prop_text_caret_      = prop_text_caret_,
 			.prop_panel_scroll_    = prop_panel_scroll_,
@@ -2777,6 +2816,7 @@ void App::Frame(float delta_seconds) {
 		.prop_editor_open_     = prop_editor_open_,
 		.prop_field_index_     = prop_field_index_,
 		.prop_text_edit_field_ = prop_text_edit_field_,
+		.prop_edit_obj_index_  = prop_edit_obj_index_,
 		.prop_text_buf_        = prop_text_buf_,
 		.prop_text_caret_      = prop_text_caret_,
 		.prop_panel_scroll_    = prop_panel_scroll_,
@@ -3637,10 +3677,11 @@ std::string App::StripQuotes(const std::string& s) {
 // True if the field currently being text-edited is a multi-line box.
 bool App::IsPropFieldMultiline(int field) const {
 	if (field < 0) return false; // note box (-2) is single-line
-	if (selected_object_index_ < 0) return false;
+	int oi = (prop_edit_obj_index_ >= 0) ? prop_edit_obj_index_ : selected_object_index_;
+	if (oi < 0) return false;
 	const auto& objects = level_.GetLevelObjects().GetObjects();
-	if (selected_object_index_ >= (int)objects.size()) return false;
-	const TaskSchema* scp = GetSchema(objects[selected_object_index_].type);
+	if (oi >= (int)objects.size()) return false;
+	const TaskSchema* scp = GetSchema(objects[oi].type);
 	if (!scp) return false;
 	int fi = field / 3;
 	if (fi < 0 || fi >= (int)scp->size()) return false;
@@ -3654,10 +3695,13 @@ void App::CommitPropTextEdit() {
 	if (prop_text_edit_field_ == -1) return;
 	int field = prop_text_edit_field_;
 	prop_text_edit_field_ = -1;
-	if (selected_object_index_ < 0) return;
+	// Edits may target the selected object OR one of its child tasks (weapon/ammo).
+	int oi = (prop_edit_obj_index_ >= 0) ? prop_edit_obj_index_ : selected_object_index_;
+	prop_edit_obj_index_ = -1;
+	if (oi < 0) return;
 	auto& objects = level_.GetLevelObjects().GetObjects();
-	if (selected_object_index_ >= (int)objects.size()) return;
-	auto& obj = objects[selected_object_index_];
+	if (oi >= (int)objects.size()) return;
+	auto& obj = objects[oi];
 
 	if (field == -2) {
 		// Note edit -> obj.name (and arg[2] if present, keeping quotes).
@@ -4100,7 +4144,7 @@ void App::ProcessTreeViewClick(int mx, int my) {
                         last_tree_click_time_ms_ = currentTime;
 
                         if (isDoubleClick) {
-                            prop_editor_open_ = true; prop_panel_scroll_ = 0;
+                            prop_editor_open_ = true; prop_panel_scroll_ = 0; prop_text_edit_field_ = -1; prop_edit_obj_index_ = -1;
                             Logger::Get().Log(LogLevel::INFO, "[App] Double clicked object from tree and opened property panel.");
                         } else {
                             Logger::Get().Log(LogLevel::INFO, "[App] Selected object from tree: " + obj.type);

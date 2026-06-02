@@ -8,6 +8,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <utility>
 #include "renderer_objects.h"
 #include "renderer_splines.h"
 #include "../level/task_schema.h"
@@ -35,6 +36,7 @@ enum class WidgetKind {
     NumBox,        // editable numeric input box (Int/Real X/Y/Z) — click to type, drag to scrub
     StringBox,     // editable text box (String*/VarString)
     Checkbox,      // bool8 / PushButton
+    ChildHeader,   // non-interactive separator label for a child task section
 };
 
 struct Widget {
@@ -42,6 +44,7 @@ struct Widget {
     int x1, y1, x2, y2;   // screen top-down rect
     int fieldIndex = -1;  // schema field index (-1 for note/snap)
     int comp       = 0;   // sub-component (0=X/Alpha/R, 1=Y/Beta/G, 2=Z/Gamma/B)
+    int objIndex   = -1;  // owning LevelObject index; -1 = the selected/parent object
 };
 
 struct Layout {
@@ -62,7 +65,8 @@ static constexpr int kZSliderW   = 22;   // vertical Z slider width
 // Build the layout for one task type's schema. `is_multi` types (ObjectPos /
 // Real32x9 / RGB) expand to multiple sub-rows. Returns rows' y positions implicitly
 // via widget rects; panel_h is the total height.
-inline Layout BuildLayout(const TaskSchemaNS::TaskSchema& schema, bool is_ai = false) {
+inline Layout BuildLayout(const TaskSchemaNS::TaskSchema& schema, bool is_ai = false,
+                          const std::vector<std::pair<int, const TaskSchemaNS::TaskSchema*>>& children = {}) {
     using namespace TaskSchemaNS;
     Layout L;
     L.panel_x = kLeft; L.panel_y = kTop; L.panel_w = kWidth;
@@ -172,6 +176,36 @@ inline Layout BuildLayout(const TaskSchemaNS::TaskSchema& schema, bool is_ai = f
         y += 4;  // gap between fields
     }
 
+    // ── Child task sections (weapon/ammo/AI sub-tasks) — editable ─────────────
+    // Each child field becomes one editable box per component, tagged with the
+    // child's LevelObject index so the input handler routes edits to the child.
+    for (const auto& [childIdx, cscp] : children) {
+        if (!cscp) continue;
+        const TaskSchema& cs = *cscp;
+        // Separator header (renderer draws the child type label).
+        L.widgets.push_back({WidgetKind::ChildHeader, kLeft + kPad, y,
+                             kLeft + kWidth - kPad, y + kRowH, -1, 0, childIdx});
+        y += kRowH + 2;
+        const int cBoxX1 = kLeft + kPad + 150;          // value box left edge
+        const int cBoxX2 = kLeft + kWidth - kPad;
+        for (int cfi = 0; cfi < (int)cs.size(); ++cfi) {
+            const FieldDef& cfd = cs[cfi];
+            const std::string& tn = cfd.typeName;
+            bool is_str  = (tn.find("String") != std::string::npos || tn == "VarString" ||
+                            tn == "EnumString32" || tn == "DropDownCombo");
+            bool is_bool = (tn == "bool8" || tn == "PushButton");
+            int ncomp = cfd.argCount > 0 ? cfd.argCount : 1;
+            for (int c = 0; c < ncomp; ++c) {
+                WidgetKind k = is_bool ? WidgetKind::Checkbox
+                             : is_str  ? WidgetKind::StringBox
+                                       : WidgetKind::NumBox;
+                L.widgets.push_back({k, cBoxX1, y, cBoxX2, y + kBoxH, cfi, c, childIdx});
+                y += kBoxH + 2;
+            }
+        }
+        y += 4;
+    }
+
     L.panel_h = (y + kPad) - kTop;
     return L;
 }
@@ -238,6 +272,7 @@ public:
 		bool prop_editor_open_     = false;
 		int  prop_field_index_     = -1;
 		int  prop_text_edit_field_ = -1;
+		int  prop_edit_obj_index_  = -1;  // LevelObject targeted by active text edit (-1 = parent)
 		std::string prop_text_buf_;
 		int  prop_text_caret_      = 0;
 		int  prop_panel_scroll_    = 0;  // vertical scroll offset (pixels)

@@ -200,6 +200,7 @@ private:
 	int						prop_drag_start_x_     = 0;
 	int						prop_drag_start_y_     = 0;
 	int						prop_text_edit_field_  = -1;    // -2 = editing note
+	int						prop_edit_obj_index_   = -1;    // LevelObject targeted by the active text edit (-1 = selected/parent)
 	std::string				prop_text_buf_;
 	int						prop_text_caret_       = 0;     // caret index within prop_text_buf_
 	int						prop_last_drag_dx_     = 0;     // last non-zero X delta (for edge-stuck continuity)

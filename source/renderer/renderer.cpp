@@ -1519,25 +1519,19 @@ void Renderer::Draw(const draw_params_s &params,
           const TaskSchema& schema = *scp;
           int vh = params.view_define_->viewport_height_;
 
-          PropPanel::Layout L = PropPanel::BuildLayout(schema, task_tree_view.selected_obj_is_ai);
-
-          // Append child-task sections (weapon, AI, etc.) to the layout.
-          // Each child gets a separator label row + its own schema fields.
-          // Child field indices are encoded as childIdx*10000 + fi*3+comp so
-          // the hit-test in app.cpp can distinguish parent vs child fields.
-          // (We only need to DISPLAY them here — editing child fields is done
-          //  by selecting the child in the task tree. The separator row is
-          //  draw-only, no widget.)
+          // Gather editable child-task sections (weapon/ammo/AI sub-tasks). Only
+          // shown when the task actually has children; appended to the layout so
+          // their fields are real editable widgets (routed to the child object).
           std::vector<std::pair<int,const TaskSchema*>> child_schemas; // (child obj idx, schema)
-          if (task_tree_view.level_objects_) {
-              for (int ci : obj.childrenIndices) {
-                  if (ci < 0 || ci >= (int)objects.size()) continue;
-                  const auto& child = objects[ci];
-                  if (child.deleted) continue;
-                  const TaskSchema* cscp = GetSchema(child.type);
-                  if (cscp && !cscp->empty()) child_schemas.push_back({ci, cscp});
-              }
+          for (int ci : obj.childrenIndices) {
+              if (ci < 0 || ci >= (int)objects.size()) continue;
+              const auto& child = objects[ci];
+              if (child.deleted) continue;
+              const TaskSchema* cscp = GetSchema(child.type);
+              if (cscp && !cscp->empty()) child_schemas.push_back({ci, cscp});
           }
+
+          PropPanel::Layout L = PropPanel::BuildLayout(schema, task_tree_view.selected_obj_is_ai, child_schemas);
 
           // Apply vertical scroll: shift all widget Y positions.
           const int scroll = task_tree_view.prop_panel_scroll_;
@@ -1587,7 +1581,12 @@ void Renderer::Draw(const draw_params_s &params,
 
           // Caret blink (on/off ~2Hz). ~7px per char matches the wrap heuristic.
           const bool caret_on = ((glutGet(GLUT_ELAPSED_TIME) / 500) & 1) == 0;
-          const int  caret_field = task_tree_view.prop_text_edit_field_;
+          // A field-id match only means "editing" when the edit targets the PARENT
+          // object; otherwise a child edit sharing the same fi*3+comp code would
+          // light up the wrong (parent) box.
+          const bool parent_edit_active = (task_tree_view.prop_edit_obj_index_ < 0 ||
+                                           task_tree_view.prop_edit_obj_index_ == sel);
+          const int  caret_field = parent_edit_active ? task_tree_view.prop_text_edit_field_ : -999;
           int caret_idx = task_tree_view.prop_text_caret_;
           if (caret_idx < 0) caret_idx = 0;
           if (caret_idx > (int)task_tree_view.prop_text_buf_.size())
@@ -1884,43 +1883,70 @@ void Renderer::Draw(const draw_params_s &params,
             y += 4;
           }
 
-          // ── Child task sections (weapon/ammo/AI sub-tasks shown read-only) ──────
-          for (auto& [ci, cscp] : child_schemas) {
-              const auto& child = objects[ci];
-              const TaskSchema& cschema = *cscp;
-              // Separator header
-              int sep_y = y - scroll + 4;
-              char sep_label[64];
-              snprintf(sep_label, sizeof(sep_label), "── %s ──", child.type.c_str());
-              draw_text(L.panel_x + PropPanel::kPad, sep_y + 11, sep_label, 0.5f, 0.8f, 1.0f);
-              y += PropPanel::kRowH + 4;
+          // ── Child task sections (weapon/ammo/AI sub-tasks) — editable ──────────
+          // Remaining widgets (from wi onward) are the appended child widgets.
+          // They carry objIndex so values/edits resolve against the child object.
+          for (; wi < (int)L.widgets.size(); ++wi) {
+              const auto& w = L.widgets[wi];
+              int coIdx = w.objIndex;
+              if (coIdx < 0 || coIdx >= (int)objects.size()) continue;
+              const auto& cobj = objects[coIdx];
+              using K = PropPanel::WidgetKind;
 
-              // Show each field as a read-only label + value (no editing; select child in tree to edit)
-              for (const auto& cfd : cschema) {
-                  int field_y = y - scroll;
-                  // Field name
-                  char fname[80];
-                  snprintf(fname, sizeof(fname), "%s:", cfd.name.c_str());
-                  draw_text(L.panel_x + PropPanel::kPad, field_y + 11, fname, 0.75f, 0.75f, 0.75f);
-                  // Value(s)
-                  int n = cfd.argCount;
-                  int off = cfd.argOffset;
-                  std::string val;
-                  for (int v = 0; v < n; ++v) {
-                      int ai = off + v;
-                      std::string tok = (ai >= 0 && ai < (int)child.argTokens.size()) ? child.argTokens[ai] : "-";
-                      if (!val.empty()) val += ", ";
-                      val += tok;
-                  }
-                  draw_text(L.panel_x + PropPanel::kPad + 140, field_y + 11, val.c_str(), 1.0f, 1.0f, 0.7f);
-                  y += PropPanel::kRowH;
+              if (w.kind == K::ChildHeader) {
+                  char sep[80];
+                  snprintf(sep, sizeof(sep), "-- %s --", cobj.type.c_str());
+                  draw_text(w.x1, w.y1 + 11, sep, 0.5f, 0.8f, 1.0f);
+                  continue;
               }
-              y += 4;
+
+              const TaskSchema* cscp = GetSchema(cobj.type);
+              if (!cscp || w.fieldIndex < 0 || w.fieldIndex >= (int)cscp->size()) continue;
+              const FieldDef& cfd = (*cscp)[w.fieldIndex];
+              int cArg = cfd.argOffset + w.comp;
+              std::string rawVal = (cArg >= 0 && cArg < (int)cobj.argTokens.size())
+                                 ? cobj.argTokens[cArg] : std::string("-");
+              std::string dispVal = rawVal;
+              if (dispVal.size() >= 2 && dispVal.front() == '"' && dispVal.back() == '"')
+                  dispVal = dispVal.substr(1, dispVal.size() - 2);
+
+              // Field label to the left of the box.
+              char lbl[80];
+              if (cfd.argCount > 1) snprintf(lbl, sizeof(lbl), "%s[%d]:", cfd.name.c_str(), w.comp);
+              else                  snprintf(lbl, sizeof(lbl), "%s:", cfd.name.c_str());
+              draw_text(L.panel_x + PropPanel::kPad, w.y1 + 12, lbl, 0.8f, 0.85f, 0.55f);
+
+              bool editing = (task_tree_view.prop_edit_obj_index_ == coIdx &&
+                              task_tree_view.prop_text_edit_field_ == w.fieldIndex * 3 + w.comp);
+
+              if (w.kind == K::Checkbox) {
+                  quad(w.x1, w.y1, w.x1 + 16, w.y2, 0.0f, 0.0f, 0.0f, 0.40f);
+                  border(w.x1, w.y1, w.x1 + 16, w.y2, 1.0f, 1.0f, 1.0f);
+                  int cur = 0; try { cur = std::stoi(rawVal); } catch(...) {}
+                  if (cur != 0) draw_text(w.x1 + 4, w.y1 + 12, "X", 1.0f, 1.0f, 0.3f);
+              } else {
+                  quad(w.x1, w.y1, w.x2, w.y2, 0.0f, 0.0f, 0.0f, 0.40f);
+                  border(w.x1, w.y1, w.x2, w.y2, 1.0f,
+                         editing ? 0.95f : 1.0f, editing ? 0.2f : 1.0f);
+                  const std::string& shown = editing ? task_tree_view.prop_text_buf_ : dispVal;
+                  draw_text(w.x1 + 3, w.y1 + 12, shown.c_str(), 1.0f, 1.0f, 0.85f);
+                  if (editing && caret_on) {
+                      int cc = caret_idx;
+                      const std::string& eb = task_tree_view.prop_text_buf_;
+                      if (cc > (int)eb.size()) cc = (int)eb.size();
+                      std::string before = eb.substr(0, cc);
+                      int cx = w.x1 + 3 + measure_text_width(before.c_str(), (int)before.size());
+                      glColor3f(1.0f, 0.95f, 0.2f);
+                      glBegin(GL_LINES);
+                      glVertex2i(cx, gl_y(w.y1 + 3)); glVertex2i(cx, gl_y(w.y1 + 16));
+                      glEnd();
+                  }
+              }
           }
 
           // ── Scrollbar ────────────────────────────────────────────────────────────
           {
-              const int total_h = y;       // total content height (approx)
+              const int total_h = L.panel_h;   // full unshifted content height
               const int vis_h   = panel_vis_h;
               if (total_h > vis_h) {
                   const int bar_x = PropPanel::kLeft + PropPanel::kWidth + 2;
