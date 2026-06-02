@@ -1243,7 +1243,8 @@ void App::Input_OnMotion(int x, int y) {
 					const std::string& tn = fd.typeName;
 					bool is_pos = (tn == "ObjectPos"); // only actual position type gets pad/camera-follow
 					bool is_ori = (tn == "Real32x9");
-					int dxp = x - prop_drag_start_x_;
+					bool edge_cont = false; // set when edge-stuck continuation drives the move (camera not followed)
+						int dxp = x - prop_drag_start_x_;
 					int dyp = y - prop_drag_start_y_;
 
 					// Edge-stuck continuity for XY pad and Z slider:
@@ -1260,6 +1261,7 @@ void App::Input_OnMotion(int x, int y) {
 						if (at_edge && dx == 0 && dy == 0) {
 							dx = prop_last_drag_dx_;
 							dy = prop_last_drag_dy_;
+							edge_cont = (dx != 0 || dy != 0);
 						}
 					}
 					auto writeArg = [&](int idx, float v) {
@@ -1293,7 +1295,7 @@ void App::Input_OnMotion(int x, int y) {
 						glm::dvec3 deltaPos = obj.pos - oldPos;
 						PropagateTransformToChildren(selected_object_index_, deltaPos, glm::dmat3(1.0), oldPos);
 						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
-						viewer_.pos_ += glm::vec3(deltaPos);
+						if (!edge_cont) viewer_.pos_ += glm::vec3(deltaPos);
 					} else if (is_pos && comp == 2) {
 						// Per-frame delta for Z — same fix as XY pad above.
 						glm::dvec3 oldPos = obj.pos;
@@ -1309,7 +1311,7 @@ void App::Input_OnMotion(int x, int y) {
 						glm::dvec3 deltaPos = obj.pos - oldPos;
 						PropagateTransformToChildren(selected_object_index_, deltaPos, glm::dmat3(1.0), oldPos);
 						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
-						viewer_.pos_ += glm::vec3(deltaPos);
+						if (!edge_cont) viewer_.pos_ += glm::vec3(deltaPos);
 					} else {
 						glm::dvec3 oldPos = obj.pos;
 						glm::dvec3 oldRot = obj.rot;
