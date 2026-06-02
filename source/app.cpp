@@ -350,9 +350,27 @@ void App::LoadAllCursors() {
 
 void App::LoadHelpEntries() {
 	help_entries_.clear();
-	std::string path = Utils::GetExeDirectory() + "\\content\\qed\\qedkeybindings.qsc";
-	std::ifstream f(path);
-	if (!f.is_open()) return;
+	std::vector<std::string> paths = {
+		Utils::GetExeDirectory() + "\\content\\qed\\qedkeybindings.qsc",
+		Utils::GetExeDirectory() + "\\qed\\qedkeybindings.qsc",
+		Utils::GetIGIRootPath() + "\\content\\qed\\qedkeybindings.qsc",
+		Utils::GetIGIRootPath() + "\\qed\\qedkeybindings.qsc",
+		"content\\qed\\qedkeybindings.qsc",
+		"qed\\qedkeybindings.qsc"
+	};
+	std::ifstream f;
+	for (const auto& p : paths) {
+		f.open(p);
+		if (f.is_open()) {
+			Logger::Get().Log(LogLevel::INFO, "[App] Loaded keybindings from: " + p);
+			break;
+		}
+		f.clear();
+	}
+	if (!f.is_open()) {
+		Logger::Get().Log(LogLevel::WARNING, "[App] Could not load help keybindings file: qedkeybindings.qsc");
+		return;
+	}
 	std::string line;
 	while (std::getline(f, line)) {
 		// Strip leading whitespace
@@ -361,8 +379,8 @@ void App::LoadHelpEntries() {
 		line = line.substr(start);
 		if (line.empty() || line[0] == '/' ) continue; // skip blank/comment lines
 		// Keep SetEventBinding lines; format them as "  Key  =>  Event"
-		if (line.find("SetEventBinding") == 0) {
-			// extract: SetEventBinding("EventName", "KeyCombo")
+		if (line.find("SetEventBinding") == 0 || line.find("QEDSetEventBinding") == 0) {
+			// extract: SetEventBinding("EventName", "KeyCombo") or QEDSetEventBinding(...)
 			size_t q1 = line.find('"');
 			size_t q2 = (q1 != std::string::npos) ? line.find('"', q1 + 1) : std::string::npos;
 			size_t q3 = (q2 != std::string::npos) ? line.find('"', q2 + 1) : std::string::npos;
@@ -388,6 +406,7 @@ void App::LoadHelpEntries() {
 		}
 	}
 }
+
 
 void App::UpdateCursorMode() {
 	if (terrain_edit_enabled_) {
@@ -3926,10 +3945,12 @@ void App::PromoteAttaToObject(int entry) {
 		rz = std::atan2(m[0][1], m[0][0]);
 	}
 
+	std::string origKey = Renderer::AttaOccupancyKey(e.modelId, e.worldPos);
+
 	LevelObject obj;
 	obj.qscFuncName  = "Task_New";
 	obj.type         = "EditRigidObj";
-	obj.name         = "";
+	obj.name         = "ATTA:" + origKey;
 	obj.taskId       = "-1";
 	obj.modelId      = e.modelId;
 	obj.modelIdArgIdx = 9;
@@ -3942,7 +3963,7 @@ void App::PromoteAttaToObject(int entry) {
 	// EditRigidObj arg layout: id, type, note, posX/Y/Z, oriX/Y/Z, model,
 	// dirlight RGB (1,1,1), dirlight ambient RGB (0,0,0).
 	obj.argTokens = {
-		"-1", "\"EditRigidObj\"", "\"\"",
+		"-1", "\"EditRigidObj\"", "\"" + obj.name + "\"",
 		"0", "0", "0",        // pos  (filled by UpdateCoordinatesInLine)
 		"0", "0", "0",        // ori  (filled by UpdateCoordinatesInLine)
 		"\"" + e.modelId + "\"",
@@ -3959,12 +3980,15 @@ void App::PromoteAttaToObject(int entry) {
 		objects[parentIdx].childrenIndices.push_back(newIdx);
 		objects[parentIdx].modified = true;
 		objects[parentIdx].qscLine.clear(); // force subtree re-serialization on save
+
+		std::string parentModelId = objects[parentIdx].modelId;
+		renderer_.SuppressAttachmentInMef(parentModelId, e.modelId, e.localPos);
 	}
 	level_.GetLevelObjects().UpdateCoordinatesInLine(objects[newIdx]);
 
 	// Permanently hide the ORIGINAL ATTA (by its starting position) so it doesn't
 	// reappear as a ghost/clone once this promoted object is moved away.
-	renderer_.SuppressAtta(Renderer::AttaOccupancyKey(e.modelId, e.worldPos));
+	renderer_.SuppressAtta(origKey);
 
 	selected_object_index_ = newIdx;
 	marker_manip_.start_pos_ = objects[newIdx].pos;

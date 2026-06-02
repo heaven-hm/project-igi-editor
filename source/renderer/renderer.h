@@ -320,6 +320,9 @@ public:
 	bool GetAttaPickEntry(int entry, AttaPickEntry& out) const { return objects_.GetAttaPickEntry(entry, out); }
 	void SuppressAtta(const std::string& key) { objects_.SuppressAtta(key); }
 	void ClearSuppressedAttas() { objects_.ClearSuppressedAttas(); }
+	bool SuppressAttachmentInMef(const std::string& parentModelId, const std::string& attModelId, const glm::vec3& localPos) {
+		return objects_.SuppressAttachmentInMef(parentModelId, attModelId, localPos);
+	}
 	static std::string AttaOccupancyKey(const std::string& modelId, const glm::vec3& worldPos) {
 		return Renderer_Objects::AttaOccupancyKey(modelId, worldPos);
 	}

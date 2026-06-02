@@ -3,6 +3,7 @@
 #include "cli_tests.h"
 #include "common.h"
 #include "logger.h"
+#include "parsers/fnt_parser.h"
 #include "parsers/graph_parser.h"
 #include "parsers/mef_exporter.h"
 #include "parsers/mef_native.h"
@@ -15,6 +16,7 @@
 #include "parsers/qvm_decompiler.h"
 #include "parsers/qvm_parser.h"
 #include "parsers/res_parser.h"
+#include "parsers/res_compiler.h"
 #include "parsers/terrain_files.h"
 #include "parsers/tex_parser.h"
 #include "utils.h"
@@ -27,8 +29,8 @@ bool CLIHandler::IsCLICommand(int argc, char **argv) {
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
     if (arg == "--help" || arg == "--mef" || arg == "--qsc" || arg == "--qvm" ||
-        arg == "--res" || arg == "--mtp" || arg == "--dat" || arg == "--terrain" ||
-        arg == "--tex" || arg == "--graph" || arg == "--run-tests" ||
+        arg == "--res" || arg == "--res-compile" || arg == "--res-pack" || arg == "--res-unpack" || arg == "--mtp" || arg == "--dat" || arg == "--terrain" ||
+        arg == "--tex" || arg == "--spr" || arg == "--fnt" || arg == "--graph" || arg == "--run-tests" ||
         arg == "--extract-level" || arg == "--verify-level") {
       return true;
     }
@@ -77,20 +79,21 @@ void CLIHandler::PrintHelp() {
       << "  --qvm <file.qvm>                       Parse QVM bytecode details\n"
       << "  --res <file.res>                       List RES archive contents\n"
       << "  --res <file.res> --extract <name> <out> Extract specific resource\n"
-      << "  --res <file.res> --extract-all <dir>   Extract all resources to "
-         "directory\n"
+      << "  --res-compile <file.qsc>               Compile QSC resource script to .res\n"
+      << "  --res-pack <dir> <out.res>             Auto-generate script and compile to .res\n"
+      << "  --res-unpack <file.res> <dir>          Extract all resources from .res to directory\n"
       << "  --mtp <file.mtp>                       Parse MTP texture mappings\n"
       << "  --dat <file.dat>                       Parse DAT, print JSON to stdout\n"
       << "  --dat <file.dat> --output <file.json>  Write DAT JSON to file\n"
       << "  --dat <file.dat> --filter <model>      Include only entries matching model name\n"
       << "  --dat <file.dat> --text                Plain-text output instead of JSON\n"
       << "  --terrain <file.lmp/.ctr>              Parse terrain structure\n"
-      << "  --tex <file.tex>                       Parse TEX texture and print "
-         "info\n"
-      << "  --tex <file.tex> --export-tga <dir>    Export TEX images as TGA "
-         "files to dir\n"
-      << "  --graph <file.dat>                     Parse navigation graph .dat "
-         "file\n"
+      << "  --tex <file.tex>                       Parse TEX texture and print info\n"
+      << "  --tex <file.tex> --export-tga <dir>    Export TEX images as TGA files to dir\n"
+      << "  --spr <file.spr>                       Parse SPR sprite and print info\n"
+      << "  --spr <file.spr> --export-tga <dir>    Export SPR images as TGA files to dir\n"
+      << "  --fnt <file.fnt>                       Parse ILFF FNT font and print info\n"
+      << "  --graph <file.dat>                     Parse navigation graph .dat file\n"
       << "  --verify-level --level N [--level N ...] Verify levels: compare\n"
       << "      objects.qvm (ground truth) vs igi1ed.log (editor output)\n"
       << "      --skip-launch          Skip launching editor; use existing log\n"
@@ -185,14 +188,41 @@ int CLIHandler::Process(int argc, char **argv) {
       } else {
         return ParseQVM(inpath, false, "");
       }
+    } else if (arg == "--res-compile" && i + 1 < argc) {
+      std::string error;
+      if (RES_Compile(argv[++i], error)) {
+        std::cout << "[CLI] Successfully compiled resource script.\n";
+        return 0;
+      } else {
+        std::cerr << "[CLI] Error compiling resource script: " << error << "\n";
+        return 1;
+      }
+    } else if (arg == "--res-pack" && i + 2 < argc) {
+      std::string dir = argv[++i];
+      std::string outRes = argv[++i];
+      for (auto& c : outRes) if (c == '\\') c = '/';
+      
+      std::string qscPath = (std::filesystem::path(dir) / "resource.qsc").string();
+      std::string error;
+      if (!RES_GenerateQSC(dir, qscPath, outRes, error)) {
+        std::cerr << "[CLI] Error generating QSC script: " << error << "\n";
+        return 1;
+      }
+      if (!RES_Compile(qscPath, error)) {
+        std::cerr << "[CLI] Error compiling generated resource script: " << error << "\n";
+        return 1;
+      }
+      std::cout << "[CLI] Successfully packed resources to " << outRes << "\n";
+      return 0;
+    } else if (arg == "--res-unpack" && i + 2 < argc) {
+      std::string inpath = argv[++i];
+      std::string outdir = argv[++i];
+      return ExtractAllRES(inpath, outdir);
     } else if (arg == "--res" && i + 1 < argc) {
       std::string inpath = argv[++i];
       if (i + 1 < argc && std::string(argv[i + 1]) == "--extract" &&
           i + 3 < argc) {
         return ParseRES(inpath, argv[i + 2], argv[i + 3]);
-      } else if (i + 1 < argc && std::string(argv[i + 1]) == "--extract-all" &&
-                 i + 2 < argc) {
-        return ExtractAllRES(inpath, argv[i + 2]);
       } else {
         return ParseRES(inpath, "", "");
       }
@@ -205,6 +235,15 @@ int CLIHandler::Process(int argc, char **argv) {
         return ParseTEX(inpath, argv[i + 2]);
       }
       return ParseTEX(inpath, "");
+    } else if (arg == "--spr" && i + 1 < argc) {
+      std::string inpath = argv[++i];
+      if (i + 1 < argc && std::string(argv[i + 1]) == "--export-tga" &&
+          i + 2 < argc) {
+        return ParseTEX(inpath, argv[i + 2]);
+      }
+      return ParseTEX(inpath, "");
+    } else if (arg == "--fnt" && i + 1 < argc) {
+      return ParseFNT(argv[++i]);
     } else if (arg == "--graph" && i + 1 < argc) {
       return ParseGraph(argv[++i]);
     } else if (arg == "--extract-level" && i + 1 < argc) {
@@ -906,4 +945,18 @@ int CLIHandler::ExtractLevelResources(int levelNo, const std::string &outDir) {
             << ": models=" << totalExtracted << " textures=" << texCount
             << " terrain=" << terrainCount << "\n";
   return (totalExtracted + texCount + terrainCount > 0) ? 0 : 1;
+}
+
+int CLIHandler::ParseFNT(const std::string &filepath) {
+  Logger::Get().Log(LogLevel::INFO, "[CLI] Parsing FNT file: " + filepath);
+  FntFont font = FNT_Parse(filepath);
+  if (!font.valid) {
+    Logger::Get().Log(LogLevel::ERR, "[CLI] Failed to parse FNT: " + filepath);
+    return 1;
+  }
+  Logger::Get().Log(LogLevel::INFO, "[CLI] Successfully parsed FNT: " + filepath);
+  Logger::Get().Log(LogLevel::INFO, "[CLI]   Line Height: " + std::to_string(font.lineHeight));
+  Logger::Get().Log(LogLevel::INFO, "[CLI]   Texture: " + std::to_string(font.texWidth) + "x" + std::to_string(font.texHeight));
+  Logger::Get().Log(LogLevel::INFO, "[CLI]   Glyphs: " + std::to_string(font.glyphs.size()));
+  return 0;
 }

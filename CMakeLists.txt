@@ -84,6 +84,7 @@ set_source_files_properties(
   source/renderer/wic_loader.cpp
   source/parsers/qvm_parser.cpp
   source/parsers/res_parser.cpp
+  source/parsers/res_compiler.cpp
   source/parsers/dat_parser.cpp
   source/parsers/mtp_parser.cpp
   source/parsers/tex_parser.cpp

@@ -23,6 +23,7 @@ struct AttaPickEntry {
     glm::vec3    worldPos = glm::vec3(0.0f);
     glm::mat3    worldRot = glm::mat3(1.0f);
     float        scale = 1.0f;
+    glm::vec3    localPos = glm::vec3(0.0f);
 };
 
 class Renderer_Objects {
@@ -42,6 +43,7 @@ public:
     // and z-fights). Cleared on level load.
     void SuppressAtta(const std::string& key) { suppressed_atta_keys_.insert(key); }
     void ClearSuppressedAttas() { suppressed_atta_keys_.clear(); }
+    bool SuppressAttachmentInMef(const std::string& parentModelId, const std::string& attModelId, const glm::vec3& localPos);
     // Stable key "model@roundedWorldPos" used to match an ATTA against an EditRigidObj.
     static std::string AttaOccupancyKey(const std::string& modelId, const glm::vec3& worldPos);
     Renderer_Objects();

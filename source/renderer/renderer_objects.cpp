@@ -14,6 +14,7 @@
 #include "../parsers/qvm_parser.h"
 #include "../parsers/qvm_decompiler.h"
 #include "../parsers/dat_parser.h"
+#include "../parsers/res_compiler.h"
 #include <sstream>
 
 // Strip pixel-format suffixes that appear in DAT texture IDs but aren't part
@@ -833,6 +834,113 @@ std::string Renderer_Objects::AttaOccupancyKey(const std::string& modelId, const
     return buf;
 }
 
+bool Renderer_Objects::SuppressAttachmentInMef(const std::string& parentModelId, const std::string& attModelId, const glm::vec3& localPos) {
+    std::vector<std::string> paths = {
+        Utils::GetExeDirectory() + "\\content\\models\\level" + std::to_string(current_level_) + "\\" + parentModelId + ".mef",
+        Utils::GetIGIModelsPath(current_level_) + "\\" + parentModelId + ".mef",
+        Utils::GetExeDirectory() + "\\content\\models\\common\\" + parentModelId + ".mef",
+        Utils::GetIGIRootPath() + "\\missions\\location0\\common\\models\\" + parentModelId + ".mef",
+        Utils::GetIGIRootPath() + "\\content\\models\\" + parentModelId + ".mef"
+    };
+
+    bool modifiedAny = false;
+    for (const auto& p : paths) {
+        if (p.empty() || !std::filesystem::exists(p)) continue;
+
+        std::fstream f(p, std::ios::in | std::ios::out | std::ios::binary);
+        if (!f.is_open()) {
+            Logger::Get().Log(LogLevel::WARNING, "[Renderer] SuppressAttachmentInMef: Could not open " + p + " for writing");
+            continue;
+        }
+
+        char header[20];
+        if (!f.read(header, 20) || std::memcmp(header, "ILFF", 4) != 0) {
+            f.close();
+            continue;
+        }
+
+        size_t chunkHeaderOffset = 20;
+        while (true) {
+            f.seekg(chunkHeaderOffset, std::ios::beg);
+            char chunkHeader[16];
+            if (!f.read(chunkHeader, 16)) break;
+
+            char fourcc[5] = {0};
+            std::memcpy(fourcc, chunkHeader, 4);
+            uint32_t size = 0, alignment = 0, skip = 0;
+            std::memcpy(&size, chunkHeader + 4, 4);
+            std::memcpy(&alignment, chunkHeader + 8, 4);
+            std::memcpy(&skip, chunkHeader + 12, 4);
+
+            if (std::strcmp(fourcc, "ATTA") == 0) {
+                size_t recordsStart = chunkHeaderOffset + 16;
+                size_t numRecords = size / 68;
+                for (size_t i = 0; i < numRecords; ++i) {
+                    f.seekg(recordsStart + i * 68, std::ios::beg);
+                    char nameBuf[16];
+                    float px = 0.f, py = 0.f, pz = 0.f;
+                    f.read(nameBuf, 16);
+                    f.read(reinterpret_cast<char*>(&px), 4);
+                    f.read(reinterpret_cast<char*>(&py), 4);
+                    f.read(reinterpret_cast<char*>(&pz), 4);
+
+                    std::string aname(nameBuf, strnlen(nameBuf, 16));
+                    if (aname == attModelId &&
+                        std::abs(px - localPos.x) < 0.1f &&
+                        std::abs(py - localPos.y) < 0.1f &&
+                        std::abs(pz - localPos.z) < 0.1f) {
+                        
+                        f.seekp(recordsStart + i * 68 + 16, std::ios::beg);
+                        float targetX = 0.0f;
+                        float targetY = 0.0f;
+                        float targetZ = -20000.0f;
+                        f.write(reinterpret_cast<char*>(&targetX), 4);
+                        f.write(reinterpret_cast<char*>(&targetY), 4);
+                        f.write(reinterpret_cast<char*>(&targetZ), 4);
+                        Logger::Get().Log(LogLevel::INFO, "[Renderer] SuppressAttachmentInMef: Moved ATTA '" + attModelId + "' underground in " + p);
+                        modifiedAny = true;
+                    }
+                }
+            }
+
+            if (skip == 0) break;
+            chunkHeaderOffset += skip;
+        }
+        f.close();
+    }
+
+    if (modifiedAny) {
+        std::string modelsFolder = Utils::GetExeDirectory() + "\\content\\models\\level" + std::to_string(current_level_);
+        std::string resName = "level" + std::to_string(current_level_) + ".res";
+        std::string resQscPath = modelsFolder + "\\resource.qsc";
+        std::string errorStr;
+
+        Logger::Get().Log(LogLevel::INFO, "[Renderer] ATTA modified, triggering automatic .res pack for " + resName);
+
+        if (RES_GenerateQSC(modelsFolder, resQscPath, resName, errorStr)) {
+            if (RES_Compile(resQscPath, errorStr)) {
+                std::string compiledRes = modelsFolder + "\\" + resName;
+                std::string gameModelsFolder = Utils::GetIGIRootPath() + "\\missions\\location0\\level" + std::to_string(current_level_) + "\\models";
+                std::string gameResPath = gameModelsFolder + "\\" + resName;
+
+                try {
+                    std::filesystem::create_directories(gameModelsFolder);
+                    std::filesystem::copy_file(compiledRes, gameResPath, std::filesystem::copy_options::overwrite_existing);
+                    Logger::Get().Log(LogLevel::INFO, "[Renderer] Successfully deployed " + resName + " to game directory.");
+                } catch (const std::exception& e) {
+                    Logger::Get().Log(LogLevel::ERR, std::string("[Renderer] Failed to copy .res file to game directory: ") + e.what());
+                }
+            } else {
+                Logger::Get().Log(LogLevel::ERR, "[Renderer] Failed to compile generated resource script: " + errorStr);
+            }
+        } else {
+            Logger::Get().Log(LogLevel::ERR, "[Renderer] Failed to generate resource script: " + errorStr);
+        }
+    }
+
+    return modifiedAny;
+}
+
 void Renderer_Objects::DrawAttachmentsForPicking(
     const std::string& parentModelId, bool isBuilding,
     const glm::mat4& parentWorldMat, float parentScale,
@@ -886,6 +994,7 @@ void Renderer_Objects::DrawAttachmentsForPicking(
             e.worldPos       = worldPos;
             e.worldRot       = glm::mat3(childWorldMat); // pure rotation (no scale in childWorldMat)
             e.scale          = parentScale;
+            e.localPos       = glm::vec3(att.px, att.py, att.pz);
             atta_pick_entries_.push_back(e);
 
             glm::mat4 leafModel = glm::scale(childWorldMat, glm::vec3(40.96f * parentScale));
@@ -928,9 +1037,13 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
     // ATTAs already promoted to real tasks aren't offered for promotion again.
     atta_pick_entries_.clear();
     editrigid_occupancy_.clear();
+    suppressed_atta_keys_.clear();
     for (const auto& o : objects) {
         if (o.deleted || o.type != "EditRigidObj" || o.modelId.empty()) continue;
         editrigid_occupancy_.insert(AttaOccupancyKey(o.modelId, glm::vec3(o.pos)));
+        if (o.name.rfind("ATTA:", 0) == 0) {
+            suppressed_atta_keys_.insert(o.name.substr(5));
+        }
     }
 
     // Set picking render state
@@ -1100,9 +1213,13 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     // duplicated by) a real EditRigidObj is suppressed in the attachment render —
     // otherwise the promoted object would draw on top of its original ATTA.
     editrigid_occupancy_.clear();
+    suppressed_atta_keys_.clear();
     for (const auto& o : objects) {
         if (o.deleted || o.type != "EditRigidObj" || o.modelId.empty()) continue;
         editrigid_occupancy_.insert(AttaOccupancyKey(o.modelId, glm::vec3(o.pos)));
+        if (o.name.rfind("ATTA:", 0) == 0) {
+            suppressed_atta_keys_.insert(o.name.substr(5));
+        }
     }
 
     // Bind our object shader
@@ -1272,6 +1389,9 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         for (const auto& sub : mesh.subMeshes) {
             if (sub.alphaMode == 2) { hasArgbSubMeshes = true; break; }
         }
+        if (current_level_ == 12 && !isWindowModel) {
+            hasArgbSubMeshes = false;
+        }
         // A model belongs in this pass if: it's a uniform transparent/opaque
         // object that matches the pass, OR it has mixed sub-meshes and we draw
         // it in both passes (filtering per-sub-mesh below).
@@ -1321,7 +1441,12 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                         if (!isTransparentPass && sub.alphaMode == 2) continue;
                     }
 
-                    if (sub.alphaMode == 2) {
+                    bool isBlendSub = (sub.alphaMode == 2);
+                    if (current_level_ == 12 && !isWindowModel) {
+                        isBlendSub = false;
+                    }
+
+                    if (isBlendSub) {
                         glEnable(GL_BLEND);
                         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
                         float subAlpha = sub.baseColorFactor.a;
@@ -1366,7 +1491,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                     glBindVertexArray(sub.VAO);
                     glDrawArrays(GL_TRIANGLES, 0, sub.vertexCount);
 
-                    if (sub.alphaMode == 2) {
+                    if (isBlendSub) {
                         glDisable(GL_BLEND);
                         glUniform1f(loc_alpha, 1.0f);
                     }
@@ -1694,6 +1819,9 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         for (const auto& s : subMesh.subMeshes) {
             if (s.alphaMode == 2) { attHasAlpha = true; break; }
         }
+        if (current_level_ == 12 && !attIsWindow) {
+            attHasAlpha = false;
+        }
 
         // Skip this sub-model if it doesn't belong in the current pass:
         //   Windows: transparent pass only
@@ -1730,7 +1858,10 @@ void Renderer_Objects::DrawAttachmentsRecursive(
 
                 // In the transparent pass, only draw alpha submeshes (with blending).
                 // In the opaque pass, draw everything — the shader discards α<0.5 pixels.
-                const bool subNeedsBlend = (sub.alphaMode == 2);
+                bool subNeedsBlend = (sub.alphaMode == 2);
+                if (current_level_ == 12 && !attIsWindow) {
+                    subNeedsBlend = false;
+                }
                 if (isTransparentPass && !attIsWindow && !subNeedsBlend) continue;
 
                 if (subNeedsBlend) {
