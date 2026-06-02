@@ -74,14 +74,14 @@ static void EnsureEditorSmFont() {
 // Draw a string with the editor bitmap font in the HUD ortho space (y=0 bottom).
 // y_gl is the gl-space y of the top of the first text line; glyphs extend
 // downward from there. '\n' starts a new line.
-static void DrawFontText(int x, int y_gl, const char* str, float r, float g, float b) {
+static void DrawFontText(int x, int y_gl, const char* str, float r, float g, float b, float scale = 1.0f) {
   if (!g_editorFont.valid || !g_editorFontTex) {
     return;
   }
 
   const float texW = (float)g_editorFont.texWidth;
   (void)texW;
-  const int spaceAdvance = g_editorFont.lineHeight > 0 ? g_editorFont.lineHeight / 2 : 4;
+  const int spaceAdvance = (int)((g_editorFont.lineHeight > 0 ? g_editorFont.lineHeight / 2 : 4) * scale);
 
   glEnable(GL_TEXTURE_2D);
   glBindTexture(GL_TEXTURE_2D, g_editorFontTex);
@@ -97,7 +97,7 @@ static void DrawFontText(int x, int y_gl, const char* str, float r, float g, flo
     unsigned char c = (unsigned char)*p;
     if (c == '\n') {
       pen_x = x;
-      pen_y -= g_editorFont.lineHeight;
+      pen_y -= (int)(g_editorFont.lineHeight * scale);
       continue;
     }
 
@@ -109,9 +109,9 @@ static void DrawFontText(int x, int y_gl, const char* str, float r, float g, flo
 
     const FntGlyph& gl = it->second;
     float x0 = (float)pen_x;
-    float x1 = (float)(pen_x + gl.width);
+    float x1 = (float)(pen_x + gl.width * scale);
     float yTop = (float)pen_y;             // y up: top of glyph
-    float yBot = (float)(pen_y - gl.height);
+    float yBot = (float)(pen_y - gl.height * scale);
 
     // Atlas V grows downward; gl V grows upward -> top of glyph uses v0.
     glTexCoord2f(gl.u0, gl.v0); glVertex2f(x0, yTop);
@@ -119,7 +119,7 @@ static void DrawFontText(int x, int y_gl, const char* str, float r, float g, flo
     glTexCoord2f(gl.u1, gl.v1); glVertex2f(x1, yBot);
     glTexCoord2f(gl.u0, gl.v1); glVertex2f(x0, yBot);
 
-    pen_x += gl.advance;
+    pen_x += (int)(gl.advance * scale);
   }
   glEnd();
 
@@ -385,6 +385,18 @@ void Renderer::Draw(const draw_params_s &params,
       EnsureEditorSmFont();
     }
 
+    // UI font scale derived from the configured size so the task tree, picker,
+    // and property editor (all routed through draw_text) honor the Font Size
+    // chosen in the pause menu. 12 is the baseline; 10/18 scale the editor
+    // bitmap glyphs and pick the matching GLUT bitmap for the fallback path.
+    const int uiFontSize = Config::Get().systemFontSize;
+    const float uiFontScale = (uiFontSize == 10) ? 0.85f
+                            : (uiFontSize == 18) ? 1.5f : 1.0f;
+    void *uiGlutFont = (uiFontSize == 10) ? GLUT_BITMAP_HELVETICA_10
+                     : (uiFontSize == 18) ? GLUT_BITMAP_HELVETICA_18
+                                          : GLUT_BITMAP_HELVETICA_12;
+    const int uiLineH = (int)(15 * uiFontScale);
+
     // Pixel width of the first `count` chars of `str` in the active HUD font.
     // Mirrors DrawFontText's per-glyph advance exactly so callers (e.g. the text
     // caret) land on the true character boundary instead of a fixed-width guess.
@@ -398,11 +410,11 @@ void Renderer::Draw(const draw_params_s &params,
           auto it = g_editorFont.glyphs.find((int)(unsigned char)str[i]);
           w += (it != g_editorFont.glyphs.end()) ? it->second.advance : spaceAdvance;
         }
-        return w;
+        return (int)(w * uiFontScale);
       }
       int w = 0;
       for (int i = 0; i < count && str[i]; ++i)
-        w += glutBitmapWidth(GLUT_BITMAP_HELVETICA_12, (unsigned char)str[i]);
+        w += glutBitmapWidth(uiGlutFont, (unsigned char)str[i]);
       return w;
     };
 
@@ -417,14 +429,14 @@ void Renderer::Draw(const draw_params_s &params,
         while (std::getline(ss, line)) {
           int y_gl = params.view_define_->viewport_height_ - line_y;
           // 1px black shadow for readability, then the requested color.
-          DrawFontText(x + 1, y_gl - 1, line.c_str(), 0.0f, 0.0f, 0.0f);
-          DrawFontText(x, y_gl, line.c_str(), r, g, b);
-          line_y += 15; // Vertical spacing
+          DrawFontText(x + 1, y_gl - 1, line.c_str(), 0.0f, 0.0f, 0.0f, uiFontScale);
+          DrawFontText(x, y_gl, line.c_str(), r, g, b, uiFontScale);
+          line_y += uiLineH; // Vertical spacing
         }
         return;
       }
 
-      // Fallback: GLUT bitmap font.
+      // Fallback: GLUT bitmap font (size chosen from config).
       std::stringstream ss(str);
       std::string line;
       int line_y = y;
@@ -434,15 +446,15 @@ void Renderer::Draw(const draw_params_s &params,
         glRasterPos2i(x + 1,
                       params.view_define_->viewport_height_ - line_y - 1);
         for (char c : line)
-          glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, c);
+          glutBitmapCharacter(uiGlutFont, c);
 
         // Draw main text
         glColor3f(r, g, b);
         glRasterPos2i(x, params.view_define_->viewport_height_ - line_y);
         for (char c : line)
-          glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, c);
+          glutBitmapCharacter(uiGlutFont, c);
 
-        line_y += 15; // Vertical spacing
+        line_y += uiLineH; // Vertical spacing
       }
     };
 
@@ -1273,16 +1285,15 @@ void Renderer::Draw(const draw_params_s &params,
       draw_text_sys(menu_x + menu_w / 2 - 35, screen_menu_top + 44, "PAUSED", 0.8f,
                 0.8f, 0.8f);
 
-      // Build dynamically-labelled buttons.
+      // Font row is rendered specially (index 1): a "Font: <type>" toggle on the
+      // left plus a [-] [size] [+] size control on the right, all on one line.
       char font_btn_label[32];
       snprintf(font_btn_label, sizeof(font_btn_label), "Font: %s",
                Config::Get().useEditorFont ? "Editor" : "System");
-      char size_btn_label[32];
-      snprintf(size_btn_label, sizeof(size_btn_label), "Font Size: %d",
-               Config::Get().systemFontSize);
-      const char *btn_labels[] = {"Resume", font_btn_label, size_btn_label,
+      const char *btn_labels[] = {"Resume", font_btn_label,
                                   "Reset Level", "Save Level", "Quit"};
-      const int NUM_BTNS = 6;
+      const int NUM_BTNS = 5;
+      const int FONT_ROW = 1;
 
       for (int i = 0; i < NUM_BTNS; ++i) {
         int screen_btn_y = screen_menu_top + 85 + i * 35;
@@ -1293,21 +1304,49 @@ void Renderer::Draw(const draw_params_s &params,
                         task_tree_view.mouse_y_ >= screen_btn_y - 15 &&
                         task_tree_view.mouse_y_ <= screen_btn_y + 15);
 
-        if (hovered) {
-          glEnable(GL_BLEND);
-          glColor4f(0.0f, 0.8f, 0.0f, 0.35f);
-          glBegin(GL_QUADS);
-          glVertex2i(menu_x + 20, gl_btn_y - 16);
-          glVertex2i(menu_x + menu_w - 20, gl_btn_y - 16);
-          glVertex2i(menu_x + menu_w - 20, gl_btn_y + 12);
-          glVertex2i(menu_x + 20, gl_btn_y + 12);
-          glEnd();
-          glDisable(GL_BLEND);
-          draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(btn_labels[i]) * 4),
-                    screen_btn_y, btn_labels[i], 1.0f, 1.0f, 1.0f);
+        if (i == FONT_ROW) {
+          // Left: font-type toggle label.
+          draw_text_sys(menu_x + 24, screen_btn_y, font_btn_label,
+                        hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
+
+          // Right: [-] [size] [+] size control.
+          const int sz_box_w = 34, btn_w = 22, gap = 6;
+          int plus_x  = menu_x + menu_w - 24 - btn_w;
+          int box_x   = plus_x - gap - sz_box_w;
+          int minus_x = box_x - gap - btn_w;
+          int row_top = gl_btn_y - 14, row_bot = gl_btn_y + 10;
+
+          auto sbox = [&](int x1, int w, const char *txt) {
+            glColor3f(0.0f, 0.7f, 0.0f);
+            glBegin(GL_LINE_LOOP);
+            glVertex2i(x1, row_bot); glVertex2i(x1 + w, row_bot);
+            glVertex2i(x1 + w, row_top); glVertex2i(x1, row_top);
+            glEnd();
+            int tw = (int)strlen(txt) * 6;
+            draw_text_sys(x1 + (w - tw) / 2, screen_btn_y, txt, 0.0f, 0.9f, 0.0f);
+          };
+          char szbuf[8];
+          snprintf(szbuf, sizeof(szbuf), "%d", Config::Get().systemFontSize);
+          sbox(minus_x, btn_w, "-");
+          sbox(box_x,   sz_box_w, szbuf);
+          sbox(plus_x,  btn_w, "+");
         } else {
-          draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(btn_labels[i]) * 4),
-                    screen_btn_y, btn_labels[i], 0.0f, 0.85f, 0.0f);
+          if (hovered) {
+            glEnable(GL_BLEND);
+            glColor4f(0.0f, 0.8f, 0.0f, 0.35f);
+            glBegin(GL_QUADS);
+            glVertex2i(menu_x + 20, gl_btn_y - 16);
+            glVertex2i(menu_x + menu_w - 20, gl_btn_y - 16);
+            glVertex2i(menu_x + menu_w - 20, gl_btn_y + 12);
+            glVertex2i(menu_x + 20, gl_btn_y + 12);
+            glEnd();
+            glDisable(GL_BLEND);
+            draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(btn_labels[i]) * 4),
+                      screen_btn_y, btn_labels[i], 1.0f, 1.0f, 1.0f);
+          } else {
+            draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(btn_labels[i]) * 4),
+                      screen_btn_y, btn_labels[i], 0.0f, 0.85f, 0.0f);
+          }
         }
       }
     }

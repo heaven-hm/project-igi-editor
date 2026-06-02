@@ -170,19 +170,15 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
             if (!foundModelId.empty()) {
                 std::string friendlyName = GetModelName(foundModelId);
                 if (!friendlyName.empty()) {
+                    // DISPLAY ONLY: show the friendly name in the tree/picker for unnamed tasks.
+                    // Must NOT touch argTokens[2] or qscLine — those are the serialization
+                    // source of truth. Mutating them persists the synthetic name into the saved
+                    // QSC/QVM, which corrupts the level (the game crashes on load). original_name
+                    // / has_original_name stay as parsed (the real name is empty) so a save still
+                    // writes the original empty note unless the user explicitly renames the task.
                     obj.name = friendlyName;
-                    obj.original_name = friendlyName;
-                    obj.has_original_name = true;
-                    
-                    // Also update the argument token in argTokens so that the UI text box matches
-                    if (obj.argTokens.size() > 2) {
-                        obj.argTokens[2] = "\"" + friendlyName + "\"";
-                    }
-                    
-                    // Force re-generation of qscLine so the UI displays it and the compiler sees it
-                    obj.qscLine.clear();
-                    
-                    Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Resolved empty task note for Task " + obj.taskId + " to model friendly name: " + friendlyName);
+
+                    Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Display name for empty-note Task " + obj.taskId + " resolved to model friendly name: " + friendlyName);
                 }
             }
         }

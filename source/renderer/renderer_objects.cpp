@@ -891,35 +891,6 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
     const int DRAW_BUILDINGS = 16;
     const int DRAW_PROPS     = 32;
 
-    // Build set of building indices whose AABB contains the camera, and cache the
-    // AABBs of buildings the camera is OUTSIDE of (used to cull objects that sit
-    // inside those buildings — they must not be pickable through window/door gaps).
-    std::unordered_set<int> inside_buildings;
-    struct BoxAABB { glm::vec3 center; glm::vec3 extents; };
-    std::vector<BoxAABB> outside_building_boxes;
-    for (int i = 0; i < (int)objects.size(); ++i) {
-        const auto& obj = objects[i];
-        if (obj.deleted || !obj.isBuilding || obj.modelId.empty()) continue;
-
-        glm::vec3 extents = GetMeshExtents(obj.modelId, true) * BASE_SCALE * obj.scale;
-        glm::vec3 center  = glm::vec3(obj.pos);
-        glm::vec3 delta   = camera_pos - center;
-        if (std::abs(delta.x) <= extents.x &&
-            std::abs(delta.y) <= extents.y &&
-            std::abs(delta.z) <= extents.z) {
-            inside_buildings.insert(i);
-        } else {
-            outside_building_boxes.push_back({center, extents});
-        }
-    }
-
-    // Objects mounted on a building's exterior (doors, lights, cameras) must stay
-    // selectable from outside; never spatially cull these.
-    auto isExteriorMountType = [](const std::string& t) {
-        return t == "Door" || t == "AlarmLight" || t == "Light" ||
-               t == "SCamera" || t == "SCameraControl" || t == "AlarmControl";
-    };
-
     // Set picking render state
     glBindFramebuffer(GL_FRAMEBUFFER, pick_fbo_);
     glViewport(0, 0, pick_fbo_w_, pick_fbo_h_);
@@ -955,47 +926,14 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
         }
         if (!shouldDraw) continue;
 
-        // Building interior occlusion (picking): if this object sits inside a
-        // building the camera is currently outside of, don't let it be picked
-        // through the hull's window/door openings. Doors/lights/cameras mounted
-        // on the exterior are exempt so they stay selectable from outside.
-        //
-        // PRIORITY: if the object is inside a building the camera IS inside,
-        // always allow picking (handles sub-children of buildings and props
-        // placed inside nested structures like WINCHHOUSE consoles/boxes).
-        if (!obj.isBuilding && !isExteriorMountType(obj.type)) {
-            glm::vec3 p = glm::vec3(obj.pos);
-
-            // Step 1: is this object inside any building the camera is also inside?
-            bool in_safe_building = false;
-            for (int bi : inside_buildings) {
-                const auto& bobj = objects[bi];
-                glm::vec3 bext = GetMeshExtents(bobj.modelId, true) * BASE_SCALE * bobj.scale;
-                glm::vec3 bcenter = glm::vec3(bobj.pos);
-                glm::vec3 bd = p - bcenter;
-                if (std::abs(bd.x) <= bext.x &&
-                    std::abs(bd.y) <= bext.y &&
-                    std::abs(bd.z) <= bext.z) {
-                    in_safe_building = true;
-                    break;
-                }
-            }
-
-            // Step 2: only check outside-building occlusion if not in a safe building.
-            if (!in_safe_building) {
-                bool occluded = false;
-                for (const auto& box : outside_building_boxes) {
-                    glm::vec3 d = p - box.center;
-                    if (std::abs(d.x) <= box.extents.x &&
-                        std::abs(d.y) <= box.extents.y &&
-                        std::abs(d.z) <= box.extents.z) {
-                        occluded = true;
-                        break;
-                    }
-                }
-                if (occluded) continue;
-            }
-        }
+        // NOTE: We deliberately do NOT cull objects that sit inside buildings.
+        // Every child / sub-object (trucks, soldiers, crates, lights inside a
+        // garage or container) must be individually pickable. GPU depth testing
+        // already gives correct occlusion: building hull walls and window glass
+        // are rendered opaque into the pick buffer and occlude objects behind
+        // them, while true openings (open doors) let the cursor reach the
+        // interior object underneath. This is geometrically exact and order-
+        // independent, so AABB-based interior occlusion is unnecessary.
 
         Mesh mesh = GetOrLoadMesh(obj.modelId, obj.isBuilding);
         if (mesh.vertexCount == 0) continue;

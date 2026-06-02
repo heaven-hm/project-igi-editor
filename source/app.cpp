@@ -1004,18 +1004,25 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 				    y >= screen_menu_top && y <= screen_menu_top + menu_h) {
 					mouse_state_.left_button_down_ = false;
 					if      (btn_hit(0, y)) { TogglePauseMenu(); }                    // Resume
-					else if (btn_hit(1, y)) {                                         // Font toggle
-						Config::Get().useEditorFont = !Config::Get().useEditorFont;
-						Config::Save();
-					}
-					else if (btn_hit(2, y)) {                                         // Font Size cycle: 10→12→18→10
+					else if (btn_hit(1, y)) {                                         // Font row: toggle + [-] size [+]
+						// Sub-region X bounds MUST match renderer.cpp font row layout.
+						int plus_x  = menu_x + menu_w - 46;
+						int minus_x = menu_x + menu_w - 114;
 						int& fs = Config::Get().systemFontSize;
-						fs = (fs <= 10) ? 12 : (fs <= 12) ? 18 : 10;
-						Config::Save();
+						if (x >= minus_x && x < minus_x + 22) {        // [-] decrease 18→12→10
+							fs = (fs >= 18) ? 12 : 10;
+							Config::Save();
+						} else if (x >= plus_x && x < plus_x + 22) {   // [+] increase 10→12→18
+							fs = (fs <= 10) ? 12 : 18;
+							Config::Save();
+						} else if (x < minus_x) {                      // left label: toggle font type
+							Config::Get().useEditorFont = !Config::Get().useEditorFont;
+							Config::Save();
+						}
 					}
-					else if (btn_hit(3, y)) { ResetLevel(); TogglePauseMenu(); }      // Reset Level
-					else if (btn_hit(4, y)) { SaveCurrentLevel(); }                   // Save Level
-					else if (btn_hit(5, y)) { exit(0); }                              // Quit
+					else if (btn_hit(2, y)) { ResetLevel(); TogglePauseMenu(); }      // Reset Level
+					else if (btn_hit(3, y)) { SaveCurrentLevel(); }                   // Save Level
+					else if (btn_hit(4, y)) { exit(0); }                              // Quit
 				}
 				return; // Block all other interactions while paused
 			}
