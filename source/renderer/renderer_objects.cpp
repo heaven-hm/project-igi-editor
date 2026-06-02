@@ -820,8 +820,12 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
     const int DRAW_BUILDINGS = 16;
     const int DRAW_PROPS     = 32;
 
-    // Build set of building indices whose AABB contains the camera
+    // Build set of building indices whose AABB contains the camera, and cache the
+    // AABBs of buildings the camera is OUTSIDE of (used to cull objects that sit
+    // inside those buildings — they must not be pickable through window/door gaps).
     std::unordered_set<int> inside_buildings;
+    struct BoxAABB { glm::vec3 center; glm::vec3 extents; };
+    std::vector<BoxAABB> outside_building_boxes;
     for (int i = 0; i < (int)objects.size(); ++i) {
         const auto& obj = objects[i];
         if (obj.deleted || !obj.isBuilding || obj.modelId.empty()) continue;
@@ -833,8 +837,17 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
             std::abs(delta.y) <= extents.y &&
             std::abs(delta.z) <= extents.z) {
             inside_buildings.insert(i);
+        } else {
+            outside_building_boxes.push_back({center, extents});
         }
     }
+
+    // Objects mounted on a building's exterior (doors, lights, cameras) must stay
+    // selectable from outside; never spatially cull these.
+    auto isExteriorMountType = [](const std::string& t) {
+        return t == "Door" || t == "AlarmLight" || t == "Light" ||
+               t == "SCamera" || t == "SCameraControl" || t == "AlarmControl";
+    };
 
     // Set picking render state
     glBindFramebuffer(GL_FRAMEBUFFER, pick_fbo_);
@@ -871,11 +884,45 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
         }
         if (!shouldDraw) continue;
 
-        // Building interior occlusion: skip children of buildings the camera is outside
-        if (obj.parentIndex >= 0 && obj.parentIndex < (int)objects.size()) {
-            const auto& parent = objects[obj.parentIndex];
-            if (parent.isBuilding && inside_buildings.find(obj.parentIndex) == inside_buildings.end()) {
-                continue; // camera is outside this parent building
+        // Building interior occlusion (picking): if this object sits inside a
+        // building the camera is currently outside of, don't let it be picked
+        // through the hull's window/door openings. Doors/lights/cameras mounted
+        // on the exterior are exempt so they stay selectable from outside.
+        //
+        // PRIORITY: if the object is inside a building the camera IS inside,
+        // always allow picking (handles sub-children of buildings and props
+        // placed inside nested structures like WINCHHOUSE consoles/boxes).
+        if (!obj.isBuilding && !isExteriorMountType(obj.type)) {
+            glm::vec3 p = glm::vec3(obj.pos);
+
+            // Step 1: is this object inside any building the camera is also inside?
+            bool in_safe_building = false;
+            for (int bi : inside_buildings) {
+                const auto& bobj = objects[bi];
+                glm::vec3 bext = GetMeshExtents(bobj.modelId, true) * BASE_SCALE * bobj.scale;
+                glm::vec3 bcenter = glm::vec3(bobj.pos);
+                glm::vec3 bd = p - bcenter;
+                if (std::abs(bd.x) <= bext.x &&
+                    std::abs(bd.y) <= bext.y &&
+                    std::abs(bd.z) <= bext.z) {
+                    in_safe_building = true;
+                    break;
+                }
+            }
+
+            // Step 2: only check outside-building occlusion if not in a safe building.
+            if (!in_safe_building) {
+                bool occluded = false;
+                for (const auto& box : outside_building_boxes) {
+                    glm::vec3 d = p - box.center;
+                    if (std::abs(d.x) <= box.extents.x &&
+                        std::abs(d.y) <= box.extents.y &&
+                        std::abs(d.z) <= box.extents.z) {
+                        occluded = true;
+                        break;
+                    }
+                }
+                if (occluded) continue;
             }
         }
 
@@ -1187,7 +1234,11 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                     if (sub.alphaMode == 2) {
                         glEnable(GL_BLEND);
                         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                        glUniform1f(loc_alpha, sub.baseColorFactor.a);
+                        float subAlpha = sub.baseColorFactor.a;
+                        glUniform1f(loc_alpha, subAlpha);
+                        // Alpha-tested sub-meshes (baseAlpha ≈ 1.0) still write depth so that
+                        // geometry rendered after them (splines, etc.) can't bleed through.
+                        if (subAlpha >= 0.99f) glDepthMask(GL_TRUE);
                     }
 
                     if (sub.textureID > 0) {
@@ -1290,6 +1341,14 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                                           loc_model, loc_dirlight, loc_ambient,
                                           loc_useTex, loc_tex, loc_alpha, drawn);
 
+                // DrawAttachmentsRecursive may leave GL_BLEND enabled and
+                // depth-writes disabled for ARGB (glass/alpha) sub-meshes.
+                // Reset both so the next object in the outer loop renders correctly
+                // (prevents tree leaves and other alpha-tested geometry from
+                //  appearing transparent when a building attachment drew before them).
+                glDisable(GL_BLEND);
+                glDepthMask(GL_TRUE);
+                glUniform1f(loc_alpha, 1.0f);
                 glDisable(GL_POLYGON_OFFSET_FILL);
             }
         }
@@ -2705,6 +2764,10 @@ void Renderer_Objects::DrawAttachmentsForSpline(
                                  loc_model, loc_dirlight, loc_ambient, loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
     }
 
+    // Restore blend/depth state — transparent pass may leave them dirty.
+    glDisable(GL_BLEND);
+    glDepthMask(GL_TRUE);
+    glUniform1f(loc_alpha, 1.0f);
     glDisable(GL_POLYGON_OFFSET_FILL);
     glUseProgram(0);
 }

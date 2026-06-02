@@ -93,7 +93,8 @@ struct ConfigData {
     bool runEvent;
     bool cameraLock;
     bool enableBackup;
-    bool useEditorFont; // TRUE: render HUD with content/qed/editor.fnt; FALSE: GLUT system font
+    bool useEditorFont;  // TRUE: render HUD with content/qed/editor.fnt; FALSE: GLUT system font
+    int  systemFontSize; // GLUT system font point size: 10, 12 (default), or 18
     std::string findTaskName;
     std::string findTaskNote;
     std::string findTaskID;

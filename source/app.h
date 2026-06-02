@@ -137,6 +137,8 @@ private:
 	bool					show_hud_;
 	bool					show_debug_;
 	bool					show_help_;
+	int						help_scroll_offset_ = 0;
+	std::vector<std::string> help_entries_;          // keybinding lines from qedkeybindings.qsc
 	bool					show_magic_obj_spheres_;
 	int						tree_scroll_offset_;
 	bool					tree_decl_expanded_;
@@ -184,6 +186,7 @@ private:
 	CursorMode              current_cursor_mode_          = CursorMode::Default;
 	bool                    camera_mode_moved_            = false;
 	void                    LoadAllCursors();
+	void                    LoadHelpEntries();   // load keybinding lines from qedkeybindings.qsc
 	void                    UpdateCursorMode();
 	void                    DrawCustomCursor();
 

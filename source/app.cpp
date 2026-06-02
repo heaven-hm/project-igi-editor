@@ -219,10 +219,11 @@ bool App::Init(int argc, char** argv) {
 
 	// Set initial cursor state
 	LoadAllCursors();
+	LoadHelpEntries();
 	glutSetCursor(GLUT_CURSOR_NONE);
 
 	// Cache editor HWND for minimize/restore around game launch
-	editor_hwnd_ = Utils::FindWindow("IGI Editor v" + Utils::GetVersionString());
+	editor_hwnd_ = Utils::FindWindow("IGI Editor");
 	if (!editor_hwnd_) editor_hwnd_ = GetActiveWindow();
 
 	// Subclass GLUT's window so WM_HOTKEY messages reach EditorSubclassWndProc
@@ -344,6 +345,47 @@ void App::LoadAllCursors() {
 			}
 		}
 		Logger::Get().Log(LogLevel::INFO, "[App] Loaded " + std::to_string(ai_model_ids_.size()) + " AITYPE_ model IDs");
+	}
+}
+
+void App::LoadHelpEntries() {
+	help_entries_.clear();
+	std::string path = Utils::GetExeDirectory() + "\\content\\qed\\qedkeybindings.qsc";
+	std::ifstream f(path);
+	if (!f.is_open()) return;
+	std::string line;
+	while (std::getline(f, line)) {
+		// Strip leading whitespace
+		size_t start = line.find_first_not_of(" \t\r\n");
+		if (start == std::string::npos) continue;
+		line = line.substr(start);
+		if (line.empty() || line[0] == '/' ) continue; // skip blank/comment lines
+		// Keep SetEventBinding lines; format them as "  Key  =>  Event"
+		if (line.find("SetEventBinding") == 0) {
+			// extract: SetEventBinding("EventName", "KeyCombo")
+			size_t q1 = line.find('"');
+			size_t q2 = (q1 != std::string::npos) ? line.find('"', q1 + 1) : std::string::npos;
+			size_t q3 = (q2 != std::string::npos) ? line.find('"', q2 + 1) : std::string::npos;
+			size_t q4 = (q3 != std::string::npos) ? line.find('"', q3 + 1) : std::string::npos;
+			if (q1 != std::string::npos && q2 != std::string::npos &&
+			    q3 != std::string::npos && q4 != std::string::npos) {
+				std::string evtName = line.substr(q1 + 1, q2 - q1 - 1);
+				std::string keyCombo = line.substr(q3 + 1, q4 - q3 - 1);
+				// Replace angle-bracket modifiers for readability
+				auto repl = [](std::string s, const std::string& from, const std::string& to) {
+					size_t p = 0;
+					while ((p = s.find(from, p)) != std::string::npos) { s.replace(p, from.size(), to); p += to.size(); }
+					return s;
+				};
+				keyCombo = repl(keyCombo, "<Alt>", "Alt+");
+				keyCombo = repl(keyCombo, "<Ctrl>", "Ctrl+");
+				keyCombo = repl(keyCombo, "<Control>", "Ctrl+");
+				keyCombo = repl(keyCombo, "<Shift>", "Shift+");
+				keyCombo = repl(keyCombo, "<", "");
+				keyCombo = repl(keyCombo, ">", "");
+				help_entries_.push_back(keyCombo + "  =>  " + evtName);
+			}
+		}
 	}
 }
 
@@ -487,6 +529,67 @@ void App::LoadLevel(int level_no) {
 			.level_no_ = level_no,
 			.render_res_loader_ = &renderer_
 		};
+
+		// ── Loading overlay ──────────────────────────────────────────────────
+		// Flush one frame with a "LOADING…" screen before the synchronous load
+		// so the user sees feedback instead of a frozen window.
+		{
+			int vw = window_state_.viewport_width_;
+			int vh = window_state_.viewport_height_;
+			glViewport(0, 0, vw, vh);
+			glClearColor(0.02f, 0.06f, 0.02f, 1.0f);
+			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+			glDisable(GL_DEPTH_TEST);
+			glMatrixMode(GL_PROJECTION);
+			glPushMatrix(); glLoadIdentity();
+			glOrtho(0, vw, 0, vh, -1, 1);
+			glMatrixMode(GL_MODELVIEW);
+			glPushMatrix(); glLoadIdentity();
+
+			// Dark green panel
+			int pw = 320, ph = 80;
+			int px = (vw - pw) / 2, py = (vh - ph) / 2;
+			glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+			glColor4f(0.0f, 0.15f, 0.0f, 0.9f);
+			glBegin(GL_QUADS);
+			glVertex2i(px, py); glVertex2i(px+pw, py);
+			glVertex2i(px+pw, py+ph); glVertex2i(px, py+ph);
+			glEnd();
+			// Border
+			glColor3f(0.0f, 0.8f, 0.0f);
+			glBegin(GL_LINE_LOOP);
+			glVertex2i(px, py); glVertex2i(px+pw, py);
+			glVertex2i(px+pw, py+ph); glVertex2i(px, py+ph);
+			glEnd();
+			// Progress bar track
+			int bx = px+20, by = py+18, bw = pw-40, bh = 10;
+			glColor3f(0.0f, 0.3f, 0.0f);
+			glBegin(GL_QUADS);
+			glVertex2i(bx, by); glVertex2i(bx+bw, by);
+			glVertex2i(bx+bw, by+bh); glVertex2i(bx, by+bh);
+			glEnd();
+			// Bar fill (indeterminate — full green bar)
+			glColor3f(0.0f, 0.8f, 0.0f);
+			glBegin(GL_QUADS);
+			glVertex2i(bx, by); glVertex2i(bx+bw, by);
+			glVertex2i(bx+bw, by+bh); glVertex2i(bx, by+bh);
+			glEnd();
+			glDisable(GL_BLEND);
+
+			// Text (GLUT bitmap, always available regardless of editor-font toggle)
+			char load_msg[64];
+			snprintf(load_msg, sizeof(load_msg), "Loading Level %d...", level_no);
+			glColor3f(0.0f, 0.9f, 0.0f);
+			glRasterPos2i(px + pw/2 - (int)(strlen(load_msg)*4), py + ph - 20);
+			for (const char* c = load_msg; *c; ++c)
+				glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, *c);
+
+			glMatrixMode(GL_PROJECTION); glPopMatrix();
+			glMatrixMode(GL_MODELVIEW);  glPopMatrix();
+			glEnable(GL_DEPTH_TEST);
+			glutSwapBuffers();
+		}
+		// ─────────────────────────────────────────────────────────────────────
 
 		glm::vec3 start_pos;
 		float start_yaw;
@@ -735,6 +838,12 @@ void App::OnDisplay() {
 
 // input
 void App::Input_OnMouseWheel(int wheel, int direction, int x, int y) {
+	if (show_help_) {
+		// Scroll keybindings help panel
+		if (direction > 0) { if (help_scroll_offset_ > 0) help_scroll_offset_--; }
+		else               { help_scroll_offset_++; }
+		return;
+	}
 	if (show_hud_ && x < 350) { // Over TreeView
 		if (direction > 0) {
 			if (tree_scroll_offset_ > 0) tree_scroll_offset_--;
@@ -790,8 +899,9 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 						// Clicks inside the panel are consumed by the panel.
 						if (x >= L.panel_x && x <= L.panel_x + L.panel_w &&
 						    y >= L.panel_y && y <= L.panel_y + L.panel_h) {
+							// +4px tolerance on all sides for pixel-perfect feel at any DPI
 							auto inRect = [&](const PropPanel::Widget& w) {
-								return x >= w.x1 && x <= w.x2 && y >= w.y1 && y <= w.y2;
+								return x >= w.x1 - 4 && x <= w.x2 + 4 && y >= w.y1 - 4 && y <= w.y2 + 4;
 							};
 							auto tokOf = [&](int idx) -> float {
 								if (idx >= 0 && idx < (int)obj.argTokens.size()) {
@@ -876,19 +986,28 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 				const int screen_menu_top = (window_state_.viewport_height_ - menu_h) / 2;
 
 				// Buttons start at screen_menu_top + 85, spaced 35px
+			// Visual quad spans btn_y-12 to btn_y+16 in screen coords; use ±18 for generous hit area
 				auto btn_hit = [&](int idx, int mouse_y) -> bool {
 					int btn_y = screen_menu_top + 85 + idx * 35;
-					return (mouse_y >= btn_y - 15 && mouse_y <= btn_y + 15);
+					return (mouse_y >= btn_y - 18 && mouse_y <= btn_y + 18);
 				};
 
 				if (x >= menu_x && x <= menu_x + menu_w &&
 				    y >= screen_menu_top && y <= screen_menu_top + menu_h) {
 					mouse_state_.left_button_down_ = false;
 					if      (btn_hit(0, y)) { TogglePauseMenu(); }                    // Resume
-					else if (btn_hit(1, y)) { show_debug_ = !show_debug_; }           // Debug
-					else if (btn_hit(2, y)) { ResetLevel(); TogglePauseMenu(); }      // Reset Level
-					else if (btn_hit(3, y)) { SaveCurrentLevel(); }                   // Save Level
-					else if (btn_hit(4, y)) { exit(0); }                              // Quit
+					else if (btn_hit(1, y)) {                                         // Font toggle
+						Config::Get().useEditorFont = !Config::Get().useEditorFont;
+						Config::Save();
+					}
+					else if (btn_hit(2, y)) {                                         // Font Size cycle: 10→12→18→10
+						int& fs = Config::Get().systemFontSize;
+						fs = (fs <= 10) ? 12 : (fs <= 12) ? 18 : 10;
+						Config::Save();
+					}
+					else if (btn_hit(3, y)) { ResetLevel(); TogglePauseMenu(); }      // Reset Level
+					else if (btn_hit(4, y)) { SaveCurrentLevel(); }                   // Save Level
+					else if (btn_hit(5, y)) { exit(0); }                              // Quit
 				}
 				return; // Block all other interactions while paused
 			}
@@ -913,6 +1032,7 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 					for (int i = 0; i < (int)objects.size(); ++i) {
 						if (!objects[i].deleted) {
 							const auto& obj = objects[i];
+							if (obj.type == "Task_DeclareParameters") continue; // picker excludes declare params
 							std::string label = obj.type;
 							if (!obj.taskId.empty() && obj.taskId != "-1") {
 								label += " (" + obj.taskId;
@@ -1066,7 +1186,7 @@ void App::Input_OnMotion(int x, int y) {
 				if (fi < (int)schema.size()) {
 					const FieldDef& fd = schema[fi];
 					const std::string& tn = fd.typeName;
-					bool is_pos = (tn == "ObjectPos" || tn == "Real32x3" || tn == "Real64x3");
+					bool is_pos = (tn == "ObjectPos"); // only actual position type gets pad/camera-follow
 					bool is_ori = (tn == "Real32x9");
 					int dxp = x - prop_drag_start_x_;
 					int dyp = y - prop_drag_start_y_;
@@ -1077,30 +1197,40 @@ void App::Input_OnMotion(int x, int y) {
 						}
 					};
 					if (is_pos && comp == 0) {
+						// Per-frame delta: dx/dy are the mouse movement THIS motion event only.
+						// The previous cumulative approach (nx = start + dxp*accel) stalled when the
+						// cursor reached the window edge because dxp/dyp stopped changing.
+						// Per-frame: cursor at edge → dx=dy=0 → no movement (natural stop, no stall).
 						glm::dvec3 oldPos = obj.pos;
-						glm::dvec3 oldRot = obj.rot;
-						// 2D pad: X horizontal, Y vertical (screen-down => world -Y).
-						// IGI positions are ~40.96 units/metre; match marker-manip feel.
-						float drag_dist = std::sqrt((float)(dxp * dxp + dyp * dyp));
-						float accel = 50.0f * std::pow(std::max(1.0f, drag_dist), 0.5f);
-						float nx = prop_drag_start_val_  + (float)dxp * accel;
-						float ny = prop_drag_start_val2_ - (float)dyp * accel;
+						float fdx = (float)dx;
+						float fdy = (float)dy;
+						float drag_speed = std::sqrt(fdx * fdx + fdy * fdy);
+						// accel = speed * 4 matches the feel of the old cumulative quadratic formula
+						// for typical drag distances (verified: 5px/frame over 20 frames ≈ 2000 units).
+						float accel = std::max(0.5f, drag_speed * 4.0f);
+						int off = fd.argOffset;
+						float cur_x = (off   < (int)obj.argTokens.size()) ? (float)std::atof(obj.argTokens[off  ].c_str()) : 0.f;
+						float cur_y = (off+1 < (int)obj.argTokens.size()) ? (float)std::atof(obj.argTokens[off+1].c_str()) : 0.f;
+						float nx = cur_x + fdx * accel;
+						float ny = cur_y - fdy * accel;
 						writeArg(fd.argOffset + 0, nx);
 						writeArg(fd.argOffset + 1, ny);
-						obj.pos.x = obj.argTokens.size() > (size_t)(fd.argOffset)   ? std::atof(obj.argTokens[fd.argOffset].c_str())   : obj.pos.x;
-						obj.pos.y = obj.argTokens.size() > (size_t)(fd.argOffset+1) ? std::atof(obj.argTokens[fd.argOffset+1].c_str()) : obj.pos.y;
+						obj.pos.x = nx;
+						obj.pos.y = ny;
 						obj.modified = true;
 						glm::dvec3 deltaPos = obj.pos - oldPos;
 						PropagateTransformToChildren(selected_object_index_, deltaPos, glm::dmat3(1.0), oldPos);
 						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
 						viewer_.pos_ += glm::vec3(deltaPos);
 					} else if (is_pos && comp == 2) {
+						// Per-frame delta for Z — same fix as XY pad above.
 						glm::dvec3 oldPos = obj.pos;
-						glm::dvec3 oldRot = obj.rot;
-						// Z vertical slider: dragging up increases Z
-						float abs_dy = std::abs((float)dyp);
-						float accel = 50.0f * std::pow(std::max(1.0f, abs_dy), 0.5f);
-						float nz = prop_drag_start_val_ - (float)dyp * accel;
+						float fdy = (float)dy;
+						float abs_fdy = std::abs(fdy);
+						float accel = std::max(0.5f, abs_fdy * 4.0f);
+						int off = fd.argOffset + 2;
+						float cur_z = (off < (int)obj.argTokens.size()) ? (float)std::atof(obj.argTokens[off].c_str()) : 0.f;
+						float nz = cur_z - fdy * accel;
 						writeArg(fd.argOffset + 2, nz);
 						obj.pos.z = nz;
 						obj.modified = true;
@@ -1159,6 +1289,7 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		for (int i = 0; i < (int)objects.size(); ++i) {
 			if (!objects[i].deleted) {
 				const auto& obj = objects[i];
+				if (obj.type == "Task_DeclareParameters") continue; // picker excludes declare params
 				std::string label = obj.type;
 				if (!obj.taskId.empty() && obj.taskId != "-1") {
 					label += " (" + obj.taskId;
@@ -1168,10 +1299,10 @@ void App::Input_OnSpecial(int key, int x, int y) {
 				} else if (!obj.name.empty()) {
 					label += " (\"" + obj.name + "\")";
 				}
-				
+
 				std::string label_lower = label;
 				std::transform(label_lower.begin(), label_lower.end(), label_lower.begin(), [](unsigned char c) { return std::tolower(c); });
-				
+
 				if (search_lower.empty() || label_lower.find(search_lower) != std::string::npos) {
 					picker_to_objects.push_back(i);
 				}
@@ -1335,6 +1466,14 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		}
 	}
 
+	// F2 always toggles TaskTree — checked before any config key overrides
+	if (key == GLUT_KEY_F2) {
+		show_hud_ = !show_hud_;
+		bridge_.SetEnabled(show_hud_);
+		Logger::Get().Log(LogLevel::INFO, std::string("[App] TaskTree ") + (show_hud_ ? "shown" : "hidden"));
+		return;
+	}
+
 	// Check configurable keybindings for special keys (F-keys, etc.)
 	// Save
 	if (Utils::IsKeyBindingPressed(config.keySave)) {
@@ -1404,13 +1543,6 @@ void App::Input_OnSpecial(int key, int x, int y) {
 
 	if (key == config.keyMoveRight) {
 		input_.keys_ |= MK_RIGHT;
-		return;
-	}
-
-	if (key == GLUT_KEY_F2) {
-		show_hud_ = !show_hud_;
-		bridge_.SetEnabled(show_hud_);
-		Logger::Get().Log(LogLevel::INFO, std::string("[App] TaskTree ") + (show_hud_ ? "shown" : "hidden"));
 		return;
 	}
 
@@ -1577,6 +1709,18 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		if (key == 13) { // Enter — confirm
 			if (find_result_idx_ >= 0) {
 				selected_object_index_ = find_result_idx_;
+				// Expand all ancestor containers so the found item is visible in tree
+				{
+					auto& objects = level_.GetLevelObjects().GetObjects();
+					int idx = find_result_idx_;
+					while (idx >= 0 && idx < (int)objects.size()) {
+						int parent = objects[idx].parentIndex;
+						if (parent < 0 || parent >= (int)objects.size()) break;
+						if (objects[parent].isContainer)
+							objects[parent].expanded = true;
+						idx = parent;
+					}
+				}
 				// Scroll the tree to make the found item visible
 				auto visibleList = GetVisibleTreeNodes();
 				int current_row = -1;
@@ -1617,6 +1761,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 			find_result_idx_ = -1;
 			for (int i = 0; i < (int)objects.size(); ++i) {
 				if (objects[i].deleted) continue;
+				if (objects[i].type == "Task_DeclareParameters") continue; // never search declare params
 				std::string label = objects[i].type + " " + objects[i].name + " " + objects[i].taskId;
 				std::transform(label.begin(), label.end(), label.begin(), [](unsigned char c){ return std::tolower(c); });
 				if (label.find(q_lower) != std::string::npos) {
@@ -1645,6 +1790,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 			for (int i = 0; i < (int)objects.size(); ++i) {
 				if (!objects[i].deleted) {
 					const auto& obj = objects[i];
+					if (obj.type == "Task_DeclareParameters") continue; // picker excludes declare params
 					std::string label = obj.type;
 					if (!obj.taskId.empty() && obj.taskId != "-1") {
 						label += " (" + obj.taskId;
@@ -1654,10 +1800,10 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 					} else if (!obj.name.empty()) {
 						label += " (\"" + obj.name + "\")";
 					}
-					
+
 					std::string label_lower = label;
 					std::transform(label_lower.begin(), label_lower.end(), label_lower.begin(), [](unsigned char c) { return std::tolower(c); });
-					
+
 					if (search_lower.empty() || label_lower.find(search_lower) != std::string::npos) {
 						picker_to_objects.push_back(i);
 					}
@@ -1804,13 +1950,20 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		return;
 	}
 
-	// Open the property panel on Enter if an object is selected.
+	// Enter: open property editor for the selected task, same as double-click.
+	// For containers also toggle expanded/collapsed.
 	if (key == 13 && !(glutGetModifiers() & GLUT_ACTIVE_ALT)) {
 		if (selected_object_index_ >= 0) {
 			auto& objects = level_.GetLevelObjects().GetObjects();
 			if (selected_object_index_ < (int)objects.size()) {
+				auto& obj = objects[selected_object_index_];
 				prop_editor_open_ = true;
-				Logger::Get().Log(LogLevel::INFO, "[App] Pressed Enter on task from tree and opened property panel.");
+				if (obj.isContainer) {
+					obj.expanded = !obj.expanded;
+					Logger::Get().Log(LogLevel::INFO, "[App] Enter opened props + toggled expand for " + obj.type);
+				} else {
+					Logger::Get().Log(LogLevel::INFO, "[App] Enter opened property panel for " + obj.type);
+				}
 				return;
 			}
 		}
@@ -2097,7 +2250,7 @@ void App::DispatchEventBindings() {
 	if (Check("TaskSendEvent")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskSendEvent not implemented"); }
 	if (Check("TaskSendEventRecursive")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskSendEventRecursive not implemented"); }
 	if (Check("TaskFind")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFind not implemented"); }
-	if (Check("TaskFindTextInTask")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFindTextInTask not implemented"); }
+	if (Check("TaskFindTextInTask")) { show_help_ = !show_help_; help_scroll_offset_ = 0; }
 	if (Check("TaskFindByTaskID")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFindByTaskID not implemented"); }
 	if (Check("TaskFindByTaskNote")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFindByTaskNote not implemented"); }
 	if (Check("TaskFindAgain")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFindAgain not implemented"); }
@@ -2479,6 +2632,8 @@ void App::Frame(float delta_seconds) {
 			.selected_obj_is_ai    = (selected_object_index_ >= 0 &&
 				selected_object_index_ < (int)level_.GetLevelObjects().GetObjects().size() &&
 				ai_model_ids_.count(level_.GetLevelObjects().GetObjects()[selected_object_index_].modelId) > 0),
+			.help_scroll_offset_   = help_scroll_offset_,
+			.help_entries_         = &help_entries_,
 		};
 		draw_params_.level_objects_ = &level_.GetLevelObjects();
 		draw_params_.selected_object_index_ = selected_object_index_;
@@ -2495,13 +2650,28 @@ void App::Frame(float delta_seconds) {
 
 	ProcessInput(delta_seconds);
 
+	// Continuous position drag: re-apply prop drag every frame while button held.
+	// This ensures objects keep moving when the cursor is stationary at the screen edge.
+	if (mouse_state_.left_button_down_ && prop_field_index_ >= 0 && selected_object_index_ >= 0 &&
+	    !Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera)) {
+		// Synthesise a motion event at the current cursor position to keep applying drag velocity.
+		Input_OnMotion(mouse_state_.prior_x_, mouse_state_.prior_y_);
+	}
+
 	if (edit_mode_ && terrain_edit_enabled_ && mouse_state_.left_button_down_) {
 		EditorProcessClick();
 	}
 
 	UpdateViewDefine();
 	if (mouse_state_.prior_x_ != last_pick_x_ || mouse_state_.prior_y_ != last_pick_y_) {
-		hover_object_index_ = PickObjectAtScreenPos(mouse_state_.prior_x_, mouse_state_.prior_y_);
+		bool camMode    = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
+		bool overPanel  = prop_editor_open_ &&
+		                  mouse_state_.prior_x_ < (PropPanel::kLeft + PropPanel::kWidth);
+		if (camMode || overPanel) {
+			hover_object_index_ = -1;
+		} else {
+			hover_object_index_ = PickObjectAtScreenPos(mouse_state_.prior_x_, mouse_state_.prior_y_);
+		}
 		last_pick_x_ = mouse_state_.prior_x_;
 		last_pick_y_ = mouse_state_.prior_y_;
 	}
@@ -2580,6 +2750,8 @@ void App::Frame(float delta_seconds) {
 		.selected_obj_is_ai    = (selected_object_index_ >= 0 &&
 			selected_object_index_ < (int)level_.GetLevelObjects().GetObjects().size() &&
 			ai_model_ids_.count(level_.GetLevelObjects().GetObjects()[selected_object_index_].modelId) > 0),
+		.help_scroll_offset_   = help_scroll_offset_,
+		.help_entries_         = &help_entries_,
 	};
 
 	renderer_.Draw(draw_params_, task_tree_view);
@@ -3210,8 +3382,12 @@ void App::SnapObjectsToTerrain() {
                 continue;
             }
             // Human soldiers within 100 units of terrain surface: snap to terrain.
-            obj.snap_z_offset = 0.0;
-            obj.pos.z = (double)terrainZ;
+            // Apply the mesh Z-offset (pivot→feet) so feet rest on the ground, matching
+            // the manual Snap-to-ground in UpdateMarkerManipulation (was: bare terrainZ,
+            // which left models floating/sunk by their pivot offset).
+            float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
+            obj.snap_z_offset = (double)(zOffset * 40.96f * obj.scale);
+            obj.pos.z = (double)terrainZ + obj.snap_z_offset;
             Logger::Get().Log(LogLevel::DEBUG, "[App] Snapped human " + obj.modelId + " to Z=" + std::to_string(obj.pos.z));
             snapped++;
         } else {
@@ -3469,7 +3645,7 @@ void App::CommitPropTextEdit() {
 	bool is_str = (tn.find("String") != std::string::npos || tn == "VarString" ||
 	               tn == "EnumString32" || tn == "DropDownCombo");
 	bool is_int = (tn == "Int16" || tn == "Int32" || tn == "EnumInt32");
-	bool is_pos = (tn == "ObjectPos" || tn == "Real32x3" || tn == "Real64x3");
+	bool is_pos = (tn == "ObjectPos"); // only sync obj.pos for actual position fields
 
 	std::string tokenVal;
 	if (is_str) {

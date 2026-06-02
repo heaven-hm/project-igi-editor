@@ -111,7 +111,7 @@ void Config::CreateDefault() {
     data_.keyDebug = {0x44, true, false, false};   
     data_.keyQuit = {0x51, true, false, false};    
     data_.keyResetScript = {0x52, false, true, false}; 
-    data_.keyClipMode = {VK_F2, false, false, false};
+    data_.keyClipMode = {VK_F9, false, false, false};
     data_.keyToggleGame = {VK_F3, false, false, false};
     data_.keySaveState = {0x57, true, false, false};           // Ctrl+W
     data_.keyToggleSaveStateOnExit = {0x41, true, false, false}; // Ctrl+A
@@ -130,7 +130,8 @@ void Config::CreateDefault() {
     data_.runEvent = true;
     data_.cameraLock = false;
     data_.enableBackup = false;
-    data_.useEditorFont = false;
+    data_.useEditorFont  = false;
+    data_.systemFontSize = 12;
     data_.findTaskName = "";
     data_.findTaskNote = "";
     data_.findTaskID = "";
@@ -219,6 +220,7 @@ void Config::Load() {
                 else if (key == "CameraLock") data_.cameraLock = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "Backup") data_.enableBackup = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "UseEditorFont") data_.useEditorFont = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "SystemFontSize") { int s = std::stoi(val); data_.systemFontSize = (s == 10 || s == 18) ? s : 12; }
                 else if (key == "FindTaskName") data_.findTaskName = val;
                 else if (key == "FindTaskNote") data_.findTaskNote = val;
                 else if (key == "FindTaskID") data_.findTaskID = val;
@@ -355,6 +357,7 @@ void Config::Save() {
         file << "QEDCameraLock(" << (data_.cameraLock ? "TRUE" : "FALSE") << ");\n";
         file << "QEDBackup(" << (data_.enableBackup ? "TRUE" : "FALSE") << ");\n";
         file << "QEDUseEditorFont(" << (data_.useEditorFont ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDSystemFontSize(" << data_.systemFontSize << ");\n";
         file << "QEDFindTaskName(\"" << data_.findTaskName << "\");\n";
         file << "QEDFindTaskNote(\"" << data_.findTaskNote << "\");\n";
         file << "QEDFindTaskID(\"" << data_.findTaskID << "\");\n";

@@ -8,6 +8,7 @@
 
 #include "config.h"
 #include "logger.h"
+#include "utils.h"
 #include "pch.h"
 #include <glm/gtc/type_ptr.hpp>
 #include <vector>
@@ -351,7 +352,8 @@ void Renderer::Draw(const draw_params_s &params,
                   objects_.GetShaderProgram());
   }
 
-  if (task_tree_view.show_hud_) {
+  // 2D HUD overlay — always active so tooltip/pause/debug show even when TreeView is hidden
+  {
     glUseProgram(0);      // Disable any active shaders for fixed-function HUD
     glBindVertexArray(0); // UNBIND VAO to prevent state leak
     glBindBufferBase(GL_UNIFORM_BUFFER, 0, 0); // UNBIND UBO
@@ -382,6 +384,27 @@ void Renderer::Draw(const draw_params_s &params,
       EnsureEditorFont();
       EnsureEditorSmFont();
     }
+
+    // Pixel width of the first `count` chars of `str` in the active HUD font.
+    // Mirrors DrawFontText's per-glyph advance exactly so callers (e.g. the text
+    // caret) land on the true character boundary instead of a fixed-width guess.
+    auto measure_text_width = [&](const char *str, int count) -> int {
+      if (count <= 0) return 0;
+      if (useEditorFont && g_editorFont.valid && g_editorFontTex) {
+        const int spaceAdvance =
+            g_editorFont.lineHeight > 0 ? g_editorFont.lineHeight / 2 : 4;
+        int w = 0;
+        for (int i = 0; i < count && str[i]; ++i) {
+          auto it = g_editorFont.glyphs.find((int)(unsigned char)str[i]);
+          w += (it != g_editorFont.glyphs.end()) ? it->second.advance : spaceAdvance;
+        }
+        return w;
+      }
+      int w = 0;
+      for (int i = 0; i < count && str[i]; ++i)
+        w += glutBitmapWidth(GLUT_BITMAP_HELVETICA_12, (unsigned char)str[i]);
+      return w;
+    };
 
     auto draw_text = [&](int x, int y, const char *str, float r, float g,
                          float b) {
@@ -477,6 +500,12 @@ void Renderer::Draw(const draw_params_s &params,
     };
 
     // draw_text_sys: always uses GLUT system font (for Escape menu, Help, Debug).
+    // Font size is chosen via Config::Get().systemFontSize (10, 12, or 18).
+    const int sysFontSize = Config::Get().systemFontSize;
+    void* sysFontPtr = (sysFontSize == 10) ? GLUT_BITMAP_HELVETICA_10
+                     : (sysFontSize == 18) ? GLUT_BITMAP_HELVETICA_18
+                                           : GLUT_BITMAP_HELVETICA_12;
+    const int sysLineH = (sysFontSize == 10) ? 13 : (sysFontSize == 18) ? 22 : 15;
     auto draw_text_sys = [&](int x, int y, const char *str, float r, float g,
                              float b) {
       std::stringstream ss(str);
@@ -485,11 +514,11 @@ void Renderer::Draw(const draw_params_s &params,
       while (std::getline(ss, line)) {
         glColor3f(0.0f, 0.0f, 0.0f);
         glRasterPos2i(x + 1, params.view_define_->viewport_height_ - line_y - 1);
-        for (char c : line) glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, c);
+        for (char c : line) glutBitmapCharacter(sysFontPtr, c);
         glColor3f(r, g, b);
         glRasterPos2i(x, params.view_define_->viewport_height_ - line_y);
-        for (char c : line) glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, c);
-        line_y += 15;
+        for (char c : line) glutBitmapCharacter(sysFontPtr, c);
+        line_y += sysLineH;
       }
     };
 
@@ -526,8 +555,8 @@ void Renderer::Draw(const draw_params_s &params,
 
     int line_y = 30;
 
-    // --- TreeView HUD Implementation ---
-    // Hidden while the property panel occupies the left strip.
+    // --- TreeView HUD Implementation (only when TaskTree is visible) ---
+    if (task_tree_view.show_hud_) {
     if (task_tree_view.level_objects_ && !task_tree_view.prop_editor_open_ && !task_tree_view.task_picker_open_) {
       const auto &objects = task_tree_view.level_objects_->GetObjects();
       int tree_x = 20;
@@ -812,9 +841,7 @@ void Renderer::Draw(const draw_params_s &params,
 
       line_y = start_y + (current_row - scroll_offset) * row_h + 20;
     }
-
-    // Show Editor/Object Telemetry (Only if debug is enabled and explicitly
-    // requested) Removed live info as requested
+    } // end show_hud_ tree panel
 
     // Display object info at mouse position
     int info_object_index = task_tree_view.hover_object_index_;
@@ -823,12 +850,12 @@ void Renderer::Draw(const draw_params_s &params,
       info_object_index = task_tree_view.selected_object_index_;
     }
 
-    // Suppress tooltip when mouse is over the TaskTree or property panel UI
+    // Suppress tooltip when: camera orbit mode, over TaskTree, or over property panel
     {
         bool over_tree  = task_tree_view.show_hud_ && task_tree_view.mouse_x_ < 350;
         bool over_panel = task_tree_view.prop_editor_open_ &&
                           task_tree_view.mouse_x_ < (PropPanel::kLeft + PropPanel::kWidth);
-        if (over_tree || over_panel) info_object_index = -1;
+        if (over_tree || over_panel || task_tree_view.enable_camera_mode_) info_object_index = -1;
     }
 
     if (info_object_index >= 0 && task_tree_view.level_objects_) {
@@ -940,12 +967,16 @@ void Renderer::Draw(const draw_params_s &params,
       draw_text_sm(tooltip_x, tooltip_y, "Terrain ID: -1", 1.0f, 1.0f, 1.0f);
     }
 
-    // Watermark
-    int w_width = glutBitmapLength(
-        GLUT_BITMAP_HELVETICA_12,
-        (const unsigned char *)"IGI Editor Copyright - HeavenHM");
-    int w_x = (params.view_define_->viewport_width_ - w_width) / 2;
-    draw_text(w_x, params.view_define_->viewport_height_ - 20, "IGI Editor - HeavenHM", 0.7f, 0.7f, 0.7f);
+    // Watermark — centered, versioned
+    {
+      static std::string s_ver_watermark;
+      if (s_ver_watermark.empty())
+        s_ver_watermark = "IGI Editor v" + Utils::GetVersionString() + " - HeavenHM";
+      int wm_w = glutBitmapLength(GLUT_BITMAP_HELVETICA_12,
+                                  (const unsigned char *)s_ver_watermark.c_str());
+      int wm_x = (params.view_define_->viewport_width_ - wm_w) / 2;
+      draw_text(wm_x, params.view_define_->viewport_height_ - 20, s_ver_watermark.c_str(), 0.7f, 0.7f, 0.7f);
+    }
 
     if (task_tree_view.task_picker_open_ && task_tree_view.level_objects_) {
       int picker_x = 20;
@@ -1032,7 +1063,7 @@ void Renderer::Draw(const draw_params_s &params,
 
       // Footer guidelines
       draw_text(picker_x + 15, viewport_h - 38,
-                "[Enter] Clone  [ESC] Cancel  [Type] Search", 0.7f, 0.7f, 0.7f);
+                "[Enter] Insert  [ESC] Cancel  [Type] Search", 0.7f, 0.7f, 0.7f);
 
       // Build task list mapping exactly like app.cpp
       const auto &objects = task_tree_view.level_objects_->GetObjects();
@@ -1046,6 +1077,7 @@ void Renderer::Draw(const draw_params_s &params,
       for (int i = 0; i < (int)objects.size(); ++i) {
         if (!objects[i].deleted) {
           const auto &obj = objects[i];
+          if (obj.type == "Task_DeclareParameters") continue; // picker excludes declare params
           std::string label = obj.type;
           if (!obj.taskId.empty() && obj.taskId != "-1") {
             label += " (" + obj.taskId;
@@ -1197,97 +1229,7 @@ void Renderer::Draw(const draw_params_s &params,
     }
 
 
-    if (task_tree_view.edit_mode_) {
-      // Flip Y because glOrtho has y=0 at bottom, but mouse_y is top-down
-      // (GLUT)
-      float cx = (float)(task_tree_view.mouse_x_);
-      float cy = (float)(params.view_define_->viewport_height_ -
-                         task_tree_view.mouse_y_);
-
-      if (task_tree_view.enable_camera_mode_) {
-        // Draw camera icon at center (since mouse is warped there)
-        float ccx = (float)(params.view_define_->viewport_width_ / 2);
-        float ccy = (float)(params.view_define_->viewport_height_ / 2);
-        float w = 16.0f, h = 10.0f;
-        glColor3f(0.4f, 0.7f, 1.0f); // Sky blue
-        glLineWidth(2.5f);
-        // Camera body
-        glBegin(GL_LINE_LOOP);
-        glVertex2f(ccx - w / 2, ccy - h / 2);
-        glVertex2f(ccx + w / 2, ccy - h / 2);
-        glVertex2f(ccx + w / 2, ccy + h / 2);
-        glVertex2f(ccx - w / 2, ccy + h / 2);
-        glEnd();
-        // Lens (inner circle-ish)
-        glBegin(GL_LINE_LOOP);
-        for (int i = 0; i < 8; ++i) {
-          float a = i * 6.28f / 8.0f;
-          glVertex2f(ccx + cosf(a) * 3, ccy + sinf(a) * 3);
-        }
-        glEnd();
-        // Viewfinder
-        glBegin(GL_LINE_LOOP);
-        glVertex2f(ccx - 3, ccy + h / 2);
-        glVertex2f(ccx + 3, ccy + h / 2);
-        glVertex2f(ccx + 4, ccy + h / 2 + 3);
-        glVertex2f(ccx - 4, ccy + h / 2 + 3);
-        glEnd();
-        glLineWidth(1.0f);
-      } else if (task_tree_view.terrain_edit_enabled_) {
-        // Terrain edit mode: orange circle brush cursor
-        float radius = 10.0f;
-        float th = 2.0f;
-        glColor3f(1.0f, 0.5f, 0.0f); // Orange
-        glLineWidth(th);
-        glBegin(GL_LINE_LOOP);
-        int segments = 16;
-        for (int i = 0; i < segments; ++i) {
-          float angle = (float)i * 6.283185f / (float)segments;
-          glVertex2f(cx + cosf(angle) * radius, cy + sinf(angle) * radius);
-        }
-        glEnd();
-        // Small cross inside circle
-        float csz = 4.0f;
-        glBegin(GL_LINES);
-        glVertex2f(cx - csz, cy);
-        glVertex2f(cx + csz, cy);
-        glVertex2f(cx, cy - csz);
-        glVertex2f(cx, cy + csz);
-        glEnd();
-        glLineWidth(1.0f);
-      } else {
-        // Object edit mode: we rely on the OS cursor instead of a drawn +
-      }
-    } else {
-      // Draw a small blue camera icon at the screen center
-      float cx = (float)(params.view_define_->viewport_width_ / 2 + 12);
-      float cy = (float)(params.view_define_->viewport_height_ / 2 + 12);
-      float w = 12.0f, h = 8.0f;
-      glColor3f(0.4f, 0.7f, 1.0f);
-      glLineWidth(2.0f);
-      // Camera body
-      glBegin(GL_LINE_LOOP);
-      glVertex2f(cx - w / 2, cy - h / 2);
-      glVertex2f(cx + w / 2, cy - h / 2);
-      glVertex2f(cx + w / 2, cy + h / 2);
-      glVertex2f(cx - w / 2, cy + h / 2);
-      glEnd();
-      // Lens (inner rect)
-      glBegin(GL_LINE_LOOP);
-      glVertex2f(cx - w / 5, cy - h / 5);
-      glVertex2f(cx + w / 5, cy - h / 5);
-      glVertex2f(cx + w / 5, cy + h / 5);
-      glVertex2f(cx - w / 5, cy + h / 5);
-      glEnd();
-      // Viewfinder bump on top
-      glBegin(GL_LINE_LOOP);
-      glVertex2f(cx - w / 5, cy - h / 2);
-      glVertex2f(cx + w / 5, cy - h / 2);
-      glVertex2f(cx + w / 5 + 2, cy - h / 2 - 4);
-      glVertex2f(cx - w / 5 - 2, cy - h / 2 - 4);
-      glEnd();
-      glLineWidth(1.0f);
-    }
+    // SPR sprite cursors are drawn by App::DrawCustomCursor() — no GLUT overlays here
 
     if (task_tree_view.pause_mode_) {
       const int menu_w = 380;
@@ -1331,9 +1273,16 @@ void Renderer::Draw(const draw_params_s &params,
       draw_text_sys(menu_x + menu_w / 2 - 35, screen_menu_top + 44, "PAUSED", 0.8f,
                 0.8f, 0.8f);
 
-      const char *btn_labels[] = {"Resume", "Debug", "Reset Level",
-                                  "Save Level", "Quit"};
-      const int NUM_BTNS = 5;
+      // Build dynamically-labelled buttons.
+      char font_btn_label[32];
+      snprintf(font_btn_label, sizeof(font_btn_label), "Font: %s",
+               Config::Get().useEditorFont ? "Editor" : "System");
+      char size_btn_label[32];
+      snprintf(size_btn_label, sizeof(size_btn_label), "Font Size: %d",
+               Config::Get().systemFontSize);
+      const char *btn_labels[] = {"Resume", font_btn_label, size_btn_label,
+                                  "Reset Level", "Save Level", "Quit"};
+      const int NUM_BTNS = 6;
 
       for (int i = 0; i < NUM_BTNS; ++i) {
         int screen_btn_y = screen_menu_top + 85 + i * 35;
@@ -1440,81 +1389,84 @@ void Renderer::Draw(const draw_params_s &params,
     }
 
     if (task_tree_view.show_help_) {
-      int menu_w = 500;
-      int menu_h = 450;
-      int menu_x = (params.view_define_->viewport_width_ - menu_w) / 2;
-      int menu_y = (params.view_define_->viewport_height_ - menu_h) / 2;
+      const int vw = params.view_define_->viewport_width_;
+      const int vh = params.view_define_->viewport_height_;
+      const int menu_w  = 560;
+      const int menu_h  = vh - 80;
+      const int menu_x  = (vw - menu_w) / 2;
+      const int menu_y  = 40; // top in screen coords
+      const int row_h   = 16;
+      const int pad     = 12;
+      const int bar_w   = 14;  // vertical scrollbar width
+      const int content_x = menu_x + pad;
+      const int content_w = menu_w - 2 * pad - bar_w - 4;
+      const int content_top = menu_y + 32;    // below title
+      const int content_bot = menu_y + menu_h - 20;
+      const int max_rows = (content_bot - content_top) / row_h;
 
-      // Draw semi-transparent background
+      // Background
       glEnable(GL_BLEND);
       glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-      glColor4f(0.0f, 0.0f, 0.0f, 0.8f);
-      glBegin(GL_QUADS);
-      glVertex2i(menu_x, menu_y);
-      glVertex2i(menu_x + menu_w, menu_y);
-      glVertex2i(menu_x + menu_w, menu_y + menu_h);
-      glVertex2i(menu_x, menu_y + menu_h);
-      glEnd();
+      glColor4f(0.04f, 0.04f, 0.10f, 0.93f);
+      {
+        int gy1 = vh - menu_y, gy2 = vh - (menu_y + menu_h);
+        glBegin(GL_QUADS);
+        glVertex2i(menu_x, gy2); glVertex2i(menu_x + menu_w, gy2);
+        glVertex2i(menu_x + menu_w, gy1); glVertex2i(menu_x, gy1);
+        glEnd();
+      }
       glDisable(GL_BLEND);
-
-      // Draw border
-      glColor3f(font_r, font_g, font_b);
+      glColor3f(0.4f, 0.6f, 1.0f);
       glLineWidth(2.0f);
-      glBegin(GL_LINE_LOOP);
-      glVertex2i(menu_x, menu_y);
-      glVertex2i(menu_x + menu_w, menu_y);
-      glVertex2i(menu_x + menu_w, menu_y + menu_h);
-      glVertex2i(menu_x, menu_y + menu_h);
-      glEnd();
+      {
+        int gy1 = vh - menu_y, gy2 = vh - (menu_y + menu_h);
+        glBegin(GL_LINE_LOOP);
+        glVertex2i(menu_x, gy2); glVertex2i(menu_x + menu_w, gy2);
+        glVertex2i(menu_x + menu_w, gy1); glVertex2i(menu_x, gy1);
+        glEnd();
+      }
       glLineWidth(1.0f);
 
-      // Title
-      draw_text_sys(menu_x + menu_w / 2 - 40, menu_y + menu_h - 30, "KEYBINDINGS",
-                font_r, font_g, font_b);
+      draw_text_sys(menu_x + menu_w / 2 - 52, menu_y + 18,
+                    "KEYBINDINGS  [Ctrl+H / scroll to close/scroll]", 0.6f, 0.85f, 1.0f);
 
-      // Help items
-      int line_y = menu_y + menu_h - 60;
-      draw_text_sys(menu_x + 30, line_y, "[W/A/S/D] Movement", font_r, font_g,
-                font_b);
-      line_y -= 20;
-      draw_text_sys(menu_x + 30, line_y, "[F3] Clip Toggle", font_r, font_g,
-                font_b);
-      line_y -= 20;
-      // Edit Mode toggle removed as requested
-      draw_text_sys(menu_x + 30, line_y, "[PageUp/Down] Move Speed", font_r, font_g,
-                font_b);
-      line_y -= 20;
-      draw_text_sys(menu_x + 30, line_y, "[Left/Right] Roll", font_r, font_g,
-                font_b);
-      line_y -= 20;
-      draw_text_sys(menu_x + 30, line_y, "[TAB] Select Next Object", font_r, font_g,
-                font_b);
-      line_y -= 20;
-      draw_text_sys(menu_x + 30, line_y, "[T] Teleport to Height Map", font_r,
-                font_g, font_b);
-      line_y -= 20;
-      draw_text_sys(menu_x + 30, line_y, "[S] Snap Object to Ground", font_r,
-                font_g, font_b);
-      line_y -= 20;
-      draw_text_sys(menu_x + 30, line_y, "[ESC] Pause Menu", font_r, font_g,
-                font_b);
-      line_y -= 30;
-      draw_text_sys(menu_x + 30, line_y, "PAUSE MENU:", font_r, font_g, font_b);
-      line_y -= 20;
-      draw_text_sys(menu_x + 30, line_y, "[CTRL+S] Save Level", font_r, font_g,
-                font_b);
-      line_y -= 20;
-      draw_text_sys(menu_x + 30, line_y, "[CTRL+R] Reset Level", font_r, font_g,
-                font_b);
-      line_y -= 20;
-      draw_text_sys(menu_x + 30, line_y, "[SHIFT+R] Reset Script", font_r, font_g,
-                font_b);
-      line_y -= 20;
-      draw_text_sys(menu_x + 30, line_y, "[CTRL+D] Debug Toggle", font_r, font_g,
-                font_b);
-      line_y -= 20;
-      draw_text_sys(menu_x + 30, line_y, "[CTRL+Q] Exit", font_r, font_g, font_b);
-      line_y -= 20;
+      // Draw visible rows from help_entries_
+      const std::vector<std::string>* entries = task_tree_view.help_entries_;
+      int scroll = task_tree_view.help_scroll_offset_;
+      int total  = entries ? (int)entries->size() : 0;
+      int clamped_scroll = std::max(0, std::min(scroll, std::max(0, total - max_rows)));
+
+      for (int r = 0; r < max_rows && (clamped_scroll + r) < total; ++r) {
+        const std::string& line = (*entries)[clamped_scroll + r];
+        int ly = content_top + r * row_h;
+        draw_text_sys(content_x, ly + row_h - 4, line.c_str(), 0.9f, 0.9f, 0.6f);
+      }
+
+      // Vertical scrollbar track + thumb
+      if (total > max_rows) {
+        int bar_x  = menu_x + menu_w - pad - bar_w;
+        int bar_y1 = content_top;
+        int bar_y2 = content_bot;
+        int bar_gl_y1 = vh - bar_y1, bar_gl_y2 = vh - bar_y2;
+        // Track
+        glEnable(GL_BLEND);
+        glColor4f(0.2f, 0.2f, 0.3f, 0.8f);
+        glBegin(GL_QUADS);
+        glVertex2i(bar_x, bar_gl_y2); glVertex2i(bar_x + bar_w, bar_gl_y2);
+        glVertex2i(bar_x + bar_w, bar_gl_y1); glVertex2i(bar_x, bar_gl_y1);
+        glEnd();
+        // Thumb
+        int track_h = bar_y2 - bar_y1;
+        int thumb_h = std::max(20, track_h * max_rows / total);
+        int thumb_top = bar_y1 + (track_h - thumb_h) * clamped_scroll / std::max(1, total - max_rows);
+        int th_gl_y1 = vh - thumb_top, th_gl_y2 = vh - (thumb_top + thumb_h);
+        glColor4f(0.5f, 0.7f, 1.0f, 0.9f);
+        glBegin(GL_QUADS);
+        glVertex2i(bar_x, th_gl_y2); glVertex2i(bar_x + bar_w, th_gl_y2);
+        glVertex2i(bar_x + bar_w, th_gl_y1); glVertex2i(bar_x, th_gl_y1);
+        glEnd();
+        glDisable(GL_BLEND);
+      }
     }
 
     // ── C2: IGI2-style property panel (left side, replaces tree) ───────────────
@@ -1595,7 +1547,11 @@ void Renderer::Draw(const draw_params_s &params,
               int ci = caret_idx;
               int cl = multiline ? (ci / max_chars) : 0;
               int cc = multiline ? (ci % max_chars) : ci;
-              int cx = w.x1 + 3 + cc * cw;
+              // Measure the actual glyph advances of the characters on this line
+              // up to the caret, so the caret aligns with the rendered text.
+              int line_start = multiline ? (cl * max_chars) : 0;
+              std::string before = txt.substr(line_start, cc);
+              int cx = w.x1 + 3 + measure_text_width(before.c_str(), (int)before.size());
               int cyt = w.y1 + 3 + cl * PropPanel::kBoxH;
               int cyb = cyt + 13;
               glColor3f(1.0f, 0.95f, 0.2f);
@@ -1631,14 +1587,15 @@ void Renderer::Draw(const draw_params_s &params,
           for (int fi = 0; fi < (int)schema.size(); ++fi) {
             const FieldDef& fd = schema[fi];
             const std::string& tn = fd.typeName;
-            bool is_pos  = (tn == "ObjectPos" || tn == "Real32x3" || tn == "Real64x3");
-            bool is_ori  = (tn == "Real32x9");
-            bool is_rgb  = (tn == "RGB" || tn == "Colour");
-            bool is_str  = (tn.find("String") != std::string::npos || tn == "VarString" ||
-                            tn == "EnumString32" || tn == "DropDownCombo");
-            bool is_bool = (tn == "bool8" || tn == "PushButton");
-            bool is_ro   = (tn == "Graph" || tn == "AnimData" || tn == "TrainPos1D");
-            bool is_int  = (tn == "Int16" || tn == "Int32" || tn == "EnumInt32");
+            bool is_pos    = (tn == "ObjectPos");
+            bool is_float3 = (tn == "Real32x3" || tn == "Real64x3");
+            bool is_ori    = (tn == "Real32x9");
+            bool is_rgb    = (tn == "RGB" || tn == "Colour");
+            bool is_str    = (tn.find("String") != std::string::npos || tn == "VarString" ||
+                              tn == "EnumString32" || tn == "DropDownCombo");
+            bool is_bool   = (tn == "bool8" || tn == "PushButton");
+            bool is_ro     = (tn == "Graph" || tn == "AnimData" || tn == "TrainPos1D");
+            bool is_int    = (tn == "Int16" || tn == "Int32" || tn == "EnumInt32");
 
             // Field header line "Name (Type)(sub):"
             const char* sub = "";
@@ -1708,15 +1665,18 @@ void Renderer::Draw(const draw_params_s &params,
               quad(zs.x1, zs.y1, zs.x2, zs.y2, 0.0f, 0.0f, 0.0f, 0.40f);
               border(zs.x1, zs.y1, zs.x2, zs.y2, 1.0f, 1.0f, 1.0f);
               {
-                double pz = 0;
-                if (task_tree_view.prop_text_edit_field_ == fi * 3 + 2)
-                  try { pz = std::stod(task_tree_view.prop_text_buf_); } catch(...) {}
-                else
-                  try { pz = std::stod(tok(fd.argOffset + 2)); } catch(...) {}
-                const double zwin = 50.0;
-                double f = (pz - std::floor(pz / zwin) * zwin) / zwin; // 0..1
-                int th = zs.y2 - (int)(f * (zs.y2 - zs.y1));
+                // Mirror the 2D pad: track the cursor within the slider during a
+                // drag, centred when idle. The previous modulo-50 mapping wrapped
+                // 0→1 every 50 world units, making the thumb flicker top↔bottom on
+                // the huge absolute Z coordinates.
                 bool drag = (task_tree_view.prop_field_index_ == fi * 3 + 2);
+                int th;
+                if (drag) {
+                  int raw_dy = task_tree_view.mouse_y_ - zs.y1;
+                  th = zs.y1 + std::max(0, std::min(zs.y2 - zs.y1, raw_dy));
+                } else {
+                  th = zs.y1 + (zs.y2 - zs.y1) / 2;
+                }
                 quad(zs.x1, th - 3, zs.x2, th + 3, 1.0f, drag ? 0.95f : 0.85f, drag ? 0.2f : 0.0f, 1.0f);
               }
               y = pad.y2 + 6;
@@ -1736,6 +1696,14 @@ void Renderer::Draw(const draw_params_s &params,
                 draw_text(L.panel_x + PropPanel::kPad, y + 11, ab, 0.75f, 0.7f, 0.4f);
                 y += PropPanel::kRowH;
               }
+            } else if (is_float3) {
+              // Generic 3-component float (Speed, etc.) — three labeled NumBoxes, no pad
+              const char* lab[3] = {"X", "Y", "Z"};
+              for (int c = 0; c < 3; ++c) {
+                const auto& w = L.widgets[wi++];
+                draw_numbox(w, lab[c]);
+              }
+              y = L.widgets[wi - 1].y2;
             } else if (is_ori) {
               // Count how many OriSlider widgets belong to this field (1 for AI-only Gamma, 3 otherwise).
               int ori_count = 0;
@@ -1810,10 +1778,12 @@ void Renderer::Draw(const draw_params_s &params,
             } else if (is_bool) {
               const auto& w = L.widgets[wi++];
               bool bv = false; try { bv = (std::stoi(tok(fd.argOffset)) != 0); } catch(...) {}
-              quad(w.x1, w.y1, w.x2, w.y2, 0.0f, 0.0f, 0.0f, 0.40f);
-              if (bv) quad(w.x1 + 2, w.y1 + 2, w.x2 - 2, w.y2 - 2, 1.0f, 1.0f, 1.0f, 0.9f);
-              border(w.x1, w.y1, w.x2, w.y2, 1.0f, 1.0f, 1.0f);
-              draw_text(w.x2 + 6, w.y1 + 11, bv ? "TRUE" : "FALSE", 1.0f, 0.9f, 0.2f);
+              // Draw a fixed 14×14 checkbox square; hit area is the full row (w.x1..w.x2)
+              int cx2 = w.x1 + 14, cy2 = w.y1 + 14;
+              quad(w.x1, w.y1, cx2, cy2, 0.0f, 0.0f, 0.0f, 0.40f);
+              if (bv) quad(w.x1 + 2, w.y1 + 2, cx2 - 2, cy2 - 2, 1.0f, 1.0f, 1.0f, 0.9f);
+              border(w.x1, w.y1, cx2, cy2, 1.0f, 1.0f, 1.0f);
+              draw_text(cx2 + 6, w.y1 + 11, bv ? "TRUE" : "FALSE", 1.0f, 0.9f, 0.2f);
               y = w.y2;
             } else if (is_ro) {
               std::string v = tok(fd.argOffset);

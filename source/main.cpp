@@ -696,6 +696,14 @@ int main(int argc, char **argv) {
   // read stick_to_ground flag
   bool stick_to_ground = (Arg_OptionIdx(argc, argv, "-stick_to_ground") > -1);
 
+#if defined(_WIN32)
+  // Become DPI-aware before any window is created so GLUT reports window size
+  // AND mouse coordinates in the same (physical) pixel space. Without this, on
+  // scaled displays (125%/150%) the viewport is physical pixels but mouse events
+  // are logical pixels, offsetting every UI widget hit-test in windowed mode.
+  SetProcessDPIAware();
+#endif
+
   glutInit(&argc, argv);
   glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA | GLUT_DEPTH | GLUT_STENCIL);
 
@@ -706,8 +714,7 @@ int main(int argc, char **argv) {
   int pos_y = (screen_cy - wnd_h) >> 1;
   glutInitWindowPosition(pos_x, pos_y);
   glutInitWindowSize(wnd_w, wnd_h);
-  std::string windowTitle = "IGI Editor v" + version;
-  glutCreateWindow(windowTitle.c_str());
+  glutCreateWindow("IGI Editor");
 
 #if defined(_WIN32)
   // Load icon from file and set it
@@ -736,7 +743,7 @@ int main(int argc, char **argv) {
   if (hIcon) {
     HWND hwnd = GetActiveWindow();
     if (!hwnd) {
-      hwnd = FindWindowA(NULL, windowTitle.c_str());
+      hwnd = FindWindowA(NULL, "IGI Editor");
     }
     if (!hwnd) {
       int glutWindow = glutGetWindow();
