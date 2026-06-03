@@ -162,7 +162,13 @@ Others (e.g. `fontmp.fnt`) use grayscale alpha values for anti-aliased rendering
 
 ## Export Format
 
-The `FNT` loader exports a `.zip` archive containing:
+The CLI supports extracting the internal font texture directly to a PNG:
+
+```bash
+igi1ed.exe --fnt <file.fnt> --export-png <output.png>
+```
+
+The GUI `FNT` loader exports a `.zip` archive containing:
 
 | File          | Format      | Content                                         |
 |---------------|-------------|-------------------------------------------------|

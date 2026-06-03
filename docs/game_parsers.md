@@ -16,11 +16,11 @@
 | **QSC Parser** | `.qsc` (script text) | Builds AST from QSC tokens | AST tree dump to stdout; feeds compiler |
 | **QVM Compiler** | `.qsc` (script text) | Compiles QSC source to binary | `.qvm` binary file (LOOP 8.5 format) |
 | **RES** | `.res` (ILFF archive) | Reads resource archive containing `.mef`, `.tex`, etc. | Lists entries to stdout, extract single resource → any file, extract ALL → folder |
-| **TEX** | `.tex` / `.spr` / `.pic` | Reads IGI proprietary texture format (RGB565 or ARGB8888) | `.tga` image files (one per image/mip-level), info dump to stdout |
+| **TEX** | `.tex` / `.spr` / `.pic` | Reads IGI proprietary texture format (RGB565 or ARGB8888) | `.tga` image files (one per image/mip-level), info dump to stdout. Can also convert `.tga` ↔ `.png`. |
 | **MTP** | `.mtp` (FORM package) | Reads model-texture package — animations, shadows, models, textures, instance mappings | Inspect only — prints counts to log |
 | **Graph** | `graph*.dat` (binary) | Reads AI navigation graph — nodes (position, material, links), edges | Inspect only — prints node/edge count + first 10 nodes to stdout |
 | **Terrain** | `.lmp` (lightmap), `.ctr` (quadtree) | Reads terrain lightmap textures and chunk quadtree structure | Inspect only — prints texture/item count to log |
-| **FNT** | `.fnt` (bitmap font) | Reads ILFF font atlas — glyphs, UV rects, advance widths | In-memory RGBA pixel data only (used by GUI renderer, no CLI export) |
+| **FNT** | `.fnt` (bitmap font) | Reads ILFF font atlas — glyphs, UV rects, advance widths | Info dump to stdout (concatenated glyphs); `.png` via `--export-png` |
 | **Extract Level** | Level N (1–14) via `.res` + loose `.mef`/`.tex` | Pulls all assets from one full game level at once | `models/levelN/*.mef`, `textures/levelN/*.tex`, `terrain/*.*` |
 
 ***
@@ -107,6 +107,19 @@ igi1ed --tex <file.tex>
 
 # Export all images as TGA files
 igi1ed --tex <file.tex> --export-tga <dir>
+
+# Convert TGA or PNG
+igi1ed --tex <file.tga> --ToPng <out.png>
+igi1ed --tex <file.png> --ToTga <out.tga>
+```
+
+### FNT Parser
+```bash
+# Print font info and characters
+igi1ed --fnt <file.fnt>
+
+# Export font texture atlas to PNG
+igi1ed --fnt <file.fnt> --export-png <out.png>
 ```
 
 ### MTP / Graph / Terrain (Inspect Only)
