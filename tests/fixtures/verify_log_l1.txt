@@ -1,0 +1,12 @@
+LoadLevel() START for level 1
+[LevelLoader] Object Loaded: ModelID=100_01_1, Type=Building, Name=Fence, Pos=(1000, 2000, 3000), Ori=(0.0000, 1.5708, 0.0000)
+[LevelLoader] Object Loaded: ModelID=200_02_1, Type=Building, Name=Wall, Pos=(5000, 6000, 7000)
+[LevelLoader] Object Loaded: ModelID=300_03_1, Type=HumanSoldier, Name=Guard, Pos=(100, 200, 300), Ori=(0.0000, 0.7854, 0.0000)
+[LevelLoader] Object Loaded: ModelID=400_04_1, Type=Prop, Name=Crate, Pos=(9000, 8000, 7000), Tex=tex_001, Model=crate_01_1
+LoadLevel() START for level 1
+[LevelLoader] Object Loaded: ModelID=100_01_1, Type=Building, Name=Fence, Pos=(1000, 2000, 3000), Ori=(0.0000, 1.5708, 0.0000)
+[LevelLoader] Object Loaded: ModelID=200_02_1, Type=Building, Name=Wall, Pos=(5000, 6000, 7000)
+[LevelLoader] Object Loaded: ModelID=300_03_1, Type=HumanSoldier, Name=Guard, Pos=(100, 200, 300), Ori=(0.0000, 0.7854, 0.0000)
+[LevelLoader] Object Loaded: ModelID=400_04_1, Type=Prop, Name=Crate, Pos=(9000, 8000, 7000), Tex=tex_001, Model=crate_01_1
+LoadLevel() START for level 2
+[LevelLoader] Object Loaded: ModelID=999_99_9, Type=Building, Name=Other, Pos=(1, 2, 3), Ori=(0.0, 0.0, 0.0)

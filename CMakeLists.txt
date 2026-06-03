@@ -202,6 +202,14 @@ add_executable(igi_tests
     tests/test_qvm_roundtrip.cpp
     tests/test_config.cpp
     tests/test_utils.cpp
+    tests/test_verify_unit.cpp
+    tests/test_verify_level.cpp
+    tests/test_dat_parser.cpp
+    tests/test_graph_parser.cpp
+    tests/test_res_parser.cpp
+    tests/test_tex_parser.cpp
+    tests/test_mtp_parser.cpp
+    tests/test_fnt_parser.cpp
 )
 
 # Explicit runtime so igi_tests always matches igi-editor (/MDd Debug, /MD Release).
@@ -226,6 +234,14 @@ target_sources(igi_tests PRIVATE
     source/utils.cpp
     source/common.cpp
     source/logger.cpp
+    source/level/task_schema.cpp
+    source/cli/verify_level_core.cpp
+    source/parsers/dat_parser.cpp
+    source/parsers/graph_parser.cpp
+    source/parsers/res_parser.cpp
+    source/parsers/tex_parser.cpp
+    source/parsers/mtp_parser.cpp
+    source/parsers/fnt_parser.cpp
 )
 
 include(GoogleTest)
