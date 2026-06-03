@@ -108,22 +108,7 @@ A comprehensive list of all known rendering, game, and engine issues can be foun
 - **OS**: Windows (x86)
 - **Compiler**: MSVC (Visual Studio 2022 recommended)
 - **Build System**: CMake
-- **QEditor**: Required for QSC/QVM compilation and decompilation.
 - **IGI Game**: Full installation of Project IGI required for level data and assets
-
-### QEditor AppData Structure (`%APPDATA%/QEditor/`)
-The editor requires QEditor to be installed in AppData for QSC/QVM compilation and decompilation:
-- **`QFiles/IGI_QSC/`**: Original IGI level data (CTR, CMD, HMP, QSC scripts) organized by:
-  - `missions/location0/level[1-14]/` - Level-specific scripts, AI, sounds, terrain
-  - `ammo/`, `weapons/`, `common/` - Shared game data
-- **`QFiles/IGI_QVM/`**: Compiled QVM files for all levels
-- **`QCompiler/`**: Compilation tools (Compile, Decompile, DConv, GConv, TexConv, etc.)
-- **`3DEditor/objects/level[1-14]/`**: Level-specific 3D model storage (proprietary `.mef` models, `.obj` files)
-- **`3DEditor/buildings/level[1-14]/`**: Building model storage (proprietary `.mef` models)
-- **`AIFiles/`**: AI data (AI-Json, AI-Path, AI-Script) per level
-- **`QGraphs/`**: Area and graph data for levels
-- **`QMissions/`**: Mission configuration files
-- **`QWeapons/`**: Weapon group and modification data
 
 ### Build Instructions
 1. Clone the repository.
@@ -202,34 +187,23 @@ Select an object in **Edit Mode (F4)** and use **LMB Drag** + Modifiers:
 
 ## 🧪 Unit Testing & Level Verification
 
-We use **GoogleTest** (gtest) for a comprehensive test suite covering the core parsers and utilities. Tests run automatically as part of the build with `ctest`.
+`igi_tests.exe` is a standalone **GoogleTest** binary covering all core parsers, utilities, QVM round-trips, and level verification. It runs co-located with `igi1ed.exe` and the game files — no source tree needed at runtime.
 
-### Current Test Status
-
-| Module / Test Suite | Status | Passing Tests | Coverage |
-| --- | :---: | :---: | --- |
-| **QSC Lexer** (`QscLexerTest`) | ✅ | 52/52 | All token types, keywords, comments, operators, escape sequences, qualified identifiers, error recovery |
-| **QSC Parser** (`QscParserTest`) | ✅ | 37/37 | All AST node types, operator precedence, control flow, error cases, counter tracking |
-| **QVM Round-Trip** (`QvmRoundTripTest`) | ✅ | 20/20 | Compile→write→parse→decompile cycle, identifier/string pools, structural re-parse |
-| **Configuration** (`ConfigTest`) | ✅ | 10/10 | Defaults, field ranges, singleton behaviour, keybinding load |
-| **String Utilities** (`UtilsTest`) | ✅ | 35/35 | `Trim`, `Split`, `TryParse<T>`, `ToString<T>` with edge cases |
-| **Overall** | ✅ | **158/158 (100%)** | |
-
-### Running the Tests
-To build and execute all tests:
 ```powershell
-# Build only the test binary (fast — skips the full editor)
-cmake --build build --target igi_tests --config Debug
+# Fast run — level 1 only (~18 seconds)
+$env:IGI_TEST_LEVEL="1"; .\igi_tests.exe
 
-# Run all 158 tests
-.\bin\Debug\igi_tests.exe
+# Run for a specific level
+$env:IGI_TEST_LEVEL="10"; .\igi_tests.exe
+
+# Run all 14 levels (~4 minutes)
+.\igi_tests.exe
 ```
 
-### Level verification integration test
-To verify loaded level layout objects (buildings, AI placement, prop positions) against database:
-```powershell
-python tests/test_igi1ed_levels.py --level 1 --timeout 15
-```
+**230 tests** across 18 suites: QSC lexer/parser, QVM round-trips (synthetic + real game data for all 14 levels), file-format parsers (DAT, RES, TEX, MTP, FNT, Graph), verify-core units, and level-verification integration tests.
+
+For the full test reference — suites, filters, fixture descriptions, and build/deploy instructions — see:
+👉 **[Test Suite Documentation](docs/TESTS.md)**
 
 ---
 
