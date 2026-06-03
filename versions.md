@@ -1,6 +1,6 @@
 # Project IGI Editor - Version History
 
-## Current Version: 2.6.0
+## Current Version: 2.7.0
 
 ---
 
@@ -8,7 +8,8 @@
 
 | Version | Release Date | Status | Major Features |
 |---------|--------------|--------|-----------------|
-| **2.6.0** | 2026-06-03 | Latest | Properties Editor UI, Attachments support, SplineObjs & Font/Sprite fixes |
+| **2.7.0** | 2026-06-04 | Latest | 3D Model Viewer, Autocomplete Task, exact keybinding match & task tree fixes |
+| **2.6.0** | 2026-06-03 | Stable | Properties Editor UI, Attachments support, SplineObjs & Font/Sprite fixes |
 | **2.5.0** | 2026-06-02 | Stable | Property panel scrolling, child task fields display, vertical scroll with scrollbar |
 | **2.4.0** | 2026-05-28 | Stable | Position editor edge continuity, all-object picking (collision meshes), MEF attachment selection |
 | **2.3.0** | 2026-05-24 | Stable | Live font toggle in pause menu, text cursor glyph alignment, variable-width font support |
@@ -26,6 +27,30 @@
 ---
 
 ## Release Notes by Version
+
+### 2.7.0 — 3D Model Viewer & Autocomplete Task
+**Released:** June 4, 2026
+
+**Overview:** This release introduces a rotating 3D Model Viewer, keyword auto-complete for task inputs, and critical keybinding and task tree fixes.
+
+**Key Improvements:**
+- 📐 **3D Model Viewer** — Added an interactive, dual-axis rotating 3D preview of the selected model directly within the model picker panel, loading assets natively from MEF.
+- 🔤 **Task Autocomplete** — Added sidebar auto-complete task picker and inline keyword auto-complete suggestions for faster and safer task editing.
+- ⌨️ **Exact Keybinding Match** — Refactored key binding validation to require exact modifier match, resolving keyboard shortcut collision bugs.
+- 🔧 **Task Tree & Save/Load** — Added task tree file dialog for subtree export/import, task placement at camera position, and robust qedkeybindings configuration serialization.
+
+**Files Modified:**
+- `source/app.cpp` — key bindings, panels, sub-task save/load, autocomplete loading
+- `source/config.cpp` — keybindings loading and saving robustness
+- `source/renderer/renderer.cpp` — 3D model viewer render path, picker panels
+- `source/renderer/renderer_objects.cpp` — implemented `DrawModelPreview`
+- `source/utils.cpp` — exact keybinding modifiers match logic
+- `tests/test_utils.cpp` — added keybinding exact matching regression tests
+- `version` — bumped version string to 2.7.0
+
+**Compatibility:** Backward compatible.
+
+---
 
 ### 2.6.0 — Properties Editor UI, Attachments & CLI Tools
 **Released:** June 3, 2026

@@ -50,6 +50,11 @@ bool HotKeysDown(const std::vector<int>& keys);
 bool IsKeyPressed(int keycode);
 bool IsKeyToggled(int keycode);
 bool IsKeyBindingPressed(const KeyBinding& kb);
+// Exact match: required modifiers down AND non-required modifiers up. Use for
+// discrete event dispatch so modified siblings (Ctrl+Shift+C) don't also fire
+// the base binding (Ctrl+C). ModifiersExactMatch is the pure, testable core.
+bool ModifiersExactMatch(const KeyBinding& kb, bool ctrlDown, bool shiftDown, bool altDown);
+bool IsKeyBindingPressedExact(const KeyBinding& kb);
 
 // Process and window utilities (Windows API)
 HANDLE FindProcess(const std::string& processName);

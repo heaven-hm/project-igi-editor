@@ -1,5 +1,26 @@
 # Changelogs
 
+## 2.7.0 - 3D Model Viewer, Autocomplete Task, Exact Keybindings & Task Tree Fixes
+This release introduces an interactive rotating 3D Model Viewer for selected level assets, auto-complete for task inputs, and critical fixes for keybinding collisions and task subtree importing/exporting.
+
+### 📐 3D Model Viewer
+- **Real-time 3D Preview**: Renders a spinning 3D preview of the selected model inside the Model ID picker (`Ctrl+O`), loaded natively from MEF files.
+- **Automatic Scaling and Orientation**: Preview models rotate automatically across dual axes and are scaled to fit the preview frame dynamically.
+
+### 🔤 Task Autocomplete
+- **Task Type Picker**: Added a dedicated sidebar autocomplete task type picker (`Ctrl+N` panel) with instant incremental search.
+- **Inline Keyword Auto-complete**: Trigger keyword suggestions directly using `Ctrl+Space` for rapid task configuration.
+
+### ⌨️ Exact Keybinding Validation
+- **Modifier Exact Matching**: Dispatches event bindings only when key modifiers match exactly, preventing shortcuts like `Ctrl+C` from firing during `Ctrl+Shift+C` commands.
+- **Autorotated Keybinding Config**: Preserves named configurations (`SaveSubTask`, `TaskMagicObjToggle`, etc.) directly from `qedkeybindings.qsc` instead of resetting them.
+
+### 🔧 Task Tree & File Dialogs
+- **Subtree Export & Import**: Save task subtrees to custom files and load them back onto target nodes dynamically.
+- **Task Creation options**: Insert new tasks directly at the camera's coordinates or insert them at specific task tree locations.
+
+---
+
 ## 2.6.0 - Properties Editor UI, Attachments, Splines & CLI Tools
 This release introduces a new Properties Editor UI, support for editable Attachments, spline track fixes, and enhanced CLI tools for image and font atlas processing.
 

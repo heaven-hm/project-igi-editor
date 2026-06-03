@@ -931,11 +931,24 @@ void Renderer::Draw(const draw_params_s &params,
           draw_text_sm(text_x, text_y, buf, 1.0f, 1.0f, 1.0f);
           text_y += 15;
 
-          std::string teamStr = (obj.team == 0) ? "Friendly" : "Enemy";
-          float tr = (obj.team == 0) ? 0.2f : 1.0f;
-          float tg = (obj.team == 0) ? 1.0f : 0.2f;
+          // Read Team from argTokens via schema (more accurate than obj.team)
+          int teamVal = obj.team;
+          {
+            const TaskSchema* sc = GetSchema(obj.type);
+            if (sc) {
+              for (auto& fd : *sc) {
+                if (fd.name == "Team" && fd.argOffset < (int)obj.argTokens.size()) {
+                  try { teamVal = std::stoi(obj.argTokens[fd.argOffset]); } catch (...) {}
+                  break;
+                }
+              }
+            }
+          }
+          std::string teamStr = (teamVal == 0) ? "Friendly" : "Enemy";
+          float tr = (teamVal == 0) ? 0.2f : 1.0f;
+          float tg = (teamVal == 0) ? 1.0f : 0.2f;
           float tb = 0.2f;
-          snprintf(buf, sizeof(buf), "Team: %s", teamStr.c_str());
+          snprintf(buf, sizeof(buf), "Team: %s (%d)", teamStr.c_str(), teamVal);
           draw_text_sm(text_x, text_y, buf, tr, tg, tb);
           text_y += 15;
 
@@ -1701,6 +1714,11 @@ void Renderer::Draw(const draw_params_s &params,
             if (sub[0]) snprintf(fhdr, sizeof(fhdr), "%s (%s)%s:", fd.name.c_str(), tn.c_str(), sub);
             else        snprintf(fhdr, sizeof(fhdr), "%s (%s):", fd.name.c_str(), tn.c_str());
             draw_text(L.panel_x + PropPanel::kPad, y + 11, fhdr, 1.0f, 0.9f, 0.2f);
+            // AI Team hint: show 0=Friendly / 1=Enemy inline
+            if (fd.name == "Team") {
+              draw_text_sm(L.panel_x + PropPanel::kPad + (int)strlen(fhdr) * 7 + 4, y + 11,
+                           "  0=Friendly  1=Enemy", 0.5f, 0.8f, 0.5f);
+            }
             y += PropPanel::kRowH;
 
             // Helper: editable numeric box (NumBox) — label + box + caret.
@@ -1999,9 +2017,17 @@ void Renderer::Draw(const draw_params_s &params,
       // bar top (screen-top-down) = vh - (bar_gl_y + bar_h)
       int bar_screen_top = vh - (bar_gl_y + bar_h);
 
-      // Title
+      // Title — shows current find mode
       {
-        const char* title = "Find task by type:";
+        static const char* kTitles[] = {
+            "Find task by type / name / ID:",
+            "Find text in task parameters:",
+            "Find task by ID:",
+            "Find task by note / name:"
+        };
+        int mi = task_tree_view.find_mode_;
+        if (mi < 0 || mi > 3) mi = 0;
+        const char* title = kTitles[mi];
         int tw = glutBitmapLength(GLUT_BITMAP_HELVETICA_12, (const unsigned char*)title);
         draw_text(bar_x + (bar_w - tw) / 2, bar_screen_top + 14, title, 1.0f, 1.0f, 1.0f);
       }
@@ -2049,6 +2075,202 @@ void Renderer::Draw(const draw_params_s &params,
       } else if (!task_tree_view.find_query_.empty()) {
         draw_text(bar_x + 12, bar_screen_top + 68, "No match found", 1.0f, 0.4f, 0.4f);
       }
+    }
+
+    // ── File dialog (SaveSubTask / LoadSubTask) ─────────────────────────────
+    if (task_tree_view.file_dialog_mode_ != 0) {
+      int vw = params.view_define_->viewport_width_;
+      int vh = params.view_define_->viewport_height_;
+      const int dw = 560, dh = 110;
+      const int dx = vw / 2 - dw / 2;
+      const int dgl = vh / 2 - dh / 2;
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glColor4f(0.05f, 0.05f, 0.1f, 0.92f);
+      glBegin(GL_QUADS);
+      glVertex2i(dx,dgl); glVertex2i(dx+dw,dgl); glVertex2i(dx+dw,dgl+dh); glVertex2i(dx,dgl+dh);
+      glEnd();
+      glColor4f(1.0f, 0.85f, 0.0f, 0.7f);
+      glBegin(GL_LINE_LOOP);
+      glVertex2i(dx,dgl); glVertex2i(dx+dw,dgl); glVertex2i(dx+dw,dgl+dh); glVertex2i(dx,dgl+dh);
+      glEnd();
+      glDisable(GL_BLEND);
+      int dsy = vh - (dgl + dh); // screen top
+      static const char* kDlgTitles[] = {"", "Save Task File:", "Save Parent Task File:", "Load Task File:", "Save Objects File:"};
+      int mi = task_tree_view.file_dialog_mode_;
+      if (mi < 0 || mi > 4) mi = 0;
+      draw_text(dx + 10, dsy + 14, kDlgTitles[mi], 1.0f, 0.9f, 0.1f);
+      // Input box
+      const int ibx1 = dx + 8, ibx2 = dx + dw - 8;
+      const int iby1 = dgl + 14, iby2 = dgl + 38;
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glColor4f(0.1f, 0.1f, 0.15f, 0.95f);
+      glBegin(GL_QUADS); glVertex2i(ibx1,iby1); glVertex2i(ibx2,iby1); glVertex2i(ibx2,iby2); glVertex2i(ibx1,iby2); glEnd();
+      glColor4f(1.0f, 0.85f, 0.0f, 0.7f);
+      glBegin(GL_LINE_LOOP); glVertex2i(ibx1,iby1); glVertex2i(ibx2,iby1); glVertex2i(ibx2,iby2); glVertex2i(ibx1,iby2); glEnd();
+      glDisable(GL_BLEND);
+      int ity = vh - (iby2 + 14);
+      char pathbuf[512]; snprintf(pathbuf, sizeof(pathbuf), "%s_", task_tree_view.file_dialog_path_.c_str());
+      draw_text(ibx1 + 4, ity, pathbuf, 1.0f, 1.0f, 1.0f);
+      draw_text(dx + 10, dsy + dh - 18, "[Enter] Confirm   [Esc] Cancel", 0.6f, 0.6f, 0.6f);
+    }
+
+    // ── Autocomplete task picker (right panel, Ctrl+N) ───────────────────────
+    if (task_tree_view.ac_task_picker_open_ && task_tree_view.ac_task_items_) {
+      int vw = params.view_define_->viewport_width_;
+      int vh = params.view_define_->viewport_height_;
+      const int pw = 280, px = vw - pw;
+      // Build filtered list
+      std::vector<std::string> filtered;
+      std::string fl = task_tree_view.ac_task_filter_;
+      std::transform(fl.begin(), fl.end(), fl.begin(), [](unsigned char c){ return std::tolower(c); });
+      for (const auto& item : *task_tree_view.ac_task_items_) {
+        if (fl.empty()) { filtered.push_back(item); }
+        else {
+          std::string il = item;
+          std::transform(il.begin(), il.end(), il.begin(), [](unsigned char c){ return std::tolower(c); });
+          if (il.find(fl) != std::string::npos) filtered.push_back(item);
+        }
+      }
+      int count = (int)filtered.size();
+      const int row_h = 16, hdr_h = 50, ftr_h = 20;
+      int body_h = vh - hdr_h - ftr_h;
+      int max_vis = std::max(1, body_h / row_h);
+
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glColor4f(0.0f, 0.0f, 0.0f, 0.45f);
+      glBegin(GL_QUADS); glVertex2i(px,0); glVertex2i(px+pw,0); glVertex2i(px+pw,vh); glVertex2i(px,vh); glEnd();
+      glColor4f(1.0f, 0.85f, 0.0f, 0.7f);
+      glBegin(GL_LINE_LOOP); glVertex2i(px,0); glVertex2i(px+pw,0); glVertex2i(px+pw,vh); glVertex2i(px,vh); glEnd();
+      glDisable(GL_BLEND);
+
+      draw_text(px + 8, 14, "Task Types", 1.0f, 0.9f, 0.1f);
+
+      // Filter box
+      const int fbx1 = px + 4, fbx2 = px + pw - 4, fby1 = vh - hdr_h + 4, fby2 = vh - hdr_h + 22;
+      glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glColor4f(0.1f, 0.1f, 0.15f, 0.9f);
+      glBegin(GL_QUADS); glVertex2i(fbx1,fby1); glVertex2i(fbx2,fby1); glVertex2i(fbx2,fby2); glVertex2i(fbx1,fby2); glEnd();
+      glColor4f(1.0f, 0.85f, 0.0f, 0.6f);
+      glBegin(GL_LINE_LOOP); glVertex2i(fbx1,fby1); glVertex2i(fbx2,fby1); glVertex2i(fbx2,fby2); glVertex2i(fbx1,fby2); glEnd();
+      glDisable(GL_BLEND);
+      char fb[64]; snprintf(fb, sizeof(fb), "%s_", task_tree_view.ac_task_filter_.c_str());
+      int fty = vh - (fby2) + 4;
+      draw_text(fbx1 + 4, fty, fb, 1.0f, 1.0f, 1.0f);
+
+      // Items
+      int sel = task_tree_view.ac_task_selected_idx_;
+      int scroll = task_tree_view.ac_task_scroll_offset_;
+      for (int r = 0; r < max_vis; ++r) {
+        int idx = scroll + r;
+        if (idx >= count) break;
+        int item_sy = hdr_h + r * row_h;
+        if (idx == sel) {
+          glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+          glColor4f(1.0f, 0.85f, 0.0f, 0.35f);
+          glBegin(GL_QUADS);
+          int gy1 = vh - item_sy - row_h, gy2 = vh - item_sy;
+          glVertex2i(px,gy1); glVertex2i(px+pw,gy1); glVertex2i(px+pw,gy2); glVertex2i(px,gy2);
+          glEnd(); glDisable(GL_BLEND);
+          draw_text(px + 4, item_sy + 13, filtered[idx].c_str(), 1.0f, 0.9f, 0.1f);
+        } else {
+          draw_text(px + 4, item_sy + 13, filtered[idx].c_str(), 1.0f, 1.0f, 1.0f);
+        }
+      }
+      draw_text(px + 4, vh - ftr_h + 4, "[Enter] Insert  [Esc] Cancel  [Type] Filter", 0.5f, 0.5f, 0.5f);
+    }
+
+    // ── Model ID picker (right panel, Ctrl+O) ───────────────────────────────
+    if (task_tree_view.model_picker_open_ && task_tree_view.model_ids_) {
+      int vw = params.view_define_->viewport_width_;
+      int vh = params.view_define_->viewport_height_;
+      const int pw = 280, px = vw - pw;
+      // Build filtered sorted list
+      std::vector<std::string> filtered;
+      std::string fl = task_tree_view.model_picker_filter_;
+      std::transform(fl.begin(), fl.end(), fl.begin(), [](unsigned char c){ return std::tolower(c); });
+      for (const auto& id : *task_tree_view.model_ids_) {
+        if (fl.empty()) { filtered.push_back(id); }
+        else {
+          std::string idl = id;
+          std::transform(idl.begin(), idl.end(), idl.begin(), [](unsigned char c){ return std::tolower(c); });
+          if (idl.find(fl) != std::string::npos) filtered.push_back(id);
+        }
+      }
+      int count = (int)filtered.size();
+      const int row_h = 16, hdr_h = 50, ftr_h = 20;
+      int body_h = vh - hdr_h - ftr_h;
+      int max_vis = std::max(1, body_h / row_h);
+
+      // 3D rotating preview of the highlighted model, centered in the editor area
+      // (to the left of the picker panel). Drawn first, then 2D HUD state restored.
+      {
+        int sel0 = task_tree_view.model_picker_selected_;
+        if (count > 0 && sel0 >= 0 && sel0 < count) {
+          int avail = vw - pw;                       // editor area width (panel excluded)
+          int s = (int)(std::min(avail, vh) * 0.6f); // square preview side
+          if (s > 64) {
+            int vpX = (avail - s) / 2;
+            int vpY = (vh - s) / 2;
+            static auto t0 = std::chrono::steady_clock::now();
+            float t = std::chrono::duration<float>(
+                          std::chrono::steady_clock::now() - t0).count();
+            objects_.DrawModelPreview(filtered[sel0], ubo_mats_, vpX, vpY, s, s,
+                                      t * 0.40f, t * 0.65f); // slow dual-axis spin
+            // Restore 2D HUD state for the immediate-mode panel below.
+            glViewport(0, 0, vw, vh);
+            glUseProgram(0);
+            glBindVertexArray(0);
+            glDisable(GL_DEPTH_TEST);
+            glEnable(GL_TEXTURE_2D);
+          }
+        }
+      }
+
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glColor4f(0.0f, 0.0f, 0.0f, 0.45f);
+      glBegin(GL_QUADS); glVertex2i(px,0); glVertex2i(px+pw,0); glVertex2i(px+pw,vh); glVertex2i(px,vh); glEnd();
+      glColor4f(1.0f, 0.85f, 0.0f, 0.7f);
+      glBegin(GL_LINE_LOOP); glVertex2i(px,0); glVertex2i(px+pw,0); glVertex2i(px+pw,vh); glVertex2i(px,vh); glEnd();
+      glDisable(GL_BLEND);
+
+      draw_text(px + 8, 14, "Model IDs", 1.0f, 0.9f, 0.1f);
+
+      // Filter box
+      const int fbx1 = px + 4, fbx2 = px + pw - 4, fby1 = vh - hdr_h + 4, fby2 = vh - hdr_h + 22;
+      glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glColor4f(0.1f, 0.1f, 0.15f, 0.9f);
+      glBegin(GL_QUADS); glVertex2i(fbx1,fby1); glVertex2i(fbx2,fby1); glVertex2i(fbx2,fby2); glVertex2i(fbx1,fby2); glEnd();
+      glColor4f(1.0f, 0.85f, 0.0f, 0.6f);
+      glBegin(GL_LINE_LOOP); glVertex2i(fbx1,fby1); glVertex2i(fbx2,fby1); glVertex2i(fbx2,fby2); glVertex2i(fbx1,fby2); glEnd();
+      glDisable(GL_BLEND);
+      char fb[64]; snprintf(fb, sizeof(fb), "%s_", task_tree_view.model_picker_filter_.c_str());
+      int fty = vh - (fby2) + 4;
+      draw_text(fbx1 + 4, fty, fb, 1.0f, 1.0f, 1.0f);
+
+      // Items
+      int sel = task_tree_view.model_picker_selected_;
+      int scroll = task_tree_view.model_picker_scroll_;
+      for (int r = 0; r < max_vis; ++r) {
+        int idx = scroll + r;
+        if (idx >= count) break;
+        int item_sy = hdr_h + r * row_h;
+        if (idx == sel) {
+          glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+          glColor4f(1.0f, 0.85f, 0.0f, 0.35f);
+          glBegin(GL_QUADS);
+          int gy1 = vh - item_sy - row_h, gy2 = vh - item_sy;
+          glVertex2i(px,gy1); glVertex2i(px+pw,gy1); glVertex2i(px+pw,gy2); glVertex2i(px,gy2);
+          glEnd(); glDisable(GL_BLEND);
+          draw_text(px + 4, item_sy + 13, filtered[idx].c_str(), 1.0f, 0.9f, 0.1f);
+        } else {
+          draw_text(px + 4, item_sy + 13, filtered[idx].c_str(), 1.0f, 1.0f, 1.0f);
+        }
+      }
+      draw_text(px + 4, vh - ftr_h + 4, "[Enter] Insert  [Esc] Cancel  [Type] Filter", 0.5f, 0.5f, 0.5f);
     }
 
     glMatrixMode(GL_PROJECTION);

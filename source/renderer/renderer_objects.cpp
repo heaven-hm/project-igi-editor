@@ -1722,6 +1722,111 @@ glm::vec3 Renderer_Objects::GetMeshExtents(const std::string& modelId, bool isBu
     return mesh.halfExtents;
 }
 
+void Renderer_Objects::DrawModelPreview(const std::string& modelId, GLuint ubo_mats,
+                                        int vpX, int vpY, int vpW, int vpH,
+                                        float rotX, float rotY) {
+    if (!shader_program_ || modelId.empty() || vpW <= 0 || vpH <= 0) return;
+
+    // Picker model IDs are almost all props; fall back to the building variant.
+    Mesh mesh = GetOrLoadMesh(modelId, false);
+    if (mesh.subMeshes.empty() && mesh.vertexCount == 0)
+        mesh = GetOrLoadMesh(modelId, true);
+    if (mesh.subMeshes.empty() && (mesh.VAO == 0 || mesh.vertexCount == 0)) return;
+
+    // Fit the model into a unit-ish sphere so any model frames the same.
+    float maxExt = std::max(std::max(mesh.halfExtents.x, mesh.halfExtents.y),
+                            std::max(mesh.halfExtents.z, 1.0f));
+    float fit = 1.0f / maxExt;
+
+    // Preview camera: IGI models are Z-up. View from -Y, slightly raised, at origin.
+    glm::mat4 proj = glm::perspective(glm::radians(40.0f),
+                                      (float)vpW / (float)vpH, 0.05f, 100.0f);
+    glm::mat4 view = glm::lookAt(glm::vec3(0.0f, -3.2f, 1.2f),
+                                 glm::vec3(0.0f, 0.0f, 0.0f),
+                                 glm::vec3(0.0f, 0.0f, 1.0f));
+    glm::mat4 mvp = proj * view;
+
+    glm::mat4 model(1.0f);
+    model = glm::rotate(model, rotY, glm::vec3(0.0f, 0.0f, 1.0f)); // horizontal spin (Z up)
+    model = glm::rotate(model, rotX, glm::vec3(1.0f, 0.0f, 0.0f)); // vertical tumble
+    model = glm::scale(model, glm::vec3(fit));
+    model = glm::translate(model, -mesh.center);
+
+    // Overwrite u_mvp (3rd mat4 in the shared UBO). The scene re-uploads the whole
+    // UBO next frame, and the scene pass for this frame already finished, so this is safe.
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo_mats);
+    glBufferSubData(GL_UNIFORM_BUFFER, 2 * sizeof(glm::mat4), sizeof(glm::mat4),
+                    glm::value_ptr(mvp));
+
+    // Isolated viewport with its own cleared depth so the preview never z-fights HUD.
+    glViewport(vpX, vpY, vpW, vpH);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(vpX, vpY, vpW, vpH);
+    glClear(GL_DEPTH_BUFFER_BIT);
+
+    glUseProgram(shader_program_);
+    glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+    GLint loc_model     = glGetUniformLocation(shader_program_, "u_model");
+    GLint loc_dirlight  = glGetUniformLocation(shader_program_, "u_dirlight");
+    GLint loc_ambient   = glGetUniformLocation(shader_program_, "u_ambient");
+    GLint loc_useTex    = glGetUniformLocation(shader_program_, "u_useTexture");
+    GLint loc_tex       = glGetUniformLocation(shader_program_, "u_texture");
+    GLint loc_alpha     = glGetUniformLocation(shader_program_, "u_alpha");
+    GLint loc_glass     = glGetUniformLocation(shader_program_, "u_glassMin");
+    GLint loc_baseColor = glGetUniformLocation(shader_program_, "u_baseColor");
+    glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
+    glUniform1f(loc_alpha, 1.0f);
+    if (loc_glass >= 0)     glUniform1f(loc_glass, 0.0f);
+    if (loc_baseColor >= 0) glUniform4f(loc_baseColor, 1.0f, 1.0f, 1.0f, 1.0f);
+
+    // Hash-based fallback color for untextured submeshes (matches the main draw).
+    float r = 0.6f, g = 0.6f, b = 0.6f;
+    {
+        size_t h = std::hash<std::string>{}(modelId);
+        r = 0.4f + (float)(h & 0xFF) / 255.0f * 0.4f;
+        g = 0.4f + (float)((h >> 8) & 0xFF) / 255.0f * 0.4f;
+        b = 0.4f + (float)((h >> 16) & 0xFF) / 255.0f * 0.4f;
+    }
+
+    auto drawSub = [&](GLuint vao, int vcount, GLuint texId, const glm::vec4& baseColor) {
+        if (vao == 0 || vcount == 0) return;
+        if (texId > 0) {
+            glUniform3f(loc_dirlight, 0.7f, 0.7f, 0.7f);
+            glUniform3f(loc_ambient,  0.45f, 0.45f, 0.45f);
+            glUniform1i(loc_useTex, 1);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, texId);
+            glUniform1i(loc_tex, 0);
+        } else {
+            glm::vec3 c(baseColor.r, baseColor.g, baseColor.b);
+            if (c.r >= 0.99f && c.g >= 0.99f && c.b >= 0.99f) c = glm::vec3(r, g, b);
+            glUniform3f(loc_dirlight, c.r * 0.7f, c.g * 0.7f, c.b * 0.7f);
+            glUniform3f(loc_ambient,  c.r * 0.45f, c.g * 0.45f, c.b * 0.45f);
+            glUniform1i(loc_useTex, 0);
+        }
+        glBindVertexArray(vao);
+        glDrawArrays(GL_TRIANGLES, 0, vcount);
+    };
+
+    if (!mesh.subMeshes.empty()) {
+        for (const auto& sub : mesh.subMeshes)
+            drawSub(sub.VAO, sub.vertexCount, sub.textureID, sub.baseColorFactor);
+    } else {
+        drawSub(mesh.VAO, mesh.vertexCount, mesh.textureID, glm::vec4(1.0f));
+    }
+
+    glBindVertexArray(0);
+    glDisable(GL_SCISSOR_TEST);
+    // Caller restores full viewport and 2D HUD state.
+}
+
 // ─── LoadAttachmentsRecursive ────────────────────────────────────────────────
 // Recursively scans the ATTA section of modelId's MEF file, caches each
 // sub-model mesh AND its own attachment records, then recurses into children.

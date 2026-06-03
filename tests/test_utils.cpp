@@ -1,9 +1,49 @@
 #include <gtest/gtest.h>
 #include "utils.h"
+#include "config.h"
 
 // ============================================================
 //  Utils — full suite
 // ============================================================
+
+// ============================================================
+//  Keybinding modifier exactness (ModifiersExactMatch)
+//
+//  Regression guard: a binding with fewer modifiers must NOT match while a
+//  modified sibling is pressed (Ctrl+C vs Ctrl+Shift+C, F2 vs Shift+F2, etc.).
+//  Fields: KeyBinding{ vkCode, ctrl, shift, alt }.
+// ============================================================
+
+TEST(KeybindExactTest, CtrlCMatchesPlainCtrl) {
+    KeyBinding ctrlC{ 'C', true, false, false };
+    EXPECT_TRUE(Utils::ModifiersExactMatch(ctrlC, /*ctrl*/true, /*shift*/false, /*alt*/false));
+}
+
+TEST(KeybindExactTest, CtrlCRejectsCtrlShift) {
+    // The bug: Ctrl+C used to fire while Ctrl+Shift+C (TaskCopyRecursive) was held.
+    KeyBinding ctrlC{ 'C', true, false, false };
+    EXPECT_FALSE(Utils::ModifiersExactMatch(ctrlC, true, true, false));
+}
+
+TEST(KeybindExactTest, CtrlShiftCNeedsBoth) {
+    KeyBinding ctrlShiftC{ 'C', true, true, false };
+    EXPECT_TRUE (Utils::ModifiersExactMatch(ctrlShiftC, true, true, false));
+    EXPECT_FALSE(Utils::ModifiersExactMatch(ctrlShiftC, true, false, false)); // Ctrl only
+}
+
+TEST(KeybindExactTest, PlainFKeyRejectsShift) {
+    // F2 (ToggleDisplay) must not fire during Shift+F2 (ToggleTaskTypeView).
+    KeyBinding f2{ 0x71 /*VK_F2*/, false, false, false };
+    EXPECT_TRUE (Utils::ModifiersExactMatch(f2, false, false, false));
+    EXPECT_FALSE(Utils::ModifiersExactMatch(f2, false, true, false));
+}
+
+TEST(KeybindExactTest, ShiftMRejectsCtrlShift) {
+    // Shift+M (magic toggle) must not fire during Ctrl+Shift+M (ToggleMouseInverted).
+    KeyBinding shiftM{ 'M', false, true, false };
+    EXPECT_TRUE (Utils::ModifiersExactMatch(shiftM, false, true, false));
+    EXPECT_FALSE(Utils::ModifiersExactMatch(shiftM, true, true, false));
+}
 
 // ============================================================
 //  Trim

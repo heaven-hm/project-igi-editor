@@ -331,6 +331,20 @@ bool IsKeyBindingPressed(const KeyBinding& kb) {
 	return HotKeysDown(keys);
 }
 
+bool ModifiersExactMatch(const KeyBinding& kb, bool ctrlDown, bool shiftDown, bool altDown) {
+	// Required modifiers must be held AND non-required modifiers must be released,
+	// so e.g. Ctrl+C does not also match while Ctrl+Shift+C is pressed.
+	return kb.ctrl == ctrlDown && kb.shift == shiftDown && kb.alt == altDown;
+}
+
+bool IsKeyBindingPressedExact(const KeyBinding& kb) {
+	// A binding with no key and no modifiers can never be "pressed".
+	if (!kb.vkCode && !kb.ctrl && !kb.shift && !kb.alt) return false;
+	auto down = [](int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; };
+	if (kb.vkCode && !down(kb.vkCode)) return false;
+	return ModifiersExactMatch(kb, down(VK_CONTROL), down(VK_SHIFT), down(VK_MENU));
+}
+
 std::string GetExeDirectory() {
 	char exePath[MAX_PATH];
 	GetModuleFileNameA(NULL, exePath, MAX_PATH);

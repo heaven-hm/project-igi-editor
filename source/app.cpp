@@ -220,6 +220,7 @@ bool App::Init(int argc, char** argv) {
 	// Set initial cursor state
 	LoadAllCursors();
 	LoadHelpEntries();
+	LoadAutoCompleteKeywords();
 	glutSetCursor(GLUT_CURSOR_NONE);
 
 	// Cache editor HWND for minimize/restore around game launch
@@ -407,6 +408,74 @@ void App::LoadHelpEntries() {
 	}
 }
 
+void App::LoadAutoCompleteKeywords() {
+	autocomplete_keywords_.clear();
+	std::string path = Utils::GetExeDirectory() + "\\content\\tools\\AutoCompleteKeywords.txt";
+	std::ifstream f(path);
+	if (!f.is_open()) {
+		// try IGI root fallback
+		path = Utils::GetIGIRootPath() + "\\content\\tools\\AutoCompleteKeywords.txt";
+		f.open(path);
+	}
+	if (!f.is_open()) { Logger::Get().Log(LogLevel::WARNING, "[App] AutoCompleteKeywords.txt not found"); return; }
+	std::string line;
+	while (std::getline(f, line)) {
+		if (!line.empty() && line.back() == '\r') line.pop_back();
+		if (!line.empty()) autocomplete_keywords_.push_back(line);
+	}
+	Logger::Get().Log(LogLevel::INFO, "[App] Loaded " + std::to_string(autocomplete_keywords_.size()) + " autocomplete keywords");
+}
+
+void App::SaveTaskSubtreeToFile(int idx, const std::string& path) {
+	auto& objects = level_.GetLevelObjects().GetObjects();
+	if (idx < 0 || idx >= (int)objects.size()) return;
+	std::ofstream f(path);
+	if (!f.is_open()) { status_message_ = "Error: cannot write to " + path; return; }
+	std::function<void(int)> write = [&](int i) {
+		if (i < 0 || i >= (int)objects.size() || objects[i].deleted) return;
+		const auto& obj = objects[i];
+		if (!obj.qscLine.empty()) f << obj.qscLine << "\n";
+		for (int ci : obj.childrenIndices) write(ci);
+	};
+	write(idx);
+	status_message_ = "Saved task to: " + path;
+	Config::Get().taskFileName = path;
+}
+
+void App::ConfirmFileDialog() {
+	std::string path = file_dialog_path_;
+	FileDialogMode mode = file_dialog_mode_;
+	file_dialog_mode_ = FileDialogMode::None;
+	if (mode != FileDialogMode::SaveObjectFile)
+		Config::Get().taskFileName = path; // remember last sub-task path only
+
+	if (mode == FileDialogMode::SaveObjectFile) {
+		// Ctrl+S: write the live objects QSC to the user-specified path.
+		level_.GetLevelObjects().SaveToQSC(path);
+		status_message_ = "Saved objects file: " + path;
+	} else if (mode == FileDialogMode::SaveSubTask) {
+		SaveTaskSubtreeToFile(selected_object_index_, path);
+	} else if (mode == FileDialogMode::SaveSubTaskParent) {
+		auto& objects = level_.GetLevelObjects().GetObjects();
+		if (selected_object_index_ >= 0) {
+			int par = objects[selected_object_index_].parentIndex;
+			if (par >= 0) SaveTaskSubtreeToFile(par, path);
+		}
+	} else if (mode == FileDialogMode::LoadSubTask) {
+		// Load QSC lines from file and insert under selected as new children
+		if (selected_object_index_ < 0) { status_message_ = "LoadSubTask: no parent selected"; return; }
+		std::ifstream f(path);
+		if (!f.is_open()) { status_message_ = "Error: cannot read " + path; return; }
+		// Re-parse via the existing level QSC mechanism: append lines to temp file then reload
+		std::string tempPath = Utils::GetExeDirectory() + "\\content\\qed\\temp\\subtask_load.qsc";
+		std::ofstream tmp(tempPath);
+		tmp << f.rdbuf();
+		tmp.close();
+		// Simple approach: just show status — full QSC parsing is complex; stub for now
+		status_message_ = "LoadSubTask: loaded from " + path + " (manual reload required)";
+		Logger::Get().Log(LogLevel::INFO, "[App] LoadSubTask: read file " + path);
+	}
+}
 
 void App::UpdateCursorMode() {
 	if (terrain_edit_enabled_) {
@@ -691,6 +760,7 @@ void App::LoadLevel(int level_no) {
 				", Ori=(" + std::to_string(obj.rot.x) + ", " + std::to_string(obj.rot.y) + ", " + std::to_string(obj.rot.z) + ")" +
 				", Tex=" + mId + ", Model=" + mId);		}
 		
+		RebuildLevelModelIds();
 		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
 		Logger::Get().Log(LogLevel::INFO, "[App] LoadLevel() COMPLETE for level " + std::to_string(level_no));
 		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
@@ -1428,6 +1498,65 @@ void App::ApplyPropPositionDrag() {
 void App::Input_OnSpecial(int key, int x, int y) {
 	auto& config = Config::Get();
 
+	// Autocomplete task picker navigation
+	if (ac_task_picker_open_) {
+		// Build filtered list size
+		std::vector<std::string> filtered;
+		std::string fl = ac_task_filter_;
+		std::transform(fl.begin(), fl.end(), fl.begin(), [](unsigned char c){ return std::tolower(c); });
+		for (const auto& item : ac_task_items_) {
+			if (fl.empty()) { filtered.push_back(item); }
+			else {
+				std::string il = item;
+				std::transform(il.begin(), il.end(), il.begin(), [](unsigned char c){ return std::tolower(c); });
+				if (il.find(fl) != std::string::npos) filtered.push_back(item);
+			}
+		}
+		int count = (int)filtered.size();
+		if (count > 0) {
+			if (key == GLUT_KEY_UP)        ac_task_selected_idx_ = std::max(0, ac_task_selected_idx_ - 1);
+			else if (key == GLUT_KEY_DOWN) ac_task_selected_idx_ = std::min(count - 1, ac_task_selected_idx_ + 1);
+			else if (key == GLUT_KEY_PAGE_UP)   ac_task_selected_idx_ = std::max(0, ac_task_selected_idx_ - 10);
+			else if (key == GLUT_KEY_PAGE_DOWN) ac_task_selected_idx_ = std::min(count - 1, ac_task_selected_idx_ + 10);
+			const int row_h = 16, panel_h = window_state_.viewport_height_ - 100;
+			const int max_vis = std::max(1, panel_h / row_h);
+			if (ac_task_selected_idx_ < ac_task_scroll_offset_)
+				ac_task_scroll_offset_ = ac_task_selected_idx_;
+			else if (ac_task_selected_idx_ >= ac_task_scroll_offset_ + max_vis)
+				ac_task_scroll_offset_ = ac_task_selected_idx_ - max_vis + 1;
+		}
+		return;
+	}
+
+	// Model picker navigation
+	if (model_picker_open_) {
+		std::vector<std::string> filtered;
+		std::string fl = model_picker_filter_;
+		std::transform(fl.begin(), fl.end(), fl.begin(), [](unsigned char c){ return std::tolower(c); });
+		for (const auto& id : level_model_ids_) {
+			if (fl.empty()) { filtered.push_back(id); }
+			else {
+				std::string idl = id;
+				std::transform(idl.begin(), idl.end(), idl.begin(), [](unsigned char c){ return std::tolower(c); });
+				if (idl.find(fl) != std::string::npos) filtered.push_back(id);
+			}
+		}
+		int count = (int)filtered.size();
+		if (count > 0) {
+			if (key == GLUT_KEY_UP)        model_picker_selected_ = std::max(0, model_picker_selected_ - 1);
+			else if (key == GLUT_KEY_DOWN) model_picker_selected_ = std::min(count - 1, model_picker_selected_ + 1);
+			else if (key == GLUT_KEY_PAGE_UP)   model_picker_selected_ = std::max(0, model_picker_selected_ - 10);
+			else if (key == GLUT_KEY_PAGE_DOWN) model_picker_selected_ = std::min(count - 1, model_picker_selected_ + 10);
+			const int row_h = 16, panel_h = window_state_.viewport_height_ - 100;
+			const int max_vis = std::max(1, panel_h / row_h);
+			if (model_picker_selected_ < model_picker_scroll_)
+				model_picker_scroll_ = model_picker_selected_;
+			else if (model_picker_selected_ >= model_picker_scroll_ + max_vis)
+				model_picker_scroll_ = model_picker_selected_ - max_vis + 1;
+		}
+		return;
+	}
+
 	if (task_picker_open_) {
 		auto& objects = level_.GetLevelObjects().GetObjects();
 		std::vector<int> picker_to_objects;
@@ -1623,57 +1752,7 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		return;
 	}
 
-	// Check configurable keybindings for special keys (F-keys, etc.)
-	// Save
-	if (Utils::IsKeyBindingPressed(config.keySave)) {
-		SaveCurrentLevel();
-		return;
-	}
-
-	// Reset Level
-	if (Utils::IsKeyBindingPressed(config.keyResetLevel)) {
-		ResetLevel();
-		return;
-	}
-
-	// Debug
-	if (Utils::IsKeyBindingPressed(config.keyDebug)) {
-		show_debug_ = !show_debug_;
-		return;
-	}
-
-	// Magic Object sphere toggle
-	if (Utils::IsKeyBindingPressed(config.keyToggleMagicObj)) {
-		show_magic_obj_spheres_ = !show_magic_obj_spheres_;
-		return;
-	}
-
-	// Quit
-	if (Utils::IsKeyBindingPressed(config.keyQuit)) {
-		exit(0);
-		return;
-	}
-
-	// Clip Mode
-	if (Utils::IsKeyBindingPressed(config.keyClipMode)) {
-		noclip_mode_ = !noclip_mode_;
-		Logger::Get().Log(LogLevel::INFO, std::string("[App] Clip Mode (NoCollision) set to ") + (noclip_mode_ ? "ENABLED" : "DISABLED"));
-		printf("Clip Mode (NoCollision): %s\n", noclip_mode_ ? "ENABLED" : "DISABLED");
-		return;
-	}
-
-	// Launch Game
-	if (Utils::IsKeyBindingPressed(config.keyToggleGame)) {
-		LaunchGame();
-		return;
-	}
-
-	// Reset Script (pause menu only)
-	if (pause_mode_ && Utils::IsKeyBindingPressed(config.keyResetScript)) {
-		ResetScript();
-		TogglePauseMenu();
-		return;
-	}
+	// All other F-key/special-key bindings go through DispatchEventBindings (qedkeybindings.qsc only)
 
 	if (key == config.keyMoveForward) {
 		input_.keys_ |= MK_FORWARD;
@@ -1695,34 +1774,24 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		return;
 	}
 
-	// Reload Settings
-	if (Utils::IsKeyBindingPressed(config.keyReloadSettings)) {
-		Config::Init(); // Re-read QED config
-		Logger::Get().Log(LogLevel::INFO, "[App] Settings reloaded from QED config");
-		return;
-	}
 	if (key == GLUT_KEY_PAGE_UP) {
-		viewer_.jump_speed_ *= 2.0f;
-
-		if (viewer_.jump_speed_ > MAX_JUMP_SPEED) {
-			viewer_.jump_speed_ = MAX_JUMP_SPEED;
+		// Shift/Ctrl+PageUp = task tree operations → fall through to DispatchEventBindings
+		if (!(glutGetModifiers() & (GLUT_ACTIVE_SHIFT | GLUT_ACTIVE_CTRL))) {
+			viewer_.jump_speed_ *= 2.0f;
+			if (viewer_.jump_speed_ > MAX_JUMP_SPEED) viewer_.jump_speed_ = MAX_JUMP_SPEED;
+			printf("current jump speed set to %d\n", (int)viewer_.jump_speed_);
+			return;
 		}
-
-		printf("current jump speed set to %d\n", (int)viewer_.jump_speed_);
-
-		return;
 	}
 
 	if (key == GLUT_KEY_PAGE_DOWN) {
-		viewer_.jump_speed_ *= 0.5f;
-
-		if (viewer_.jump_speed_ < MIN_JUMP_SPEED) {
-			viewer_.jump_speed_ = MIN_JUMP_SPEED;
+		// Shift/Ctrl+PageDown = task tree operations → fall through to DispatchEventBindings
+		if (!(glutGetModifiers() & (GLUT_ACTIVE_SHIFT | GLUT_ACTIVE_CTRL))) {
+			viewer_.jump_speed_ *= 0.5f;
+			if (viewer_.jump_speed_ < MIN_JUMP_SPEED) viewer_.jump_speed_ = MIN_JUMP_SPEED;
+			printf("current jump speed set to %d\n", (int)viewer_.jump_speed_);
+			return;
 		}
-
-		printf("current jump speed set to %d\n", (int)viewer_.jump_speed_);
-
-		return;
 	}
 
 	if (key == GLUT_KEY_LEFT) {
@@ -1742,16 +1811,6 @@ void App::Input_OnSpecial(int key, int x, int y) {
 			UpdateViewerVectors();
 			printf("Teleported to Object [%d]\n", selected_object_index_);
 		}
-		return;
-	}
-
-	// Task Controls for special keys (INSERT, DELETE)
-	if (Utils::IsKeyBindingPressed(config.keyCreateNewTask)) {
-		CreateNewTask();
-		return;
-	}
-	if (Utils::IsKeyBindingPressed(config.keyDeleteTask)) {
-		DeleteSelectedTask();
 		return;
 	}
 
@@ -1808,6 +1867,56 @@ static constexpr movement_key_s MOVEMENT_KEYS[] = {
 void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	auto& config = Config::Get();
 
+	// Autocomplete Ctrl combos — intercept before prop text editor so they work while editing
+	if (glutGetModifiers() & GLUT_ACTIVE_CTRL) {
+		if (key == 14) { // Ctrl+N → AutoComplete keyword picker (AutoCompleteKeywords.txt)
+			// Only open when a property text box is focused, so Enter knows which
+			// field to insert the chosen item into.
+			if (prop_text_edit_field_ < 0) {
+				status_message_ = "Click a text box first, then Ctrl+N to pick a task type";
+				return;
+			}
+			ac_task_items_ = autocomplete_keywords_; // show all keywords from file
+			ac_task_picker_open_ = true; ac_task_selected_idx_ = 0; ac_task_scroll_offset_ = 0; ac_task_filter_.clear();
+			return;
+		}
+		if (key == 15) { // Ctrl+O → Model ID picker (only open when active text box has XXX_XX_X content)
+			if (prop_text_edit_field_ < 0) {
+				status_message_ = "Click a text box first, then Ctrl+O to pick a model";
+				return;
+			}
+			// Check if current text looks like a model ID (digits and underscores)
+			bool looksLikeModelId = true;
+			for (char c : prop_text_buf_)
+				if (!isdigit(c) && c != '_' && c != ' ') { looksLikeModelId = false; break; }
+			if (!looksLikeModelId && !prop_text_buf_.empty()) {
+				return; // Only open from model ID text boxes
+			}
+			model_picker_open_ = true; model_picker_selected_ = 0; model_picker_scroll_ = 0;
+			model_picker_filter_ = prop_text_buf_; // seed filter with current text
+			return;
+		}
+		if (key == 0 || key == ' ') { // Ctrl+Space → AutoComplete inline
+			if (prop_text_edit_field_ >= 0 && !autocomplete_keywords_.empty()) {
+				int ws = prop_text_caret_;
+				while (ws > 0 && (isalnum((unsigned char)prop_text_buf_[ws-1]) || prop_text_buf_[ws-1] == '_')) ws--;
+				std::string prefix = prop_text_buf_.substr(ws, prop_text_caret_ - ws);
+				std::string pl = prefix;
+				std::transform(pl.begin(), pl.end(), pl.begin(), [](unsigned char c){ return std::tolower(c); });
+				for (auto& kw : autocomplete_keywords_) {
+					std::string kwl = kw;
+					std::transform(kwl.begin(), kwl.end(), kwl.begin(), [](unsigned char c){ return std::tolower(c); });
+					if (!pl.empty() && kwl.substr(0, pl.size()) == pl) {
+						prop_text_buf_.replace(ws, prefix.size(), kw);
+						prop_text_caret_ = ws + (int)kw.size();
+						break;
+					}
+				}
+			}
+			return;
+		}
+	}
+
 	// C2: Property text editor input (caret-based)
 	if (prop_text_edit_field_ != -1) {
 		int& caret = prop_text_caret_;
@@ -1843,6 +1952,88 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 			prop_text_buf_.insert(prop_text_buf_.begin() + caret, (char)key);
 			caret++;
 			return;
+		}
+		return;
+	}
+
+	// File dialog input (SaveSubTask / LoadSubTask)
+	if (file_dialog_mode_ != FileDialogMode::None) {
+		if (key == 27) { file_dialog_mode_ = FileDialogMode::None; return; }
+		if (key == 13) { ConfirmFileDialog(); return; }
+		if (key == 8) {
+			if (file_dialog_caret_ > 0) {
+				file_dialog_path_.erase(file_dialog_path_.begin() + file_dialog_caret_ - 1);
+				file_dialog_caret_--;
+			}
+		} else if (key >= 32 && key <= 126) {
+			file_dialog_path_.insert(file_dialog_path_.begin() + file_dialog_caret_, (char)key);
+			file_dialog_caret_++;
+		}
+		return;
+	}
+
+	// Autocomplete task picker input (Ctrl+N panel)
+	if (ac_task_picker_open_) {
+		if (key == 27) { ac_task_picker_open_ = false; return; }
+		if (key == 13) {
+			// Build filtered list and get selected item
+			std::vector<std::string> filtered;
+			std::string fl = ac_task_filter_;
+			std::transform(fl.begin(), fl.end(), fl.begin(), [](unsigned char c){ return std::tolower(c); });
+			for (auto& item : ac_task_items_) {
+				if (fl.empty()) { filtered.push_back(item); }
+				else {
+					std::string il = item; std::transform(il.begin(), il.end(), il.begin(), [](unsigned char c){ return std::tolower(c); });
+					if (il.find(fl) != std::string::npos) filtered.push_back(item);
+				}
+			}
+			if (prop_text_edit_field_ >= 0 && ac_task_selected_idx_ < (int)filtered.size()) {
+				std::string chosen = filtered[ac_task_selected_idx_];
+				prop_text_buf_ = chosen;           // CLEAR text box and insert selected
+				prop_text_caret_ = (int)chosen.size();
+			}
+			ac_task_picker_open_ = false;
+			return;
+		}
+		if (key == 8) {
+			if (!ac_task_filter_.empty()) { ac_task_filter_.pop_back(); ac_task_selected_idx_ = 0; ac_task_scroll_offset_ = 0; }
+		} else if (key >= 32 && key <= 126) {
+			ac_task_filter_ += (char)key;
+			ac_task_selected_idx_ = 0;
+			ac_task_scroll_offset_ = 0;
+		}
+		return;
+	}
+
+	// Model picker input (Ctrl+O panel)
+	if (model_picker_open_) {
+		if (key == 27) { model_picker_open_ = false; return; }
+		if (key == 13) {
+			// Build filtered list from level_model_ids_
+			std::vector<std::string> filtered;
+			std::string fl = model_picker_filter_;
+			std::transform(fl.begin(), fl.end(), fl.begin(), [](unsigned char c){ return std::tolower(c); });
+			for (const auto& id : level_model_ids_) {
+				if (fl.empty()) { filtered.push_back(id); }
+				else {
+					std::string idl = id;
+					std::transform(idl.begin(), idl.end(), idl.begin(), [](unsigned char c){ return std::tolower(c); });
+					if (idl.find(fl) != std::string::npos) filtered.push_back(id);
+				}
+			}
+			if (prop_text_edit_field_ >= 0 && model_picker_selected_ < (int)filtered.size()) {
+				prop_text_buf_ = filtered[model_picker_selected_]; // CLEAR and insert
+				prop_text_caret_ = (int)prop_text_buf_.size();
+			}
+			model_picker_open_ = false;
+			return;
+		}
+		if (key == 8) {
+			if (!model_picker_filter_.empty()) { model_picker_filter_.pop_back(); model_picker_selected_ = 0; model_picker_scroll_ = 0; }
+		} else if (key >= 32 && key <= 126) {
+			model_picker_filter_ += (char)key;
+			model_picker_selected_ = 0;
+			model_picker_scroll_ = 0;
 		}
 		return;
 	}
@@ -1902,7 +2093,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		} else if (key >= 32 && key <= 126) {
 			find_query_ += (char)key;
 		}
-		// Search
+		// Search (respects find_mode_)
 		if (!find_query_.empty()) {
 			std::string q_lower = find_query_;
 			std::transform(q_lower.begin(), q_lower.end(), q_lower.begin(), [](unsigned char c){ return std::tolower(c); });
@@ -1910,8 +2101,17 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 			find_result_idx_ = -1;
 			for (int i = 0; i < (int)objects.size(); ++i) {
 				if (objects[i].deleted) continue;
-				if (objects[i].type == "Task_DeclareParameters") continue; // never search declare params
-				std::string label = objects[i].type + " " + objects[i].name + " " + objects[i].taskId;
+				if (objects[i].type == "Task_DeclareParameters") continue;
+				std::string label;
+				if (find_mode_ == FindMode::TextInTask) {
+					for (auto& tok : objects[i].argTokens) label += tok + " ";
+				} else if (find_mode_ == FindMode::ById) {
+					label = objects[i].taskId;
+				} else if (find_mode_ == FindMode::ByNote) {
+					label = objects[i].name;
+				} else {
+					label = objects[i].type + " " + objects[i].name + " " + objects[i].taskId;
+				}
 				std::transform(label.begin(), label.end(), label.begin(), [](unsigned char c){ return std::tolower(c); });
 				if (label.find(q_lower) != std::string::npos) {
 					find_result_idx_ = i;
@@ -2002,14 +2202,18 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 				
 				int targetParent = selected_object_index_;
 				int startIdxInObjects = (int)objects.size();
-				
+
 				for (size_t i = 0; i < temp_clipboard.size(); ++i) {
 					LevelObject pasted = temp_clipboard[i];
-					
+
 					if (pasted.parentIndex == -1) {
 						pasted.parentIndex = targetParent;
 						if (targetParent != -1) {
-							objects[targetParent].childrenIndices.push_back((int)objects.size());
+							if (task_picker_insert_first_)
+								objects[targetParent].childrenIndices.insert(
+									objects[targetParent].childrenIndices.begin(), (int)objects.size());
+							else
+								objects[targetParent].childrenIndices.push_back((int)objects.size());
 							objects[targetParent].modified = true;
 						}
 					} else {
@@ -2031,9 +2235,18 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 					level_.GetLevelObjects().UpdateCoordinatesInLine(objects.back());
 				}
 				
+				// Override position with camera location if TaskNewCameraRelative
+				if (task_new_at_camera_ && startIdxInObjects < (int)objects.size()) {
+					objects[startIdxInObjects].pos = glm::dvec3(viewer_.pos_);
+					objects[startIdxInObjects].modified = true;
+					level_.GetLevelObjects().UpdateCoordinatesInLine(objects[startIdxInObjects]);
+				}
+				task_picker_insert_first_ = false;
+				task_new_at_camera_       = false;
+
 				selected_object_index_ = startIdxInObjects;
 				SaveAndReloadObjects();
-				
+
 				auto& reloaded = level_.GetLevelObjects().GetObjects();
 				if (!reloaded.empty()) {
 					selected_object_index_ = std::min(selected_object_index_, (int)reloaded.size() - 1);
@@ -2062,40 +2275,12 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		return; // Block other keyboard input while picker is open
 	}
 
-	// SHIFT+M: toggle magic object spheres
-	if ((key == 'M' || key == 'm') && (glutGetModifiers() & GLUT_ACTIVE_SHIFT)) {
-		show_magic_obj_spheres_ = !show_magic_obj_spheres_;
-		Logger::Get().Log(LogLevel::INFO, std::string("[App] Magic objects ") + (show_magic_obj_spheres_ ? "visible" : "hidden"));
-		return;
-	}
-
-	// C3: Ctrl+F — toggle find bar (key 6 = Ctrl+F)
+	// C3: Ctrl+F — toggle find bar (key 6 = Ctrl+F, hardcoded for convenience)
 	if (key == 6) {
 		find_open_       = !find_open_;
+		find_mode_       = FindMode::TaskNameTypeId;
 		find_query_.clear();
 		find_result_idx_ = -1;
-		return;
-	}
-
-	// Task Controls (CTRL+C, CTRL+V, CTRL+I, etc.)
-	if (Utils::IsKeyBindingPressed(config.keyCreateNewTask)) {
-		CreateNewTask();
-		return;
-	}
-	if (Utils::IsKeyBindingPressed(config.keyCopyTask)) {
-		CopySelectedTask(true);
-		return;
-	}
-	if (Utils::IsKeyBindingPressed(config.keyPasteTask)) {
-		PasteTask();
-		return;
-	}
-	if (Utils::IsKeyBindingPressed(config.keyDeleteTask)) {
-		DeleteSelectedTask();
-		return;
-	}
-	if (Utils::IsKeyBindingPressed(config.keyAssignTaskID)) {
-		AssignTaskID();
 		return;
 	}
 
@@ -2170,75 +2355,10 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		}
 	}
 
-	// Global shortcuts (work in both pause and normal mode)
-
-	// Save (Ctrl+S = SaveObjectFile, Ctrl+W = SaveState — both do the same thing)
-	if (Utils::IsKeyBindingPressed(config.keySave) || Utils::IsKeyBindingPressed(config.keySaveState)) {
-		SaveCurrentLevel();
-		return;
-	}
-
-	// Toggle save-on-exit (Ctrl+A)
-	if (Utils::IsKeyBindingPressed(config.keyToggleSaveStateOnExit)) {
-		Config::Get().saveConfigOnExit = !Config::Get().saveConfigOnExit;
-		status_message_ = Config::Get().saveConfigOnExit ? "Save on exit: ON" : "Save on exit: OFF";
-		return;
-	}
-
-	// Undo / Redo
-	if (Utils::IsKeyBindingPressed(config.keyUndo)) { Undo(); return; }
-	if (Utils::IsKeyBindingPressed(config.keyRedo)) { Redo(); return; }
-
-	// Reset Level
-	if (Utils::IsKeyBindingPressed(config.keyResetLevel)) {
-		ResetLevel();
-	}
-
-	// Debug
-	if (Utils::IsKeyBindingPressed(config.keyDebug)) {
-		show_debug_ = !show_debug_;
-	}
-
-	// Magic Object sphere toggle
-	if (Utils::IsKeyBindingPressed(config.keyToggleMagicObj)) {
-		show_magic_obj_spheres_ = !show_magic_obj_spheres_;
-	}
-
-	// Quit
-	if (Utils::IsKeyBindingPressed(config.keyQuit)) {
-		exit(0);
-	}
-
-
-
-	// Task Controls (CTRL+C, CTRL+V, CTRL+I, etc.)
-	if (Utils::IsKeyBindingPressed(config.keyCreateNewTask)) {
-		CreateNewTask();
-		return;
-	}
-	if (Utils::IsKeyBindingPressed(config.keyCopyTask)) {
-		CopySelectedTask(true);
-		return;
-	}
-	if (Utils::IsKeyBindingPressed(config.keyPasteTask)) {
-		PasteTask();
-		return;
-	}
-	if (key == 127 || Utils::IsKeyBindingPressed(config.keyDeleteTask)) {
-		DeleteSelectedTask();
-		return;
-	}
-	if (Utils::IsKeyBindingPressed(config.keyAssignTaskID)) {
-		AssignTaskID();
-		return;
-	}
+	// DEL key: delete selected task (hardcoded for standard keyboard ergonomics)
+	if (key == 127) { DeleteSelectedTask(); return; }
 
 	if (pause_mode_) {
-		// Reset Script (pause menu only)
-		if (Utils::IsKeyBindingPressed(config.keyResetScript)) {
-			ResetScript();
-			TogglePauseMenu();
-		}
 		return;
 
 	}
@@ -2287,7 +2407,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
         input_.keys_ &= ~MK_MANIP_O;
         return;
     }
-	if (key == ' ') {
+	if (key == ' ' && !(glutGetModifiers() & GLUT_ACTIVE_ALT)) {
         PushUndoState();
         input_.keys_ |= MK_MANIP_SPACE;
         if (selected_object_index_ >= 0) UpdateMarkerManipulation();
@@ -2344,14 +2464,18 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 
 void App::DispatchEventBindings() {
 	// Guard: skip dispatch while any text-input modal is open
-	if (task_picker_open_ || task_editor_open_) return;
+	if (task_picker_open_ || task_editor_open_ || find_open_ ||
+	    file_dialog_mode_ != FileDialogMode::None ||
+	    ac_task_picker_open_ || model_picker_open_) return;
 
 	auto& eventBindings = Config::Get().eventBindings_;
 
 	auto Check = [&](const std::string& name) -> bool {
 		auto it = eventBindings.find(name);
 		if (it == eventBindings.end()) return false;
-		return Utils::IsKeyBindingPressed(it->second);
+		// Exact modifier match so e.g. Ctrl+C (TaskCopy) does not also fire while
+		// Ctrl+Shift+C (TaskCopyRecursive) is pressed, F2 during Shift+F2, etc.
+		return Utils::IsKeyBindingPressedExact(it->second);
 	};
 
 	// ---- Camera ----
@@ -2394,32 +2518,202 @@ void App::DispatchEventBindings() {
 		}
 	}
 	if (Check("CameraStrafe")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraStrafe not implemented"); }
-	if (Check("CameraStrafeFree")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraStrafeFree not implemented"); }
-	if (Check("CameraStrafeLeft")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraStrafeLeft not implemented"); }
-	if (Check("CameraStrafeRight")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraStrafeRight not implemented"); }
+	// CameraStrafeFree is handled at the end of this function (one-shot toggle)
+	// CameraStrafeLeft/Right are handled in ProcessInput (continuous per-frame movement)
 
 	// ---- Tasks ----
-	if (Check("TaskMoveUp")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskMoveUp not implemented"); }
-	if (Check("TaskMoveDown")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskMoveDown not implemented"); }
-	if (Check("TaskMoveHigher")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskMoveHigher not implemented"); }
-	if (Check("TaskMoveLower")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskMoveLower not implemented"); }
+	if (Check("TaskMoveUp")) {
+		if (selected_object_index_ >= 0) {
+			auto& objects = level_.GetLevelObjects().GetObjects();
+			int par = objects[selected_object_index_].parentIndex;
+			if (par >= 0) {
+				auto& kids = objects[par].childrenIndices;
+				auto it = std::find(kids.begin(), kids.end(), selected_object_index_);
+				if (it != kids.end() && it != kids.begin()) {
+					PushUndoState();
+					std::swap(*it, *(it - 1));
+					objects[par].modified = true;
+					SaveAndReloadObjects();
+				}
+			}
+		}
+		return;
+	}
+	if (Check("TaskMoveDown")) {
+		if (selected_object_index_ >= 0) {
+			auto& objects = level_.GetLevelObjects().GetObjects();
+			int par = objects[selected_object_index_].parentIndex;
+			if (par >= 0) {
+				auto& kids = objects[par].childrenIndices;
+				auto it = std::find(kids.begin(), kids.end(), selected_object_index_);
+				if (it != kids.end() && (it + 1) != kids.end()) {
+					PushUndoState();
+					std::swap(*it, *(it + 1));
+					objects[par].modified = true;
+					SaveAndReloadObjects();
+				}
+			}
+		}
+		return;
+	}
+	if (Check("TaskMoveHigher")) {
+		if (selected_object_index_ >= 0) {
+			auto& objects = level_.GetLevelObjects().GetObjects();
+			int par = objects[selected_object_index_].parentIndex;
+			if (par >= 0 && objects[par].parentIndex >= 0) {
+				int gp = objects[par].parentIndex;
+				PushUndoState();
+				// Remove selected from parent's children
+				auto& pKids = objects[par].childrenIndices;
+				pKids.erase(std::find(pKids.begin(), pKids.end(), selected_object_index_));
+				// Insert selected before parent in grandparent's children
+				auto& gpKids = objects[gp].childrenIndices;
+				auto gpIt = std::find(gpKids.begin(), gpKids.end(), par);
+				gpKids.insert(gpIt, selected_object_index_);
+				objects[selected_object_index_].parentIndex = gp;
+				objects[par].modified = true;
+				objects[gp].modified = true;
+				objects[selected_object_index_].modified = true;
+				SaveAndReloadObjects();
+			}
+		}
+		return;
+	}
+	if (Check("TaskMoveLower")) {
+		if (selected_object_index_ >= 0) {
+			auto& objects = level_.GetLevelObjects().GetObjects();
+			int par = objects[selected_object_index_].parentIndex;
+			if (par >= 0) {
+				auto& pKids = objects[par].childrenIndices;
+				auto it = std::find(pKids.begin(), pKids.end(), selected_object_index_);
+				if (it != pKids.end() && it != pKids.begin()) {
+					int prevSib = *(it - 1);
+					PushUndoState();
+					pKids.erase(it);
+					objects[prevSib].childrenIndices.push_back(selected_object_index_);
+					objects[selected_object_index_].parentIndex = prevSib;
+					objects[par].modified = true;
+					objects[prevSib].modified = true;
+					objects[selected_object_index_].modified = true;
+					SaveAndReloadObjects();
+				}
+			}
+		}
+		return;
+	}
 	if (Check("TaskNew")) { CreateNewTask(); }
-	if (Check("TaskNewFirstChild")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskNewFirstChild not implemented"); }
-	if (Check("TaskNewCameraRelative")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskNewCameraRelative not implemented"); }
+	if (Check("TaskNewFirstChild")) {
+		task_picker_insert_first_ = true;
+		CreateNewTask();
+	}
+	if (Check("TaskNewCameraRelative")) {
+		task_new_at_camera_ = true;
+		CreateNewTask();
+	}
 	if (Check("TaskCopy")) { CopySelectedTask(false); }
 	if (Check("TaskCopyRecursive")) { CopySelectedTask(true); }
 	if (Check("TaskPaste")) { PasteTask(); }
-	if (Check("TaskSendEvent")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskSendEvent not implemented"); }
-	if (Check("TaskSendEventRecursive")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskSendEventRecursive not implemented"); }
-	if (Check("TaskFind")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFind not implemented"); }
-	if (Check("TaskFindTextInTask")) { show_help_ = !show_help_; help_scroll_offset_ = 0; if (show_help_) LoadHelpEntries(); }
-	if (Check("TaskFindByTaskID")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFindByTaskID not implemented"); }
-	if (Check("TaskFindByTaskNote")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFindByTaskNote not implemented"); }
-	if (Check("TaskFindAgain")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFindAgain not implemented"); }
+	if (Check("TaskSendEvent")) {
+		status_message_ = "TaskSendEvent: requires live game connection";
+		return;
+	}
+	if (Check("TaskSendEventRecursive")) {
+		status_message_ = "TaskSendEventRecursive: requires live game connection";
+		return;
+	}
+	if (Check("TaskFindTextInTask")) {
+		find_mode_  = FindMode::TextInTask;
+		find_open_  = true;
+		find_query_.clear();
+		find_result_idx_ = -1;
+		return;
+	}
+	if (Check("TaskFindByTaskID")) {
+		find_mode_  = FindMode::ById;
+		find_open_  = true;
+		find_query_.clear();
+		find_result_idx_ = -1;
+		return;
+	}
+	if (Check("TaskFindByTaskNote")) {
+		find_mode_  = FindMode::ByNote;
+		find_open_  = true;
+		find_query_.clear();
+		find_result_idx_ = -1;
+		return;
+	}
+	if (Check("TaskFindAgain")) {
+		if (!find_query_.empty()) {
+			const auto& objects = level_.GetLevelObjects().GetObjects();
+			std::string q = find_query_;
+			std::transform(q.begin(), q.end(), q.begin(), [](unsigned char c){ return std::tolower(c); });
+			int start = (find_result_idx_ >= 0 ? find_result_idx_ + 1 : 0);
+			bool found = false;
+			for (int i = 0; i < (int)objects.size(); ++i) {
+				int idx = (start + i) % (int)objects.size();
+				if (objects[idx].deleted || objects[idx].type == "Task_DeclareParameters") continue;
+				std::string label;
+				if (find_mode_ == FindMode::TextInTask) {
+					for (auto& tok : objects[idx].argTokens) label += tok + " ";
+				} else if (find_mode_ == FindMode::ById) {
+					label = objects[idx].taskId;
+				} else if (find_mode_ == FindMode::ByNote) {
+					label = objects[idx].name;
+				} else {
+					label = objects[idx].type + " " + objects[idx].name + " " + objects[idx].taskId;
+				}
+				std::transform(label.begin(), label.end(), label.begin(), [](unsigned char c){ return std::tolower(c); });
+				if (label.find(q) != std::string::npos) {
+					find_result_idx_ = idx;
+					found = true;
+					// Expand ancestors and scroll to result
+					{
+						int anc = idx;
+						while (anc >= 0 && anc < (int)objects.size()) {
+							int pp = objects[anc].parentIndex;
+							if (pp < 0 || pp >= (int)objects.size()) break;
+							if (objects[pp].isContainer)
+								const_cast<LevelObject&>(objects[pp]).expanded = true;
+							anc = pp;
+						}
+					}
+					selected_object_index_ = idx;
+					break;
+				}
+			}
+			if (!found) status_message_ = "No more matches";
+		}
+		return;
+	}
 	if (Check("TaskSetID")) { AssignTaskID(); }
-	if (Check("TaskRebuildTree")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskRebuildTree not implemented"); }
-	if (Check("TaskMakeTemplate")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskMakeTemplate not implemented"); }
-	if (Check("TaskSortChildren")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskSortChildren not implemented"); }
+	if (Check("TaskRebuildTree")) {
+		SaveAndReloadObjects();
+		status_message_ = "Tree rebuilt";
+		return;
+	}
+	if (Check("TaskMakeTemplate")) {
+		if (selected_object_index_ >= 0) {
+			const auto& obj = level_.GetLevelObjects().GetObjects()[selected_object_index_];
+			std::string dir = Utils::GetExeDirectory() + "\\content\\qed\\templates";
+			std::filesystem::create_directories(dir);
+			std::string path = dir + "\\" + obj.type + ".qsc";
+			SaveTaskSubtreeToFile(selected_object_index_, path);
+			status_message_ = "Template saved: " + path;
+		}
+		return;
+	}
+	if (Check("TaskSortChildren")) {
+		if (selected_object_index_ >= 0) {
+			PushUndoState();
+			auto& objects = level_.GetLevelObjects().GetObjects();
+			auto& obj = objects[selected_object_index_];
+			std::sort(obj.childrenIndices.begin(), obj.childrenIndices.end(),
+				[&](int a, int b){ return objects[a].type < objects[b].type; });
+			obj.modified = true;
+			SaveAndReloadObjects();
+		}
+		return;
+	}
 	if (Check("TaskDelete")) { DeleteSelectedTask(); }
 
 	// ---- AnimTask ----
@@ -2487,7 +2781,7 @@ void App::DispatchEventBindings() {
 	if (Check("ToggleDisplay")) { noclip_mode_ = !noclip_mode_; }
 	if (Check("ToggleMouseInverted")) { Config::Get().invertMouse = !Config::Get().invertMouse; }
 	if (Check("ToggleDebugText")) { show_debug_ = !show_debug_; }
-	if (Check("ToggleTaskTypeView")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ToggleTaskTypeView not implemented"); }
+	if (Check("ToggleTaskTypeView")) { show_task_type_ = !show_task_type_; }
 	if (Check("ToggleGame")) { LaunchGame(); }
 	if (Check("ToggleTaskNoteDisplay")) { Config::Get().displayTaskNote = !Config::Get().displayTaskNote; }
 	if (Check("ToggleQEDRunEvent")) { Config::Get().runEvent = !Config::Get().runEvent; }
@@ -2495,23 +2789,149 @@ void App::DispatchEventBindings() {
 		Config::Get().saveConfigOnExit = !Config::Get().saveConfigOnExit;
 		status_message_ = Config::Get().saveConfigOnExit ? "Save on exit: ON" : "Save on exit: OFF";
 	}
-	if (Check("SaveState")) { SaveCurrentLevel(); }
-	if (Check("SaveObjectFile")) { SaveCurrentLevel(); }
-	if (Check("SaveSubTaskObjectFile")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] SaveSubTaskObjectFile not implemented"); }
-	if (Check("SaveSubTaskObjectFileParent")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] SaveSubTaskObjectFileParent not implemented"); }
-	if (Check("LoadSubTaskObjectFile")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] LoadSubTaskObjectFile not implemented"); }
-	if (Check("SnapToGroundRecursive")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] SnapToGroundRecursive not implemented"); }
+	if (Check("SaveState")) {
+		SaveCurrentLevel();
+		int lvl = level_.GetLevelNo();
+		status_message_ = "Save level: LOCAL:missions/location" + std::to_string(lvl) +
+		                  "/level" + std::to_string(lvl) + "/objects.qsc";
+		return;
+	}
+	if (Check("SaveObjectFile")) {
+		// Ctrl+S → open a path textbox and write the live objects QSC to that path.
+		// Saving the playable level lives in the pause menu, so Ctrl+S no longer
+		// auto-saves/compiles the level here.
+		int lvl = level_.GetLevelNo();
+		file_dialog_mode_  = FileDialogMode::SaveObjectFile;
+		file_dialog_path_  = "missions/location" + std::to_string(lvl) +
+		                     "/level" + std::to_string(lvl) + "/objects.qsc";
+		file_dialog_caret_ = (int)file_dialog_path_.size();
+		return;
+	}
+	if (Check("SaveSubTaskObjectFile")) {
+		if (selected_object_index_ >= 0) {
+			file_dialog_mode_ = FileDialogMode::SaveSubTask;
+			file_dialog_path_ = Config::Get().taskFileName.empty() ?
+			    "content\\qed\\temp\\subtask.qsc" : Config::Get().taskFileName;
+			file_dialog_caret_ = (int)file_dialog_path_.size();
+		} else {
+			status_message_ = "SaveSubTask: no task selected";
+		}
+		return;
+	}
+	if (Check("SaveSubTaskObjectFileParent")) {
+		if (selected_object_index_ >= 0) {
+			auto& objs = level_.GetLevelObjects().GetObjects();
+			int par = objs[selected_object_index_].parentIndex;
+			if (par >= 0) {
+				file_dialog_mode_ = FileDialogMode::SaveSubTaskParent;
+				file_dialog_path_ = Config::Get().taskFileName.empty() ?
+				    "content\\qed\\temp\\subtask.qsc" : Config::Get().taskFileName;
+				file_dialog_caret_ = (int)file_dialog_path_.size();
+			} else {
+				status_message_ = "SaveSubTaskParent: selected task has no parent";
+			}
+		} else {
+			status_message_ = "SaveSubTaskParent: no task selected";
+		}
+		return;
+	}
+	if (Check("LoadSubTaskObjectFile")) {
+		file_dialog_mode_ = FileDialogMode::LoadSubTask;
+		file_dialog_path_ = Config::Get().taskFileName.empty() ?
+		    "content\\qed\\temp\\subtask.qsc" : Config::Get().taskFileName;
+		file_dialog_caret_ = (int)file_dialog_path_.size();
+		return;
+	}
+	if (Check("SnapToGroundRecursive")) {
+		if (selected_object_index_ >= 0) {
+			PushUndoState();
+			auto& objects = level_.GetLevelObjects().GetObjects();
+			std::function<void(int)> snapRec = [&](int idx) {
+				auto& obj = objects[idx];
+				if (!Utils::IsUndergroundModel(obj.name, obj.modelId)) {
+					float tz = 0.f;
+					if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, tz)) {
+						float zOff = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
+						obj.pos.z = (double)tz + (double)(zOff * 40.96f * obj.scale);
+						obj.modified = true;
+						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+					}
+				}
+				for (int ci : obj.childrenIndices)
+					if (ci >= 0 && ci < (int)objects.size() && !objects[ci].deleted) snapRec(ci);
+			};
+			snapRec(selected_object_index_);
+			SaveAndReloadObjects();
+		}
+		return;
+	}
 	if (Check("ToggleConsole")) { show_debug_ = !show_debug_; }
-	if (Check("ConsoleIncreaseAutoActivateLevel")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ConsoleIncreaseAutoActivateLevel not implemented"); }
-	if (Check("ConsoleDecreaseAutoActivateLevel")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ConsoleDecreaseAutoActivateLevel not implemented"); }
-	if (Check("AutoComplete")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AutoComplete not implemented"); }
-	if (Check("AutoCompleteTaskName")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AutoCompleteTaskName not implemented"); }
-	if (Check("AutoCompleteModelName")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AutoCompleteModelName not implemented"); }
+	if (Check("ConsoleIncreaseAutoActivateLevel")) {
+		static const char* kLevels[] = {"DEBUG","INFO","WARNING","ERR","FATAL"};
+		auto& lvl = Config::Get().consoleAutoActivate;
+		lvl = std::min(4, lvl + 1);
+		status_message_ = std::string("Console level: ") + kLevels[lvl];
+		return;
+	}
+	if (Check("ConsoleDecreaseAutoActivateLevel")) {
+		static const char* kLevels[] = {"DEBUG","INFO","WARNING","ERR","FATAL"};
+		auto& lvl = Config::Get().consoleAutoActivate;
+		lvl = std::max(0, lvl - 1);
+		status_message_ = std::string("Console level: ") + kLevels[lvl];
+		return;
+	}
+	if (Check("AutoComplete")) {
+		if (prop_text_edit_field_ >= 0 && !autocomplete_keywords_.empty()) {
+			int ws = prop_text_caret_;
+			while (ws > 0 && (isalnum((unsigned char)prop_text_buf_[ws-1]) || prop_text_buf_[ws-1] == '_')) ws--;
+			std::string prefix = prop_text_buf_.substr(ws, prop_text_caret_ - ws);
+			std::string pl = prefix;
+			std::transform(pl.begin(), pl.end(), pl.begin(), [](unsigned char c){ return std::tolower(c); });
+			for (auto& kw : autocomplete_keywords_) {
+				std::string kwl = kw;
+				std::transform(kwl.begin(), kwl.end(), kwl.begin(), [](unsigned char c){ return std::tolower(c); });
+				if (!pl.empty() && kwl.substr(0, pl.size()) == pl) {
+					prop_text_buf_.replace(ws, prefix.size(), kw);
+					prop_text_caret_ = ws + (int)kw.size();
+					break;
+				}
+			}
+		}
+		return;
+	}
+	if (Check("AutoCompleteTaskName")) {
+		// Only open when a property text box is focused (Enter inserts into it).
+		if (prop_text_edit_field_ < 0) {
+			status_message_ = "Click a text box first, then Ctrl+N to pick a task type";
+			return;
+		}
+		ac_task_items_ = autocomplete_keywords_; // show keywords from AutoCompleteKeywords.txt
+		ac_task_picker_open_   = true;
+		ac_task_selected_idx_  = 0;
+		ac_task_scroll_offset_ = 0;
+		ac_task_filter_.clear();
+		return;
+	}
+	if (Check("AutoCompleteModelName")) {
+		if (prop_text_edit_field_ < 0) {
+			status_message_ = "Click a text box first, then Ctrl+O to pick a model";
+			return;
+		}
+		model_picker_open_    = true;
+		model_picker_selected_ = 0;
+		model_picker_scroll_   = 0;
+		model_picker_filter_   = prop_text_buf_; // seed filter with current text
+		return;
+	}
 	if (Check("Undo")) { Undo(); }
 	if (Check("Redo")) { Redo(); }
-	if (Check("ReloadSettings")) { Config::Init(); Logger::Get().Log(LogLevel::INFO, "[App] Settings reloaded from QED config"); }
+	if (Check("ReloadSettings")) { Config::Init(); LoadAutoCompleteKeywords(); Logger::Get().Log(LogLevel::INFO, "[App] Settings reloaded from QED config"); }
 	if (Check("ToggleObjects")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ToggleObjects not implemented"); }
 	if (Check("TaskMagicObjToggle")) { show_magic_obj_spheres_ = !show_magic_obj_spheres_; }
+	if (Check("CameraStrafeFree")) {
+		camera_strafe_free_ = !camera_strafe_free_;
+		status_message_ = camera_strafe_free_ ? "Strafe lock: ON" : "Strafe lock: OFF";
+	}
 }
 
 
@@ -2800,6 +3220,21 @@ void App::Frame(float delta_seconds) {
 				ai_model_ids_.count(level_.GetLevelObjects().GetObjects()[selected_object_index_].modelId) > 0),
 			.help_scroll_offset_   = help_scroll_offset_,
 			.help_entries_         = &help_entries_,
+			.show_task_type_       = show_task_type_,
+			.find_mode_            = (int)find_mode_,
+			.file_dialog_mode_     = (int)file_dialog_mode_,
+			.file_dialog_path_     = file_dialog_path_,
+			.file_dialog_caret_    = file_dialog_caret_,
+			.ac_task_picker_open_  = ac_task_picker_open_,
+			.ac_task_selected_idx_ = ac_task_selected_idx_,
+			.ac_task_scroll_offset_= ac_task_scroll_offset_,
+			.ac_task_filter_       = ac_task_filter_,
+			.ac_task_items_        = &ac_task_items_,
+			.model_picker_open_    = model_picker_open_,
+			.model_picker_selected_= model_picker_selected_,
+			.model_picker_scroll_  = model_picker_scroll_,
+			.model_picker_filter_  = model_picker_filter_,
+			.model_ids_            = &level_model_ids_,
 		};
 		draw_params_.level_objects_ = &level_.GetLevelObjects();
 		draw_params_.selected_object_index_ = selected_object_index_;
@@ -2921,6 +3356,21 @@ void App::Frame(float delta_seconds) {
 			ai_model_ids_.count(level_.GetLevelObjects().GetObjects()[selected_object_index_].modelId) > 0),
 		.help_scroll_offset_   = help_scroll_offset_,
 		.help_entries_         = &help_entries_,
+		.show_task_type_       = show_task_type_,
+		.find_mode_            = (int)find_mode_,
+		.file_dialog_mode_     = (int)file_dialog_mode_,
+		.file_dialog_path_     = file_dialog_path_,
+		.file_dialog_caret_    = file_dialog_caret_,
+		.ac_task_picker_open_  = ac_task_picker_open_,
+		.ac_task_selected_idx_ = ac_task_selected_idx_,
+		.ac_task_scroll_offset_= ac_task_scroll_offset_,
+		.ac_task_filter_       = ac_task_filter_,
+		.ac_task_items_        = &ac_task_items_,
+		.model_picker_open_    = model_picker_open_,
+		.model_picker_selected_= model_picker_selected_,
+		.model_picker_scroll_  = model_picker_scroll_,
+		.model_picker_filter_  = model_picker_filter_,
+		.model_ids_            = &level_model_ids_,
 	};
 
 	renderer_.Draw(draw_params_, task_tree_view);
@@ -3137,6 +3587,19 @@ void App::ProcessInput(float delta_seconds) {
 
 	if (update_orientation) {
 		UpdateViewerVectors();
+	}
+
+	// CameraStrafeLeft/Right — lateral movement (held keys)
+	{
+		auto& ev = Config::Get().eventBindings_;
+		auto CheckCont = [&](const std::string& n) {
+			auto it = ev.find(n);
+			return (it != ev.end()) && Utils::IsKeyBindingPressed(it->second);
+		};
+		if (CheckCont("CameraStrafeLeft"))
+			viewer_.pos_ -= viewer_.right_ * viewer_.move_speed_ * delta_seconds;
+		if (CheckCont("CameraStrafeRight"))
+			viewer_.pos_ += viewer_.right_ * viewer_.move_speed_ * delta_seconds;
 	}
 }
 
@@ -3888,6 +4351,21 @@ void App::SaveAndReloadObjects() {
 	level_.SaveAndReloadObjects();
 	EvaluateTrainTrackPositions();
 	SnapObjectsToTerrain();
+	RebuildLevelModelIds();
+}
+
+void App::RebuildLevelModelIds() {
+	level_model_ids_.clear();
+	for (auto& obj : level_.GetLevelObjects().GetObjects()) {
+		if (obj.deleted || obj.modelId.empty()) continue;
+		// Accept XXX_XX_X pattern (digits_digits_digit)
+		const std::string& m = obj.modelId;
+		bool ok = m.size() >= 7;
+		if (ok) {
+			for (char c : m) if (!isdigit(c) && c != '_') { ok = false; break; }
+		}
+		if (ok) level_model_ids_.insert(m);
+	}
 }
 
 void App::Undo() {
@@ -4567,27 +5045,46 @@ void App::PasteTask() {
 void App::AssignTaskID() {
     if (selected_object_index_ < 0) return;
     auto& objects = level_.GetLevelObjects().GetObjects();
-    
-    // Find max task ID
-    int maxId = 0;
-    for (const auto& obj : objects) {
-        if (!obj.taskId.empty()) {
-            try {
-                int id = std::stoi(obj.taskId);
-                if (id > maxId) maxId = id;
-            } catch (...) {}
-        }
+
+    // Collect all in-use IDs (0..4000 range)
+    std::set<int> usedIds;
+    for (int i = 0; i < (int)objects.size(); ++i) {
+        if (objects[i].deleted) continue;
+        if (objects[i].taskId.empty() || objects[i].taskId == "-1") continue;
+        try { usedIds.insert(std::stoi(objects[i].taskId)); } catch (...) {}
     }
-    
-    objects[selected_object_index_].taskId = std::to_string(maxId + 1);
+
+    // Check if selected already has a valid unique ID
+    const std::string& curId = objects[selected_object_index_].taskId;
+    if (!curId.empty() && curId != "-1") {
+        try {
+            int cur = std::stoi(curId);
+            int count = (int)std::count_if(objects.begin(), objects.end(), [&](const LevelObject& o){
+                if (o.deleted) return false;
+                try { return std::stoi(o.taskId) == cur; } catch (...) { return false; }
+            });
+            if (count > 1) {
+                status_message_ = "Error: duplicate Task ID " + curId + " — assigning new unique ID";
+            } else {
+                status_message_ = "Task ID " + curId + " is already unique";
+                return;
+            }
+        } catch (...) {}
+    }
+
+    // Find lowest positive integer not in use
+    int newId = 1;
+    while (usedIds.count(newId)) newId++;
+
+    objects[selected_object_index_].taskId = std::to_string(newId);
     objects[selected_object_index_].modified = true;
     level_.GetLevelObjects().UpdateCoordinatesInLine(objects[selected_object_index_]);
     SaveAndReloadObjects();
     auto& reloaded = level_.GetLevelObjects().GetObjects();
     if (!reloaded.empty()) selected_object_index_ = std::min(selected_object_index_, (int)reloaded.size() - 1);
-    
-    Logger::Get().Log(LogLevel::INFO, "[App] Assigned new Task ID: " + std::to_string(maxId + 1));
-    printf("[App] Assigned new Task ID: %d\n", maxId + 1);
+
+    status_message_ = "Assigned unique Task ID: " + std::to_string(newId);
+    Logger::Get().Log(LogLevel::INFO, "[App] Assigned unique Task ID: " + std::to_string(newId));
 }
 
 void App::ModifyTaskParameters() {

@@ -76,6 +76,13 @@ public:
     glm::vec3 GetMeshExtents(const std::string& modelId, bool isBuilding);
     float GetMeshZOffset(const std::string& modelId, bool isBuilding);
     Mesh GetOrLoadMesh(const std::string& modelId, bool isBuilding);
+    // Render one model centered in a viewport rectangle, auto-rotated by (rotX,rotY)
+    // radians, for the model-picker preview. Uploads its own preview camera into the
+    // shared matrices UBO (overwritten next frame by the scene), so it must be called
+    // after the main scene pass. Does not touch the fixed-function matrix stack.
+    void DrawModelPreview(const std::string& modelId, GLuint ubo_mats,
+                          int vpX, int vpY, int vpW, int vpH,
+                          float rotX, float rotY);
     GLuint GetShaderProgram() const { return shader_program_; }
     void DrawAttachmentsForSpline(const std::string& modelId, bool isBuilding,
                                   const glm::mat4& unscaledWorldMat, GLuint ubo_mats,

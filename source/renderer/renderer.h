@@ -6,6 +6,7 @@
 #pragma once
 
 #include <string>
+#include <set>
 #include <unordered_map>
 #include <vector>
 #include <utility>
@@ -268,6 +269,31 @@ public:
 		// Help panel (keybindings from qedkeybindings.qsc)
 		int  help_scroll_offset_    = 0;
 		const std::vector<std::string>* help_entries_ = nullptr;
+
+		// Task type column toggle
+		bool show_task_type_ = false;
+
+		// Find mode: 0=name/type/id, 1=text-in-task, 2=by-id, 3=by-note
+		int  find_mode_ = 0;
+
+		// File dialog
+		int         file_dialog_mode_ = 0; // 0=none,1=SaveSubTask,2=SaveSubTaskParent,3=LoadSubTask
+		std::string file_dialog_path_;
+		int         file_dialog_caret_ = 0;
+
+		// Autocomplete task picker (left panel)
+		bool ac_task_picker_open_   = false;
+		int  ac_task_selected_idx_  = 0;
+		int  ac_task_scroll_offset_ = 0;
+		std::string ac_task_filter_;
+		const std::vector<std::string>* ac_task_items_ = nullptr;
+
+		// Model ID picker (right panel)
+		bool model_picker_open_    = false;
+		int  model_picker_selected_ = 0;
+		int  model_picker_scroll_   = 0;
+		std::string model_picker_filter_;
+		const std::set<std::string>* model_ids_ = nullptr;  // all XXX_XX_X model IDs from level objects
 	};
 
 

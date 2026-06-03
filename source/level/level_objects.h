@@ -19,7 +19,7 @@ struct LevelObject {
     std::string primaryAmmo;    // Primary ammo from JSON
     std::string secondaryWeapon; // Secondary weapon name from JSON
     std::string secondaryAmmo;    // Secondary ammo from JSON
-    int team; // 0 = Friendly, 1 = Enemy
+    int team = 0; // 0 = Friendly, 1 = Enemy — read from argTokens at load; tooltip uses argTokens directly
     glm::dvec3 pos = glm::dvec3(0.0);
     glm::dvec3 original_pos = glm::dvec3(0.0);  // Original position from QSC for fallback matching
     glm::dvec3 rot = glm::dvec3(0.0);

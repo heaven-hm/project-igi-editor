@@ -218,6 +218,43 @@ private:
 	bool					find_open_        = false;
 	std::string				find_query_;
 	int						find_result_idx_  = -1;
+	enum class FindMode { TaskNameTypeId, TextInTask, ById, ByNote };
+	FindMode				find_mode_        = FindMode::TaskNameTypeId;
+
+	// Task type view toggle
+	bool					show_task_type_   = false;
+
+	// Task picker creation flags
+	bool					task_picker_insert_first_ = false;
+	bool					task_new_at_camera_       = false;
+
+	// Camera strafe
+	bool					camera_strafe_free_ = false;
+
+	// File dialog (SaveSubTask, LoadSubTask)
+	enum class FileDialogMode { None, SaveSubTask, SaveSubTaskParent, LoadSubTask, SaveObjectFile };
+	FileDialogMode			file_dialog_mode_ = FileDialogMode::None;
+	std::string				file_dialog_path_;
+	int						file_dialog_caret_ = 0;
+
+	// Autocomplete keyword picker (Ctrl+N — left panel)
+	bool					ac_task_picker_open_   = false;
+	int						ac_task_selected_idx_  = 0;
+	int						ac_task_scroll_offset_ = 0;
+	std::string				ac_task_filter_;
+	std::vector<std::string> ac_task_items_;
+
+	// Model ID picker (Ctrl+O — right panel)
+	bool					model_picker_open_    = false;
+	int						model_picker_selected_ = 0;
+	int						model_picker_scroll_   = 0;
+	std::string				model_picker_filter_;
+
+	// AutoComplete inline keywords (Ctrl+Space)
+	std::vector<std::string> autocomplete_keywords_;
+
+	// All modelIds from current level objects in XXX_XX_X format (for model picker)
+	std::set<std::string> level_model_ids_;
 
 	bool					sync_from_game_once_;
 	int						last_game_level_;
@@ -322,6 +359,10 @@ private:
 	bool					IsComputer(const LevelObject& obj);
 	bool					IsWaterTower(const LevelObject& obj);
 	bool					ValidateParentChildCompatibility(const LevelObject& parent, const std::vector<LevelObject>& addedSubtree);
+	void					SaveTaskSubtreeToFile(int idx, const std::string& path);
+	void					ConfirmFileDialog();
+	void					LoadAutoCompleteKeywords();
+	void					RebuildLevelModelIds();
 
 public:
 	// QSC/QVM workflow

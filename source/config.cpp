@@ -333,6 +333,21 @@ void Config::Load() {
             }
         }
     }
+
+    // Event bindings are authoritative from the human-readable keybindings file.
+    // Parse it last so it overrides any stale bindings from a compiled .qvm and so
+    // the full set (TaskMagicObjToggle, AutoComplete*, SaveSubTask*, ...) is loaded.
+    {
+        std::ifstream kbFile(GetKeybindingsPath());
+        if (kbFile.is_open()) {
+            std::string line;
+            int n = 0;
+            while (std::getline(kbFile, line)) { ParseLine(line); ++n; }
+            Logger::Get().Log(LogLevel::INFO, "[Config] Loaded event bindings from qedkeybindings.qsc (" + std::to_string(n) + " lines)");
+        } else {
+            Logger::Get().Log(LogLevel::WARNING, "[Config] qedkeybindings.qsc not found at: " + GetKeybindingsPath());
+        }
+    }
 }
 
 void Config::Save() {
@@ -372,56 +387,12 @@ void Config::Save() {
         file << "QEDSetCameraMatrix(" << data_.cameraMatX << ", " << data_.cameraMatY << ", " << data_.cameraMatZ << ");\n";
         file.close();
     }
-    std::string kbPath = GetKeybindingsPath();
-    std::ofstream kb(kbPath);
-    if (kb.is_open()) {
-        auto KeyToString = [](const KeyBinding& k) -> std::string {
-            std::string s;
-            if (k.ctrl) s += "<CTRL>";
-            if (k.shift) s += "<SHIFT>";
-            if (k.alt) s += "<ALT>";
-            if (k.vkCode == 0x2D) s += "INSERT";
-            else if (k.vkCode == 0x2E) s += "DELETE";
-            else if (k.vkCode == 0x24) s += "HOME";
-            else if (k.vkCode == 0x20) s += "SPACE";
-            else if (k.vkCode >= 0x70 && k.vkCode <= 0x7B) s += "F" + std::to_string(k.vkCode - 0x70 + 1);
-            else if (k.vkCode >= 0x41 && k.vkCode <= 0x5A) s += (char)k.vkCode;
-            else if (k.vkCode) s += (char)k.vkCode;
-            return s;
-        };
-        auto WriteBind = [&](const std::string& name, const KeyBinding& b) {
-            kb << "QEDSetEventBinding(\"" << name << "\", \"" << KeyToString(b) << "\");\n";
-        };
-        WriteBind("SaveObjectFile", data_.keySave);
-        WriteBind("ResetLevel", data_.keyResetLevel);
-        WriteBind("Debug", data_.keyDebug);
-        WriteBind("Quit", data_.keyQuit);
-        WriteBind("ResetScript", data_.keyResetScript);
-        WriteBind("CameraEnable", data_.keyEnableCamera);
-        WriteBind("CameraMoveForward", data_.keyMoveCameraForward);
-        WriteBind("CameraMoveBackward", data_.keyMoveCameraBackward);
-        WriteBind("CameraAdjustRadius", data_.keyAdjustCameraRadius);
-        WriteBind("CameraLookDown", data_.keyLookDown);
-        WriteBind("CameraSnapToObject", data_.keySnapToObject);
-        WriteBind("CameraSnapToGround", data_.keySnapToGround);
-        WriteBind("ToggleDisplay", data_.keyClipMode);
-        WriteBind("ToggleGame", data_.keyToggleGame);
-        WriteBind("SaveState", data_.keySaveState);
-        WriteBind("ToggleSaveStateOnExit", data_.keyToggleSaveStateOnExit);
-        WriteBind("TaskNew", data_.keyCreateNewTask);
-        WriteBind("TaskCopy", data_.keyCopyTask);
-        WriteBind("TaskPaste", data_.keyPasteTask);
-        WriteBind("DeleteTask", data_.keyDeleteTask);
-        WriteBind("AssignTaskID", data_.keyAssignTaskID);
-        WriteBind("StartRecording", data_.keyStartRecording);
-        WriteBind("GoToCursor", data_.keyGoToCursor);
-        WriteBind("SyncPlayback", data_.keySyncPlayback);
-        WriteBind("Undo", data_.keyUndo);
-        WriteBind("Redo", data_.keyRedo);
-        WriteBind("ReloadSettings", data_.keyReloadSettings);
-        kb.close();
-    }
-    for (const auto& path : { qscPath, kbPath }) {
+    // NOTE: qedkeybindings.qsc is a user-authored source of truth and is deliberately
+    // NOT rewritten here. A previous version regenerated it from a hardcoded subset of
+    // named bindings, which silently dropped TaskMagicObjToggle, AutoComplete*,
+    // SaveSubTask*, TaskMove*, find variants, etc. — leaving most hotkeys unbound on the
+    // next launch. The editor now only reads that file (see Config::Init).
+    for (const auto& path : { qscPath }) {
         std::string qvmPath = std::filesystem::path(path).parent_path().string() + "\\" + std::filesystem::path(path).stem().string() + ".qvm";
         std::ifstream qscIn(path);
         std::string qscSrc((std::istreambuf_iterator<char>(qscIn)), std::istreambuf_iterator<char>());
