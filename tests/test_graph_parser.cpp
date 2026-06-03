@@ -11,7 +11,7 @@
 // ============================================================
 
 static std::string GraphPath() {
-    return Utils::GetIGIRootPath() + "\\missions\\location0\\level1\\graph1.dat";
+    return Utils::GetIGIRootPath() + "\\missions\\location0\\level1\\graphs\\graph1.dat";
 }
 
 class GraphParserTest : public ::testing::Test {

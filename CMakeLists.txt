@@ -247,3 +247,11 @@ target_sources(igi_tests PRIVATE
 include(GoogleTest)
 gtest_discover_tests(igi_tests WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
+# Copy test fixtures next to igi_tests.exe so tests work from any directory
+add_custom_command(TARGET igi_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${PROJECT_SOURCE_DIR}/tests/fixtures"
+        "$<TARGET_FILE_DIR:igi_tests>/fixtures"
+    COMMENT "Copying test fixtures to output directory"
+)
+

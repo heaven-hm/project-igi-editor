@@ -17,9 +17,11 @@
 
 static std::string ResPath() {
     return Utils::GetIGIRootPath() +
-           "\\missions\\location0\\level1\\models\\level1.res";
+           "\\missions\\location0\\level1\\textures\\level1.res";
 }
-static const std::string kTempTex = "tests/fixtures/_tmp_test.tex";
+static std::string TempTexPath() {
+    return Utils::GetExeDirectory() + "\\fixtures\\_tmp_test.tex";
+}
 
 static bool ExtractFirstTex(const std::string& resPath, const std::string& outPath) {
     RESFile res = RES_Parse(resPath);
@@ -43,13 +45,13 @@ class TexParserTest : public ::testing::Test {
 protected:
     TEXFile tex;
     void SetUp() override {
-        bool ok = ExtractFirstTex(ResPath(), kTempTex);
+        bool ok = ExtractFirstTex(ResPath(), TempTexPath());
         ASSERT_TRUE(ok) << "Could not extract a .tex entry from " << ResPath();
-        tex = TEX_Parse(kTempTex);
+        tex = TEX_Parse(TempTexPath());
     }
     void TearDown() override {
         std::error_code ec;
-        std::filesystem::remove(kTempTex, ec);
+        std::filesystem::remove(TempTexPath(), ec);
     }
 };
 

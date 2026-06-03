@@ -41,7 +41,10 @@ TEST(VerifyLevelIntegration, Level1PassesVerification) {
 
     ASSERT_TRUE(ok) << "CreateProcess failed, GetLastError=" << GetLastError();
 
-    const DWORD kTimeoutMs = 15000;
+    // The outer process runs --verify-level which internally launches the
+    // GUI editor and kills it after 15 seconds, then parses the log.
+    // Allow 35 seconds total: 15s inner editor budget + startup/log overhead.
+    const DWORD kTimeoutMs = 35000;
     DWORD waitResult = WaitForSingleObject(pi.hProcess, kTimeoutMs);
 
     if (waitResult == WAIT_TIMEOUT) {
@@ -49,7 +52,7 @@ TEST(VerifyLevelIntegration, Level1PassesVerification) {
         WaitForSingleObject(pi.hProcess, 5000);
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
-        FAIL() << "igi1ed.exe --verify-level 1 timed out after 15 seconds.";
+        FAIL() << "igi1ed.exe --verify-level 1 timed out after 35 seconds.";
     }
 
     DWORD exitCode = 0;

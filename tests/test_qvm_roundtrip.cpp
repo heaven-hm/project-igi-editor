@@ -20,6 +20,12 @@
 
 namespace {
 
+// Returns path to a file in the fixtures/ directory next to the exe.
+// Fixtures are copied there by CMake post-build so tests work from any CWD.
+std::string FixturePath(const std::string& name) {
+    return Utils::GetExeDirectory() + "\\fixtures\\" + name;
+}
+
 std::string ReadFile(const std::string& path) {
     std::ifstream ifs(path);
     if (!ifs) return "";
@@ -36,7 +42,8 @@ std::string NormalizeQsc(const std::string& input) {
 // Full compile→write→parse→decompile pipeline.
 // Returns the decompiled string. Sets *err on any stage failure.
 std::string RoundTrip(const std::string& source, std::string* err,
-                      const std::string& tmp = "tests/fixtures/_rt_tmp.qvm") {
+                      const std::string& tmp = "") {
+    std::string tmpPath = tmp.empty() ? FixturePath("_rt_tmp.qvm") : tmp;
     auto lr = qsc::Lex(source);
     if (!lr.ok) { if (err) *err = "lex: " + lr.error; return {}; }
 
@@ -47,14 +54,14 @@ std::string RoundTrip(const std::string& source, std::string* err,
     if (!cr.ok) { if (err) *err = "compile: " + cr.error; return {}; }
 
     {
-        std::ofstream ofs(tmp, std::ios::binary);
-        if (!ofs) { if (err) *err = "cannot open tmp: " + tmp; return {}; }
+        std::ofstream ofs(tmpPath, std::ios::binary);
+        if (!ofs) { if (err) *err = "cannot open tmp: " + tmpPath; return {}; }
         ofs.write(reinterpret_cast<const char*>(cr.binary.data()),
                   static_cast<std::streamsize>(cr.binary.size()));
     }
 
-    QVMFile qvm = QVM_Parse(tmp);
-    std::remove(tmp.c_str());
+    QVMFile qvm = QVM_Parse(tmpPath);
+    std::remove(tmpPath.c_str());
     if (!qvm.valid) { if (err) *err = "qvm_parse: " + qvm.error; return {}; }
 
     return QVM_DecompileToString(qvm);
@@ -67,11 +74,11 @@ std::string RoundTrip(const std::string& source, std::string* err,
 // ============================================================
 
 TEST(QvmRoundTripTest, FixtureLevel01Simple) {
-    std::string src = ReadFile("tests/fixtures/level01_simple.qsc");
+    std::string src = ReadFile(FixturePath("level01_simple.qsc"));
     ASSERT_FALSE(src.empty()) << "fixture 'tests/fixtures/level01_simple.qsc' not found";
 
     std::string err;
-    std::string out = RoundTrip(src, &err, "tests/fixtures/_rt_fixture.qvm");
+    std::string out = RoundTrip(src, &err, FixturePath("_rt_fixture.qvm"));
     ASSERT_TRUE(err.empty()) << err;
     ASSERT_FALSE(out.empty());
 
@@ -125,7 +132,7 @@ TEST(QvmRoundTripTest, SingleSimpleCall) {
     std::string src = "Task_New(9900, \"SplineObj\", \"TestBridgeTrack\", FALSE, FALSE, "
                       "FALSE, FALSE, 20, 0, 0, 0, 0, 3.125, 1, 1, 1, 0, 0, 0);";
     std::string err;
-    std::string out = RoundTrip(src, &err, "tests/fixtures/_rt_single.qvm");
+    std::string out = RoundTrip(src, &err, FixturePath("_rt_single.qvm"));
     ASSERT_TRUE(err.empty()) << err;
     EXPECT_FALSE(out.empty());
     EXPECT_NE(out.find("Task_New"), std::string::npos);
@@ -134,7 +141,7 @@ TEST(QvmRoundTripTest, SingleSimpleCall) {
 TEST(QvmRoundTripTest, BooleanArguments) {
     std::string src = "SetFlag(TRUE, FALSE);";
     std::string err;
-    std::string out = RoundTrip(src, &err, "tests/fixtures/_rt_bool.qvm");
+    std::string out = RoundTrip(src, &err, FixturePath("_rt_bool.qvm"));
     ASSERT_TRUE(err.empty()) << err;
     EXPECT_FALSE(out.empty());
     EXPECT_NE(out.find("SetFlag"), std::string::npos);
@@ -143,7 +150,7 @@ TEST(QvmRoundTripTest, BooleanArguments) {
 TEST(QvmRoundTripTest, IntAndFloatArguments) {
     std::string src = "Spawn(42, 3.125);";
     std::string err;
-    std::string out = RoundTrip(src, &err, "tests/fixtures/_rt_nums.qvm");
+    std::string out = RoundTrip(src, &err, FixturePath("_rt_nums.qvm"));
     ASSERT_TRUE(err.empty()) << err;
     EXPECT_FALSE(out.empty());
     EXPECT_NE(out.find("Spawn"), std::string::npos);
@@ -152,7 +159,7 @@ TEST(QvmRoundTripTest, IntAndFloatArguments) {
 TEST(QvmRoundTripTest, HexArgument) {
     std::string src = "SetMask(0xFF);";
     std::string err;
-    std::string out = RoundTrip(src, &err, "tests/fixtures/_rt_hex.qvm");
+    std::string out = RoundTrip(src, &err, FixturePath("_rt_hex.qvm"));
     ASSERT_TRUE(err.empty()) << err;
     EXPECT_FALSE(out.empty());
     EXPECT_NE(out.find("SetMask"), std::string::npos);
@@ -161,7 +168,7 @@ TEST(QvmRoundTripTest, HexArgument) {
 TEST(QvmRoundTripTest, StringArgument) {
     std::string src = "SetName(\"player_1\");";
     std::string err;
-    std::string out = RoundTrip(src, &err, "tests/fixtures/_rt_str.qvm");
+    std::string out = RoundTrip(src, &err, FixturePath("_rt_str.qvm"));
     ASSERT_TRUE(err.empty()) << err;
     EXPECT_FALSE(out.empty());
     EXPECT_NE(out.find("SetName"), std::string::npos);
@@ -170,7 +177,7 @@ TEST(QvmRoundTripTest, StringArgument) {
 TEST(QvmRoundTripTest, NegativeIntArgument) {
     std::string src = "Task_New(-1, \"waypoint\", FALSE);";
     std::string err;
-    std::string out = RoundTrip(src, &err, "tests/fixtures/_rt_neg.qvm");
+    std::string out = RoundTrip(src, &err, FixturePath("_rt_neg.qvm"));
     ASSERT_TRUE(err.empty()) << err;
     EXPECT_FALSE(out.empty());
     EXPECT_NE(out.find("Task_New"), std::string::npos);
@@ -187,7 +194,7 @@ TEST(QvmRoundTripTest, NestedCallsRoundTrip) {
         "    Task_New(-1, \"SplineObjWaypoint\", \"\", 0, 0, 3.125, "
         "2630.0, -5650.0, 1740.0, \"waypoint\", \"322_01_1\", 20, FALSE, FALSE, FALSE));";
     std::string err;
-    std::string out = RoundTrip(src, &err, "tests/fixtures/_rt_nested.qvm");
+    std::string out = RoundTrip(src, &err, FixturePath("_rt_nested.qvm"));
     ASSERT_TRUE(err.empty()) << err;
     EXPECT_FALSE(out.empty());
     EXPECT_NE(out.find("SplineObj"), std::string::npos);
@@ -201,7 +208,7 @@ TEST(QvmRoundTripTest, NestedCallsRoundTrip) {
 TEST(QvmRoundTripTest, MultipleTopLevelCalls) {
     std::string src = "Alpha(1); Beta(2); Gamma(3);";
     std::string err;
-    std::string out = RoundTrip(src, &err, "tests/fixtures/_rt_multi.qvm");
+    std::string out = RoundTrip(src, &err, FixturePath("_rt_multi.qvm"));
     ASSERT_TRUE(err.empty()) << err;
     EXPECT_FALSE(out.empty());
     EXPECT_NE(out.find("Alpha"), std::string::npos);
@@ -216,7 +223,7 @@ TEST(QvmRoundTripTest, MultipleTopLevelCalls) {
 TEST(QvmRoundTripTest, IfElseRoundTrip) {
     std::string src = "if (TRUE) { Foo(); } else { Bar(); }";
     std::string err;
-    std::string out = RoundTrip(src, &err, "tests/fixtures/_rt_ifelse.qvm");
+    std::string out = RoundTrip(src, &err, FixturePath("_rt_ifelse.qvm"));
     ASSERT_TRUE(err.empty()) << err;
     EXPECT_FALSE(out.empty());
     // Both branch functions must survive the round-trip
@@ -227,7 +234,7 @@ TEST(QvmRoundTripTest, IfElseRoundTrip) {
 TEST(QvmRoundTripTest, WhileLoopRoundTrip) {
     std::string src = "while (TRUE) { Tick(); }";
     std::string err;
-    std::string out = RoundTrip(src, &err, "tests/fixtures/_rt_while.qvm");
+    std::string out = RoundTrip(src, &err, FixturePath("_rt_while.qvm"));
     ASSERT_TRUE(err.empty()) << err;
     EXPECT_FALSE(out.empty());
     EXPECT_NE(out.find("Tick"), std::string::npos);
@@ -244,7 +251,7 @@ TEST(QvmRoundTripTest, ParsedQvmHasCorrectIdentifierCount) {
     auto pr = qsc::Parse(lr.tokens); ASSERT_TRUE(pr.ok);
     auto cr = qvm::Compile(*pr.program); ASSERT_TRUE(cr.ok);
 
-    std::string tmp = "tests/fixtures/_rt_id_count.qvm";
+    std::string tmp = FixturePath("_rt_id_count.qvm");
     {
         std::ofstream ofs(tmp, std::ios::binary);
         ofs.write(reinterpret_cast<const char*>(cr.binary.data()),
@@ -266,7 +273,7 @@ TEST(QvmRoundTripTest, ParsedQvmHasStringInPool) {
     auto pr = qsc::Parse(lr.tokens); ASSERT_TRUE(pr.ok);
     auto cr = qvm::Compile(*pr.program); ASSERT_TRUE(cr.ok);
 
-    std::string tmp = "tests/fixtures/_rt_str_pool.qvm";
+    std::string tmp = FixturePath("_rt_str_pool.qvm");
     {
         std::ofstream ofs(tmp, std::ios::binary);
         ofs.write(reinterpret_cast<const char*>(cr.binary.data()),
@@ -287,7 +294,7 @@ TEST(QvmRoundTripTest, ParsedQvmHasInstructions) {
     auto pr = qsc::Parse(lr.tokens); ASSERT_TRUE(pr.ok);
     auto cr = qvm::Compile(*pr.program); ASSERT_TRUE(cr.ok);
 
-    std::string tmp = "tests/fixtures/_rt_instr.qvm";
+    std::string tmp = FixturePath("_rt_instr.qvm");
     {
         std::ofstream ofs(tmp, std::ios::binary);
         ofs.write(reinterpret_cast<const char*>(cr.binary.data()),
@@ -306,7 +313,7 @@ TEST(QvmRoundTripTest, ParsedQvmHasInstructions) {
 TEST(QvmRoundTripTest, DecompiledOutputIsValidQsc) {
     std::string src = "Task_New(42, \"obj\", TRUE, 0.5);";
     std::string err;
-    std::string out = RoundTrip(src, &err, "tests/fixtures/_rt_reparse.qvm");
+    std::string out = RoundTrip(src, &err, FixturePath("_rt_reparse.qvm"));
     ASSERT_TRUE(err.empty()) << err;
     ASSERT_FALSE(out.empty());
 
@@ -320,7 +327,7 @@ TEST(QvmRoundTripTest, DecompiledOutputIsValidQsc) {
 TEST(QvmRoundTripTest, MultiCallDecompiledOutputIsValidQsc) {
     std::string src = "A(1, \"x\"); B(TRUE, 0xFF); C(-1, 2.5);";
     std::string err;
-    std::string out = RoundTrip(src, &err, "tests/fixtures/_rt_reparse2.qvm");
+    std::string out = RoundTrip(src, &err, FixturePath("_rt_reparse2.qvm"));
     ASSERT_TRUE(err.empty()) << err;
     ASSERT_FALSE(out.empty());
 

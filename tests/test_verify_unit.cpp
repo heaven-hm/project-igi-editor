@@ -1,17 +1,22 @@
 #include <gtest/gtest.h>
 #include "cli/verify_level_core.h"
+#include "utils.h"
 #include <filesystem>
 
 // ============================================================
 //  verify_level_core — unit tests (no game files, no launch)
 //
-//  Fixture path: tests/fixtures/verify_log_l1.txt
-//  ParseQscObjects fixture: tests/fixtures/level01_simple.qsc
+//  Fixtures are copied to the exe output dir at build time.
+//  Paths are resolved via GetExeDirectory() so the tests work
+//  regardless of which directory igi_tests.exe is run from.
 // ============================================================
 
-static const std::string kLogFixture    = "tests/fixtures/verify_log_l1.txt";
-static const std::string kQscFixture    = "tests/fixtures/level01_simple.qsc";
-static const std::string kMissingPath   = "tests/fixtures/nonexistent_file.txt";
+static std::string FixturePath(const std::string& name) {
+    return Utils::GetExeDirectory() + "\\fixtures\\" + name;
+}
+static std::string kLogFixture()  { return FixturePath("verify_log_l1.txt"); }
+static std::string kQscFixture()  { return FixturePath("level01_simple.qsc"); }
+static std::string kMissingPath() { return FixturePath("nonexistent_file.txt"); }
 
 // ---------------------------------------------------------------------------
 //  PosMatch
@@ -78,7 +83,7 @@ TEST(OriMatchTest, LargeDifferenceDoesNotMatch) {
 
 TEST(ParseLogTest, ExtractsModelIdAndType) {
     bool err = false; std::string msg;
-    auto objs = ParseLog(kLogFixture, 1, err, msg);
+    auto objs = ParseLog(kLogFixture(), 1, err, msg);
     ASSERT_FALSE(err) << msg;
     ASSERT_FALSE(objs.empty());
     EXPECT_EQ(objs[0].modelId, "100_01_1");
@@ -88,7 +93,7 @@ TEST(ParseLogTest, ExtractsModelIdAndType) {
 
 TEST(ParseLogTest, ExtractsPosition) {
     bool err = false; std::string msg;
-    auto objs = ParseLog(kLogFixture, 1, err, msg);
+    auto objs = ParseLog(kLogFixture(), 1, err, msg);
     ASSERT_FALSE(err) << msg;
     ASSERT_FALSE(objs.empty());
     EXPECT_EQ(objs[0].px, 1000LL);
@@ -98,7 +103,7 @@ TEST(ParseLogTest, ExtractsPosition) {
 
 TEST(ParseLogTest, SetsOriLoggedTrueWhenOriPresent) {
     bool err = false; std::string msg;
-    auto objs = ParseLog(kLogFixture, 1, err, msg);
+    auto objs = ParseLog(kLogFixture(), 1, err, msg);
     ASSERT_FALSE(err) << msg;
     ASSERT_FALSE(objs.empty());
     EXPECT_TRUE(objs[0].ori_logged);
@@ -107,7 +112,7 @@ TEST(ParseLogTest, SetsOriLoggedTrueWhenOriPresent) {
 
 TEST(ParseLogTest, SetsOriLoggedFalseWhenOriAbsent) {
     bool err = false; std::string msg;
-    auto objs = ParseLog(kLogFixture, 1, err, msg);
+    auto objs = ParseLog(kLogFixture(), 1, err, msg);
     ASSERT_FALSE(err) << msg;
     // Second object (Wall) has no Ori= field
     ASSERT_GE(objs.size(), 2u);
@@ -116,7 +121,7 @@ TEST(ParseLogTest, SetsOriLoggedFalseWhenOriAbsent) {
 
 TEST(ParseLogTest, SetsTexAndMeshLoggedWhenPresent) {
     bool err = false; std::string msg;
-    auto objs = ParseLog(kLogFixture, 1, err, msg);
+    auto objs = ParseLog(kLogFixture(), 1, err, msg);
     ASSERT_FALSE(err) << msg;
     // Fourth object (Crate) has Tex= and Model=
     ASSERT_GE(objs.size(), 4u);
@@ -128,7 +133,7 @@ TEST(ParseLogTest, SetsTexAndMeshLoggedWhenPresent) {
 
 TEST(ParseLogTest, ErrorOnMissingFile) {
     bool err = false; std::string msg;
-    ParseLog(kMissingPath, 1, err, msg);
+    ParseLog(kMissingPath(), 1, err, msg);
     EXPECT_TRUE(err);
     EXPECT_FALSE(msg.empty());
 }
@@ -136,7 +141,7 @@ TEST(ParseLogTest, ErrorOnMissingFile) {
 TEST(ParseLogTest, ErrorWhenLevelMarkerAbsent) {
     bool err = false; std::string msg;
     // Level 99 is not in the fixture
-    ParseLog(kLogFixture, 99, err, msg);
+    ParseLog(kLogFixture(), 99, err, msg);
     EXPECT_TRUE(err);
     EXPECT_NE(msg.find("99"), std::string::npos);
 }
@@ -146,7 +151,7 @@ TEST(ParseLogTest, UsesLastOccurrenceOfLevelMarker) {
     // Level 2 marker comes after that, so we expect exactly 4 objects (from the second run),
     // not 8 (which would be both runs combined).
     bool err = false; std::string msg;
-    auto objs = ParseLog(kLogFixture, 1, err, msg);
+    auto objs = ParseLog(kLogFixture(), 1, err, msg);
     ASSERT_FALSE(err) << msg;
     EXPECT_EQ(objs.size(), 4u);
 }
@@ -154,7 +159,7 @@ TEST(ParseLogTest, UsesLastOccurrenceOfLevelMarker) {
 TEST(ParseLogTest, DoesNotParseObjectsForOtherLevel) {
     // Level 2 has one object (999_99_9) in the fixture; it must not appear in level 1 results.
     bool err = false; std::string msg;
-    auto objs = ParseLog(kLogFixture, 1, err, msg);
+    auto objs = ParseLog(kLogFixture(), 1, err, msg);
     ASSERT_FALSE(err) << msg;
     for (const auto& o : objs)
         EXPECT_NE(o.modelId, "999_99_9");
@@ -299,7 +304,7 @@ TEST(CrossRefTest, MeshMismatch) {
 
 TEST(ParseQscObjectsTest, ParsesSplineObjWaypointFromFixture) {
     std::map<std::string, std::string> noNames;
-    auto objs = ParseQscObjects(kQscFixture, noNames);
+    auto objs = ParseQscObjects(kQscFixture(), noNames);
     // level01_simple.qsc has one SplineObjWaypoint with model 322_01_1
     ASSERT_FALSE(objs.empty());
     bool found = false;
@@ -310,6 +315,6 @@ TEST(ParseQscObjectsTest, ParsesSplineObjWaypointFromFixture) {
 
 TEST(ParseQscObjectsTest, ReturnsEmptyForMissingFile) {
     std::map<std::string, std::string> noNames;
-    auto objs = ParseQscObjects(kMissingPath, noNames);
+    auto objs = ParseQscObjects(kMissingPath(), noNames);
     EXPECT_TRUE(objs.empty());
 }

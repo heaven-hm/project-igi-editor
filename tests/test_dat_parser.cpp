@@ -49,6 +49,7 @@ TEST_F(DatParserTest, AllTexturesNonEmpty) {
 TEST_F(DatParserTest, JsonOutputIsWellFormed) {
     std::string json = DAT_FormatJSON(dat);
     ASSERT_FALSE(json.empty());
-    EXPECT_EQ(json.front(), '[');
-    EXPECT_EQ(json.back(),  ']');
+    EXPECT_EQ(json.front(), '{');
+    EXPECT_NE(json.find("\"models\""),    std::string::npos);
+    EXPECT_NE(json.find("\"modelName\""), std::string::npos);
 }
