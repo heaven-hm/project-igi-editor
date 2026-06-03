@@ -187,6 +187,35 @@ With the successful release of **Version 2.0.0**, core features like the **Nativ
      ```
      *(Note: AI models are stored as non-building objects (props) inside the engine. To visually render the 3D meshes of the AI units, combine with props to get `-draw_parts 97` which is `1` + `32` + `64`)*
 
+### 🧪 Unit Testing & Status
+
+We use **GoogleTest** (gtest) to ensure the stability of the core parsers and utilities.
+
+#### Current Test Status
+
+| Module / Test Suite | Status | Passing Tests |
+| --- | :---: | :---: |
+| **QSC Lexer** (`QscLexerTest`) | ✅ | 1/1 |
+| **QVM Round-Trip** (`QvmRoundTripTest`) | ✅ | 1/1 |
+| **Configuration** (`ConfigTest`) | ✅ | 1/1 |
+| **String Utilities** (`UtilsTest`) | ✅ | 2/2 |
+| **Overall** | ✅ | **5/5 (100%)** |
+
+#### How to Run Tests
+
+1. Configure the project for building (if you haven't already):
+   ```powershell
+   cmake -B build -DCMAKE_BUILD_TYPE=Debug
+   ```
+2. Build the `igi_tests` target:
+   ```powershell
+   cmake --build build --target igi_tests
+   ```
+3. Run `ctest` inside the build directory:
+   ```powershell
+   cd build
+   ctest --output-on-failure
+   ```
 
 ---
 

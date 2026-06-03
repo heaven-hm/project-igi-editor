@@ -20,7 +20,6 @@ endif ()
 message("CMAKE_BUILD_TYPE = ${CMAKE_BUILD_TYPE}")
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-    add_definitions(-DDEBUG)
         add_definitions(-D_DEBUG)
     message("Set cmake debug")
 endif ()
@@ -183,4 +182,39 @@ else()
   target_link_libraries(igi-editor PRIVATE glut GL GLEW)
 endif()
 
+include(FetchContent)
+FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(googletest)
+enable_testing()
+
+add_executable(igi_tests
+    tests/test_qsc_lexer.cpp
+    tests/test_qvm_roundtrip.cpp
+    tests/test_config.cpp
+    tests/test_utils.cpp
+)
+
+target_include_directories(igi_tests PRIVATE source)
+target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/glm-1.0.1)
+target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/GL/include)
+target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
+target_link_libraries(igi_tests PRIVATE gtest_main)
+target_sources(igi_tests PRIVATE
+    source/parsers/qsc_lexer.cpp
+    source/parsers/qsc_parser.cpp
+    source/parsers/qvm_parser.cpp
+    source/parsers/qvm_compiler.cpp
+    source/parsers/qvm_decompiler.cpp
+    source/config.cpp
+    source/utils.cpp
+    source/common.cpp
+    source/logger.cpp
+)
+
+include(GoogleTest)
+gtest_discover_tests(igi_tests WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
