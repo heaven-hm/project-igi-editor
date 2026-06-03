@@ -5,7 +5,7 @@
 
 struct VerifyLevelParams {
     std::vector<int> levels;
-    int  timeout    = 0;    // 0 = wait indefinitely
+    int  timeout    = 15;   // 15-second cap per level
     bool skipLaunch = false;
     std::string gamePath;   // empty = Utils::GetIGIRootPath()
     std::string logPath;    // empty = gamePath\igi1ed.log
@@ -23,6 +23,7 @@ public:
   // Processes the arguments and executes the corresponding parser
   // Returns 0 on success, non-zero on failure
   static int Process(int argc, char **argv);
+  static int VerifyLevel(const VerifyLevelParams &params);
 
 private:
   static int ParseMEF(const std::string &filepath);
@@ -53,6 +54,5 @@ private:
   static int ParseFNT(const std::string &filepath, const std::string &exportPngPath = "");
   static int ParseGraph(const std::string &filepath);
   static int ExtractLevelResources(int levelNo, const std::string &outDir);
-  static int VerifyLevel(const VerifyLevelParams &params);
   static void PrintHelp();
 };
