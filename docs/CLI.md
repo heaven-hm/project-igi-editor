@@ -209,6 +209,29 @@ Reads and extracts proprietary game assets stored within `.res` archives.
   ```
   *Extracts raw image assets from the TEX format and saves them as standard, uncompressed TGA files.*
 
+* **Convert TGA/PNG Images**:
+  ```powershell
+  .\bin\Release\igi1ed.exe --tex input.tga --ToPng output.png
+  .\bin\Release\igi1ed.exe --tex input.png --ToTga output.tga
+  ```
+  *Provides quick lossless image conversion natively through the CLI without invoking the full parser.*
+
+---
+
+### 🔤 Bitmap Fonts (`--fnt`)
+
+* **Parse FNT and List Characters**:
+  ```powershell
+  .\bin\Release\igi1ed.exe --fnt editorsm.fnt
+  ```
+  *Reads an ILFF-based font file and outputs its dimension stats and concatenated glyph characters.*
+
+* **Export Font Texture Atlas**:
+  ```powershell
+  .\bin\Release\igi1ed.exe --fnt editorsm.fnt --export-png atlas.png
+  ```
+  *Extracts the embedded bitmap texture from the `.fnt` file and saves it as a PNG image.*
+
 ---
 
 ### 🏔️ Terrain & Navigation Systems (`--terrain`, `--graph`)

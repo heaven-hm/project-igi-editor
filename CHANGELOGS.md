@@ -1,5 +1,17 @@
 # Changelogs
 
+## 2.6.0 - CLI Image Conversion & FNT Export
+This release enhances the Command Line Interface with direct image format conversion and font atlas extraction.
+
+### 🖼️ Image Conversion Utilities
+- **Direct Format Conversion**: Added `--ToPng` and `--ToTga` arguments to convert individual `TGA` or `PNG` files instantly via the CLI.
+- **PNG Encoding**: Integrated `stb_image_write.h` to natively write high-quality PNGs directly from the engine.
+
+### 🔤 Font Output Improvements
+- **FNT Atlas Export**: New `--export-png` flag for the `--fnt` parser extracts the internal bitmap texture of font files directly to PNG.
+- **Glyph String Concatenation**: The `--fnt` info log now aggregates all active glyphs and prints them as a single string for quick character set verification.
+
+---
 ## 2.5.0 - Property Panel Scrolling & Child Task Display
 This release adds a scrollable property editor and displays weapon/ammo fields for soldier units.
 
