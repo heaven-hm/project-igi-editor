@@ -2139,6 +2139,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		if (key == 'h' || key == 'H' || (key == 8 && ctrl)) {
 			show_help_ = !show_help_;
 			help_scroll_offset_ = 0;
+			if (show_help_) LoadHelpEntries(); // (re)read qedkeybindings.qsc so it's never empty
 			return;
 		}
 	}
@@ -2385,7 +2386,7 @@ void App::DispatchEventBindings() {
 	if (Check("TaskSendEvent")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskSendEvent not implemented"); }
 	if (Check("TaskSendEventRecursive")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskSendEventRecursive not implemented"); }
 	if (Check("TaskFind")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFind not implemented"); }
-	if (Check("TaskFindTextInTask")) { show_help_ = !show_help_; help_scroll_offset_ = 0; }
+	if (Check("TaskFindTextInTask")) { show_help_ = !show_help_; help_scroll_offset_ = 0; if (show_help_) LoadHelpEntries(); }
 	if (Check("TaskFindByTaskID")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFindByTaskID not implemented"); }
 	if (Check("TaskFindByTaskNote")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFindByTaskNote not implemented"); }
 	if (Check("TaskFindAgain")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TaskFindAgain not implemented"); }

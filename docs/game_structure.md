@@ -1,6 +1,6 @@
 [Back to README](../README.md)
 
-# IGI2 Game File Organization
+# IGI Game File Organization
 
 This page documents how files are organized in the IGI2 game directory and the three data sources available for research and conversion.
 

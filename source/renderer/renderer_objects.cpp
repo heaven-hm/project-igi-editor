@@ -834,111 +834,105 @@ std::string Renderer_Objects::AttaOccupancyKey(const std::string& modelId, const
     return buf;
 }
 
+// Disable a baked ATTA record inside an in-memory .mef byte buffer: zero its 16-byte
+// model NAME (so the engine can't resolve a model and skips it) and shove the record
+// far below the world as a fallback. Returns true if a matching record was edited.
+static bool DisableAttaInMefBytes(std::vector<uint8_t>& mef, const std::string& attModelId, const glm::vec3& localPos) {
+    if (mef.size() < 20 || std::memcmp(mef.data(), "ILFF", 4) != 0) return false;
+    bool modified = false;
+    size_t off = 20;
+    while (off + 16 <= mef.size()) {
+        char fourcc[5] = {0};
+        std::memcpy(fourcc, mef.data() + off, 4);
+        uint32_t size = 0, skip = 0;
+        std::memcpy(&size, mef.data() + off + 4, 4);
+        std::memcpy(&skip, mef.data() + off + 12, 4);
+
+        if (std::strcmp(fourcc, "ATTA") == 0) {
+            size_t recordsStart = off + 16;
+            size_t numRecords = size / 68;
+            for (size_t i = 0; i < numRecords; ++i) {
+                size_t base = recordsStart + i * 68;
+                if (base + 68 > mef.size()) break;
+                char nameBuf[16];
+                std::memcpy(nameBuf, mef.data() + base, 16);
+                float px, py, pz;
+                std::memcpy(&px, mef.data() + base + 16, 4);
+                std::memcpy(&py, mef.data() + base + 20, 4);
+                std::memcpy(&pz, mef.data() + base + 24, 4);
+                std::string aname(nameBuf, strnlen(nameBuf, 16));
+                if (aname == attModelId &&
+                    std::abs(px - localPos.x) < 1.0f &&
+                    std::abs(py - localPos.y) < 1.0f &&
+                    std::abs(pz - localPos.z) < 1.0f) {
+                    std::memset(mef.data() + base, 0, 16);   // name = ""
+                    float fx = 0.f, fy = 0.f, fz = -1.0e9f;
+                    std::memcpy(mef.data() + base + 16, &fx, 4);
+                    std::memcpy(mef.data() + base + 20, &fy, 4);
+                    std::memcpy(mef.data() + base + 24, &fz, 4);
+                    modified = true;
+                }
+            }
+        }
+        if (skip == 0) break;
+        off += skip;
+    }
+    return modified;
+}
+
 bool Renderer_Objects::SuppressAttachmentInMef(const std::string& parentModelId, const std::string& attModelId, const glm::vec3& localPos) {
-    std::vector<std::string> paths = {
-        Utils::GetExeDirectory() + "\\content\\models\\level" + std::to_string(current_level_) + "\\" + parentModelId + ".mef",
-        Utils::GetIGIModelsPath(current_level_) + "\\" + parentModelId + ".mef",
-        Utils::GetExeDirectory() + "\\content\\models\\common\\" + parentModelId + ".mef",
-        Utils::GetIGIRootPath() + "\\missions\\location0\\common\\models\\" + parentModelId + ".mef",
-        Utils::GetIGIRootPath() + "\\content\\models\\" + parentModelId + ".mef"
+    // Patch the level's model archive IN PLACE: parse it, disable the one ATTA record
+    // inside the parent building's .mef entry, and repack ALL entries. This keeps the
+    // archive complete (the old code regenerated from content/models/levelX, which the
+    // editor wipes after loading, producing an empty/broken .res).
+    const std::string gameRes = Utils::GetIGIRootPath() + "\\missions\\location0\\level" +
+                                std::to_string(current_level_) + "\\models\\level" +
+                                std::to_string(current_level_) + ".res";
+    if (!std::filesystem::exists(gameRes)) {
+        Logger::Get().Log(LogLevel::WARNING, "[Renderer] SuppressAttachmentInMef: archive not found: " + gameRes);
+        return false;
+    }
+
+    RESFile res = RES_Parse(gameRes);
+    if (!res.valid) {
+        Logger::Get().Log(LogLevel::ERR, "[Renderer] SuppressAttachmentInMef: failed to parse " + gameRes);
+        return false;
+    }
+
+    auto endsWithCI = [](const std::string& s, const std::string& suf) {
+        if (suf.size() > s.size()) return false;
+        for (size_t i = 0; i < suf.size(); ++i)
+            if (std::tolower((unsigned char)s[s.size()-suf.size()+i]) != std::tolower((unsigned char)suf[i])) return false;
+        return true;
     };
+    const std::string suffix = parentModelId + ".mef";
 
-    bool modifiedAny = false;
-    for (const auto& p : paths) {
-        if (p.empty() || !std::filesystem::exists(p)) continue;
-
-        std::fstream f(p, std::ios::in | std::ios::out | std::ios::binary);
-        if (!f.is_open()) {
-            Logger::Get().Log(LogLevel::WARNING, "[Renderer] SuppressAttachmentInMef: Could not open " + p + " for writing");
-            continue;
-        }
-
-        char header[20];
-        if (!f.read(header, 20) || std::memcmp(header, "ILFF", 4) != 0) {
-            f.close();
-            continue;
-        }
-
-        size_t chunkHeaderOffset = 20;
-        while (true) {
-            f.seekg(chunkHeaderOffset, std::ios::beg);
-            char chunkHeader[16];
-            if (!f.read(chunkHeader, 16)) break;
-
-            char fourcc[5] = {0};
-            std::memcpy(fourcc, chunkHeader, 4);
-            uint32_t size = 0, alignment = 0, skip = 0;
-            std::memcpy(&size, chunkHeader + 4, 4);
-            std::memcpy(&alignment, chunkHeader + 8, 4);
-            std::memcpy(&skip, chunkHeader + 12, 4);
-
-            if (std::strcmp(fourcc, "ATTA") == 0) {
-                size_t recordsStart = chunkHeaderOffset + 16;
-                size_t numRecords = size / 68;
-                for (size_t i = 0; i < numRecords; ++i) {
-                    f.seekg(recordsStart + i * 68, std::ios::beg);
-                    char nameBuf[16];
-                    float px = 0.f, py = 0.f, pz = 0.f;
-                    f.read(nameBuf, 16);
-                    f.read(reinterpret_cast<char*>(&px), 4);
-                    f.read(reinterpret_cast<char*>(&py), 4);
-                    f.read(reinterpret_cast<char*>(&pz), 4);
-
-                    std::string aname(nameBuf, strnlen(nameBuf, 16));
-                    if (aname == attModelId &&
-                        std::abs(px - localPos.x) < 0.1f &&
-                        std::abs(py - localPos.y) < 0.1f &&
-                        std::abs(pz - localPos.z) < 0.1f) {
-                        
-                        f.seekp(recordsStart + i * 68 + 16, std::ios::beg);
-                        float targetX = 0.0f;
-                        float targetY = 0.0f;
-                        float targetZ = -20000.0f;
-                        f.write(reinterpret_cast<char*>(&targetX), 4);
-                        f.write(reinterpret_cast<char*>(&targetY), 4);
-                        f.write(reinterpret_cast<char*>(&targetZ), 4);
-                        Logger::Get().Log(LogLevel::INFO, "[Renderer] SuppressAttachmentInMef: Moved ATTA '" + attModelId + "' underground in " + p);
-                        modifiedAny = true;
-                    }
-                }
-            }
-
-            if (skip == 0) break;
-            chunkHeaderOffset += skip;
-        }
-        f.close();
-    }
-
-    if (modifiedAny) {
-        std::string modelsFolder = Utils::GetExeDirectory() + "\\content\\models\\level" + std::to_string(current_level_);
-        std::string resName = "level" + std::to_string(current_level_) + ".res";
-        std::string resQscPath = modelsFolder + "\\resource.qsc";
-        std::string errorStr;
-
-        Logger::Get().Log(LogLevel::INFO, "[Renderer] ATTA modified, triggering automatic .res pack for " + resName);
-
-        if (RES_GenerateQSC(modelsFolder, resQscPath, resName, errorStr)) {
-            if (RES_Compile(resQscPath, errorStr)) {
-                std::string compiledRes = modelsFolder + "\\" + resName;
-                std::string gameModelsFolder = Utils::GetIGIRootPath() + "\\missions\\location0\\level" + std::to_string(current_level_) + "\\models";
-                std::string gameResPath = gameModelsFolder + "\\" + resName;
-
-                try {
-                    std::filesystem::create_directories(gameModelsFolder);
-                    std::filesystem::copy_file(compiledRes, gameResPath, std::filesystem::copy_options::overwrite_existing);
-                    Logger::Get().Log(LogLevel::INFO, "[Renderer] Successfully deployed " + resName + " to game directory.");
-                } catch (const std::exception& e) {
-                    Logger::Get().Log(LogLevel::ERR, std::string("[Renderer] Failed to copy .res file to game directory: ") + e.what());
-                }
-            } else {
-                Logger::Get().Log(LogLevel::ERR, "[Renderer] Failed to compile generated resource script: " + errorStr);
-            }
-        } else {
-            Logger::Get().Log(LogLevel::ERR, "[Renderer] Failed to generate resource script: " + errorStr);
+    bool modified = false;
+    for (auto& e : res.entries) {
+        if (endsWithCI(e.name, suffix)) {
+            if (DisableAttaInMefBytes(e.data, attModelId, localPos)) { modified = true; break; }
         }
     }
+    if (!modified) {
+        Logger::Get().Log(LogLevel::WARNING, "[Renderer] SuppressAttachmentInMef: ATTA '" + attModelId +
+            "' not found in " + parentModelId + ".mef");
+        return false;
+    }
 
-    return modifiedAny;
+    try {
+        std::string bak = gameRes + ".orig";
+        if (!std::filesystem::exists(bak))
+            std::filesystem::copy_file(gameRes, bak, std::filesystem::copy_options::overwrite_existing);
+    } catch (...) {}
+
+    std::string err;
+    if (!RES_WriteEntries(res.entries, gameRes, err)) {
+        Logger::Get().Log(LogLevel::ERR, "[Renderer] SuppressAttachmentInMef: repack failed: " + err);
+        return false;
+    }
+    Logger::Get().Log(LogLevel::INFO, "[Renderer] SuppressAttachmentInMef: disabled ATTA '" + attModelId +
+        "' in " + parentModelId + ".mef and repacked " + gameRes);
+    return true;
 }
 
 void Renderer_Objects::DrawAttachmentsForPicking(

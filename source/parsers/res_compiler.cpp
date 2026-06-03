@@ -117,8 +117,15 @@ bool RES_Compile(const std::string& scriptPath, std::string& error) {
         return false;
     }
 
-    // Write dummy ILFF header (20 bytes)
-    os.write("ILFF\0\0\0\0\0\0\0\0\0\0\0\0IRES", 20);
+    // ILFF header (20 bytes), matching the real game .res files exactly:
+    //   "ILFF" | uint32 size (TOTAL file size) | uint32 align (4) | uint32 skip (0) | "IRES"
+    // The size field is patched to the final file size at the end. (The old code
+    // wrote size = finalSize-8 and align = 0, which the game's loader rejected.)
+    WriteFourCC(os, FOURCC_ILFF);
+    WriteU32LE(os, 0);   // size — patched below
+    WriteU32LE(os, 4);   // align = 4 (as in every shipped .res)
+    WriteU32LE(os, 0);   // skip = 0 for the top-level ILFF
+    WriteFourCC(os, FOURCC_IRES);
 
     for (const auto& res : resources) {
         std::string internalName = res.first;
@@ -144,7 +151,7 @@ bool RES_Compile(const std::string& scriptPath, std::string& error) {
         
         WriteFourCC(os, FOURCC_NAME);
         WriteU32LE(os, nameSize);
-        WriteU32LE(os, 0); // align
+        WriteU32LE(os, 4); // align = 4 (matches shipped .res chunks)
         WriteU32LE(os, nameSkip);
         os.write(internalName.c_str(), nameSize);
         if (namePadding > 0) {
@@ -159,7 +166,7 @@ bool RES_Compile(const std::string& scriptPath, std::string& error) {
 
         WriteFourCC(os, FOURCC_BODY);
         WriteU32LE(os, bodySize);
-        WriteU32LE(os, 0); // align
+        WriteU32LE(os, 4); // align = 4 (matches shipped .res chunks)
         WriteU32LE(os, bodySkip);
         
         char buf[8192];
@@ -174,10 +181,48 @@ bool RES_Compile(const std::string& scriptPath, std::string& error) {
         }
     }
 
+    // Patch the ILFF size field (offset 4) to the TOTAL file size, exactly as the
+    // shipped archives store it (verified against SOUNDS/SPRITES/COMMON/TEXTURES.res).
     uint32_t finalSize = static_cast<uint32_t>(os.tellp());
     os.seekp(4, std::ios::beg);
-    uint32_t ilffSize = finalSize - 8;
-    WriteU32LE(os, ilffSize);
+    WriteU32LE(os, finalSize);
 
+    return true;
+}
+
+bool RES_WriteEntries(const std::vector<RESEntry>& entries, const std::string& outPath, std::string& error) {
+    std::ofstream os(outPath, std::ios::binary);
+    if (!os) { error = "Failed to create output file: " + outPath; return false; }
+
+    // ILFF header (size patched at end).
+    WriteFourCC(os, FOURCC_ILFF);
+    WriteU32LE(os, 0);   // size — patched below
+    WriteU32LE(os, 4);   // align
+    WriteU32LE(os, 0);   // skip
+    WriteFourCC(os, FOURCC_IRES);
+
+    auto writeChunk = [&](uint32_t fourcc, const uint8_t* data, uint32_t dataSize) {
+        uint32_t padding = (4 - (dataSize % 4)) % 4;
+        uint32_t skip = 16 + dataSize + padding;
+        WriteFourCC(os, fourcc);
+        WriteU32LE(os, dataSize);
+        WriteU32LE(os, 4);     // align
+        WriteU32LE(os, skip);
+        if (dataSize) os.write(reinterpret_cast<const char*>(data), dataSize);
+        if (padding) { char pad[3] = {0}; os.write(pad, padding); }
+    };
+
+    for (const auto& e : entries) {
+        // NAME chunk: null-terminated name.
+        std::vector<uint8_t> nameBytes(e.name.begin(), e.name.end());
+        nameBytes.push_back(0);
+        writeChunk(FOURCC_NAME, nameBytes.data(), (uint32_t)nameBytes.size());
+        // BODY chunk: raw resource bytes.
+        writeChunk(FOURCC_BODY, e.data.data(), (uint32_t)e.data.size());
+    }
+
+    uint32_t finalSize = static_cast<uint32_t>(os.tellp());
+    os.seekp(4, std::ios::beg);
+    WriteU32LE(os, finalSize);
     return true;
 }
