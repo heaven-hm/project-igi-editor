@@ -1808,7 +1808,9 @@ void Renderer_Objects::DrawAttachmentsRecursive(
     auto ait = attachment_cache_.find(attCacheKey);
     if (ait == attachment_cache_.end()) return;
 
-    for (const auto &att : ait->second) {
+    const auto& attsR = ait->second;
+    for (size_t rri = 0; rri < attsR.size(); ++rri) {
+        const auto &att = attsR[rri];
         // Find the mesh
         std::string subKey = std::to_string(current_level_) + ":" + prefix + att.modelId;
         auto sit = mesh_cache_.find(subKey);
@@ -1847,10 +1849,10 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         childWorldMat = glm::translate(childWorldMat, worldPos);
         childWorldMat = childWorldMat * parentRot * attLocalRot;
 
-        // If this ATTA has been promoted to a real EditRigidObj task, skip drawing
-        // it here — the task renders it now — but still recurse into its children
-        // so nested attachments keep showing.
-        if (IsAttaPromoted(att.modelId, worldPos)) {
+        // If this ATTA has a proxy object editing it, skip rendering it here —
+        // the proxy renders it — but still recurse into children.
+        if (IsAttaPromoted(att.modelId, worldPos) ||
+            promoted_atta_records_.count(parentModelId + ":" + std::to_string(rri)) > 0) {
             std::string childKey = parentModelId + ">" + att.modelId;
             if (drawn.insert(childKey).second) {
                 DrawAttachmentsRecursive(topLevelModelId, att.modelId, isBuilding, childWorldMat, isTransparentPass,
