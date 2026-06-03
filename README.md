@@ -37,12 +37,8 @@ See the [CHANGELOGS.md](CHANGELOGS.md) for version history and detailed change l
 - **Level Tested**: Supports compiling/decompiling all 14 original game levels. Note that only the first few levels are fully tested and verified. Levels from Level 5 onwards may have bugs or issues; if you find any, please create an issue on GitHub and report them to us! Thank you!
 
 ### ⚠️ Known Issues
-A comprehensive list of all known rendering, game, and engine issues can be found in our **[Known Issues Guide](docs/KNOWN_ISSUES.md)**. Key issues currently include:
-- **Fence Wire**: Rendering and placement of secondary fence wiring is currently not solved.
-- **Level 7 Cutscenes**: Model `003_01_1` (PATROL_AK) does not draw properly due to missing texture coordinates in cutscene context.
-- **Metal Doors (L12-14)**: Slide-up doors fail to acquire standard orientations because the levels configure them as `EditRigidObj` instead of `Door`.
-- **Train Tracks (L1, 9, 10)**: Spline railway lines appear jagged over bridges and lack smooth curve interpolation.
-- **Cutscene Editing Crashes**: Editing `AnimationTask` or other timeline nodes can lead to game engine crashes due to bytecode script offset mismatches.
+A comprehensive list of all known rendering, game, and engine issues can be found in our **[Known Issues Guide](docs/KNOWN_ISSUES.md)**.
+
 
 ### Future Work
 - **Expanded Sandbox Modding**: Expanding item drop coordinates, trigger boundary visualizers, and ammo boxes placements.

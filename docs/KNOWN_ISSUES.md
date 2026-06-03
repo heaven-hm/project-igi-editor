@@ -6,33 +6,29 @@ This document tracks all known rendering bugs, engine limitations, and editor wo
 
 ## 🏔️ 1. Rendering and Model Issues
 
-### 👤 Level 7: PATROL_AK Soldier (Model `003_01_1`) Mesh Artifacts
-* **Symptom**: The `PATROL_AK` Soldier unit (Model ID `003_01_1`) is not drawn properly or appears with missing mesh segments/distorted polygons in the 3D viewport.
-* **Root Cause**: This soldier is bound specifically to an introductory/in-game cutscene. Because it lacks standard texture mapping coordinates within the loaded level's material buffers, the renderer is unable to bind and project textures onto the bone mesh successfully.
+### 🎥 Camera Orientation
+* **Symptom**: Camera orientations in certain views or cutscenes do not align correctly with the expected angles.
+* **Root Cause**: Discrepancies in yaw/pitch/roll representations and matrix multiplication orders between the editor's camera viewport and the game's internal camera structures.
 
-### 🚪 Levels 12, 13, 14: Metal Slide-Up Door Orientation Mismatch
-* **Symptom**: Slide-up metal doors (Model ID `506_01_1`, `METAL_DOOR_SLIDE_UP`) appear in the viewport or log files with mismatched orientations or snapped axes.
-* **Root Cause**: The physical game levels register these doors as standard `"EditRigidObj"` tasks rather than actual `"Door"` tasks. Because they are defined as rigid objects, they bypass the special hinged/sliding door transformation matrix handling, resulting in incorrect rotation interpretations between the engine's loader and the editor.
-
----
-
-## 🛤️ 2. Splines and Waypoints
-
-### 🚂 Levels 1, 9, 10: Jagged Train Track Spline Segments on Bridges
-* **Symptom**: Train track paths do not draw smooth curved spline segments. The segment lines appear highly jagged or disjointed, particularly when crossing bridge structures.
-* **Root Cause**: Spline track rendering over complex geometries requires dynamic Hermite/Bezier interpolation. Currently, bridge transitions do not trigger the necessary interpolation densities, causing straight-line segments to bridge the gap and look disjointed.
+### 📏 Wire Width
+* **Symptom**: Fence wires and secondary wire meshes render with incorrect thicknesses or fail to scale dynamically based on viewport distance.
+* **Root Cause**: Platform line-width rendering limits and lack of shader-based variable wire width scaling.
 
 ---
 
-## 🎮 3. Game Engine Stability
+## 🛤️ 2. Splines and Placements
 
-### 💥 AnimationTask and Cutscene Modifications Crash
-* **Symptom**: Modifying `AnimationTask` parameters, camera nodes, or cutscene objectives inside the Task Tree triggers a complete game crash (`igi.exe` Access Violation) when loading the mission.
-* **Root Cause**: The Project IGI engine utilizes highly rigid binary offsets and bytecode structures to map cutscene camera animations and timeline events. Any ad-hoc changes made in the compiled QVM directly invalidate these hardcoded sequence offsets, causing the game's virtual machine to dereference invalid memory.
+### 📍 Missing Position
+* **Symptom**: Certain objects or entities are loaded without valid coordinates, defaulting to the map origin or failing to render.
+* **Root Cause**: Unmapped coordinate offsets in the parsed binary QSC/QVM level files for specific object classes.
+
+### 🎬 Train Placements in Cutscenes
+* **Symptom**: Trains or railway carriages appear misplaced, misaligned, or floating during cutscene playback.
+* **Root Cause**: The engine uses hardcoded spline overrides and coordinate offsets specifically during cutscenes, which are not currently synchronized with the editor's standard object placement.
 
 ---
 
-## 📢 4. Reporting Other Bugs and Issues
+## 📢 3. Reporting Other Bugs and Issues
 
 If you encounter any other bugs, crashes, or rendering issues that are not documented here, please feel free to report them to the dev team!
 
