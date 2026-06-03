@@ -1,6 +1,6 @@
 # Project IGI Editor - Version History
 
-## Current Version: 2.5.0
+## Current Version: 2.6.0
 
 ---
 
@@ -8,7 +8,8 @@
 
 | Version | Release Date | Status | Major Features |
 |---------|--------------|--------|-----------------|
-| **2.5.0** | 2026-06-02 | Latest | Property panel scrolling, child task fields display, vertical scroll with scrollbar |
+| **2.6.0** | 2026-06-03 | Latest | Properties Editor UI, Attachments support, SplineObjs & Font/Sprite fixes |
+| **2.5.0** | 2026-06-02 | Stable | Property panel scrolling, child task fields display, vertical scroll with scrollbar |
 | **2.4.0** | 2026-05-28 | Stable | Position editor edge continuity, all-object picking (collision meshes), MEF attachment selection |
 | **2.3.0** | 2026-05-24 | Stable | Live font toggle in pause menu, text cursor glyph alignment, variable-width font support |
 | **2.2.0** | 2026-05-20 | Stable | Building interior occlusion, door/light/camera exterior selection, ancestor chain traversal |
@@ -25,6 +26,28 @@
 ---
 
 ## Release Notes by Version
+
+### 2.6.0 — Properties Editor UI, Attachments & CLI Tools
+**Released:** June 3, 2026
+
+**Overview:** This release introduces a new Properties Editor UI, support for editable Attachments, spline track fixes, and enhanced CLI tools for image and font atlas processing.
+
+**Key Improvements:**
+- 📋 **Properties Editor UI** — Added a brand new User Interface for the Properties Editor
+- 🔗 **Editable Attachments** — Added support for editing and configuring Attachments objects
+- 🛣️ **Road Tracks** — Fixed spline calculation and rendering issues for Road Tracks (`SplineObjs`)
+- 🔤 **Editor Fonts & Sprites** — Added custom Editor Fonts and Sprites assets
+- 🖼️ **CLI Image Conversion** — Direct format conversion via `--ToPng` and `--ToTga` with native PNG encoding
+- 🎨 **Font Export & Concatenation** — FNT atlas extraction (`--export-png`) and active glyph string concatenation
+
+**Files Modified:**
+- `source/app.cpp` — integrated properties UI, attachments hook, key handlers
+- `source/renderer/renderer_objects.cpp` — spline fixes, font/sprite rendering
+- `version` — bumped version string to 2.6.0
+
+**Compatibility:** Backward compatible.
+
+---
 
 ### 2.5.0 — Property Panel Scrolling & Child Task Display
 **Released:** June 2, 2026

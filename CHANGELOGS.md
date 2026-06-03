@@ -1,7 +1,15 @@
 # Changelogs
 
-## 2.6.0 - CLI Image Conversion & FNT Export
-This release enhances the Command Line Interface with direct image format conversion and font atlas extraction.
+## 2.6.0 - Properties Editor UI, Attachments, Splines & CLI Tools
+This release introduces a new Properties Editor UI, support for editable Attachments, spline track fixes, and enhanced CLI tools for image and font atlas processing.
+
+### 📋 Properties Editor & Attachments
+- **Properties Editor UI**: Added a brand new User Interface for the Properties Editor.
+- **Editable Attachments**: Added support for editing and configuring Attachments objects.
+
+### 🛣️ Road Tracks & Assets
+- **Road Tracks**: Fixed spline calculation and rendering issues for Road Tracks (`SplineObjs`).
+- **Editor Fonts & Sprites**: Added custom Editor Fonts and Sprites assets.
 
 ### 🖼️ Image Conversion Utilities
 - **Direct Format Conversion**: Added `--ToPng` and `--ToTga` arguments to convert individual `TGA` or `PNG` files instantly via the CLI.
@@ -10,6 +18,9 @@ This release enhances the Command Line Interface with direct image format conver
 ### 🔤 Font Output Improvements
 - **FNT Atlas Export**: New `--export-png` flag for the `--fnt` parser extracts the internal bitmap texture of font files directly to PNG.
 - **Glyph String Concatenation**: The `--fnt` info log now aggregates all active glyphs and prints them as a single string for quick character set verification.
+
+### 🔧 Stability
+- **Bug Fixes**: Fixed general bugs and improved overall editor stability.
 
 ---
 ## 2.5.0 - Property Panel Scrolling & Child Task Display
