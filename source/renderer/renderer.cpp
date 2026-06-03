@@ -931,11 +931,9 @@ void Renderer::Draw(const draw_params_s &params,
           draw_text_sm(text_x, text_y, buf, 1.0f, 1.0f, 1.0f);
           text_y += 15;
 
-          std::string teamStr =
-              (obj.team == 1) ? "Enemy"
-                              : ((obj.team == 0) ? "Friendly" : "Neutral");
-          float tr = (obj.team == 1) ? 1.0f : 0.2f;
-          float tg = (obj.team == 1) ? 0.2f : 1.0f;
+          std::string teamStr = (obj.team == 0) ? "Friendly" : "Enemy";
+          float tr = (obj.team == 0) ? 0.2f : 1.0f;
+          float tg = (obj.team == 0) ? 1.0f : 0.2f;
           float tb = 0.2f;
           snprintf(buf, sizeof(buf), "Team: %s", teamStr.c_str());
           draw_text_sm(text_x, text_y, buf, tr, tg, tb);

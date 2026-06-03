@@ -4713,17 +4713,9 @@ struct ModelEntry {
 static std::vector<ModelEntry> LoadAllModelsFromJson() {
 	std::vector<ModelEntry> entries;
 	std::string jsonPath = Utils::GetExeDirectory() + "\\content\\tools\\IGIModels.json";
-	bool usingBackup = false;
 
 	if (!std::filesystem::exists(jsonPath)) {
-		std::string backupPath = Utils::GetExeDirectory() + "\\content\\tools\\IGIModels.json";
-		if (std::filesystem::exists(backupPath)) {
-			jsonPath = backupPath;
-			usingBackup = true;
-			Logger::Get().Log(LogLevel::WARNING, "[App] QEditor not found at APPDATA or configured path. Using backup IGIModels.json from executable directory: " + backupPath);
-		} else {
-			Logger::Get().Log(LogLevel::ERR, "[App] QEditor missing and backup IGIModels.json not found in executable directory!");
-		}
+		Logger::Get().Log(LogLevel::ERR, "[App] IGIModels.json not found in executable directory: " + jsonPath);
 	} else {
 		Logger::Get().Log(LogLevel::INFO, "[App] Loading model database from: " + jsonPath);
 	}

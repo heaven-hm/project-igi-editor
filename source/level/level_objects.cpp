@@ -579,24 +579,14 @@ void LevelObjects::LoadModelNames() {
     char jsonPath[1024];
     std::string exeDir = Utils::GetExeDirectory();
     Str_SPrintf(jsonPath, 1024, "%s\\content\\tools\\IGIModels.json", exeDir.c_str());
-    bool usingBackup = false;
 
     if (!std::filesystem::exists(jsonPath)) {
-        std::string backupPath = Utils::GetExeDirectory() + "\\content\\tools\\IGIModels.json";
-        if (std::filesystem::exists(backupPath)) {
-            Str_Copy(jsonPath, 1024, backupPath.c_str());
-            usingBackup = true;
-            Logger::Get().Log(LogLevel::WARNING, "[LevelObjects] QEditor not found at APPDATA or configured path. Using backup IGIModels.json from executable directory: " + backupPath);
-        } else {
-            Logger::Get().Log(LogLevel::ERR, "[LevelObjects] QEditor missing and backup IGIModels.json not found in executable directory!");
-        }
+        Logger::Get().Log(LogLevel::ERR, "[LevelObjects] IGIModels.json not found in executable directory: " + std::string(jsonPath));
     }
 
     char* buf = nullptr;
     if (File_LoadText(jsonPath, buf)) {
-        if (!usingBackup) {
-            Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Loading model names from: " + std::string(jsonPath));
-        }
+        Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Loading model names from: " + std::string(jsonPath));
         std::string content(buf);
 
         File_FreeBuf(buf);

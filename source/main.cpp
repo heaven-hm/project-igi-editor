@@ -660,7 +660,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // setup path of res and shaders folders (GUI mode only — creates QEditor dirs)
+  // setup path of res and shaders folders (GUI mode only)
   Folders_Init();
 
 #if defined(_WIN32) && !defined(_DEBUG)
