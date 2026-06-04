@@ -3473,6 +3473,9 @@ void App::Frame(float delta_seconds) {
 			.model_picker_scroll_  = model_picker_scroll_,
 			.model_picker_filter_  = model_picker_filter_,
 			.model_ids_            = &level_model_ids_,
+			.ai_script_path_       = ai_script_path_,
+			.ai_script_text_       = ai_script_text_,
+			.ai_script_dirty_      = ai_script_dirty_,
 		};
 		draw_params_.level_objects_ = &level_.GetLevelObjects();
 		draw_params_.selected_object_index_ = selected_object_index_;
@@ -3609,6 +3612,9 @@ void App::Frame(float delta_seconds) {
 		.model_picker_scroll_  = model_picker_scroll_,
 		.model_picker_filter_  = model_picker_filter_,
 		.model_ids_            = &level_model_ids_,
+		.ai_script_path_       = ai_script_path_,
+		.ai_script_text_       = ai_script_text_,
+		.ai_script_dirty_      = ai_script_dirty_,
 	};
 
 	renderer_.Draw(draw_params_, task_tree_view);
