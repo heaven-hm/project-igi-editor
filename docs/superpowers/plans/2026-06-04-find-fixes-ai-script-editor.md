@@ -24,7 +24,7 @@
 
 ## Task 1: Fix TaskFindTextInTask — rebind from Ctrl+H to Ctrl+Shift+T
 
-Ctrl+H = ASCII 8 = Backspace. The keyboard handler intercepts key 8 as backspace before `DispatchEventBindings` is ever called, so this binding has never worked. Rebind to `<Ctrl><Shift><T>` which is currently unused.
+Ctrl+H = ASCII 8 = Backspace. The keyboard handler intercepts key 8 as backspace before `DispatchEventBindings` is ever called, so this binding has never worked. Rebind to `<Ctrl><Shift><X>` — `<Ctrl><Shift><T>` was already bound to `SaveSubTaskObjectFile`.
 
 **Files:**
 - Modify: `assets/content/qed/qedkeybindings.qsc:41`
@@ -37,7 +37,7 @@ SetEventBinding("TaskFindTextInTask",                       "<Ctrl><H>");
 ```
 Change to:
 ```
-SetEventBinding("TaskFindTextInTask",                       "<Ctrl><Shift><T>");
+SetEventBinding("TaskFindTextInTask",                       "<Ctrl><Shift><X>");
 ```
 
 - [ ] **Step 2: Build and verify**

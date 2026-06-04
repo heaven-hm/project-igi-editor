@@ -38,10 +38,10 @@
 
 **Problem:** Ctrl+H = ASCII 8 = Backspace. The keyboard handler has explicit backspace handling that fires before `DispatchEventBindings()`, so `TaskFindTextInTask` never receives its key.
 
-**Fix:** Rebind `TaskFindTextInTask` in `assets/content/qed/qedkeybindings.qsc` to an unused combo. After auditing all existing bindings, use `<Ctrl><Shift><T>` (T for "text in task") which is currently unbound.
+**Fix:** Rebind `TaskFindTextInTask` in `assets/content/qed/qedkeybindings.qsc` to an unused combo. `<Ctrl><Shift><T>` was the first candidate but is already bound to `SaveSubTaskObjectFile`. `<Ctrl><Shift><X>` is unused.
 
 - Old: `SetEventBinding("TaskFindTextInTask", "<Ctrl><H>");`
-- New: `SetEventBinding("TaskFindTextInTask", "<Ctrl><Shift><T>");`
+- New: `SetEventBinding("TaskFindTextInTask", "<Ctrl><Shift><X>");`
 
 **Success criterion:** Ctrl+Shift+T opens the find bar in "Find text in task parameters" mode.
 
