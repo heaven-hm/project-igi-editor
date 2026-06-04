@@ -840,6 +840,32 @@ void App::SaveCurrentLevel() {
 		Logger::Get().Log(LogLevel::INFO, "[App] SaveCurrentLevel() called");
 		FlushAttaProxiesToMef();
 		level_.SaveChanges();
+
+		// Compile edited AI script (.qsc text -> .qvm file) before saving the level QVM.
+		if (ai_script_dirty_ && !ai_script_path_.empty()) {
+			Logger::Get().Log(LogLevel::INFO, "[App] Compiling modified AI script to: " + ai_script_path_);
+			auto lexResult   = qsc::Lex(ai_script_text_);
+			auto parseResult = lexResult.ok ? qsc::Parse(lexResult.tokens) : qsc::ParseResult{};
+			std::string compileErr;
+			bool ok = lexResult.ok && parseResult.ok &&
+			          qvm::CompileToFile(*parseResult.program, ai_script_path_, &compileErr);
+			if (ok) {
+				QVMFile check = QVM_Parse(ai_script_path_);
+				if (check.valid) {
+					ai_script_dirty_ = false;
+					status_message_ = "AI script compiled: " + ai_script_path_;
+					Logger::Get().Log(LogLevel::INFO, "[App] AI script compiled OK");
+				} else {
+					Logger::Get().Log(LogLevel::ERR, "[App] AI script round-trip failed -- file may be corrupt");
+					status_message_ = "AI script compile: round-trip failed";
+				}
+			} else {
+				std::string detail = compileErr.empty() ? "(no detail)" : compileErr;
+				Logger::Get().Log(LogLevel::ERR, "[App] AI script compile error: " + detail);
+				status_message_ = "AI script compile error: " + detail;
+			}
+		}
+
 		Logger::Get().Log(LogLevel::INFO, "[App] Calling SaveAndCompile()");
 		SaveAndCompile();
 	}
