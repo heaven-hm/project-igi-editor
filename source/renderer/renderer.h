@@ -321,7 +321,9 @@ public:
 		// AI Script editor state
 		std::string ai_script_path_;
 		std::string ai_script_text_;
-		bool        ai_script_dirty_ = false;
+		bool        ai_script_dirty_        = false;
+		int         ai_script_vscroll_      = 0;
+		int         ai_script_path_hscroll_ = 0;
 	};
 
 

@@ -1570,38 +1570,79 @@ void Renderer::Draw(const draw_params_s &params,
             caret_idx = (int)task_tree_view.prop_text_buf_.size();
           // Draw an editable box's contents + blinking caret. `field_id` is the
           // edit-field key (fi*3+comp, or -2 for the note). `multiline` wraps.
+          // Returns flat text offsets of each visual line start.
+          // Lines split on '\n'; lines longer than max_chars wrap.
+          auto aiLineStarts = [](const std::string& t, int mc) {
+            std::vector<int> s; s.push_back(0);
+            for (int i = 0; i < (int)t.size(); ) {
+              if (t[i] == '\n') { s.push_back(i + 1); i++; }
+              else {
+                int cnt = 0;
+                while (i < (int)t.size() && t[i] != '\n' && cnt < mc) { i++; cnt++; }
+                if (i < (int)t.size() && t[i] != '\n') s.push_back(i);
+              }
+            }
+            return s;
+          };
+
+          // draw_edit_box: start_line = first visible visual line (scroll offset for multiline).
+          //                hscroll    = first visible char offset (scroll offset for single-line).
           auto draw_edit_box = [&](const PropPanel::Widget& w, int field_id,
-                                   const std::string& live_text, bool multiline) {
+                                   const std::string& live_text, bool multiline,
+                                   int start_line = 0, int hscroll = 0) {
             bool editing = (resolveEdit(curObjIdx) && task_tree_view.prop_text_edit_field_ == field_id);
             const std::string& txt = editing ? task_tree_view.prop_text_buf_ : live_text;
             const int cw = 7;
             int max_chars = std::max(1, (w.x2 - w.x1 - 6) / cw);
-            int box_lines = std::max(1, (w.y2 - w.y1) / PropPanel::kBoxH);
-            // Render wrapped (single-line types still wrap if oversized).
-            int line = 0;
-            for (size_t p = 0; (p < txt.size() || (txt.empty() && line == 0)) &&
-                               line < (multiline ? box_lines : 1); p += max_chars, ++line) {
-              std::string seg = txt.substr(p, (multiline ? (size_t)max_chars : txt.size()));
-              if (!multiline && (int)seg.size() > max_chars && !editing)
-                seg = seg.substr(0, max_chars);
-              draw_text(w.x1 + 3, w.y1 + 12 + line * PropPanel::kBoxH, seg.c_str(), 1.0f, 1.0f, 0.85f);
-              if (txt.empty()) break;
+            int box_lines_cap = std::max(1, (w.y2 - w.y1) / PropPanel::kBoxH);
+
+            if (!multiline) {
+              // Single-line with horizontal scroll
+              int hs = std::max(0, std::min(hscroll, (int)txt.size()));
+              std::string disp = txt.size() > (size_t)hs ? txt.substr(hs, max_chars) : "";
+              draw_text(w.x1 + 3, w.y1 + 12, disp.c_str(), 1.0f, 1.0f, 0.85f);
+              if (editing && caret_on) {
+                int vis = std::max(0, caret_idx - hs);
+                vis = std::min(vis, (int)disp.size());
+                std::string before = disp.substr(0, vis);
+                int cx = w.x1 + 3 + measure_text_width(before.c_str(), (int)before.size());
+                glColor3f(1.0f, 0.95f, 0.2f);
+                glBegin(GL_LINES);
+                glVertex2i(cx, gl_y(w.y1 + 3)); glVertex2i(cx, gl_y(w.y1 + 16));
+                glEnd();
+              }
+              return;
             }
-            if (editing && caret_on) {
-              int ci = caret_idx;
-              int cl = multiline ? (ci / max_chars) : 0;
-              int cc = multiline ? (ci % max_chars) : ci;
-              // Measure the actual glyph advances of the characters on this line
-              // up to the caret, so the caret aligns with the rendered text.
-              int line_start = multiline ? (cl * max_chars) : 0;
-              std::string before = txt.substr(line_start, cc);
-              int cx = w.x1 + 3 + measure_text_width(before.c_str(), (int)before.size());
-              int cyt = w.y1 + 3 + cl * PropPanel::kBoxH;
-              int cyb = cyt + 13;
-              glColor3f(1.0f, 0.95f, 0.2f);
-              glBegin(GL_LINES);
-              glVertex2i(cx, gl_y(cyt)); glVertex2i(cx, gl_y(cyb));
-              glEnd();
+
+            // Multiline: build visual line starts respecting \n and max_chars wrap
+            auto lstarts = aiLineStarts(txt, max_chars);
+            // Caret visual line/col
+            int caret_line = -1, caret_col = -1;
+            if (editing) {
+              caret_line = (int)(std::upper_bound(lstarts.begin(), lstarts.end(), caret_idx) - lstarts.begin()) - 1;
+              caret_line = std::max(0, std::min(caret_line, (int)lstarts.size() - 1));
+              caret_col  = caret_idx - lstarts[caret_line];
+            }
+            // Render visible lines from start_line
+            int render_line = 0;
+            for (int li = start_line; li < (int)lstarts.size() && render_line < box_lines_cap; li++, render_line++) {
+              int ls = lstarts[li];
+              int le = (li + 1 < (int)lstarts.size()) ? lstarts[li + 1] : (int)txt.size();
+              if (le > ls && txt[le - 1] == '\n') le--;
+              int seg_len = std::min(le - ls, max_chars);
+              if (seg_len < 0) seg_len = 0;
+              std::string seg = txt.substr(ls, seg_len);
+              draw_text(w.x1 + 3, w.y1 + 12 + render_line * PropPanel::kBoxH, seg.c_str(), 1.0f, 1.0f, 0.85f);
+              if (editing && caret_on && caret_line == li) {
+                int cc = std::min(caret_col, (int)seg.size());
+                std::string before = seg.substr(0, cc);
+                int cx  = w.x1 + 3 + measure_text_width(before.c_str(), (int)before.size());
+                int cyt = w.y1 + 3 + render_line * PropPanel::kBoxH;
+                glColor3f(1.0f, 0.95f, 0.2f);
+                glBegin(GL_LINES);
+                glVertex2i(cx, gl_y(cyt)); glVertex2i(cx, gl_y(cyt + 13));
+                glEnd();
+              }
             }
           };
 
@@ -1655,11 +1696,6 @@ void Renderer::Draw(const draw_params_s &params,
             if (sub[0]) snprintf(fhdr, sizeof(fhdr), "%s (%s)%s:", fd.name.c_str(), tn.c_str(), sub);
             else        snprintf(fhdr, sizeof(fhdr), "%s (%s):", fd.name.c_str(), tn.c_str());
             draw_text(L.panel_x + PropPanel::kPad, y + 11, fhdr, 1.0f, 0.9f, 0.2f);
-            // AI Team hint: show 0=Friendly / 1=Enemy inline
-            if (fd.name == "Team") {
-              draw_text_sm(L.panel_x + PropPanel::kPad + (int)strlen(fhdr) * 7 + 4, y + 11,
-                           "  0=Friendly  1=Enemy", 0.5f, 0.8f, 0.5f);
-            }
             y += PropPanel::kRowH;
 
             // Helper: editable numeric box (NumBox) — label + box + caret.
@@ -1891,14 +1927,22 @@ void Renderer::Draw(const draw_params_s &params,
           }
 
           // AI script widgets (appended after child fields for AI task types)
+          curObjIdx = sel;  // resolveEdit must see sel so edit state is applied correctly
           while (wi < (int)L.widgets.size()) {
               using K = PropPanel::WidgetKind;
               const auto& w = L.widgets[wi++];
               if (w.kind == K::AIScriptPath) {
+                  bool ed = resolveEdit(sel) &&
+                            task_tree_view.prop_text_edit_field_ == PropPanel::kAIScriptPathField;
                   draw_text(w.x1, w.y1 - PropPanel::kRowH + 12, "AI Script Path:", 0.8f, 0.8f, 1.0f);
+                  quad(w.x1, w.y1, w.x2, w.y2, 0.0f, 0.0f, 0.0f, 0.40f);
+                  border(w.x1, w.y1, w.x2, w.y2, 1.0f, ed ? 0.95f : 1.0f, ed ? 0.2f : 1.0f);
                   draw_edit_box(w, PropPanel::kAIScriptPathField,
-                                task_tree_view.ai_script_path_, false);
+                                task_tree_view.ai_script_path_, false,
+                                0, task_tree_view.ai_script_path_hscroll_);
               } else if (w.kind == K::AIScriptText) {
+                  bool ed = resolveEdit(sel) &&
+                            task_tree_view.prop_text_edit_field_ == PropPanel::kAIScriptTextField;
                   const char* label = task_tree_view.ai_script_dirty_
                                           ? "AI Script (modified -- save to compile):"
                                           : "AI Script:";
@@ -1906,8 +1950,11 @@ void Renderer::Draw(const draw_params_s &params,
                             task_tree_view.ai_script_dirty_ ? 1.0f : 0.8f,
                             task_tree_view.ai_script_dirty_ ? 0.6f : 0.8f,
                             task_tree_view.ai_script_dirty_ ? 0.2f : 1.0f);
+                  quad(w.x1, w.y1, w.x2, w.y2, 0.0f, 0.0f, 0.0f, 0.40f);
+                  border(w.x1, w.y1, w.x2, w.y2, 1.0f, ed ? 0.95f : 1.0f, ed ? 0.2f : 1.0f);
                   draw_edit_box(w, PropPanel::kAIScriptTextField,
-                                task_tree_view.ai_script_text_, true);
+                                task_tree_view.ai_script_text_, true,
+                                task_tree_view.ai_script_vscroll_, 0);
               }
               y = w.y2 + 6;
           }

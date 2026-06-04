@@ -1,5 +1,35 @@
 # Changelogs
 
+## 2.8.0 — Inline AI Script Editor, Mini-Notepad, Autocomplete Overhaul & Find Fixes
+This release delivers a full inline AI script editor embedded inside the property panel, a proper mini-notepad text editor with scrolling and arrow key navigation, a global autocomplete fix, and three keyboard shortcut corrections in the find system.
+
+### 🤖 Inline AI Script Editor
+- **Correct Task ID Resolution** — AI script path now uses the `HumanAI` child task's ID (e.g. `2203`) instead of the parent `HumanSoldier` ID, correctly pointing to `ai/2203.qvm`.
+- **Path Textbox** — Editable single-line textbox showing the full `.qvm` path. Type a new path and press Enter to load and decompile that file. Horizontal scrolling keeps long paths visible.
+- **Script Textbox** — Tall multiline textbox showing the decompiled QSC source. The orange "modified" label appears whenever unsaved edits exist.
+- **Compile-on-Save** — AI script edits are compiled back to `.qvm` only when the user saves the level (F3 / Save), with round-trip validation. Errors are shown in the status bar; dirty flag stays set on failure.
+
+### 📝 Mini-Notepad Text Editor
+- **Vertical Scrolling** — Mouse wheel scrolls the script content. PageUp / PageDown jump a screen at a time.
+- **Arrow Key Navigation** — Left/Right move the caret one character. Up/Down move by visual line, preserving the column position. Works correctly across `\n`-separated lines and wrapped lines.
+- **Mouse Click Positioning** — Clicking inside the script box positions the caret at the character closest to the click, accounting for the current scroll offset.
+- **Path Horizontal Scroll** — The path box scrolls horizontally as the caret moves past the visible area.
+- **Proper `\n`-Aware Wrapping** — The `draw_edit_box` renderer now splits on `\n` characters AND wraps at the box width, showing each logical line correctly. Cursor is always on the right visual line.
+- **Editable Appearance** — Both boxes now draw a dark background and a white/yellow border (yellow = active editing), matching the visual style of all other property fields.
+
+### 🔡 Autocomplete Everywhere Fixed
+- **Root Cause** — Field-ID sentinels for AI boxes are `-10`/`-11` (both `< 0`), which triggered a stale `prop_text_edit_field_ < 0` guard that blocked Ctrl+N, Ctrl+Space, and Ctrl+O in every field where they were hit. All guards now check `== -1`.
+- **Ctrl+N / Ctrl+Space / Ctrl+O** — All autocomplete and picker paths now work in the AI script box, the AI path box, and all standard string fields.
+- **Caret-Preserving Insert** — When Ctrl+N opens the keyword picker, the cursor position is captured (`picker_target_caret_`). Confirming a pick INSERTs the keyword at that exact position in the AI script box. Standard fields keep the existing full-replace behaviour.
+- **DispatchEventBindings Paths Fixed** — `AutoCompleteTaskName` and `AutoCompleteModelName` event bindings also had the stale guard; both now fixed and save the caret on open.
+
+### ⌨️ Find Shortcut Fixes
+- **TaskFindTextInTask** — Rebound from `Ctrl+H` (ASCII 8 = Backspace, permanently blocked) to `Ctrl+Shift+X`.
+- **TaskFindByTaskNote** — `Ctrl+Shift+N` was being silently swallowed by the Ctrl+N autocomplete intercept (both produce ASCII 14 in GLUT). Guard now checks `!shiftDown` so Ctrl+Shift+N correctly reaches `DispatchEventBindings`.
+- **TaskFindAgain** — After finding the next match, `Ctrl+Shift+F` now scrolls the task tree so the found item is visible and highlighted.
+
+---
+
 ## 2.7.0 - 3D Model Viewer, Autocomplete Task, Exact Keybindings & Task Tree Fixes
 This release introduces an interactive rotating 3D Model Viewer for selected level assets, auto-complete for task inputs, and critical fixes for keybinding collisions and task subtree importing/exporting.
 

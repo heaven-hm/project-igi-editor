@@ -994,6 +994,28 @@ void App::OnDisplay() {
 	// ignore
 }
 
+// AI text editor helpers — must be defined before Input_OnMouse and Input_OnSpecial.
+
+// Returns flat text offsets of each visual line start.
+// Lines split on '\n'; lines longer than max_chars wrap to the next visual line.
+static std::vector<int> AiTextLineStarts(const std::string& txt, int max_chars) {
+	std::vector<int> s;
+	s.push_back(0);
+	for (int i = 0; i < (int)txt.size(); ) {
+		if (txt[i] == '\n') { s.push_back(i + 1); i++; }
+		else {
+			int cnt = 0;
+			while (i < (int)txt.size() && txt[i] != '\n' && cnt < max_chars) { i++; cnt++; }
+			if (i < (int)txt.size() && txt[i] != '\n') s.push_back(i);
+		}
+	}
+	return s;
+}
+
+static int AiScriptMaxChars() {
+	return std::max(1, (PropPanel::kWidth - 2 * PropPanel::kPad - 6) / 7);
+}
+
 // input
 void App::Input_OnMouseWheel(int wheel, int direction, int x, int y) {
 	if (show_help_) {
@@ -1164,12 +1186,29 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 									prop_edit_obj_index_ = -1;
 									prop_text_edit_field_ = PropPanel::kAIScriptPathField;
 									prop_text_buf_ = ai_script_path_;
-									prop_text_caret_ = (int)prop_text_buf_.size();
+									{
+										int cc = std::max(0, (x - w.x1 - 3) / 7);
+										prop_text_caret_ = std::min((int)prop_text_buf_.size(),
+										                            ai_script_path_hscroll_ + cc);
+									}
 								} else if (w.kind == K::AIScriptText) {
 									prop_edit_obj_index_ = -1;
 									prop_text_edit_field_ = PropPanel::kAIScriptTextField;
 									prop_text_buf_ = ai_script_text_;
-									prop_text_caret_ = (int)prop_text_buf_.size();
+									{
+										const int mc = AiScriptMaxChars();
+										int click_row = std::max(0, (y - w.y1) / PropPanel::kBoxH);
+										int click_col = std::max(0, (x - w.x1 - 3) / 7);
+										int abs_line  = ai_script_vscroll_ + click_row;
+										auto lstarts  = AiTextLineStarts(ai_script_text_, mc);
+										abs_line = std::max(0, std::min(abs_line, (int)lstarts.size() - 1));
+										int ls   = lstarts[abs_line];
+										int next = (abs_line + 1 < (int)lstarts.size()) ? lstarts[abs_line + 1] : (int)ai_script_text_.size();
+										int len  = next - ls;
+										if (len > 0 && (ls + len) <= (int)ai_script_text_.size() &&
+										    ai_script_text_[ls + len - 1] == '\n') --len;
+										prop_text_caret_ = ls + std::min(click_col, len);
+									}
 								} else {
 									// PosZSlider / OriSlider / RgbSlider / NumSlider — single-value drag
 									prop_drag_obj_index_ = tIdx;
@@ -1605,6 +1644,51 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		return;
 	}
 
+	// Arrow key navigation inside AI script / path text boxes
+	if (prop_text_edit_field_ == PropPanel::kAIScriptTextField ||
+	    prop_text_edit_field_ == PropPanel::kAIScriptPathField) {
+		bool isScript = (prop_text_edit_field_ == PropPanel::kAIScriptTextField);
+		const int mc = AiScriptMaxChars();
+
+		if (key == GLUT_KEY_LEFT) {
+			if (prop_text_caret_ > 0) --prop_text_caret_;
+			if (isScript) UpdateAIScriptScroll(); else UpdateAIScriptPathHScroll();
+			return;
+		}
+		if (key == GLUT_KEY_RIGHT) {
+			if (prop_text_caret_ < (int)prop_text_buf_.size()) ++prop_text_caret_;
+			if (isScript) UpdateAIScriptScroll(); else UpdateAIScriptPathHScroll();
+			return;
+		}
+		if (isScript) {
+			if (key == GLUT_KEY_UP || key == GLUT_KEY_DOWN) {
+				auto starts = AiTextLineStarts(prop_text_buf_, mc);
+				int cl = (int)(std::upper_bound(starts.begin(), starts.end(), prop_text_caret_) - starts.begin()) - 1;
+				cl = std::max(0, std::min(cl, (int)starts.size() - 1));
+				int col = prop_text_caret_ - starts[cl];
+				int nl = cl + (key == GLUT_KEY_DOWN ? 1 : -1);
+				nl = std::max(0, std::min(nl, (int)starts.size() - 1));
+				int next_end = (nl + 1 < (int)starts.size()) ? starts[nl + 1] : (int)prop_text_buf_.size();
+				int line_len = next_end - starts[nl];
+				if (line_len > 0 && (starts[nl] + line_len) <= (int)prop_text_buf_.size() &&
+				    prop_text_buf_[starts[nl] + line_len - 1] == '\n') --line_len;
+				prop_text_caret_ = starts[nl] + std::min(col, line_len);
+				UpdateAIScriptScroll();
+				return;
+			}
+			if (key == GLUT_KEY_PAGE_UP) {
+				ai_script_vscroll_ = std::max(0, ai_script_vscroll_ - 12);
+				return;
+			}
+			if (key == GLUT_KEY_PAGE_DOWN) {
+				auto starts = AiTextLineStarts(prop_text_buf_, mc);
+				ai_script_vscroll_ = std::min(std::max(0, (int)starts.size() - 12),
+				                              ai_script_vscroll_ + 12);
+				return;
+			}
+		}
+	}
+
 	if (task_picker_open_) {
 		auto& objects = level_.GetLevelObjects().GetObjects();
 		std::vector<int> picker_to_objects;
@@ -1924,17 +2008,19 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		if (key == 14 && !shiftDown) { // Ctrl+N only (not Ctrl+Shift+N — that's TaskFindByTaskNote)
 			// Only open when a property text box is focused, so Enter knows which
 			// field to insert the chosen item into.
-			if (prop_text_edit_field_ < 0) {
+			if (prop_text_edit_field_ == -1) {
 				status_message_ = "Click a text box first, then Ctrl+N to pick a task type";
 				return;
 			}
-			picker_target_field_ = prop_text_edit_field_; picker_target_obj_ = prop_edit_obj_index_;
-			ac_task_items_ = autocomplete_keywords_; // show all keywords from file
+			picker_target_field_  = prop_text_edit_field_;
+			picker_target_obj_    = prop_edit_obj_index_;
+			picker_target_caret_  = prop_text_caret_;
+			ac_task_items_ = autocomplete_keywords_;
 			ac_task_picker_open_ = true; ac_task_selected_idx_ = 0; ac_task_scroll_offset_ = 0; ac_task_filter_.clear();
 			return;
 		}
 		if (key == 15) { // Ctrl+O → Model ID picker (only open when active text box has XXX_XX_X content)
-			if (prop_text_edit_field_ < 0) {
+			if (prop_text_edit_field_ == -1) {
 				status_message_ = "Click a text box first, then Ctrl+O to pick a model";
 				return;
 			}
@@ -1951,7 +2037,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 			return;
 		}
 		if (key == 0 || key == ' ') { // Ctrl+Space → AutoComplete inline
-			if (prop_text_edit_field_ < 0) {
+			if (prop_text_edit_field_ == -1) {
 				status_message_ = "Autocomplete: click a text box first";
 			} else if (autocomplete_keywords_.empty()) {
 				status_message_ = "Autocomplete: no keywords loaded (content/tools/AutoCompleteKeywords.txt)";
@@ -1971,6 +2057,12 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 							prop_text_caret_ = ws + (int)kw.size();
 							status_message_ = "Autocompleted: " + kw;
 							done = true;
+							// Sync AI script state immediately (inline autocomplete keeps editing)
+							if (prop_text_edit_field_ == PropPanel::kAIScriptTextField) {
+								ai_script_text_  = prop_text_buf_;
+								ai_script_dirty_ = true;
+								UpdateAIScriptScroll();
+							}
 							break;
 						}
 					}
@@ -2000,6 +2092,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 			if (multiline) {              // VarString/String256: insert newline
 				prop_text_buf_.insert(prop_text_buf_.begin() + caret, '\n');
 				caret++;
+				UpdateAIScriptScroll();
 			} else {                      // single-line: commit
 				CommitPropTextEdit();
 			}
@@ -2009,17 +2102,22 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 			if (caret > 0) {
 				prop_text_buf_.erase(prop_text_buf_.begin() + (caret - 1));
 				caret--;
+				UpdateAIScriptScroll();
+				UpdateAIScriptPathHScroll();
 			}
 			return;
 		}
 		if (key == 127) { // Delete — delete at caret
 			if (caret < (int)prop_text_buf_.size())
 				prop_text_buf_.erase(prop_text_buf_.begin() + caret);
+			UpdateAIScriptScroll();
 			return;
 		}
 		if (key >= 32 && key <= 126) { // printable: insert at caret
 			prop_text_buf_.insert(prop_text_buf_.begin() + caret, (char)key);
 			caret++;
+			UpdateAIScriptScroll();
+			UpdateAIScriptPathHScroll();
 			return;
 		}
 		return;
@@ -2057,15 +2155,30 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 				}
 			}
 			ac_task_picker_open_ = false;
-			// Restore the field captured when the picker opened, so the choice lands in
-			// the exact text box the cursor was in (even if focus changed meanwhile).
-			if (picker_target_field_ >= 0) { prop_text_edit_field_ = picker_target_field_; prop_edit_obj_index_ = picker_target_obj_; }
-			if (prop_text_edit_field_ >= 0 && ac_task_selected_idx_ < (int)filtered.size()) {
-				prop_text_buf_ = filtered[ac_task_selected_idx_]; // CLEAR text box and insert selected
-				prop_text_caret_ = (int)prop_text_buf_.size();
-				CommitPropTextEdit();              // apply the chosen value to the field
+			// Restore field, obj, and caret position captured when the picker opened.
+			if (picker_target_field_ != -1) {
+				prop_text_edit_field_ = picker_target_field_;
+				prop_edit_obj_index_  = picker_target_obj_;
 			}
-			picker_target_field_ = -1; picker_target_obj_ = -1;
+			if (prop_text_edit_field_ != -1 && ac_task_selected_idx_ < (int)filtered.size()) {
+				const std::string& item = filtered[ac_task_selected_idx_];
+				bool isAI = (prop_text_edit_field_ == PropPanel::kAIScriptTextField);
+				if (isAI) {
+					// For AI script: INSERT at saved caret position (don't replace entire script)
+					int ins = std::max(0, std::min(picker_target_caret_, (int)prop_text_buf_.size()));
+					prop_text_buf_.insert(ins, item);
+					prop_text_caret_ = ins + (int)item.size();
+					// Commit: store into ai_script_text_ and mark dirty, keep editing
+					ai_script_text_  = prop_text_buf_;
+					ai_script_dirty_ = true;
+					UpdateAIScriptScroll();
+				} else {
+					prop_text_buf_  = item;       // REPLACE field content (existing behaviour)
+					prop_text_caret_ = (int)prop_text_buf_.size();
+					CommitPropTextEdit();
+				}
+			}
+			picker_target_field_ = -1; picker_target_obj_ = -1; picker_target_caret_ = -1;
 			return;
 		}
 		if (key == 8) {
@@ -3136,13 +3249,14 @@ void App::DispatchEventBindings() {
 		return;
 	}
 	if (Check("AutoCompleteTaskName")) {
-		// Only open when a property text box is focused (Enter inserts into it).
-		if (prop_text_edit_field_ < 0) {
+		if (prop_text_edit_field_ == -1) {
 			status_message_ = "Click a text box first, then Ctrl+N to pick a task type";
 			return;
 		}
-		picker_target_field_ = prop_text_edit_field_; picker_target_obj_ = prop_edit_obj_index_;
-		ac_task_items_ = autocomplete_keywords_; // show keywords from AutoCompleteKeywords.txt
+		picker_target_field_  = prop_text_edit_field_;
+		picker_target_obj_    = prop_edit_obj_index_;
+		picker_target_caret_  = prop_text_caret_;
+		ac_task_items_ = autocomplete_keywords_;
 		ac_task_picker_open_   = true;
 		ac_task_selected_idx_  = 0;
 		ac_task_scroll_offset_ = 0;
@@ -3150,15 +3264,17 @@ void App::DispatchEventBindings() {
 		return;
 	}
 	if (Check("AutoCompleteModelName")) {
-		if (prop_text_edit_field_ < 0) {
+		if (prop_text_edit_field_ == -1) {
 			status_message_ = "Click a text box first, then Ctrl+O to pick a model";
 			return;
 		}
-		picker_target_field_ = prop_text_edit_field_; picker_target_obj_ = prop_edit_obj_index_;
+		picker_target_field_  = prop_text_edit_field_;
+		picker_target_obj_    = prop_edit_obj_index_;
+		picker_target_caret_  = prop_text_caret_;
 		model_picker_open_    = true;
 		model_picker_selected_ = 0;
 		model_picker_scroll_   = 0;
-		model_picker_filter_.clear(); // show ALL model IDs; user types to filter
+		model_picker_filter_.clear();
 		return;
 	}
 	if (Check("Undo")) { Undo(); }
@@ -3612,9 +3728,11 @@ void App::Frame(float delta_seconds) {
 		.model_picker_scroll_  = model_picker_scroll_,
 		.model_picker_filter_  = model_picker_filter_,
 		.model_ids_            = &level_model_ids_,
-		.ai_script_path_       = ai_script_path_,
-		.ai_script_text_       = ai_script_text_,
-		.ai_script_dirty_      = ai_script_dirty_,
+		.ai_script_path_        = ai_script_path_,
+		.ai_script_text_        = ai_script_text_,
+		.ai_script_dirty_       = ai_script_dirty_,
+		.ai_script_vscroll_     = ai_script_vscroll_,
+		.ai_script_path_hscroll_= ai_script_path_hscroll_,
 	};
 
 	renderer_.Draw(draw_params_, task_tree_view);
@@ -4495,12 +4613,35 @@ bool App::IsPropFieldMultiline(int field) const {
 	return tn == "VarString" || tn == "String256";
 }
 
+void App::UpdateAIScriptScroll() {
+	if (prop_text_edit_field_ != PropPanel::kAIScriptTextField) return;
+	const int mc = AiScriptMaxChars(), box_lines = 12;
+	auto starts = AiTextLineStarts(prop_text_buf_, mc);
+	int cl = (int)(std::upper_bound(starts.begin(), starts.end(), prop_text_caret_) - starts.begin()) - 1;
+	cl = std::max(0, std::min(cl, (int)starts.size() - 1));
+	if (cl < ai_script_vscroll_)
+		ai_script_vscroll_ = cl;
+	else if (cl >= ai_script_vscroll_ + box_lines)
+		ai_script_vscroll_ = cl - box_lines + 1;
+}
+
+void App::UpdateAIScriptPathHScroll() {
+	if (prop_text_edit_field_ != PropPanel::kAIScriptPathField) return;
+	const int mc = AiScriptMaxChars();
+	if (prop_text_caret_ < ai_script_path_hscroll_)
+		ai_script_path_hscroll_ = prop_text_caret_;
+	if (prop_text_caret_ >= ai_script_path_hscroll_ + mc)
+		ai_script_path_hscroll_ = prop_text_caret_ - mc + 1;
+}
+
 void App::LoadAIScriptForSelected() {
 	if (ai_script_dirty_)
 		status_message_ = "Warning: unsaved AI script edits discarded (save level first)";
 	ai_script_path_.clear();
 	ai_script_text_.clear();
-	ai_script_dirty_ = false;
+	ai_script_dirty_        = false;
+	ai_script_vscroll_      = 0;
+	ai_script_path_hscroll_ = 0;
 
 	if (selected_object_index_ < 0) return;
 	const auto& objects = level_.GetLevelObjects().GetObjects();
@@ -4509,12 +4650,25 @@ void App::LoadAIScriptForSelected() {
 
 	// Only AI model types get the script section.
 	if (ai_model_ids_.find(obj.modelId) == ai_model_ids_.end()) return;
-	if (obj.taskId.empty()) return;
+
+	// The .qvm belongs to the HumanAI child task (not the HumanSoldier parent).
+	// If this object IS the HumanAI, use its own ID; otherwise find the HumanAI child.
+	const LevelObject* aiTask = nullptr;
+	if (obj.type == "HumanAI") {
+		aiTask = &obj;
+	} else {
+		for (int ci : obj.childrenIndices) {
+			if (ci < 0 || ci >= (int)objects.size()) continue;
+			if (objects[ci].deleted) continue;
+			if (objects[ci].type == "HumanAI") { aiTask = &objects[ci]; break; }
+		}
+	}
+	if (!aiTask || aiTask->taskId.empty()) return;
 
 	int levelNo = level_.GetLevelNo();
 	std::string aiDir = Utils::GetIGIRootPath() +
 	                    "\\missions\\location0\\level" + std::to_string(levelNo) + "\\ai";
-	ai_script_path_ = aiDir + "\\" + obj.taskId + ".qvm";
+	ai_script_path_ = aiDir + "\\" + aiTask->taskId + ".qvm";
 
 	if (!std::filesystem::exists(ai_script_path_)) {
 		ai_script_text_ = "// .qvm not found: " + ai_script_path_;

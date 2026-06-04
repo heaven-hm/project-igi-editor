@@ -1,6 +1,6 @@
 # Project IGI Editor - Version History
 
-## Current Version: 2.7.0
+## Current Version: 2.8.0
 
 ---
 
@@ -8,7 +8,8 @@
 
 | Version | Release Date | Status | Major Features |
 |---------|--------------|--------|-----------------|
-| **2.7.0** | 2026-06-04 | Latest | 3D Model Viewer, Autocomplete Task, exact keybinding match & task tree fixes |
+| **2.8.0** | 2026-06-04 | Latest | Inline AI Script Editor, mini-notepad with scrolling & arrow keys, autocomplete everywhere, find-shortcut fixes |
+| **2.7.0** | 2026-06-04 | Stable | 3D Model Viewer, Autocomplete Task, exact keybinding match & task tree fixes |
 | **2.6.0** | 2026-06-03 | Stable | Properties Editor UI, Attachments support, SplineObjs & Font/Sprite fixes |
 | **2.5.0** | 2026-06-02 | Stable | Property panel scrolling, child task fields display, vertical scroll with scrollbar |
 | **2.4.0** | 2026-05-28 | Stable | Position editor edge continuity, all-object picking (collision meshes), MEF attachment selection |
@@ -27,6 +28,34 @@
 ---
 
 ## Release Notes by Version
+
+### 2.8.0 — Inline AI Script Editor & Autocomplete Overhaul
+**Released:** June 4, 2026
+
+**Overview:** This release adds a full inline AI script mini-editor directly inside the property panel for HumanSoldier and HumanAI tasks, fixes three broken keyboard shortcuts in the find system, and overhauled autocomplete so it works correctly in every text field including the new AI script box.
+
+**Key Improvements:**
+- 🤖 **Inline AI Script Editor** — When a HumanSoldier or HumanAI task is selected, the property panel now shows a single-line path box and a tall multiline script textbox showing the decompiled QSC source from the correct `ai/XXXX.qvm` file (uses HumanAI child task's ID, not the parent soldier's ID).
+- 📝 **Mini-Notepad Text Editor** — The AI script textbox is a proper text editor: vertical scrolling (mouse wheel + PageUp/PageDown), arrow key cursor navigation (left/right by character, up/down by visual line), mouse click to position cursor accurately, proper `\n`-aware text wrapping, and blinking cursor with yellow highlight border when active.
+- 📂 **Path Box Horizontal Scroll** — The AI Script Path textbox scrolls horizontally with arrow keys and caret tracking, handles long file paths cleanly.
+- 💾 **Compile-on-Save** — Edits to the AI script are compiled back to the `.qvm` file only when the user saves the level (F3 / Save button), with round-trip validation. The "modified" label turns orange when unsaved edits exist.
+- 🔡 **Autocomplete Everywhere** — Fixed a field-ID guard bug (`< 0` instead of `== -1`) that silently blocked Ctrl+N, Ctrl+Space, and Ctrl+O in every text field. All autocomplete paths now work in AI fields and all standard fields.
+- 📌 **Caret-Preserving Autocomplete** — When Ctrl+N opens the keyword picker, the cursor position is saved. Confirming a pick INSERTs the keyword at that saved position in the AI script box (rather than replacing the entire script), while regular string fields keep the existing replace behaviour.
+- ⌨️ **TaskFindTextInTask Rebound** — `Ctrl+H` (ASCII backspace conflict) rebound to `Ctrl+Shift+X`.
+- ⌨️ **TaskFindByTaskNote Fixed** — `Ctrl+Shift+N` was being consumed by the Ctrl+N autocomplete intercept; now properly falls through to `DispatchEventBindings`.
+- ⌨️ **TaskFindAgain Scrolls Tree** — `Ctrl+Shift+F` now scrolls and highlights the found task in the tree view after each press.
+
+**Files Modified:**
+- `source/app.cpp` — AI script load/compile, arrow key handler, mouse click caret, autocomplete fixes, find-shortcut fixes, scroll helpers
+- `source/app.h` — AI script state fields (`ai_script_path_`, `ai_script_text_`, `ai_script_dirty_`, `ai_script_vscroll_`, `ai_script_path_hscroll_`), picker caret field
+- `source/renderer/renderer.cpp` — rewritten `draw_edit_box` with `\n` support + scrolling, AI widget rendering with box background/border
+- `source/renderer/renderer.h` — `AIScriptPath`/`AIScriptText` widget kinds, sentinel constants, new params struct fields
+- `assets/content/qed/qedkeybindings.qsc` — rebound `TaskFindTextInTask` to `Ctrl+Shift+X`
+- `version` — bumped to 2.8.0
+
+**Compatibility:** Backward compatible. Existing levels and configurations work without modification.
+
+---
 
 ### 2.7.0 — 3D Model Viewer & Autocomplete Task
 **Released:** June 4, 2026

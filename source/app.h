@@ -213,6 +213,7 @@ private:
 	// is inserted into the exact field the cursor was in — even if focus changed.
 	int						picker_target_field_   = -1;
 	int						picker_target_obj_     = -1;
+	int						picker_target_caret_   = -1;    // caret position when picker opened
 	int						prop_last_drag_dx_     = 0;     // last non-zero X delta (for edge-stuck continuity)
 	int						prop_last_drag_dy_     = 0;     // last non-zero Y delta (for edge-stuck continuity)
 	float					prop_drag_speed_       = 0.f;   // ramping position-drag speed (units/frame) while held in a direction
@@ -228,7 +229,9 @@ private:
 	// AI script editor state (HumanSoldier / HumanAI prop panel section)
 	std::string              ai_script_path_;
 	std::string              ai_script_text_;
-	bool                     ai_script_dirty_ = false;
+	bool                     ai_script_dirty_       = false;
+	int                      ai_script_vscroll_     = 0;   // first visible visual line
+	int                      ai_script_path_hscroll_= 0;   // first visible char in path box
 
 	// Task type view toggle
 	bool					show_task_type_   = false;
@@ -356,6 +359,8 @@ private:
 	bool					IsPropFieldMultiline(int field) const; // VarString/String256 box?
 	static std::string		StripQuotes(const std::string& s);
 	void    LoadAIScriptForSelected();
+	void    UpdateAIScriptScroll();      // keep vscroll so caret is visible
+	void    UpdateAIScriptPathHScroll(); // keep hscroll so caret is visible
 	void					SaveAndReloadObjects();
 	void					Undo();
 	void					Redo();
