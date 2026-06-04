@@ -38,6 +38,8 @@ enum class WidgetKind {
     StringBox,     // editable text box (String*/VarString)
     Checkbox,      // bool8 / PushButton
     ChildHeader,   // non-interactive separator label for a child task section
+    AIScriptPath,  // single-line editable: resolved .qvm file path
+    AIScriptText,  // multiline editable: decompiled QSC source
 };
 
 struct Widget {
@@ -52,6 +54,11 @@ struct Layout {
     int panel_x = 8, panel_y = 8, panel_w = 320, panel_h = 0;
     std::vector<Widget> widgets;
 };
+
+// Sentinel prop_text_edit_field_ values for AI script widgets.
+// Must not collide with fi*3+comp range (always >= 0 for normal fields).
+static constexpr int kAIScriptPathField = -10;
+static constexpr int kAIScriptTextField = -11;
 
 // Layout constants (kept in one place so draw + hit-test agree exactly).
 static constexpr int kLeft       = 8;
@@ -186,6 +193,22 @@ inline Layout BuildLayout(const TaskSchemaNS::TaskSchema& schema, bool is_ai = f
         y += kRowH + 2;
         emitFields(*cscp, false, childIdx);
         y += 4;
+    }
+
+    // AI Script section — only for AI tasks (HumanSoldier, HumanAI, etc.)
+    if (is_ai) {
+        y += kRowH;  // "AI Script Path:" label line
+        L.widgets.push_back({WidgetKind::AIScriptPath,
+                             kLeft + kPad, y, kLeft + kWidth - kPad, y + kBoxH,
+                             kAIScriptPathField, 0});
+        y += kBoxH + 6;
+
+        y += kRowH;  // "AI Script:" label line
+        const int scriptH = kBoxH * 12;
+        L.widgets.push_back({WidgetKind::AIScriptText,
+                             kLeft + kPad, y, kLeft + kWidth - kPad, y + scriptH,
+                             kAIScriptTextField, 0});
+        y += scriptH + 6;
     }
 
     L.panel_h = (y + kPad) - kTop;
