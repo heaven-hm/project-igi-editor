@@ -4450,6 +4450,37 @@ bool App::IsPropFieldMultiline(int field) const {
 	return tn == "VarString" || tn == "String256";
 }
 
+void App::LoadAIScriptForSelected() {
+	ai_script_path_.clear();
+	ai_script_text_.clear();
+	ai_script_dirty_ = false;
+
+	if (selected_object_index_ < 0) return;
+	const auto& objects = level_.GetLevelObjects().GetObjects();
+	if (selected_object_index_ >= (int)objects.size()) return;
+	const auto& obj = objects[selected_object_index_];
+
+	// Only AI model types get the script section.
+	if (ai_model_ids_.find(obj.modelId) == ai_model_ids_.end()) return;
+	if (obj.taskId.empty()) return;
+
+	int levelNo = level_.GetLevelNo();
+	std::string aiDir = Utils::GetIGIRootPath() +
+	                    "\\missions\\location0\\level" + std::to_string(levelNo) + "\\ai";
+	ai_script_path_ = aiDir + "\\" + obj.taskId + ".qvm";
+
+	if (!std::filesystem::exists(ai_script_path_)) {
+		ai_script_text_ = "// .qvm not found: " + ai_script_path_;
+		return;
+	}
+	QVMFile qvm = QVM_Parse(ai_script_path_);
+	if (!qvm.valid) {
+		ai_script_text_ = "// decompile failed (invalid QVM): " + ai_script_path_;
+		return;
+	}
+	ai_script_text_ = QVM_DecompileToString(qvm);
+}
+
 // Commit the active text/numeric box (prop_text_buf_) back to the object and
 // objects.qsc, then clear edit focus. Handles the note (-2) and any field box.
 void App::CommitPropTextEdit() {

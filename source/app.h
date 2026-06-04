@@ -225,6 +225,11 @@ private:
 	enum class FindMode { TaskNameTypeId, TextInTask, ById, ByNote, SetId };
 	FindMode				find_mode_        = FindMode::TaskNameTypeId;
 
+	// AI script editor state (HumanSoldier / HumanAI prop panel section)
+	std::string              ai_script_path_;
+	std::string              ai_script_text_;
+	bool                     ai_script_dirty_ = false;
+
 	// Task type view toggle
 	bool					show_task_type_   = false;
 
@@ -350,6 +355,7 @@ private:
 	void					CommitPropTextEdit();          // writes prop_text_buf_ to argTokens; clears edit state
 	bool					IsPropFieldMultiline(int field) const; // VarString/String256 box?
 	static std::string		StripQuotes(const std::string& s);
+	void    LoadAIScriptForSelected();
 	void					SaveAndReloadObjects();
 	void					Undo();
 	void					Redo();
