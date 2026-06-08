@@ -943,67 +943,138 @@ bool Renderer_Objects::SuppressAttachmentInMef(const std::string& parentModelId,
     return true;
 }
 
-bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId) {
-    const std::string gameRes = Utils::GetIGIRootPath() + "\\missions\\location0\\level" +
-        std::to_string(current_level_) + "\\models\\level" +
-        std::to_string(current_level_) + ".res";
-    if (!std::filesystem::exists(gameRes)) {
-        Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: archive missing: " + gameRes);
+// Add a single resource (model or texture) to a .res archive, idempotently.
+// Returns true if the entry is present after the call (already there = no-op true).
+// Backs the archive up to <resPath>.orig once before the first modification, and
+// ABORTS (false) if that backup copy fails so the user's archive is never touched.
+static bool AddFileToRes(const std::string& resPath, const std::string& entryName,
+                         const std::vector<uint8_t>& bytes, std::string& err) {
+    RESFile res = RES_Parse(resPath);
+    if (!res.valid) {
+        err = "parse failed: " + resPath;
         return false;
     }
-    // Locate the loose .mef the editor is rendering from.
+
+    auto equalsCI = [](const std::string& a, const std::string& b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i)
+            if (std::tolower((unsigned char)a[i]) != std::tolower((unsigned char)b[i])) return false;
+        return true;
+    };
+    for (const auto& e : res.entries) {
+        if (equalsCI(e.name, entryName)) return true;  // already present -> no-op
+    }
+
+    const std::string bak = resPath + ".orig";
+    if (!std::filesystem::exists(bak)) {
+        std::error_code ec;
+        std::filesystem::copy_file(resPath, bak, std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) {
+            err = "backup failed, aborting (archive untouched): " + ec.message();
+            return false;
+        }
+    }
+
+    res.entries.push_back(RESEntry{ entryName, bytes });
+    if (!RES_WriteEntries(res.entries, resPath, err)) {
+        return false;
+    }
+    return true;
+}
+
+bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId) {
+    const std::string levelDir = Utils::GetIGIRootPath() + "\\missions\\location0\\level" +
+        std::to_string(current_level_);
+    const std::string modelsRes   = levelDir + "\\models\\level"   + std::to_string(current_level_) + ".res";
+    const std::string texturesRes = levelDir + "\\textures\\level" + std::to_string(current_level_) + ".res";
+
+    if (!std::filesystem::exists(modelsRes)) {
+        Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: models archive missing: " + modelsRes);
+        return false;
+    }
+
+    // Locate and read the loose .mef the editor is rendering from.
     std::string mefPath = FindModelFile(modelId, /*isBuilding=*/false);
     if (mefPath.empty()) mefPath = FindModelFile(modelId, true);
     if (mefPath.empty()) {
         Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: no loose .mef for " + modelId);
         return false;
     }
-    std::ifstream f(mefPath, std::ios::binary);
-    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    if (bytes.empty()) {
+    std::ifstream mf(mefPath, std::ios::binary);
+    std::vector<uint8_t> mefBytes((std::istreambuf_iterator<char>(mf)), std::istreambuf_iterator<char>());
+    if (mefBytes.empty()) {
         Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: empty/unreadable .mef: " + mefPath);
         return false;
     }
 
-    RESFile res = RES_Parse(gameRes);
-    if (!res.valid) {
-        Logger::Get().Log(LogLevel::ERR, "[Renderer] AddModelToLevelRes: parse failed: " + gameRes);
-        return false;
-    }
-
-    // Skip if already present (case-insensitive <modelId>.mef suffix).
-    const std::string suffix = modelId + ".mef";
-    auto endsWithCI = [](const std::string& s, const std::string& suf) {
-        if (suf.size() > s.size()) return false;
-        for (size_t i = 0; i < suf.size(); ++i)
-            if (std::tolower((unsigned char)s[s.size()-suf.size()+i]) !=
-                std::tolower((unsigned char)suf[i])) return false;
-        return true;
-    };
-    for (const auto& e : res.entries) {
-        if (endsWithCI(e.name, suffix)) {
-            Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: already present: " + modelId);
-            return true;
-        }
-    }
-
-    const std::string bak = gameRes + ".orig";
-    if (!std::filesystem::exists(bak)) {
-        std::error_code ec;
-        std::filesystem::copy_file(gameRes, bak, std::filesystem::copy_options::overwrite_existing, ec);
-        if (ec) {
-            Logger::Get().Log(LogLevel::ERR, "[Renderer] AddModelToLevelRes: backup failed, aborting (archive untouched): " + ec.message());
-            return false;
-        }
-    }
-
-    res.entries.push_back(RESEntry{ "models\\" + modelId + ".mef", bytes });
+    // 1. Pack the model into the models archive with the in-game entry name.
+    const std::string modelEntry = "LOCAL:models/" + modelId + ".mef";
     std::string err;
-    if (!RES_WriteEntries(res.entries, gameRes, err)) {
-        Logger::Get().Log(LogLevel::ERR, "[Renderer] AddModelToLevelRes: repack failed: " + err);
+    if (!AddFileToRes(modelsRes, modelEntry, mefBytes, err)) {
+        Logger::Get().Log(LogLevel::ERR, "[Renderer] AddModelToLevelRes: model add failed: " + err);
         return false;
     }
-    Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: added " + modelId + ".mef to " + gameRes);
+    Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: model " + modelId + " -> " + modelsRes);
+
+    // 2. Pack each of the model's textures into the textures archive.
+    const bool haveTexRes = std::filesystem::exists(texturesRes);
+    bool warnedNoTexRes = false;
+    int texAdded = 0;
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> looseTextures;  // for editor-content copy
+    for (const std::string& texId : GetTextureIdsForModel(modelId)) {
+        std::string texPath = FindTextureFile(texId);
+        if (texPath.empty()) {
+            Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: texture " + texId +
+                " not found on disk, skipping");
+            continue;
+        }
+        std::ifstream tf(texPath, std::ios::binary);
+        std::vector<uint8_t> texBytes((std::istreambuf_iterator<char>(tf)), std::istreambuf_iterator<char>());
+        if (texBytes.empty()) continue;
+
+        if (!haveTexRes) {
+            if (!warnedNoTexRes) {
+                Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: textures archive missing, "
+                    "skipping texture packing: " + texturesRes);
+                warnedNoTexRes = true;
+            }
+            continue;
+        }
+        std::string terr;
+        if (AddFileToRes(texturesRes, "LOCAL:textures/" + texId + ".tex", texBytes, terr)) {
+            ++texAdded;
+            looseTextures.emplace_back(texId, std::move(texBytes));
+        } else {
+            Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: texture add failed for " +
+                texId + ": " + terr);
+        }
+    }
+
+    // 3. Best-effort: copy loose files into the editor's content dirs so the editor
+    //    keeps resolving them after a level reload. Failure here is non-fatal.
+    try {
+        const std::string exeDir = Utils::GetExeDirectory();
+        const std::string lvl = std::to_string(current_level_);
+        std::filesystem::path modelDst = std::filesystem::path(exeDir) / "content" / "models" / ("level" + lvl);
+        std::filesystem::create_directories(modelDst);
+        {
+            std::ofstream out((modelDst / (modelId + ".mef")).string(), std::ios::binary);
+            out.write(reinterpret_cast<const char*>(mefBytes.data()), (std::streamsize)mefBytes.size());
+        }
+        if (!looseTextures.empty()) {
+            std::filesystem::path texDst = std::filesystem::path(exeDir) / "content" / "textures" / ("level" + lvl);
+            std::filesystem::create_directories(texDst);
+            for (const auto& t : looseTextures) {
+                std::ofstream out((texDst / (t.first + ".tex")).string(), std::ios::binary);
+                out.write(reinterpret_cast<const char*>(t.second.data()), (std::streamsize)t.second.size());
+            }
+        }
+    } catch (const std::exception& e) {
+        Logger::Get().Log(LogLevel::WARNING, std::string("[Renderer] AddModelToLevelRes: editor-content copy failed: ") + e.what());
+    }
+
+    Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: added model " + modelId +
+        " + " + std::to_string(texAdded) + " texture(s)");
     return true;
 }
 

@@ -3312,7 +3312,7 @@ void App::DispatchEventBindings() {
 			if (renderer_.AddModelToLevelRes(objs[oi].modelId)) {
 				level_res_models_.AddEntry("models\\" + objs[oi].modelId + ".mef");
 				objs[oi].modelMissingInRes = false;
-				status_message_ = "Added '" + objs[oi].modelId + "' to level .res (backup .orig written).";
+				status_message_ = "Added '" + objs[oi].modelId + "' + textures to level .res (backups .orig written).";
 			} else {
 				status_message_ = "Failed to add '" + objs[oi].modelId + "' to level .res (see log).";
 			}
