@@ -987,11 +987,15 @@ bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId) {
         }
     }
 
-    try {
-        std::string bak = gameRes + ".orig";
-        if (!std::filesystem::exists(bak))
-            std::filesystem::copy_file(gameRes, bak, std::filesystem::copy_options::overwrite_existing);
-    } catch (...) {}
+    const std::string bak = gameRes + ".orig";
+    if (!std::filesystem::exists(bak)) {
+        std::error_code ec;
+        std::filesystem::copy_file(gameRes, bak, std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) {
+            Logger::Get().Log(LogLevel::ERR, "[Renderer] AddModelToLevelRes: backup failed, aborting (archive untouched): " + ec.message());
+            return false;
+        }
+    }
 
     res.entries.push_back(RESEntry{ "models\\" + modelId + ".mef", bytes });
     std::string err;
