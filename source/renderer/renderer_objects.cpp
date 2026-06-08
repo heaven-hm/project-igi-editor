@@ -943,6 +943,66 @@ bool Renderer_Objects::SuppressAttachmentInMef(const std::string& parentModelId,
     return true;
 }
 
+bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId) {
+    const std::string gameRes = Utils::GetIGIRootPath() + "\\missions\\location0\\level" +
+        std::to_string(current_level_) + "\\models\\level" +
+        std::to_string(current_level_) + ".res";
+    if (!std::filesystem::exists(gameRes)) {
+        Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: archive missing: " + gameRes);
+        return false;
+    }
+    // Locate the loose .mef the editor is rendering from.
+    std::string mefPath = FindModelFile(modelId, /*isBuilding=*/false);
+    if (mefPath.empty()) mefPath = FindModelFile(modelId, true);
+    if (mefPath.empty()) {
+        Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: no loose .mef for " + modelId);
+        return false;
+    }
+    std::ifstream f(mefPath, std::ios::binary);
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    if (bytes.empty()) {
+        Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: empty/unreadable .mef: " + mefPath);
+        return false;
+    }
+
+    RESFile res = RES_Parse(gameRes);
+    if (!res.valid) {
+        Logger::Get().Log(LogLevel::ERR, "[Renderer] AddModelToLevelRes: parse failed: " + gameRes);
+        return false;
+    }
+
+    // Skip if already present (case-insensitive <modelId>.mef suffix).
+    const std::string suffix = modelId + ".mef";
+    auto endsWithCI = [](const std::string& s, const std::string& suf) {
+        if (suf.size() > s.size()) return false;
+        for (size_t i = 0; i < suf.size(); ++i)
+            if (std::tolower((unsigned char)s[s.size()-suf.size()+i]) !=
+                std::tolower((unsigned char)suf[i])) return false;
+        return true;
+    };
+    for (const auto& e : res.entries) {
+        if (endsWithCI(e.name, suffix)) {
+            Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: already present: " + modelId);
+            return true;
+        }
+    }
+
+    try {
+        std::string bak = gameRes + ".orig";
+        if (!std::filesystem::exists(bak))
+            std::filesystem::copy_file(gameRes, bak, std::filesystem::copy_options::overwrite_existing);
+    } catch (...) {}
+
+    res.entries.push_back(RESEntry{ "models\\" + modelId + ".mef", bytes });
+    std::string err;
+    if (!RES_WriteEntries(res.entries, gameRes, err)) {
+        Logger::Get().Log(LogLevel::ERR, "[Renderer] AddModelToLevelRes: repack failed: " + err);
+        return false;
+    }
+    Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: added " + modelId + ".mef to " + gameRes);
+    return true;
+}
+
 bool Renderer_Objects::UpdateAttaLocalPosInMef(
     const std::string& parentModelId, bool isBuilding,
     int recordIndex, const glm::vec3& newLocalPos, const glm::mat3& newLocalRot)

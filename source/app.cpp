@@ -3302,6 +3302,21 @@ void App::DispatchEventBindings() {
 	if (Check("ReloadSettings")) { Config::Init(); LoadAutoCompleteKeywords(); Logger::Get().Log(LogLevel::INFO, "[App] Settings reloaded from QED config"); }
 	if (Check("ToggleObjects")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ToggleObjects not implemented"); }
 	if (Check("TaskMagicObjToggle")) { show_magic_obj_spheres_ = !show_magic_obj_spheres_; }
+	if (Check("AddModelToRes")) {
+		int oi = selected_object_index_;
+		auto& objs = level_.GetLevelObjects().GetObjects();
+		if (oi >= 0 && oi < (int)objs.size() && objs[oi].modelMissingInRes) {
+			if (renderer_.AddModelToLevelRes(objs[oi].modelId)) {
+				level_res_models_.AddEntry("models\\" + objs[oi].modelId + ".mef");
+				objs[oi].modelMissingInRes = false;
+				status_message_ = "Added '" + objs[oi].modelId + "' to level .res (backup .orig written).";
+			} else {
+				status_message_ = "Failed to add '" + objs[oi].modelId + "' to level .res (see log).";
+			}
+		} else {
+			status_message_ = "Select an object whose model is flagged missing from the .res first.";
+		}
+	}
 	if (Check("CameraStrafeFree")) {
 		camera_strafe_free_ = !camera_strafe_free_;
 		status_message_ = camera_strafe_free_ ? "Strafe lock: ON" : "Strafe lock: OFF";

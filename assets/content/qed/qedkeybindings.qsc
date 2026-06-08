@@ -111,3 +111,6 @@ SetEventBinding("ReloadSettings",                           "<F4>");
 // Toggle objects in editor (Extreme Sports)
 SetEventBinding("ToggleObjects",                            "<Ctrl><Shift><Z>");
 
+// Add a missing model's loose .mef into the level .res (issue 2)
+SetEventBinding("AddModelToRes",                            "<Ctrl><Shift><A>");
+
