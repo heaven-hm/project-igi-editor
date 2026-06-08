@@ -775,16 +775,23 @@ void App::LoadLevel(int level_no) {
 		
 		RebuildLevelModelIds();
 
-		// Build the set of models actually packed in this level's .res so we can warn
-		// when an object references a model the game archive lacks (issue 2).
+		// Build the set of models packed in this level's .res (names only — stream so we
+		// never buffer the whole 200+MB archive in the 32-bit process). (issue 2)
 		{
 			std::string gameRes = Utils::GetIGIRootPath() +
 				"\\missions\\location0\\level" + std::to_string(level_no) +
 				"\\models\\level" + std::to_string(level_no) + ".res";
-			RESFile res = RES_Parse(gameRes);
-			level_res_models_ = res.valid ? ResModelSet(res) : ResModelSet();
+			level_res_models_ = ResModelSet();
+			std::string resErr;
+			size_t entryCount = 0;
+			bool ok = RES_ForEachEntry(gameRes,
+				[&](const std::string& name, const uint8_t*, size_t) {
+					level_res_models_.AddEntry(name);
+					++entryCount;
+				}, resErr);
 			Logger::Get().Log(LogLevel::INFO, std::string("[App] Level .res model set: ") +
-				(res.valid ? std::to_string(res.entries.size()) + " entries" : "UNAVAILABLE (" + gameRes + ")"));
+				(ok ? std::to_string(entryCount) + " entries (streamed)"
+				    : "UNAVAILABLE (" + gameRes + "): " + resErr));
 		}
 		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
 		Logger::Get().Log(LogLevel::INFO, "[App] LoadLevel() COMPLETE for level " + std::to_string(level_no));

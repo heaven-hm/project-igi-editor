@@ -17,11 +17,13 @@ static std::string LowerStem(const std::string& name) {
     return lower;
 }
 
+void ResModelSet::AddEntry(const std::string& entryName) {
+    std::string id = LowerStem(entryName);
+    if (!id.empty()) ids_.insert(id);
+}
+
 ResModelSet::ResModelSet(const RESFile& res) {
-    for (const auto& e : res.entries) {
-        std::string id = LowerStem(e.name);
-        if (!id.empty()) ids_.insert(id);
-    }
+    for (const auto& e : res.entries) AddEntry(e.name);
 }
 
 bool ResModelSet::Contains(const std::string& modelId) const {
