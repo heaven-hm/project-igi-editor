@@ -83,6 +83,7 @@ set_source_files_properties(
   source/renderer/wic_loader.cpp
   source/parsers/qvm_parser.cpp
   source/parsers/res_parser.cpp
+  source/level/res_model_set.cpp
   source/parsers/res_compiler.cpp
   source/parsers/dat_parser.cpp
   source/parsers/mtp_parser.cpp
@@ -211,6 +212,7 @@ add_executable(igi_tests
     tests/test_mtp_parser.cpp
     tests/test_fnt_parser.cpp
     tests/test_pickup_resolve.cpp
+    tests/test_res_model_set.cpp
 )
 
 # Explicit runtime so igi_tests always matches igi-editor (/MDd Debug, /MD Release).
@@ -244,6 +246,7 @@ target_sources(igi_tests PRIVATE
     source/parsers/dat_parser.cpp
     source/parsers/graph_parser.cpp
     source/parsers/res_parser.cpp
+    source/level/res_model_set.cpp
     source/parsers/tex_parser.cpp
     source/parsers/mtp_parser.cpp
     source/parsers/fnt_parser.cpp
