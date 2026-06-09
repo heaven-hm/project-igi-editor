@@ -12,7 +12,7 @@ This project is built upon the foundational work of the [Project-IGI-Terrain](ht
 
 Click the thumbnail below to watch the IGI Editor in action:
 
-[![IGI Editor Demo](https://img.youtube.com/vi/w4k5TRIy9eM/maxresdefault.jpg)](https://www.youtube.com/watch?v=w4k5TRIy9eM)
+[![IGI Editor Demo](https://img.youtube.com/vi/w4k5TRIy9eM/hqdefault.jpg)](https://www.youtube.com/watch?v=w4k5TRIy9eM)
 
 ---
 
@@ -276,7 +276,7 @@ See the [CHANGELOGS.md](CHANGELOGS.md) for version history and detailed change l
 If you encounter any issues or have suggestions, feel free to reach out:
 
 - **🎮 Discord**: Message me at `Jones_IGI#3954` or join our [Discord Server](https://discord.com/invite/QpbQrRFAER).
-- **📧 Email**: [igiproz.hm@gmail.com](mailto:igiproz.hm@gmail.com)
+- **📧 Email**: [igiproz.hm@gmail.com](mailto:igiproz.hm@gmail.com).
 - **🌟 GitHub**: Follow the project on [Jones-HM GitHub](https://github.com/Jones-HM/).
 - **📺 YouTube**: Subscribe to [IGI Research Devs](https://www.youtube.com/@igi-research-devs) for guides and walkthroughs.
 
