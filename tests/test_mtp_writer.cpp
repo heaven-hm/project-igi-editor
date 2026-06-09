@@ -4,6 +4,9 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <map>
+#include <vector>
+#include <cstdint>
 
 static std::string SrcMtp() {
     return Utils::GetIGIRootPath() + "\\missions\\location0\\level1\\level1.mtp";
@@ -59,6 +62,37 @@ TEST_F(MtpWriterTest, AddsModelAndTexturesAndPreservesExisting) {
             EXPECT_NE(std::find(m.textureNames.begin(), m.textureNames.end(), "abc_xy_9"), m.textureNames.end());
         }
     EXPECT_TRUE(found);
+}
+
+TEST_F(MtpWriterTest, PreservesUntouchedChunksByteForByte) {
+    if (!std::filesystem::exists(tmpIn)) GTEST_SKIP() << "level1.mtp not available";
+    std::string err;
+    ASSERT_TRUE(MTP_AddModel(tmpIn, tmpOut, "999_77_1", {"019_03_1", "abc_xy_9"}, err)) << err;
+
+    auto readChunks = [](const std::string& path) {
+        std::ifstream f(path, std::ios::binary | std::ios::ate);
+        std::vector<uint8_t> b((size_t)f.tellg());
+        f.seekg(0); f.read((char*)b.data(), b.size());
+        std::map<std::string, std::vector<uint8_t>> chunks;
+        size_t off = 12; // FORM + size + "MTP "
+        while (off + 8 <= b.size()) {
+            std::string cc((char*)&b[off], 4);
+            uint32_t sz = ((uint32_t)b[off+4]<<24)|((uint32_t)b[off+5]<<16)|((uint32_t)b[off+6]<<8)|b[off+7];
+            off += 8;
+            if (off + sz > b.size()) break;
+            chunks[cc] = std::vector<uint8_t>(b.begin()+off, b.begin()+off+sz);
+            off += sz; if (off % 2) off++;
+        }
+        return chunks;
+    };
+    auto a = readChunks(tmpIn);
+    auto c = readChunks(tmpOut);
+    for (auto& kv : a) {
+        const std::string& cc = kv.first;
+        if (cc == "MODS" || cc == "TEXF" || cc == "INST") continue;
+        ASSERT_TRUE(c.count(cc)) << "chunk lost: " << cc;
+        EXPECT_EQ(c[cc], kv.second) << "chunk changed: " << cc;
+    }
 }
 
 TEST_F(MtpWriterTest, IdempotentWhenModelAlreadyPresent) {

@@ -774,30 +774,33 @@ Note: The count field is little-endian despite the IFF chunk sizes being big-end
 
 ### 6.5 INST Chunk -- Instance Mappings
 
-The INST chunk maps each model to its texture list:
-
-| Offset | Size | Type        | Description                           |
-|--------|------|-------------|---------------------------------------|
-| 0x00   | 4    | uint32 (LE) | count -- number of mapping entries    |
+The INST chunk maps each model to its texture list. It has **no count prefix**:
+it holds exactly one entry per model, so the entry count equals the MODS model
+count.
 
 Each entry (variable length):
 
-| Offset | Size       | Type        | Description                           |
-|--------|------------|-------------|---------------------------------------|
-| 0x00   | 2          | uint16 (LE) | modelIdx -- index into MODS array    |
-| 0x02   | 2          | uint16 (LE) | texCount -- number of textures       |
-| 0x04   | texCount*2 | uint16 (LE)[] | Array of texture indices into TEXF |
+| Offset | Size       | Type          | Description                           |
+|--------|------------|---------------|---------------------------------------|
+| 0x00   | 4          | uint32 (LE)   | modelIdx -- index into MODS array     |
+| 0x04   | 4          | uint32 (LE)   | texCount -- number of textures        |
+| 0x08   | texCount*4 | uint32 (LE)[] | Array of texture indices into TEXF    |
+
+Note: INST appears **before** TEXF in file order, so a parser must read all
+chunks first and resolve INST -> texture names afterward (the TEXF names are not
+yet known when the INST chunk is encountered).
 
 ### 6.6 Example Parsing Flow
 
 ```
 1. Validate "FORM" magic and read BE size
 2. Validate "MTP " format ID at offset 8
-3. Iterate chunks from offset 12:
+3. Iterate chunks from offset 12, collecting raw chunk data:
    - Parse MODS -> list of model names
    - Parse TEXF -> list of texture names
-   - Parse INST -> resolve model/texture indices to names
-4. Each INST entry: model_name = MODS[modelIdx], textures = TEXF[texIdx] for each texIdx
+   - Defer INST (it appears before TEXF, so TEXF names aren't known yet)
+4. After all chunks are read, resolve each INST entry:
+   model_name = MODS[modelIdx], textures = TEXF[texIdx] for each texIdx
 ```
 
 ---
