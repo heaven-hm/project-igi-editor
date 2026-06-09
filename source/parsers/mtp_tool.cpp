@@ -5,6 +5,7 @@
 
 #include "mtp_tool.h"
 #include "../logger.h"
+#include <algorithm>
 #include <filesystem>
 #include <vector>
 
@@ -37,32 +38,71 @@ INPUT_RECORD KeyRecord(WORD vk, char ascii, bool down) {
     return r;
 }
 
-// Best-effort injection of 'M' + Enter into the child's console input buffer.
-// Any failure is swallowed; the user can press M manually.
-void TryInjectChoice(DWORD childPid) {
+// Best-effort injection of the menu choice into the child's console input buffer.
+//
+// Two gotchas, both verified against mtp_decoder.exe v0.08:
+//  1. The tool's menu ("M: Packed MTP - ...") is matched against the LOWERCASE ascii
+//     char its FPC-crt ReadKey returns. Sending AsciiChar 'M' (uppercase) is treated as
+//     an unrecognized choice -> the tool exits WITHOUT writing the .mtp. We must send
+//     AsciiChar 'm'. No Enter is required (ReadKey takes a single keypress).
+//  2. After AttachConsole, GetStdHandle returns this process's *stale* std handle, not
+//     the freshly-attached child console (WriteConsoleInput then fails with
+//     ERROR_INVALID_HANDLE). We must open the live input buffer via CONIN$.
+//
+// Returns true if the keystroke was written into the child's input buffer. Any failure
+// is swallowed; the user can press M manually.
+bool TryInjectChoice(DWORD childPid) {
     // Detach from our (likely none) console and attach to the child's.
     FreeConsole();
     if (!AttachConsole(childPid)) {
         // Restore parent console attachment and give up.
         FreeConsole();
         AttachConsole(ATTACH_PARENT_PROCESS);
-        return;
+        return false;
     }
 
-    HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+    bool wrote = false;
+    HANDLE hIn = CreateFileA("CONIN$", GENERIC_READ | GENERIC_WRITE,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                             OPEN_EXISTING, 0, nullptr);
     if (hIn != INVALID_HANDLE_VALUE && hIn != nullptr) {
-        INPUT_RECORD recs[4] = {
-            KeyRecord('M', 'M', true),
-            KeyRecord('M', 'M', false),
-            KeyRecord(VK_RETURN, '\r', true),
-            KeyRecord(VK_RETURN, '\r', false),
+        INPUT_RECORD recs[2] = {
+            KeyRecord('M', 'm', true),   // lowercase ascii is what the tool matches
+            KeyRecord('M', 'm', false),
         };
         DWORD written = 0;
-        WriteConsoleInputA(hIn, recs, 4, &written);
+        if (WriteConsoleInputA(hIn, recs, 2, &written) && written == 2)
+            wrote = true;
+        CloseHandle(hIn);
     }
 
     FreeConsole();
     AttachConsole(ATTACH_PARENT_PROCESS);
+    return wrote;
+}
+
+// Bring the child's console window to the foreground so a user who must press M
+// manually sees it immediately. Best-effort; any failure is ignored.
+struct FindWindowCtx { DWORD pid; HWND hwnd; };
+
+BOOL CALLBACK FindChildWindowProc(HWND hwnd, LPARAM lp) {
+    auto* ctx = reinterpret_cast<FindWindowCtx*>(lp);
+    DWORD winPid = 0;
+    GetWindowThreadProcessId(hwnd, &winPid);
+    if (winPid == ctx->pid && GetWindow(hwnd, GW_OWNER) == nullptr && IsWindowVisible(hwnd)) {
+        ctx->hwnd = hwnd;
+        return FALSE; // found it; stop enumerating
+    }
+    return TRUE;
+}
+
+void BringChildToForeground(DWORD childPid) {
+    FindWindowCtx ctx{ childPid, nullptr };
+    EnumWindows(FindChildWindowProc, reinterpret_cast<LPARAM>(&ctx));
+    if (ctx.hwnd) {
+        ShowWindow(ctx.hwnd, SW_RESTORE);
+        SetForegroundWindow(ctx.hwnd);
+    }
 }
 
 } // namespace
@@ -104,17 +144,22 @@ bool RunMtpDecoder(const std::string& exePath, const std::string& datPath,
         return false;
     }
 
-    // Give the child console a moment to initialize before injecting the keystroke.
-    for (int i = 0; i < 15; ++i) {
-        if (WaitForSingleObject(pi.hProcess, 100) == WAIT_OBJECT_0)
-            break; // already exited (unlikely)
-    }
-    TryInjectChoice(pi.dwProcessId);
-
-    // Poll for the .mtp mtime to advance (tool prints "File Saved.." after writing).
+    // Drive the tool: spend at most a few seconds injecting the 'm' keystroke and
+    // polling for the .mtp to be (re)written. The synthetic keypress sits in the child's
+    // input buffer until its ReadKey consumes it, so an early inject is fine; we still
+    // retry a handful of times in case the very first AttachConsole races the child's
+    // console creation. We cap the synchronous wait low (a few seconds) so the editor's
+    // UI does not appear frozen -- if the tool somehow stalls, the user just presses M.
     bool ok = false;
-    const DWORD deadline = GetTickCount() + timeoutMs;
-    while (GetTickCount() < deadline) {
+    bool injected = false;
+    const DWORD shortDeadline = GetTickCount() + (std::min)(timeoutMs, 6000u);
+    for (int attempt = 0; GetTickCount() < shortDeadline; ++attempt) {
+        // (Re)try the keystroke a few times early; once written it stays buffered.
+        if (attempt < 6) {
+            if (TryInjectChoice(pi.dwProcessId))
+                injected = true;
+        }
+
         long long now = MtpMtime(expectedMtpPath);
         if (now != -1 && (beforeMtime == -1 || now > beforeMtime)) {
             ok = true;
@@ -129,13 +174,23 @@ bool RunMtpDecoder(const std::string& exePath, const std::string& datPath,
         }
     }
 
+    bool childAlive = (WaitForSingleObject(pi.hProcess, 0) != WAIT_OBJECT_0);
+    if (!ok && childAlive) {
+        // Injection did not land within the short window and the tool is still at its
+        // prompt. Surface its window so the user can immediately press M, and leave it
+        // running rather than freezing the editor for the full timeout.
+        BringChildToForeground(pi.dwProcessId);
+    }
+
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
 
     if (ok) {
         Logger::Get().Log(LogLevel::INFO, "[MTPTool] mtp_decoder regenerated " + expectedMtpPath);
     } else {
-        err = "mtp_decoder did not regenerate .mtp within timeout; press M in its window manually";
+        err = "mtp_decoder did not finish automatically; press M in its console window "
+              "to write " + std::filesystem::path(expectedMtpPath).filename().string() +
+              (injected ? " (keystroke was injected but no .mtp yet)" : "");
         Logger::Get().Log(LogLevel::WARNING, "[MTPTool] " + err);
     }
     return ok;

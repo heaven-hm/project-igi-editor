@@ -3378,7 +3378,7 @@ void App::DispatchEventBindings() {
 			if (renderer_.AddModelToLevelRes(addId, progressCb)) {
 				level_res_models_.AddEntry("models\\" + objs[oi].modelId + ".mef");
 				objs[oi].modelMissingInRes = false;
-				status_message_ = "Added '" + objs[oi].modelId + "' + textures to .res; updated level .dat and ran mtp_decoder. If its console is still open, press M to finish the .mtp (backups written).";
+				status_message_ = "Added '" + objs[oi].modelId + "' + textures to .res and updated level .dat (backups written). If the mtp_decoder console is still open in front, press M in it to finish writing the level .mtp.";
 			} else {
 				status_message_ = "Failed to add '" + objs[oi].modelId + "' to level .res (see log).";
 			}
