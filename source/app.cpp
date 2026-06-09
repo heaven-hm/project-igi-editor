@@ -3706,14 +3706,17 @@ void App::Frame(float delta_seconds) {
 			.ai_script_path_       = ai_script_path_,
 			.ai_script_text_       = ai_script_text_,
 			.ai_script_dirty_      = ai_script_dirty_,
-			.terrain_brush_        = edit_brush_,
-			.terrain_brush_radius_ = edit_brush_radius_,
+			.terrain_brush_          = edit_brush_,
+			.terrain_brush_radius_   = edit_brush_radius_,
+			.terrain_brush_strength_ = edit_brush_strength_,
 		};
 		draw_params_.level_objects_ = &level_.GetLevelObjects();
 		draw_params_.selected_object_index_ = selected_object_index_;
 		draw_params_.show_magic_obj_spheres_ = show_magic_obj_spheres_;
 		draw_params_.terrain_id_at_world_xy_ =
 			[this](double x, double y) { return level_.GetTerrainNodeId(x, y); };
+		draw_params_.terrain_z_at_world_xy_ =
+			[this](double x, double y, float& z) { return level_.GetTerrainZ(x, y, z); };
 		renderer_.Draw(draw_params_, task_tree_view);
 
 		DrawCustomCursor();
@@ -3853,8 +3856,9 @@ void App::Frame(float delta_seconds) {
 		.ai_script_dirty_       = ai_script_dirty_,
 		.ai_script_vscroll_     = ai_script_vscroll_,
 		.ai_script_path_hscroll_= ai_script_path_hscroll_,
-		.terrain_brush_         = edit_brush_,
-		.terrain_brush_radius_  = edit_brush_radius_,
+		.terrain_brush_          = edit_brush_,
+		.terrain_brush_radius_   = edit_brush_radius_,
+		.terrain_brush_strength_ = edit_brush_strength_,
 	};
 
 	renderer_.Draw(draw_params_, task_tree_view);
@@ -4231,11 +4235,18 @@ bool App::TerrainPaletteClick(int x, int y) {
 	if (!edit_mode_ || !terrain_edit_enabled_) return false;
 	int idx = TerrainPalette::HitTest(x, y, window_state_.viewport_width_, window_state_.viewport_height_);
 	if (idx < 0) return false;
-	if (idx == 0) {
+	switch (idx) {
+	case TerrainPalette::kSelect:
 		// Select/exit button: leave terrain edit, back to object editing.
 		SetTerrainEditEnabled(false);
-	} else {
+		break;
+	case TerrainPalette::kRadiusDec:   AdjustBrushRadius(0.8);    break;
+	case TerrainPalette::kRadiusInc:   AdjustBrushRadius(1.25);   break;
+	case TerrainPalette::kStrengthDec: AdjustBrushStrength(-1.0); break;
+	case TerrainPalette::kStrengthInc: AdjustBrushStrength(1.0);  break;
+	default:
 		SetEditBrush(TerrainPalette::BrushForIndex(idx));
+		break;
 	}
 	return true;
 }

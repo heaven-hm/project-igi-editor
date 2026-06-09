@@ -1036,38 +1036,58 @@ void Renderer::Draw(const draw_params_s &params,
         draw_text_sm(tooltip_x, tooltip_y, "Terrain ID: -1", 1.0f, 1.0f, 1.0f);
       }
 
-      // Terrain-edit overlay: cursor brush-radius ring + active brush name label.
+      // Terrain-edit overlay: 3D brush-radius ring hugging the terrain surface +
+      // active brush name label.
       if (task_tree_view.terrain_edit_enabled_) {
-        const int vh = params.view_define_->viewport_height_;
-        // Cursor center in GL bottom-up coords (mouse y is top-down).
-        float cx = (float)task_tree_view.mouse_x_;
-        float cy = (float)(vh - task_tree_view.mouse_y_);
+        const int vpW = params.view_define_->viewport_width_;
+        const int vpH = params.view_define_->viewport_height_;
 
-        // Map world-space radius [5000,250000] -> pixel radius [20,160] (linear clamp).
-        double r = task_tree_view.terrain_brush_radius_;
-        if (r < 5000.0)   r = 5000.0;
-        if (r > 250000.0) r = 250000.0;
-        float radius = 20.0f + (float)((r - 5000.0) / (250000.0 - 5000.0)) * (160.0f - 20.0f);
+        // Same world->clip transform the 3D scene + terrain-ID lookup use.
+        glm::mat4 worldToClip =
+            mat_proj_ * mat_view_ *
+            glm::scale(glm::mat4(1.0f), glm::vec3(RENDERER_MODEL_SCALE_DOWN));
 
-        const int segments = 48;
-        glColor3f(1.0f, 0.5f, 0.0f); // orange
-        glLineWidth(2.0f);
-        glBegin(GL_LINE_LOOP);
-        for (int i = 0; i < segments; ++i) {
-          float a = (float)i * 6.283185f / (float)segments;
-          glVertex2f(cx + cosf(a) * radius, cy + sinf(a) * radius);
+        glm::vec3 centerWorld;
+        bool haveCenter =
+            params.terrain_z_at_world_xy_ &&
+            UnprojectCursorToWorld(task_tree_view.mouse_x_, task_tree_view.mouse_y_,
+                                   vpW, vpH, worldToClip, centerWorld);
+
+        if (haveCenter) {
+          const double cx = centerWorld.x;
+          const double cy = centerWorld.y;
+          // Surface height at the center; fall back to the unprojected z.
+          float centerZ = centerWorld.z;
+          params.terrain_z_at_world_xy_(cx, cy, centerZ);
+
+          const int segments = 48;
+          // Project a world point onto the surface, then to GL screen coords.
+          // Returns false if behind the camera (clip.w<=0); caller skips the vertex.
+          auto emit_ring = [&](double radius) {
+            glBegin(GL_LINE_LOOP);
+            for (int i = 0; i < segments; ++i) {
+              double a = (double)i * 6.283185307 / (double)segments;
+              double px = cx + radius * cos(a);
+              double py = cy + radius * sin(a);
+              float pz = centerZ;
+              params.terrain_z_at_world_xy_(px, py, pz); // keep centerZ on miss
+              glm::vec4 clip = worldToClip *
+                  glm::vec4((float)px, (float)py, pz, 1.0f);
+              if (clip.w <= 0.0f) continue; // behind camera; skip point
+              float sx = (clip.x / clip.w * 0.5f + 0.5f) * vpW;
+              float sy = (clip.y / clip.w * 0.5f + 0.5f) * vpH; // already GL bottom-up
+              glVertex2f(sx, sy);
+            }
+            glEnd();
+          };
+
+          glLineWidth(2.0f);
+          glColor3f(1.0f, 0.5f, 0.0f); // orange outer ring
+          emit_ring(task_tree_view.terrain_brush_radius_);
+          glColor4f(1.0f, 0.6f, 0.1f, 0.6f); // inner falloff ring at half radius
+          emit_ring(task_tree_view.terrain_brush_radius_ * 0.5);
+          glLineWidth(1.0f);
         }
-        glEnd();
-        // Inner falloff ring.
-        float inner = radius * 0.5f;
-        glColor4f(1.0f, 0.6f, 0.1f, 0.6f);
-        glBegin(GL_LINE_LOOP);
-        for (int i = 0; i < segments; ++i) {
-          float a = (float)i * 6.283185f / (float)segments;
-          glVertex2f(cx + cosf(a) * inner, cy + sinf(a) * inner);
-        }
-        glEnd();
-        glLineWidth(1.0f);
 
         // Active brush name under the existing "Terrain ID" tooltip line.
         static const char* kBrushNames[4] = { "Raise", "Lower", "Soften", "Flatten" };
@@ -1077,14 +1097,15 @@ void Renderer::Draw(const draw_params_s &params,
       }
     }
 
-    // On-screen 5-button terrain brush palette (bottom-right). Drawn independently
+    // On-screen terrain editor panel (bottom-right): 5 brush buttons + a 2x2 grid
+    // of radius/strength settings buttons with value readouts. Drawn independently
     // of the hover-tooltip branch so it stays visible while the cursor is over an
     // object or the left tree panel.
     if (task_tree_view.terrain_edit_enabled_) {
       const int vw = params.view_define_->viewport_width_;
       const int vh = params.view_define_->viewport_height_;
       int active_idx = TerrainPalette::IndexForBrush(task_tree_view.terrain_brush_);
-      for (int i = 0; i < TerrainPalette::kCount; ++i) {
+      for (int i = 0; i < TerrainPalette::kBrushCount; ++i) {
         int rx, ry_top, rw, rh;
         TerrainPalette::GetButtonRect(i, vw, vh, rx, ry_top, rw, rh);
         // Top-down rect -> GL bottom-up.
@@ -1165,6 +1186,58 @@ void Renderer::Draw(const draw_params_s &params,
           break;
         }
         glLineWidth(1.0f);
+      }
+
+      // Settings buttons (Radius -/+, Strength -/+) as a 2x2 grid below the brushes.
+      static const char* kSetLabel[4] = { "R-", "R+", "S-", "S+" };
+      for (int s = 0; s < 4; ++s) {
+        int idx = TerrainPalette::kRadiusDec + s;
+        int rx, ry_top, rw, rh;
+        TerrainPalette::GetButtonRect(idx, vw, vh, rx, ry_top, rw, rh);
+        float bx = (float)rx;
+        float by = (float)(vh - (ry_top + rh));
+        float bw = (float)rw, bh = (float)rh;
+
+        glEnable(GL_BLEND);
+        glColor4f(0.12f, 0.12f, 0.14f, 0.80f);
+        glBegin(GL_QUADS);
+        glVertex2f(bx, by);
+        glVertex2f(bx + bw, by);
+        glVertex2f(bx + bw, by + bh);
+        glVertex2f(bx, by + bh);
+        glEnd();
+        glColor3f(0.55f, 0.55f, 0.6f);
+        glLineWidth(1.5f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2f(bx, by);
+        glVertex2f(bx + bw, by);
+        glVertex2f(bx + bw, by + bh);
+        glVertex2f(bx, by + bh);
+        glEnd();
+        glLineWidth(1.0f);
+
+        // Label centered in the button (draw_text_sm uses top-down y).
+        int lblW = glutBitmapLength(GLUT_BITMAP_HELVETICA_10,
+                                    (const unsigned char *)kSetLabel[s]);
+        int lx = rx + (rw - lblW) / 2;
+        int ly = ry_top + (rh + 8) / 2;
+        draw_text_sm(lx, ly, kSetLabel[s], 0.9f, 0.9f, 0.95f);
+      }
+
+      // Current radius / strength readout text, left of the settings grid.
+      {
+        int rx, ry_top, rw, rh;
+        TerrainPalette::GetButtonRect(TerrainPalette::kRadiusDec, vw, vh, rx, ry_top, rw, rh);
+        char rbuf[48], sbuf[48];
+        snprintf(rbuf, sizeof(rbuf), "R: %ld", (long)task_tree_view.terrain_brush_radius_);
+        snprintf(sbuf, sizeof(sbuf), "S: %ld", (long)task_tree_view.terrain_brush_strength_);
+        int rWidth = glutBitmapLength(GLUT_BITMAP_HELVETICA_10,
+                                      (const unsigned char *)rbuf);
+        int tx = rx - 6 - rWidth;
+        if (tx < 2) tx = 2;
+        draw_text_sm(tx, ry_top + 10, rbuf, 1.0f, 0.85f, 0.4f);
+        draw_text_sm(tx, ry_top + TerrainPalette::kSetBtnH + TerrainPalette::kSetGap + 10,
+                     sbuf, 1.0f, 0.85f, 0.4f);
       }
     }
 

@@ -22,27 +22,61 @@
  Returns rect in TOP-DOWN screen coords (y grows downward, matching GLUT mouse y).
 */
 namespace TerrainPalette {
-	static constexpr int kCount      = 5;
+	static constexpr int kBrushCount = 5;  // Select + Raise/Lower/Soften/Flatten
 	static constexpr int kBtnSize    = 36;
 	static constexpr int kBtnGap     = 6;
 	static constexpr int kMarginX    = 14;
 	static constexpr int kMarginY    = 14;
 
-	// Maps a palette button index (0..4) to the corresponding edit_brush_ value (0..3).
+	// Settings buttons sit below the brush column as a 2x2 grid: Radius-/Radius+
+	// on one row, Strength-/Strength+ on the next. They are half-height so the
+	// panel stays compact.
+	static constexpr int kSetBtnH    = 24;
+	static constexpr int kSetGap     = 4;
+
+	// Shared index space between App (hit-test) and Renderer (draw).
+	// 0..4 = brush column; 5..8 = settings buttons.
+	enum Index {
+		kSelect      = 0,
+		kRaise       = 1,
+		kLower       = 2,
+		kSoften      = 3,
+		kFlatten     = 4,
+		kRadiusDec   = 5,
+		kRadiusInc   = 6,
+		kStrengthDec = 7,
+		kStrengthInc = 8,
+		kCount       = 9
+	};
+
+	// Maps a brush-column index (0..4) to the corresponding edit_brush_ value (0..3).
 	// Index 0 is the Select button (no brush). Returns -1 for Select.
 	inline int BrushForIndex(int idx) { return idx == 0 ? -1 : idx - 1; }
 	inline int IndexForBrush(int brush) { return brush + 1; }
 
 	inline void GetButtonRect(int idx, int viewport_w, int viewport_h, int& x, int& y, int& w, int& h) {
-		w = kBtnSize;
-		h = kBtnSize;
-		x = viewport_w - kMarginX - kBtnSize;
-		int total_h = kCount * kBtnSize + (kCount - 1) * kBtnGap;
-		int top = viewport_h - kMarginY - total_h;
-		y = top + idx * (kBtnSize + kBtnGap);
+		int colX = viewport_w - kMarginX - kBtnSize;
+		int total_brush_h = kBrushCount * kBtnSize + (kBrushCount - 1) * kBtnGap;
+		int brush_top = viewport_h - kMarginY - total_brush_h
+		              - (2 * kSetBtnH + kSetGap + kBtnGap);  // leave room for settings rows below
+		if (idx < kBrushCount) {
+			w = kBtnSize; h = kBtnSize;
+			x = colX;
+			y = brush_top + idx * (kBtnSize + kBtnGap);
+			return;
+		}
+		// Settings 2x2 grid below the brush column.
+		int settings_top = brush_top + total_brush_h + kBtnGap;
+		int halfW = (kBtnSize - kSetGap) / 2;
+		int s = idx - kRadiusDec;          // 0..3
+		int row = s / 2;                    // 0 = radius row, 1 = strength row
+		int col = s % 2;                    // 0 = minus, 1 = plus
+		w = halfW; h = kSetBtnH;
+		x = colX + col * (halfW + kSetGap);
+		y = settings_top + row * (kSetBtnH + kSetGap);
 	}
 
-	// Hit-test in top-down screen coords. Returns button index 0..4 or -1.
+	// Hit-test in top-down screen coords. Returns button index 0..8 or -1.
 	inline int HitTest(int mx, int my, int viewport_w, int viewport_h) {
 		for (int i = 0; i < kCount; ++i) {
 			int x, y, w, h;
@@ -290,6 +324,10 @@ public:
 		// Returns the terrain CTR node id at a world (x,y), or -1. Set by App so the
 		// renderer can show the terrain id under the cursor without depending on Level. (issue 3)
 		std::function<int(double,double)> terrain_id_at_world_xy_;
+
+		// Returns the terrain surface height z at a world (x,y); false over a hole/edge.
+		// Set by App so the renderer can project the 3D brush ring onto the surface.
+		std::function<bool(double,double,float&)> terrain_z_at_world_xy_;
 	};
 
 	struct task_tree_view_params_s {
@@ -367,8 +405,9 @@ public:
 		int         ai_script_path_hscroll_ = 0;
 
 		// Terrain brush palette / cursor ring
-		int    terrain_brush_        = 0;   // 0=Raise,1=Lower,2=Soften,3=Flatten
-		double terrain_brush_radius_ = 0.0; // world-space brush radius (for cursor ring scale)
+		int    terrain_brush_          = 0;   // 0=Raise,1=Lower,2=Soften,3=Flatten
+		double terrain_brush_radius_   = 0.0; // world-space brush radius (for cursor ring scale)
+		double terrain_brush_strength_ = 0.0; // brush strength (settings readout)
 	};
 
 

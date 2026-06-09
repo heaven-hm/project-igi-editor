@@ -44,14 +44,6 @@ constexpr int MENU_TERRAIN_DISCARD_MOD = 53;
 constexpr int MENU_EDITOR_TOGGLE = 71;
 constexpr int MENU_EDIT_OBJECTS = 72;
 constexpr int MENU_EDIT_TERRAIN = 73;
-constexpr int MENU_TERRAIN_BRUSH_RAISE = 74;
-constexpr int MENU_TERRAIN_BRUSH_LOWER = 75;
-constexpr int MENU_TERRAIN_BRUSH_SOFTEN = 101;
-constexpr int MENU_TERRAIN_BRUSH_FLATTEN = 102;
-constexpr int MENU_TERRAIN_RADIUS_INC = 103;
-constexpr int MENU_TERRAIN_RADIUS_DEC = 104;
-constexpr int MENU_TERRAIN_STRENGTH_INC = 105;
-constexpr int MENU_TERRAIN_STRENGTH_DEC = 106;
 constexpr int MENU_EDITOR_SAVE = 76;
 
 constexpr int MENU_IGI_LIVE_DATA = 78;
@@ -77,11 +69,6 @@ constexpr int MENU_LOAD_BUILDINGS = 93;
 constexpr int MENU_LOAD_AI = 94;
 constexpr int MENU_EXPORT_TEXMAP = 99;
 
-constexpr int BRUSH_RAISE = 0;
-constexpr int BRUSH_LOWER = 1;
-constexpr int BRUSH_SOFTEN = 2;
-constexpr int BRUSH_FLATTEN = 3;
-
 // exit
 constexpr int MENU_CLOSE = 61;
 
@@ -94,7 +81,6 @@ static int g_menu_editor_tools;
 static int g_menu_model_lookup;
 static int g_menu_object_scale;
 static int g_menu_load_options;
-static int g_menu_terrain_brush;
 static int g_main_menu;
 
 // glut (ubuntu): Menu manipulation not allowed while menus in use.
@@ -340,16 +326,6 @@ static void UpdateEditorToolsMenuText() {
     glutChangeToMenuEntry(2, "Edit Terrain [ ]", MENU_EDIT_TERRAIN);
   }
 
-  glutSetMenu(g_menu_terrain_brush);
-  {
-    const int b = g_app.GetEditBrush();
-    auto mark = [&](int brush) { return brush == b ? "[*]" : "[ ]"; };
-    glutChangeToMenuEntry(1, (std::string("Brush: Raise Terrain ")   + mark(BRUSH_RAISE)).c_str(),   MENU_TERRAIN_BRUSH_RAISE);
-    glutChangeToMenuEntry(2, (std::string("Brush: Lower Terrain ")   + mark(BRUSH_LOWER)).c_str(),   MENU_TERRAIN_BRUSH_LOWER);
-    glutChangeToMenuEntry(3, (std::string("Brush: Soften Terrain ")  + mark(BRUSH_SOFTEN)).c_str(),  MENU_TERRAIN_BRUSH_SOFTEN);
-    glutChangeToMenuEntry(4, (std::string("Brush: Flatten Terrain ") + mark(BRUSH_FLATTEN)).c_str(), MENU_TERRAIN_BRUSH_FLATTEN);
-  }
-
   // Editor Tools menu no longer has a separate IGI Live Data entry here.
 }
 
@@ -425,34 +401,6 @@ static void OnMenu(int menu) {
   case MENU_EDIT_TERRAIN:
     g_app.SetTerrainEditEnabled(true);
     g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS;
-    break;
-  case MENU_TERRAIN_BRUSH_RAISE:
-    g_app.SetEditBrush(BRUSH_RAISE);
-    g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS;
-    break;
-  case MENU_TERRAIN_BRUSH_LOWER:
-    g_app.SetEditBrush(BRUSH_LOWER);
-    g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS;
-    break;
-  case MENU_TERRAIN_BRUSH_SOFTEN:
-    g_app.SetEditBrush(BRUSH_SOFTEN);
-    g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS;
-    break;
-  case MENU_TERRAIN_BRUSH_FLATTEN:
-    g_app.SetEditBrush(BRUSH_FLATTEN);
-    g_update_menu_flags |= UPDATE_MENU_EDITOR_TOOLS;
-    break;
-  case MENU_TERRAIN_RADIUS_INC:
-    g_app.AdjustBrushRadius(1.25);
-    break;
-  case MENU_TERRAIN_RADIUS_DEC:
-    g_app.AdjustBrushRadius(0.8);
-    break;
-  case MENU_TERRAIN_STRENGTH_INC:
-    g_app.AdjustBrushStrength(1.0);
-    break;
-  case MENU_TERRAIN_STRENGTH_DEC:
-    g_app.AdjustBrushStrength(-1.0);
     break;
   case MENU_EDITOR_SAVE:
     g_app.SaveCurrentLevel();
@@ -860,16 +808,6 @@ int main(int argc, char **argv) {
     glutAddMenuEntry("", i);
   }
 
-  g_menu_terrain_brush = glutCreateMenu(OnMenu);
-  glutAddMenuEntry("Brush: Raise Terrain", MENU_TERRAIN_BRUSH_RAISE);
-  glutAddMenuEntry("Brush: Lower Terrain", MENU_TERRAIN_BRUSH_LOWER);
-  glutAddMenuEntry("Brush: Soften Terrain", MENU_TERRAIN_BRUSH_SOFTEN);
-  glutAddMenuEntry("Brush: Flatten Terrain", MENU_TERRAIN_BRUSH_FLATTEN);
-  glutAddMenuEntry("Radius +25%", MENU_TERRAIN_RADIUS_INC);
-  glutAddMenuEntry("Radius -25%", MENU_TERRAIN_RADIUS_DEC);
-  glutAddMenuEntry("Strength +1", MENU_TERRAIN_STRENGTH_INC);
-  glutAddMenuEntry("Strength -1", MENU_TERRAIN_STRENGTH_DEC);
-
   g_menu_editor_tools = glutCreateMenu(OnMenu);
   glutAddMenuEntry("Edit Objects", MENU_EDIT_OBJECTS);
   glutAddMenuEntry("Edit Terrain", MENU_EDIT_TERRAIN);
@@ -882,7 +820,6 @@ int main(int argc, char **argv) {
 
   glutSetMenu(
       g_menu_editor_tools); // Set back to editor tools before adding submenus
-  glutAddSubMenu("Terrain Brush", g_menu_terrain_brush);
   glutAddMenuEntry("Save Changes", MENU_EDITOR_SAVE);
   glutAddMenuEntry("Export Texture Map", MENU_EXPORT_TEXMAP);
 
