@@ -4946,6 +4946,14 @@ void App::CommitPropTextEdit() {
 			obj.modelId = level_.GetLevelObjects().ResolvePickupModelId(enumStr);
 		}
 	}
+	// Eagerly load the (possibly new) model now, with a progress overlay, so a heavy
+	// model with many textures doesn't appear to freeze the editor on the next frame
+	// (the load is otherwise lazy in Draw → looks like a hang). (user feedback)
+	if (is_model_field && !obj.modelId.empty()) {
+		DrawProgressOverlay(("Loading model '" + obj.modelId + "'").c_str(), 40, "mesh & textures");
+		renderer_.PreloadModel(obj.modelId, obj.isBuilding);
+	}
+
 	obj.modified = true;
 	level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
 }

@@ -386,6 +386,11 @@ public:
 	                        const std::function<void(size_t,size_t)>& onProgress = nullptr) {
 		return objects_.AddModelToLevelRes(modelId, onProgress);
 	}
+	// Force the mesh + textures for a model to load now (so a heavy model doesn't
+	// appear to hang the editor on the next frame). No-op if already cached.
+	void PreloadModel(const std::string& modelId, bool isBuilding) {
+		objects_.GetOrLoadMesh(modelId, isBuilding);
+	}
 	bool UpdateAttaLocalPosInMef(const std::string& parentModelId, bool isBuilding, int recordIndex, const glm::vec3& newLocalPos, const glm::mat3& newLocalRot) {
 		return objects_.UpdateAttaLocalPosInMef(parentModelId, isBuilding, recordIndex, newLocalPos, newLocalRot);
 	}
