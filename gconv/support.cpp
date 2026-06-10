@@ -218,6 +218,23 @@ ConfigData& Config::Get() {
 }
 
 // ---------------------------------------------------------------------------
+// Pic_FreePics (used by cmd_terrain)
+// ---------------------------------------------------------------------------
+void Pic_FreePics(pics_s& pics) {
+    if (pics.pics_) {
+        for (int i = 0; i < pics.num_pic_; ++i) {
+            pic_s* p = pics.pics_ + i;
+            if (p->pixels_) {
+                Mem_Free(p->pixels_, __FILE__, __LINE__);
+            }
+        }
+        Mem_Free(pics.pics_, __FILE__, __LINE__);
+        pics.pics_ = nullptr;
+    }
+    pics.num_pic_ = 0;
+}
+
+// ---------------------------------------------------------------------------
 // Utils::Trim (used by dat_parser)
 // ---------------------------------------------------------------------------
 std::string Utils::Trim(const std::string& str) {
