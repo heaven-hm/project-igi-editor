@@ -17,7 +17,7 @@
 #include "../parsers/qvm_decompiler.h"
 #include "../parsers/dat_parser.h"
 #include "../parsers/res_compiler.h"
-#include "../parsers/mtp_tool.h"
+#include "../parsers/mtp_parser.h"
 #include <sstream>
 
 // Strip pixel-format suffixes that appear in DAT texture IDs but aren't part
@@ -731,7 +731,8 @@ void Renderer_Objects::ClearCaches() {
     // level switches. Clearing them causes lazy re-loads that might fail if cache 
     // stamps trick the asset extractor into skipping partial directories.
     texture_map_level_ = -1;
-    
+    persistent_dat_ = DATFile{};
+    persistent_dat_path_.clear();
     logged_draw_buildings_.clear();
 
 }
@@ -751,6 +752,8 @@ void Renderer_Objects::Shutdown() {
     texture_cache_.clear();
     model_texture_map_cache_.clear();
     texture_map_level_ = -1;
+    persistent_dat_ = DATFile{};
+    persistent_dat_path_.clear();
 
     if (shader_program_) {
         glDeleteProgram(shader_program_);
@@ -1220,7 +1223,20 @@ bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId,
             }
 
             if (proceed) {
-                DATFile dat = DAT_Parse(datPath);
+                // Use the persistent in-memory DAT to avoid data loss caused by
+                // mtp_decoder.exe rewriting level.dat on disk between adds.
+                // On the first add this session, populate it from disk; on all
+                // subsequent adds for the same level, reuse the accumulated copy.
+                if (!persistent_dat_.valid || persistent_dat_path_ != datPath) {
+                    persistent_dat_ = DAT_Parse(datPath);
+                    persistent_dat_path_ = datPath;
+                    if (!persistent_dat_.valid) {
+                        Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: initial .dat parse failed: "
+                            + persistent_dat_.error + " — clearing persistent cache");
+                        persistent_dat_path_.clear();
+                    }
+                }
+                DATFile& dat = persistent_dat_;
                 if (!dat.valid) {
                     Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: .dat parse failed, "
                         "skipping mapping update: " + dat.error);
@@ -1248,30 +1264,32 @@ bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId,
                             "' already mapped in " + datPath);
                     }
 
-                    // 4b. Back up the .mtp once, then drive mtp_decoder.exe to rebuild it.
-                    if (datReady) {
-                        if (std::filesystem::exists(mtpPath)) {
-                            const std::string mtpBackup = mtpPath + ".orig";
-                            if (!std::filesystem::exists(mtpBackup)) {
-                                std::error_code ec;
-                                std::filesystem::copy_file(mtpPath, mtpBackup,
-                                    std::filesystem::copy_options::overwrite_existing, ec);
-                                if (ec)
-                                    Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: "
-                                        "could not back up .mtp: " + mtpBackup + " (" + ec.message() + ")");
+                    // 4b. Back up the .mtp once, then add models natively via MTP_AddModel.
+                    if (datReady && std::filesystem::exists(mtpPath)) {
+                        const std::string mtpBackup = mtpPath + ".orig";
+                        if (!std::filesystem::exists(mtpBackup)) {
+                            std::error_code ec;
+                            std::filesystem::copy_file(mtpPath, mtpBackup,
+                                std::filesystem::copy_options::overwrite_existing, ec);
+                            if (ec)
+                                Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: "
+                                    "could not back up .mtp: " + mtpBackup + " (" + ec.message() + ")");
+                        }
+                        int mtpAdded = 0;
+                        for (const auto& fm : familyModels) {
+                            std::string merr;
+                            if (MTP_AddModel(mtpPath, mtpPath, fm.first, GetTextureIdsForModel(fm.first), merr)) {
+                                ++mtpAdded;
+                            } else {
+                                Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: "
+                                    "MTP_AddModel failed for " + fm.first + ": " + merr);
                             }
                         }
-                        const std::string exePath = Utils::GetExeDirectory() +
-                            "\\content\\tools\\mtp_decoder.exe";
-                        std::string terr;
-                        if (RunMtpDecoder(exePath, datPath, mtpPath, terr)) {
-                            Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: regenerated " +
-                                mtpPath + " via mtp_decoder");
-                        } else {
-                            Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: mtp_decoder "
-                                "did not finish automatically -- press M in its window to write level" + lvl +
-                                ".mtp (" + terr + ")");
-                        }
+                        Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: updated " + mtpPath +
+                            " natively (" + std::to_string(mtpAdded) + " model(s) added/confirmed)");
+                    } else if (datReady) {
+                        Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: "
+                            ".mtp not found, skipping MTP update: " + mtpPath);
                     }
                 }
             }
@@ -2659,6 +2677,23 @@ void Renderer_Objects::EnsureGlobalTextureMapLoaded() const {
                 for (const auto& t : dat.allTextures) {
                     texture_level_map_[t] = lvl;
                 }
+            }
+        }
+    }
+
+    // Also scan the common package (weapons, shared models not tied to any level)
+    std::string commonDat = igiRoot + "\\missions\\location0\\common\\location0.dat";
+    if (std::filesystem::exists(commonDat)) {
+        DATFile dat = DAT_Parse(commonDat);
+        if (dat.valid) {
+            for (const auto& m : dat.models) {
+                if (global_texture_map_.find(m.modelName) == global_texture_map_.end())
+                    global_texture_map_[m.modelName] = m.textures;
+                model_level_map_.emplace(m.modelName, 0);
+            }
+            for (const auto& t : dat.allTextures) {
+                if (texture_level_map_.find(t) == texture_level_map_.end())
+                    texture_level_map_[t] = 0;
             }
         }
     }

@@ -2,6 +2,7 @@
 #include "../pch.h"
 #include "model.h"
 #include "../level/level_objects.h"
+#include "../parsers/dat_parser.h"
 #include <map>
 #include <string>
 #include <vector>
@@ -113,6 +114,13 @@ private:
     std::unordered_set<std::string> suppressed_atta_keys_;
     std::set<std::string>           promoted_atta_records_; // "parentModelId:recordIndex"
     int texture_map_level_ = -1;
+
+    // Persistent in-memory DAT: accumulates AddModelToLevelRes additions within
+    // a session so mtp_decoder (which may rewrite the .dat on disk as a side-effect)
+    // cannot cause previously-added families to be lost on subsequent adds.
+    DATFile persistent_dat_;
+    std::string persistent_dat_path_;  // path this dat was loaded from
+
     GLuint shader_program_;
     GLint  loc_glass_min_ = -1;  // u_glassMin location (glass sheen floor), set in Draw
     GLuint ubo_binding_point_;

@@ -9,7 +9,9 @@ static void print_usage()
         "Usage:\n"
         "  gconv mtp dump <input.mtp> [-o <output.json>]\n"
         "  gconv mtp info <input.mtp>\n"
-        "  gconv mtp to-dat <input.mtp> [-o <out.dat>]\n";
+        "  gconv mtp to-dat <input.mtp> [-o <out.dat>]\n"
+        "  gconv mtp repair <input.mtp>              (sync VNAM/GTT counts)\n"
+        "  gconv mtp sync <input.mtp> <input.dat>    (add DAT models missing from MTP)\n";
 }
 
 // Minimal JSON string escaping
@@ -199,7 +201,7 @@ int cmd_mtp(int argc, char** argv)
             return 3;
         }
 
-        // Build DAT from MTP mappings
+        // Build DAT from MTP mappings (mappings already include "waypoint" if present)
         DATFile dat;
         dat.valid = true;
         for (const auto& m : mtp.mappings)
@@ -209,7 +211,6 @@ int cmd_mtp(int argc, char** argv)
             e.textures  = m.textureNames;
             dat.models.push_back(e);
         }
-        dat.models.push_back(DATModelEntry{"waypoint", {}});
         dat.allTextures           = mtp.textures;
         dat.declaredModelCount    = (int)dat.models.size();
         dat.declaredTextureCount  = (int)dat.allTextures.size();
@@ -223,6 +224,95 @@ int cmd_mtp(int argc, char** argv)
             return 4;
         }
         std::cout << "Wrote DAT: " << out_dat << "\n";
+        return 0;
+    }
+
+    // ── repair ────────────────────────────────────────────────────────────────
+    if (sub == "repair")
+    {
+        if (argc < 3)
+        {
+            std::cerr << "mtp repair: missing <input.mtp>\n";
+            return 1;
+        }
+        std::string path = argv[2];
+        if (!std::filesystem::exists(path))
+        {
+            std::cerr << "mtp repair: file not found: " << path << "\n";
+            return 2;
+        }
+        // Use MTP_AddModel with the first model already in the file — the idempotent
+        // path now syncs VNAM/GTT counts to match MODS/TEXF without changing content.
+        MTPFile mtp = MTP_Parse(path);
+        if (!mtp.valid || mtp.models.empty())
+        {
+            std::cerr << "mtp repair: parse error or empty MTP: "
+                      << (mtp.valid ? "no models" : mtp.error) << "\n";
+            return 3;
+        }
+        // Get the textures for the first model from its INST mapping.
+        std::vector<std::string> firstTextures;
+        if (!mtp.mappings.empty())
+            firstTextures = mtp.mappings[0].textureNames;
+
+        std::string err;
+        if (!MTP_AddModel(path, path, mtp.models[0], firstTextures, err))
+        {
+            std::cerr << "mtp repair: " << err << "\n";
+            return 4;
+        }
+        // Verify result.
+        MTPFile fixed = MTP_Parse(path);
+        std::cout << "Repaired: " << path << "\n"
+                  << "  Models=" << fixed.models.size()
+                  << " Textures=" << fixed.textures.size()
+                  << " Mappings=" << fixed.mappings.size() << "\n";
+        return 0;
+    }
+
+    // ── sync ──────────────────────────────────────────────────────────────────
+    if (sub == "sync")
+    {
+        if (argc < 4)
+        {
+            std::cerr << "mtp sync: usage: mtp sync <file.mtp> <file.dat>\n";
+            return 1;
+        }
+        std::string mtpPath = argv[2];
+        std::string datPath = argv[3];
+        if (!std::filesystem::exists(mtpPath))
+        {
+            std::cerr << "mtp sync: mtp not found: " << mtpPath << "\n";
+            return 2;
+        }
+        if (!std::filesystem::exists(datPath))
+        {
+            std::cerr << "mtp sync: dat not found: " << datPath << "\n";
+            return 2;
+        }
+        DATFile dat = DAT_Parse(datPath);
+        if (!dat.valid)
+        {
+            std::cerr << "mtp sync: dat parse error: " << dat.error << "\n";
+            return 3;
+        }
+        int added = 0, confirmed = 0;
+        for (const auto& m : dat.models)
+        {
+            std::string err;
+            if (!MTP_AddModel(mtpPath, mtpPath, m.modelName, m.textures, err))
+            {
+                std::cerr << "mtp sync: MTP_AddModel failed for " << m.modelName << ": " << err << "\n";
+                return 4;
+            }
+            // Re-parse to check if it was newly added or already present.
+            ++confirmed;
+        }
+        MTPFile result = MTP_Parse(mtpPath);
+        std::cout << "Synced " << mtpPath << "\n"
+                  << "  Models=" << result.models.size()
+                  << " Textures=" << result.textures.size()
+                  << " (processed " << confirmed << " DAT entries)\n";
         return 0;
     }
 

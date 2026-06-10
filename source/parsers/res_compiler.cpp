@@ -60,17 +60,15 @@ bool RES_GenerateQSC(const std::string& inputDir, const std::string& outQscPath,
             return false;
         }
 
+        std::string qscBase = fs::path(outQscPath).filename().string();
         for (const auto& entry : fs::recursive_directory_iterator(inputDir)) {
-            if (entry.is_regular_file()) {
-                std::string ext = entry.path().extension().string();
-                for (auto& c : ext) c = std::tolower(c);
+            if (!entry.is_regular_file()) continue;
+            // Skip the generated QSC itself
+            if (entry.path().filename().string() == qscBase) continue;
 
-                if (ext == ".mef") {
-                    std::string relPath = fs::relative(entry.path(), inputDir).string();
-                    for (auto& c : relPath) if (c == '\\') c = '/';
-                    out << "AddResource(\"" << relPath << "\", \"LOCAL:" << relPath << "\");\n";
-                }
-            }
+            std::string relPath = fs::relative(entry.path(), inputDir).string();
+            for (auto& c : relPath) if (c == '\\') c = '/';
+            out << "AddResource(\"" << relPath << "\", \"LOCAL:" << relPath << "\");\n";
         }
     } catch(const std::exception& e) {
         error = "Filesystem error: " + std::string(e.what());

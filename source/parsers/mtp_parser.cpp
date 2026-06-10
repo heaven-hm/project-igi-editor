@@ -246,6 +246,42 @@ static std::vector<uint8_t> EncodeStringArray(const std::vector<std::string>& st
     return data;
 }
 
+// Build VNAM chunk data from model names and per-model texture counts.
+// Verified format (from level1.mtp):
+//   u32_LE count
+//   count × u32_LE offsets  where offset[i] = sum_{j<i}(4 + texCount_j * 4)
+//   string pool = packed null-terminated model names (same bytes as MODS without count)
+static std::vector<uint8_t> BuildVNAM(const std::vector<std::string>& models,
+                                       const std::vector<uint32_t>& texCounts) {
+    std::vector<uint8_t> vnam;
+    WriteU32LE(vnam, (uint32_t)models.size());
+    uint32_t cumOffset = 0;
+    for (size_t i = 0; i < models.size(); ++i) {
+        WriteU32LE(vnam, cumOffset);
+        uint32_t tc = (i < texCounts.size()) ? texCounts[i] : 0;
+        cumOffset += 4 + tc * 4;
+    }
+    for (const auto& m : models) {
+        vnam.insert(vnam.end(), m.begin(), m.end());
+        vnam.push_back(0);
+    }
+    return vnam;
+}
+
+// Parse INST chunk to extract per-model texture counts in INST order.
+// INST format (no count prefix): repeated entries of (u32 modelIdx, u32 texCount, texCount*u32 texIdx)
+static std::vector<uint32_t> ParseInstTexCounts(const std::vector<uint8_t>& inst) {
+    std::vector<uint32_t> counts;
+    size_t pos = 0;
+    while (pos + 8 <= inst.size()) {
+        pos += 4; // skip modelIdx
+        uint32_t tc = ReadU32LE(inst.data() + pos); pos += 4;
+        counts.push_back(tc);
+        pos += tc * 4; // skip texIdx array
+    }
+    return counts;
+}
+
 struct MTPChunk {
     char fourcc[4];
     std::vector<uint8_t> data;
@@ -298,37 +334,32 @@ bool MTP_AddModel(const std::string& mtpPath, const std::string& outPath,
         if (offset % 2 != 0) offset++; // 2-byte alignment pad (not counted in size)
     }
 
-    // 3. Locate MODS, TEXF, INST.
-    int modsIdx = -1, texfIdx = -1, instIdx = -1;
+    // 3. Locate MODS, TEXF, INST, VNAM, GTT .
+    int modsIdx = -1, texfIdx = -1, instIdx = -1, vnamIdx = -1, gttIdx = -1;
     for (size_t i = 0; i < chunks.size(); ++i) {
         const uint8_t* fc = reinterpret_cast<const uint8_t*>(chunks[i].fourcc);
-        if (MatchFourCC(fc, "MODS")) modsIdx = (int)i;
+        if      (MatchFourCC(fc, "MODS")) modsIdx = (int)i;
         else if (MatchFourCC(fc, "TEXF")) texfIdx = (int)i;
         else if (MatchFourCC(fc, "INST")) instIdx = (int)i;
+        else if (MatchFourCC(fc, "VNAM")) vnamIdx = (int)i;
+        else if (MatchFourCC(fc, "GTT ")) gttIdx  = (int)i;
     }
     if (modsIdx < 0 || texfIdx < 0 || instIdx < 0) {
         err = "MTP missing required MODS/TEXF/INST chunk: " + mtpPath;
         return false;
     }
 
-    // 4. Decode MODS; idempotency check.
+    // 4. Decode MODS; check if model already present.
     std::vector<std::string> models =
         ParseStringArray(chunks[modsIdx].data.data(), (uint32_t)chunks[modsIdx].data.size());
-    for (const std::string& m : models) {
-        if (m == modelName) {
-            // Already present: copy input -> outPath verbatim (if different) and return.
-            if (outPath != mtpPath) {
-                std::ofstream o(outPath, std::ios::binary | std::ios::trunc);
-                if (!o.is_open()) { err = "Could not open output: " + outPath; return false; }
-                o.write(reinterpret_cast<const char*>(buf.data()), (std::streamsize)buf.size());
-            }
-            return true;
-        }
-    }
+    bool modelAlreadyPresent = false;
+    for (const std::string& m : models)
+        if (m == modelName) { modelAlreadyPresent = true; break; }
 
-    // 5. Append new model; new modelIdx = current MODS count.
+    // 5. Append new model (if new); record modelIdx.
     uint32_t newModelIdx = (uint32_t)models.size();
-    models.push_back(modelName);
+    if (!modelAlreadyPresent)
+        models.push_back(modelName);
 
     // 6. Decode TEXF; resolve/append each requested texture.
     std::vector<std::string> textures =
@@ -347,16 +378,45 @@ bool MTP_AddModel(const std::string& mtpPath, const std::string& outPath,
         resolvedTexIdx.push_back((uint32_t)idx);
     }
 
-    // 7. Re-encode MODS / TEXF bodies.
+    // 7. Re-encode MODS / TEXF bodies (only if model is new; TEXF may still grow).
+    uint32_t origTexCount = chunks[texfIdx].data.size() >= 4
+                            ? ReadU32LE(chunks[texfIdx].data.data()) : 0;
     chunks[modsIdx].data = EncodeStringArray(models);
     chunks[texfIdx].data = EncodeStringArray(textures);
 
-    // 8. Rebuild INST. Verified layout has NO count prefix: it is a packed array of
-    //    entries (one per model). We keep the existing entry bytes verbatim and append
-    //    one new entry: u32 LE modelIdx, u32 LE texCount, texCount * u32 LE texIdx.
-    {
+    // 7b. Rebuild VNAM using the verified format: count + offset_table + model-name pool.
+    // offset[i] = sum_{j<i}(4 + texCount_j * 4).  Tex counts come from the existing
+    // INST data (original entries) plus the new model's tex count if a new model was added.
+    if (vnamIdx >= 0) {
+        auto texCounts = ParseInstTexCounts(chunks[instIdx].data);
+        if (!modelAlreadyPresent)
+            texCounts.push_back((uint32_t)resolvedTexIdx.size());
+        chunks[vnamIdx].data = BuildVNAM(models, texCounts);
+    }
+    if (gttIdx >= 0 && chunks[gttIdx].data.size() >= 4) {
+        uint32_t gtCount = ReadU32LE(chunks[gttIdx].data.data());
+        uint32_t newCount = (uint32_t)textures.size();
+        if (gtCount < newCount) {
+            auto& gd = chunks[gttIdx].data;
+            gd[0] = (uint8_t)(newCount & 0xFF);
+            gd[1] = (uint8_t)((newCount >> 8)  & 0xFF);
+            gd[2] = (uint8_t)((newCount >> 16) & 0xFF);
+            gd[3] = (uint8_t)((newCount >> 24) & 0xFF);
+            for (uint32_t n = gtCount; n < newCount; ++n) {
+                gd.push_back((uint8_t)(n & 0xFF));
+                gd.push_back((uint8_t)((n >> 8) & 0xFF));
+                gd.push_back((uint8_t)((n >> 16) & 0xFF));
+                gd.push_back((uint8_t)((n >> 24) & 0xFF));
+                gd.push_back(0xFF); gd.push_back(0xFF); gd.push_back(0xFF); gd.push_back(0xFF);
+            }
+        }
+    }
+    (void)origTexCount;
+
+    // 8. Append to INST only if this is a new model.
+    if (!modelAlreadyPresent) {
         std::vector<uint8_t>& inst = chunks[instIdx].data;
-        std::vector<uint8_t> newInst = inst; // existing entries unchanged
+        std::vector<uint8_t> newInst = inst;
         WriteU32LE(newInst, newModelIdx);
         WriteU32LE(newInst, (uint32_t)resolvedTexIdx.size());
         for (uint32_t ti : resolvedTexIdx) WriteU32LE(newInst, ti);
@@ -387,5 +447,102 @@ bool MTP_AddModel(const std::string& mtpPath, const std::string& outPath,
     if (!o.is_open()) { err = "Could not open output: " + outPath; return false; }
     o.write(reinterpret_cast<const char*>(out.data()), (std::streamsize)out.size());
     if (!o.good()) { err = "Write failed: " + outPath; return false; }
+    return true;
+}
+
+bool MTP_Generate(const std::string& outPath,
+                  const std::vector<MTPModelTexture>& mappings,
+                  std::string& err,
+                  const std::vector<std::string>& extraTextures) {
+    std::vector<std::string> models;
+    std::vector<std::string> textures;
+    std::vector<uint8_t> instData;
+
+    std::vector<uint32_t> texCountsForVNAM;
+    for (const auto& m : mappings) {
+        uint32_t modelIdx = (uint32_t)models.size();
+        models.push_back(m.modelName);
+
+        std::vector<uint32_t> texIdxs;
+        for (const auto& t : m.textureNames) {
+            int idx = -1;
+            for (size_t i = 0; i < textures.size(); ++i)
+                if (textures[i] == t) { idx = (int)i; break; }
+            if (idx < 0) { idx = (int)textures.size(); textures.push_back(t); }
+            texIdxs.push_back((uint32_t)idx);
+        }
+
+        texCountsForVNAM.push_back((uint32_t)texIdxs.size());
+        WriteU32LE(instData, modelIdx);
+        WriteU32LE(instData, (uint32_t)texIdxs.size());
+        for (uint32_t ti : texIdxs) WriteU32LE(instData, ti);
+    }
+
+    // Append extra textures (e.g. manifest-only entries like "0") not already in TEXF.
+    for (const auto& t : extraTextures) {
+        bool found = false;
+        for (const auto& existing : textures) if (existing == t) { found = true; break; }
+        if (!found) textures.push_back(t);
+    }
+
+    auto modsData = EncodeStringArray(models);
+    auto texfData = EncodeStringArray(textures);
+
+    // VNAM: count + offset_table + model-name pool.
+    // offset[i] = sum_{j<i}(4 + texCount_j * 4) — matches original game-file format.
+    auto vnamData = BuildVNAM(models, texCountsForVNAM);
+
+    // GTT: u32_LE count + count * 8 bytes: (tex_index_LE, 0xFFFFFFFF).
+    std::vector<uint8_t> gttData;
+    gttData.reserve(4 + textures.size() * 8);
+    auto pushU32LE_v = [&](std::vector<uint8_t>& v, uint32_t x) {
+        v.push_back((uint8_t)(x & 0xFF));
+        v.push_back((uint8_t)((x >> 8) & 0xFF));
+        v.push_back((uint8_t)((x >> 16) & 0xFF));
+        v.push_back((uint8_t)((x >> 24) & 0xFF));
+    };
+    pushU32LE_v(gttData, (uint32_t)textures.size());
+    for (uint32_t i = 0; i < (uint32_t)textures.size(); ++i) {
+        pushU32LE_v(gttData, i);
+        gttData.push_back(0xFF); gttData.push_back(0xFF);
+        gttData.push_back(0xFF); gttData.push_back(0xFF);
+    }
+
+    // Empty 4-byte stub for BANM/SNDS/SVOL/PALF (count=0 string arrays).
+    std::vector<uint8_t> emptyStub(4, 0); // LE u32 = 0
+
+    std::vector<uint8_t> out;
+    out.insert(out.end(), {'F', 'O', 'R', 'M'});
+    size_t formSizePos = out.size();
+    WriteU32BE(out, 0);
+    out.insert(out.end(), {'M', 'T', 'P', ' '});
+
+    auto writeChunk = [&](const char* fc, const std::vector<uint8_t>& data) {
+        out.insert(out.end(), fc, fc + 4);
+        WriteU32BE(out, (uint32_t)data.size());
+        out.insert(out.end(), data.begin(), data.end());
+        if (data.size() % 2 != 0) out.push_back(0);
+    };
+    // Match original chunk order: BANM SNDS SVOL MODS VNAM INST TEXF PALF GTT
+    writeChunk("BANM", emptyStub);
+    writeChunk("SNDS", emptyStub);
+    writeChunk("SVOL", emptyStub);
+    writeChunk("MODS", modsData);
+    writeChunk("VNAM", vnamData);
+    writeChunk("INST", instData);
+    writeChunk("TEXF", texfData);
+    writeChunk("PALF", emptyStub);
+    writeChunk("GTT ", gttData);
+
+    uint32_t formSize = (uint32_t)(out.size() - 8);
+    out[formSizePos + 0] = (uint8_t)((formSize >> 24) & 0xFF);
+    out[formSizePos + 1] = (uint8_t)((formSize >> 16) & 0xFF);
+    out[formSizePos + 2] = (uint8_t)((formSize >> 8) & 0xFF);
+    out[formSizePos + 3] = (uint8_t)(formSize & 0xFF);
+
+    std::ofstream ofs(outPath, std::ios::binary | std::ios::trunc);
+    if (!ofs.is_open()) { err = "Cannot write: " + outPath; return false; }
+    ofs.write(reinterpret_cast<const char*>(out.data()), (std::streamsize)out.size());
+    if (!ofs.good()) { err = "Write failed: " + outPath; return false; }
     return true;
 }

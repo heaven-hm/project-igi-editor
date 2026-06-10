@@ -33,3 +33,11 @@ MTPFile MTP_Parse(const std::string& filepath);
 bool MTP_AddModel(const std::string& mtpPath, const std::string& outPath,
                   const std::string& modelName, const std::vector<std::string>& textureNames,
                   std::string& err);
+
+// Generate a new MTP file from scratch given a list of model-texture mappings.
+// extraTextures: textures to include in TEXF but not referenced by any INST entry
+// (e.g. the literal "0" manifest entry from some DAT files).
+bool MTP_Generate(const std::string& outPath,
+                  const std::vector<MTPModelTexture>& mappings,
+                  std::string& err,
+                  const std::vector<std::string>& extraTextures = {});

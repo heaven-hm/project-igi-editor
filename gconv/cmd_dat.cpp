@@ -1,8 +1,9 @@
 #include "pch.h"
 #include "cmd_dat.h"
 #include "dat_parser.h"
-#include "mtp_tool.h"
+#include "mtp_parser.h"
 #include <filesystem>
+#include <set>
 
 static void print_usage()
 {
@@ -10,7 +11,8 @@ static void print_usage()
         "Usage:\n"
         "  gconv dat info <file.dat>\n"
         "  gconv dat export <file.dat> [-o <out.json>] [--filter <model>] [--text]\n"
-        "  gconv dat to-mtp <file.dat> [-o <out.mtp>]\n";
+        "  gconv dat to-mtp <file.dat> [-o <out.mtp>]    (native, no external tool)\n"
+        "  gconv mtp to-dat <file.mtp> [-o <out.dat>]\n";
 }
 
 static const char* opt_val(int argc, char** argv, const char* name)
@@ -128,47 +130,41 @@ int cmd_dat(int argc, char** argv)
             std::cerr << "dat to-mtp: file not found: " << dat_path << "\n";
             return 2;
         }
-
-        // Locate mtp_decoder.exe relative to gconv executable
-        // gconv.exe is in bin/Release/content/tools/; mtp_decoder is a sibling.
-        std::string exe_dir;
-#ifdef _WIN32
-        char buf[MAX_PATH] = {};
-        GetModuleFileNameA(nullptr, buf, MAX_PATH);
-        exe_dir = std::filesystem::path(buf).parent_path().string();
-#endif
-        std::string decoder_exe = exe_dir + "\\mtp_decoder.exe";
-        if (!std::filesystem::exists(decoder_exe))
+        DATFile dat = DAT_Parse(dat_path);
+        if (!dat.valid)
         {
-            std::cerr << "dat to-mtp: mtp_decoder.exe not found at: " << decoder_exe << "\n";
-            std::cerr << "  Place mtp_decoder.exe in the same directory as gconv.exe\n";
-            return 1;
-        }
-
-        // Determine output MTP path
-        const char* out_arg = opt_val(argc, argv, "-o");
-        std::string sibling_mtp = std::filesystem::path(dat_path).replace_extension(".mtp").string();
-        std::string final_mtp   = out_arg ? std::string(out_arg) : sibling_mtp;
-
-        std::string err;
-        if (!RunMtpDecoder(decoder_exe, dat_path, sibling_mtp, err))
-        {
-            std::cerr << "dat to-mtp: mtp_decoder failed: " << err << "\n";
+            std::cerr << "dat to-mtp: parse error: " << dat.error << "\n";
             return 3;
         }
 
-        if (out_arg && std::string(out_arg) != sibling_mtp)
+        const char* out_arg = opt_val(argc, argv, "-o");
+        std::string out_mtp = out_arg ? std::string(out_arg)
+                                      : std::filesystem::path(dat_path).replace_extension(".mtp").string();
+
+        // Build MTPModelTexture list from all DAT models.
+        std::vector<MTPModelTexture> mappings;
+        mappings.reserve(dat.models.size());
+        for (const auto& m : dat.models)
+            mappings.push_back({m.modelName, m.textures});
+
+        // Collect textures present in allTextures but not in any model's texture list
+        // (e.g. the literal "0" manifest entry that some DAT files include).
+        std::set<std::string> modelTexSet;
+        for (const auto& m : dat.models)
+            for (const auto& t : m.textures)
+                modelTexSet.insert(t);
+        std::vector<std::string> extraTextures;
+        for (const auto& t : dat.allTextures)
+            if (modelTexSet.find(t) == modelTexSet.end())
+                extraTextures.push_back(t);
+
+        std::string merr;
+        if (!MTP_Generate(out_mtp, mappings, merr, extraTextures))
         {
-            std::error_code ec;
-            std::filesystem::copy_file(sibling_mtp, final_mtp,
-                                       std::filesystem::copy_options::overwrite_existing, ec);
-            if (ec)
-            {
-                std::cerr << "dat to-mtp: copy failed: " << ec.message() << "\n";
-                return 4;
-            }
+            std::cerr << "dat to-mtp: " << merr << "\n";
+            return 4;
         }
-        std::cout << "Generated MTP: " << final_mtp << "\n";
+        std::cout << "Generated MTP: " << out_mtp << "\n";
         return 0;
     }
 

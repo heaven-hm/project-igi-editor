@@ -13,7 +13,8 @@ static void print_usage()
         "  gconv res extract <input.res> --file <name> -o <output_dir>\n"
         "  gconv res compile <file.qsc>\n"
         "  gconv res pack <dir> <out.res>\n"
-        "  gconv res unpack <file.res> <dir>\n";
+        "  gconv res unpack <file.res> <dir>\n"
+        "  gconv res append <input.res> <file1> [file2...] -o <out.res> [--prefix LOCAL:textures/]\n";
 }
 
 // Return the value of a named option (e.g. "-o", "--file"), or nullptr if absent.
@@ -232,6 +233,74 @@ int cmd_res(int argc, char** argv)
             return 3;
         }
         std::cout << "Unpacked " << extracted << " file(s) to " << out_dir << "\n";
+        return 0;
+    }
+
+    // ── append ────────────────────────────────────────────────────────────────
+    if (sub == "append")
+    {
+        // gconv res append <input.res> <file1> [file2...] -o <out.res> [--prefix <p>]
+        if (argc < 5)
+        {
+            std::cerr << "res append: usage: gconv res append <input.res> <file1> [file2 ...] -o <out.res> [--prefix LOCAL:textures/]\n";
+            return 1;
+        }
+        std::string src_res = argv[2];
+
+        const char* out_res  = opt_val(argc, argv, "-o");
+        const char* prefix_c = opt_val(argc, argv, "--prefix");
+        std::string prefix = prefix_c ? prefix_c : "";
+
+        if (!out_res)
+        {
+            std::cerr << "res append: missing -o <out.res>\n";
+            return 1;
+        }
+        if (!std::filesystem::exists(src_res))
+        {
+            std::cerr << "res append: file not found: " << src_res << "\n";
+            return 2;
+        }
+
+        // Collect input files: argv[3..] until we hit "-o" or "--prefix"
+        std::vector<std::string> input_files;
+        for (int i = 3; i < argc; ++i)
+        {
+            std::string a = argv[i];
+            if (a == "-o" || a == "--prefix") { ++i; continue; }
+            input_files.push_back(a);
+        }
+        if (input_files.empty())
+        {
+            std::cerr << "res append: no input files specified\n";
+            return 1;
+        }
+
+        std::vector<RESEntry> new_entries;
+        for (const auto& fpath : input_files)
+        {
+            if (!std::filesystem::exists(fpath))
+            {
+                std::cerr << "res append: file not found: " << fpath << "\n";
+                return 2;
+            }
+            std::ifstream f(fpath, std::ios::binary | std::ios::ate);
+            if (!f) { std::cerr << "res append: cannot read: " << fpath << "\n"; return 4; }
+            std::streamsize sz = f.tellg(); f.seekg(0);
+            RESEntry e;
+            e.name = prefix + std::filesystem::path(fpath).filename().string();
+            e.data.resize(sz);
+            f.read(reinterpret_cast<char*>(e.data.data()), sz);
+            new_entries.push_back(std::move(e));
+        }
+
+        std::string err;
+        if (!RES_StreamAppend(src_res, new_entries, out_res, err))
+        {
+            std::cerr << "res append: " << err << "\n";
+            return 3;
+        }
+        std::cout << "res append: appended " << new_entries.size() << " file(s) to " << out_res << "\n";
         return 0;
     }
 

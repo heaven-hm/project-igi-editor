@@ -3474,7 +3474,7 @@ void App::DispatchEventBindings() {
 				level_res_models_.AddEntry("models\\" + objs[oi].modelId + ".mef");
 				objs[oi].modelMissingInRes = false;
 				std::string fam = addId.substr(0, addId.find('_'));
-				status_message_ = "Added model family '" + fam + "' (+textures) to .res/.dat/.mtp (backups written). If the mtp_decoder console is still open in front, press M in it to finish writing the level .mtp.";
+				status_message_ = "Added model family '" + fam + "' (+textures) to .res/.dat/.mtp (backups written).";
 			} else {
 				status_message_ = "Failed to add '" + objs[oi].modelId + "' to level .res (see log).";
 			}
@@ -5073,9 +5073,21 @@ void App::CommitPropTextEdit() {
 		if (!level_res_models_.Empty() && !obj.modelId.empty() &&
 		    !level_res_models_.Contains(obj.modelId)) {
 			obj.modelMissingInRes = true;
-			status_message_ = "Model '" + obj.modelId +
-				"' is not in this level's .res — it will be invisible in-game. "
-				"Press Ctrl+Shift+A to add it.";
+			// Auto-add the foreign model immediately — no extra keypress needed.
+			std::string addId = obj.modelId;
+			DrawProgressOverlay(("Adding '" + addId + "' to .res").c_str(), 0, "starting");
+			auto progressCb = [this, addId](size_t done, size_t total) {
+				int pct = total ? (int)(done * 100 / total) : 0;
+				DrawProgressOverlay(("Adding '" + addId + "' to .res").c_str(), pct, "packing textures");
+			};
+			if (renderer_.AddModelToLevelRes(addId, progressCb)) {
+				level_res_models_.AddEntry("models\\" + addId + ".mef");
+				obj.modelMissingInRes = false;
+				std::string fam = addId.substr(0, addId.find('_'));
+				status_message_ = "Added model family '" + fam + "' (+textures) to .res/.dat/.mtp.";
+			} else {
+				status_message_ = "Failed to add '" + addId + "' to level .res (see log).";
+			}
 		} else {
 			obj.modelMissingInRes = false;
 		}

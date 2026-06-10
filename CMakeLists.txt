@@ -194,18 +194,9 @@ endif()
 add_executable(gconv1 ${GCONV_SOURCES} ${SOURCES_PARSERS})
 
 set_target_properties(gconv1 PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${PROJECT_SOURCE_DIR}/bin/Release"
-    RUNTIME_OUTPUT_DIRECTORY_DEBUG   "${PROJECT_SOURCE_DIR}/bin/Debug"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${PROJECT_SOURCE_DIR}/bin/Release/content/tools"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG   "${PROJECT_SOURCE_DIR}/bin/Debug/content/tools"
     OUTPUT_NAME "gconv"
-)
-
-# Deploy gconv.exe to content/tools/ alongside the editor
-add_custom_command(TARGET gconv1 POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:igi-editor>/content/tools"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<TARGET_FILE:gconv1>"
-        "$<TARGET_FILE_DIR:igi-editor>/content/tools/gconv.exe"
-    COMMENT "Deploying gconv.exe to tools/"
 )
 
 # gconv1 has no GL/GLUT — only standard + GLM + parser headers
