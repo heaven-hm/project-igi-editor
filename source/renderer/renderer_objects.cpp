@@ -484,9 +484,9 @@ layout(location = 1) in vec3 a_normal;
 layout(location = 2) in vec2 a_uv;
 
 layout(std140) uniform Matrices {
-    mat4 u_unused1;
-    mat4 u_unused2;
-    mat4 u_mvp; // Proj * View * GlobalScale
+    mat4 u_mvp_mat_follow_view;
+    mat4 u_mvp_flat_sky_layer;
+    mat4 u_mvp_objects; // Proj * View * GlobalScale
 };
 
 
@@ -501,7 +501,7 @@ void main() {
     v_fragPos       = worldPos.xyz;
     v_normal        = mat3(transpose(inverse(u_model))) * a_normal;
     v_uv            = a_uv;
-    gl_Position     = u_mvp * u_model * vec4(a_pos, 1.0);
+    gl_Position     = u_mvp_objects * u_model * vec4(a_pos, 1.0);
 }
 
 )";
@@ -565,15 +565,15 @@ layout(location = 1) in vec3 a_normal;
 layout(location = 2) in vec2 a_uv;
 
 layout(std140) uniform Matrices {
-    mat4 u_unused1;
-    mat4 u_unused2;
-    mat4 u_mvp;
+    mat4 u_mvp_mat_follow_view;
+    mat4 u_mvp_flat_sky_layer;
+    mat4 u_mvp_objects;
 };
 
 uniform mat4 u_model;
 
 void main() {
-    gl_Position = u_mvp * u_model * vec4(a_pos, 1.0);
+    gl_Position = u_mvp_objects * u_model * vec4(a_pos, 1.0);
 }
 )";
 
@@ -3454,14 +3454,14 @@ void Renderer_Objects::DrawSelectionBox(const LevelObject& obj, GLuint ubo_mats,
     static const char* simple_vert = R"(
 #version 330 core
 layout(std140) uniform Matrices {
-    mat4 u_unused1;
-    mat4 u_unused2;
-    mat4 u_mvp;
+    mat4 u_mvp_mat_follow_view;
+    mat4 u_mvp_flat_sky_layer;
+    mat4 u_mvp_objects;
 };
 uniform mat4 u_model;
 layout(location = 0) in vec3 a_pos;
 void main() {
-    gl_Position = u_mvp * u_model * vec4(a_pos, 1.0);
+    gl_Position = u_mvp_objects * u_model * vec4(a_pos, 1.0);
 }
 )";
 
