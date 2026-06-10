@@ -2229,7 +2229,7 @@ void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool
                                      (isBuilding ? "building:" : "object:") + aname;
                 if (mesh_cache_.find(subKey) == mesh_cache_.end()) {
                     try {
-                        Mesh subMesh = loadObjModel(subFile, "");
+                        Mesh subMesh = loadObjModel(subFile);
                         ApplyTexturesToMesh(subMesh, aname, modelId);
                         mesh_cache_[subKey] = subMesh;
                         Logger::Get().Log(LogLevel::INFO,
@@ -2531,7 +2531,7 @@ Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding
 
     // Load and cache
     try {
-        Mesh mesh = loadObjModel(filepath, "");
+        Mesh mesh = loadObjModel(filepath);
         ApplyTexturesToMesh(mesh, modelId);
         mesh_cache_[cacheKey] = mesh;
         Logger::Get().Log(LogLevel::DEBUG, "[Renderer_Objects] Success: Loaded model '" + modelId + "' from " + filepath + " (" + std::to_string(mesh.vertexCount) + " vertices)");

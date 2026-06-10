@@ -254,7 +254,7 @@ Mesh BuildMeshFromGeometry(const ParsedGeometry& geometry, const std::string& fi
 
 } // namespace
 
-Mesh loadObjModel(const std::string& filepath, const std::string& /*unused*/) {
+Mesh loadObjModel(const std::string& filepath) {
     Logger::Get().Log(
         LogLevel::DEBUG,
         "[MEF Binary Native] Loading file=" + filepath);
