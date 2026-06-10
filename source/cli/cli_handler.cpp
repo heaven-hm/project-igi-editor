@@ -42,9 +42,9 @@ void CLIHandler::PrintHelp() {
       << "      --report-dir <dir>  Write per-level reports to dir\n"
       << "      --delay <sec>       Delay between levels (default: 5)\n"
       << "  --extract-level <N> [outdir]  Extract level N resources\n\n"
-      << "For asset conversion, use gconv1.exe (in content/tools/):\n"
-      << "  gconv1 tex / mef / qsc / qvm / res / mtp / dat / terrain / fnt / graph\n"
-      << "  Run: gconv1 --help\n";
+      << "For asset conversion, use gconv.exe (in content/tools/):\n"
+      << "  gconv tex / mef / qsc / qvm / res / mtp / dat / terrain / fnt / graph\n"
+      << "  Run: gconv --help\n";
 }
 
 int CLIHandler::Process(int argc, char **argv) {

@@ -18,8 +18,12 @@ static void print_tex_help()
         "  decode <input.tex|.spr|.pic> -o <output_dir>\n"
         "  decode <folder/> -o <output_dir> --batch\n"
         "  info   <input.tex|.spr|.pic>\n"
-        "  to-png <input.tga|.tex> -o <out.png>\n"
-        "  to-tga <input.png|.tex> -o <out.tga>\n"
+        "  to-png <input> [-o <out.png>] [--resize <W> <H>]\n"
+        "  to-tga <input> [-o <out.tga>] [--resize <W> <H>]\n"
+        "\n"
+        "  <input> for to-png/to-tga: .tex .spr .pic .tga .png .bmp .jpg .jpeg\n"
+        "  -o is optional; default: same directory as input, same base name\n"
+        "  --resize W H: scale the output to W x H pixels\n"
         "\n"
         "Exit codes: 0=success 1=bad args 2=file not found 3=parse error 4=write error\n";
 }
@@ -188,14 +192,17 @@ int cmd_tex(int argc, char** argv)
         }
         std::string input = argv[2];
 
+        // Parse -o, --resize W H
         std::string outpath;
-        for (int i = 3; i < argc - 1; ++i)
-            if (std::string(argv[i]) == "-o") { outpath = argv[i + 1]; break; }
-
-        if (outpath.empty())
+        int resize_w = 0, resize_h = 0;
+        for (int i = 3; i < argc; ++i)
         {
-            std::cerr << "tex " << subcmd << ": missing -o <output>\n";
-            return 1;
+            std::string a = argv[i];
+            if (a == "-o" && i + 1 < argc)      { outpath = argv[++i]; }
+            else if (a == "--resize" && i + 2 < argc) {
+                try { resize_w = std::stoi(argv[i+1]); resize_h = std::stoi(argv[i+2]); i += 2; }
+                catch (...) { std::cerr << "tex " << subcmd << ": --resize needs two integers\n"; return 1; }
+            }
         }
 
         if (!fs::exists(input))
@@ -204,37 +211,38 @@ int cmd_tex(int argc, char** argv)
             return 2;
         }
 
-        // Determine input type by extension
+        // Default output path: same dir, same stem, new extension
+        if (outpath.empty())
+        {
+            fs::path p(input);
+            std::string new_ext = (subcmd == "to-png") ? ".png" : ".tga";
+            outpath = (p.parent_path() / (p.stem().string() + new_ext)).string();
+        }
+
         std::string ext = fs::path(input).extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
-        if (ext == ".tga" || ext == ".png")
+        // Load pixels from input
+        int w = 0, h = 0;
+        std::vector<unsigned char> pixels;
+
+        bool is_stb_format = (ext == ".tga" || ext == ".png" || ext == ".bmp" ||
+                              ext == ".jpg" || ext == ".jpeg" || ext == ".gif");
+        if (is_stb_format)
         {
-            // Use stb_image to load and stb_image_write to convert
-            int w, h, channels;
+            int channels;
             unsigned char* data = stbi_load(input.c_str(), &w, &h, &channels, 4);
             if (!data)
             {
                 std::cerr << "tex " << subcmd << ": failed to load image: " << input << "\n";
                 return 3;
             }
-            int rc = 0;
-            if (subcmd == "to-png")
-                rc = stbi_write_png(outpath.c_str(), w, h, 4, data, w * 4);
-            else
-                rc = stbi_write_tga(outpath.c_str(), w, h, 4, data);
+            pixels.assign(data, data + w * h * 4);
             stbi_image_free(data);
-            if (!rc)
-            {
-                std::cerr << "tex " << subcmd << ": failed to write: " << outpath << "\n";
-                return 4;
-            }
-            std::cout << "tex: converted " << input << " -> " << outpath << "\n";
-            return 0;
         }
         else
         {
-            // Try TEX parse for .tex/.spr/.pic
+            // TEX/SPR/PIC: raw pixels are not RGBA; decode via TGA round-trip
             TEXFile tex = TEX_Parse(input);
             if (!tex.valid)
             {
@@ -246,28 +254,58 @@ int cmd_tex(int argc, char** argv)
                 std::cerr << "tex " << subcmd << ": no images in file\n";
                 return 3;
             }
-            const TEXImage& img = tex.images[0];
-            if (subcmd == "to-png")
+            // Write to a temp TGA then re-load via stb_image to get RGBA8888
+            std::string tmp_tga = outpath + ".~tmp.tga";
+            if (!TEX_WriteTGA(tmp_tga, tex.images[0]))
             {
-                int rc = stbi_write_png(outpath.c_str(), img.width, img.height, 4,
-                                        img.pixels.data(), img.width * 4);
-                if (!rc)
-                {
-                    std::cerr << "tex to-png: failed to write PNG: " << outpath << "\n";
-                    return 4;
-                }
+                std::cerr << "tex " << subcmd << ": failed to decode TEX pixels\n";
+                return 3;
             }
-            else
+            int channels;
+            unsigned char* data = stbi_load(tmp_tga.c_str(), &w, &h, &channels, 4);
+            fs::remove(tmp_tga);
+            if (!data)
             {
-                if (!TEX_WriteTGA(outpath, img))
-                {
-                    std::cerr << "tex to-tga: failed to write TGA: " << outpath << "\n";
-                    return 4;
-                }
+                std::cerr << "tex " << subcmd << ": failed to decode TGA: " << input << "\n";
+                return 3;
             }
-            std::cout << "tex: converted " << input << " -> " << outpath << "\n";
-            return 0;
+            pixels.assign(data, data + w * h * 4);
+            stbi_image_free(data);
         }
+
+        // Resize if requested (nearest-neighbour)
+        if (resize_w > 0 && resize_h > 0 && (resize_w != w || resize_h != h))
+        {
+            std::vector<unsigned char> resized(resize_w * resize_h * 4);
+            float sx = (float)w / resize_w;
+            float sy = (float)h / resize_h;
+            for (int ry = 0; ry < resize_h; ++ry) {
+                for (int rx = 0; rx < resize_w; ++rx) {
+                    int px = std::min((int)(rx * sx), w - 1);
+                    int py = std::min((int)(ry * sy), h - 1);
+                    const unsigned char* s = pixels.data() + (py * w + px) * 4;
+                    unsigned char* d = resized.data() + (ry * resize_w + rx) * 4;
+                    d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=s[3];
+                }
+            }
+            pixels = std::move(resized);
+            w = resize_w; h = resize_h;
+        }
+
+        // Write output
+        int rc = 0;
+        if (subcmd == "to-png")
+            rc = stbi_write_png(outpath.c_str(), w, h, 4, pixels.data(), w * 4);
+        else
+            rc = stbi_write_tga(outpath.c_str(), w, h, 4, pixels.data());
+
+        if (!rc)
+        {
+            std::cerr << "tex " << subcmd << ": failed to write: " << outpath << "\n";
+            return 4;
+        }
+        std::cout << "tex: converted " << input << " -> " << outpath << "\n";
+        return 0;
     }
 
     std::cerr << "tex: unknown subcommand '" << subcmd << "'\n";
