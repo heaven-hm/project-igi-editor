@@ -222,7 +222,7 @@ bool App::Init(int argc, char** argv) {
 	LoadAllCursors();
 	LoadHelpEntries();
 	LoadAutoCompleteKeywords();
-	glutSetCursor(GLUT_CURSOR_NONE);
+	glutSetCursor(cursor_loaded_count_ > 0 ? GLUT_CURSOR_NONE : GLUT_CURSOR_LEFT_ARROW);
 
 	// Cache editor HWND for minimize/restore around game launch
 	editor_hwnd_ = Utils::FindWindow("IGI Editor");
@@ -1431,9 +1431,9 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 		}
 	}
 
-	// Update cursor instantly on click/release — keep NONE if SPR cursor is active
+	// Update cursor instantly on click/release
 	if (window_state_.cursor_visible_ && !pause_mode_) {
-		glutSetCursor(GLUT_CURSOR_NONE);
+		glutSetCursor(enableCameraMode ? GLUT_CURSOR_NONE : GLUT_CURSOR_LEFT_ARROW);
 	}
 }
 
@@ -1460,7 +1460,7 @@ void App::Input_OnMotion(int x, int y) {
 	}
 
 	if (window_state_.cursor_visible_) {
-		glutSetCursor(GLUT_CURSOR_NONE);
+		glutSetCursor(enableCameraMode ? GLUT_CURSOR_NONE : GLUT_CURSOR_LEFT_ARROW);
 	}
 
 	if (window_state_.cursor_visible_ && !enableCameraMode) {
@@ -3983,8 +3983,12 @@ void App::ProcessInput(float delta_seconds) {
 	
 	bool enableCameraMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
 	
-	// Update cursor — always NONE so SPR sprite cursor is the only visible cursor
-	glutSetCursor(GLUT_CURSOR_NONE);
+	// Update cursor based on mode
+	if (pause_mode_) {
+		glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
+	} else {
+		glutSetCursor(enableCameraMode ? GLUT_CURSOR_NONE : GLUT_CURSOR_LEFT_ARROW);
+	}
 
 	if (!edit_mode_ || enableCameraMode) {
 		if (orbit_active_) {
@@ -4308,15 +4312,15 @@ void App::TogglePauseMenu() {
 	// Hiding the cursor permanently caused the "mouse stuck" bug after resuming.
 	window_state_.cursor_visible_ = true;
 	if (pause_mode_) {
-		// Opening pause menu
-		glutSetCursor(GLUT_CURSOR_NONE);
+		// Opening pause menu — show system cursor so user can interact with UI
+		glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
 	} else {
 		// Closing pause menu: reset mouse state so no stale drag occurs
 		input_.mouse_delta_x_ = 0;
 		input_.mouse_delta_y_ = 0;
 		mouse_state_.left_button_down_ = false;
 		skip_input_on_motion_once_ = false;
-		glutSetCursor(GLUT_CURSOR_NONE);
+		glutSetCursor(GLUT_CURSOR_LEFT_ARROW);
 	}
 }
 
