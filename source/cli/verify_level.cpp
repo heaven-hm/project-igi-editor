@@ -17,7 +17,9 @@
 #include <thread>
 
 #define WIN32_LEAN_AND_MEAN
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -298,22 +300,23 @@ static void WriteJsonReport(std::ostream& o, const LevelReport& r) {
 static std::string MdTable(const std::vector<std::string>& hdr,
                            const std::vector<std::vector<std::string>>& rows) {
     if (rows.empty()) return "";
-    std::string out = "| " + hdr[0];
-    for (size_t i = 1; i < hdr.size(); ++i) out += " | " + hdr[i];
-    out += " |\n| ";
-    for (size_t i = 0; i < hdr.size(); ++i) out += (i ? " | " : "") + std::string("---");
-    out += " |\n";
+    std::ostringstream out;
+    out << "| " << hdr[0];
+    for (size_t i = 1; i < hdr.size(); ++i) out << " | " << hdr[i];
+    out << " |\n| ";
+    for (size_t i = 0; i < hdr.size(); ++i) out << (i ? " | " : "") << "---";
+    out << " |\n";
     for (const auto& row : rows) {
-        out += "| ";
+        out << "| ";
         for (size_t i = 0; i < hdr.size(); ++i) {
-            if (i) out += " | ";
+            if (i) out << " | ";
             std::string cell = (i < row.size()) ? row[i] : "";
             for (char& c : cell) if (c == '|') c = '\\';
-            out += cell;
+            out << cell;
         }
-        out += " |\n";
+        out << " |\n";
     }
-    return out;
+    return out.str();
 }
 
 static void WriteMdCategory(std::ostream& o, const LevelReport::Category& cat,
