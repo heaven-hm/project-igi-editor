@@ -45,6 +45,22 @@ bool GL_Init() {
 	// requires OpenGL 4.5 and above or ARB_direct_state_access to support glBindTextureUnit
 	g_gl_info.support_version_45_ = glewIsSupported("GL_VERSION_4_5") == GL_TRUE;
 
+	// OpenGL 4.1+ required for shaders/41 (GLSL 4.10 core profile)
+	g_gl_info.support_version_41_ = glewIsSupported("GL_VERSION_4_1") == GL_TRUE;
+
+	// legacy_glsl_ is true when the context is too old for shaders/41.
+	// This happens on Wine (macOS) where Apple caps the default OpenGL context at 2.1.
+	g_gl_info.legacy_glsl_ = !g_gl_info.support_version_41_;
+
+	if (g_gl_info.legacy_glsl_) {
+		Log(log_type_t::LOG_ERROR, __FILE__, __LINE__,
+			"OpenGL 4.1 not supported (context: %s, GLSL: %s). "
+			"Falling back to legacy GLSL 1.20 shader set (shaders/21). "
+			"This is expected on Wine/macOS with OpenGL 2.1 contexts.\n",
+			glGetString(GL_VERSION),
+			glGetString(GL_SHADING_LANGUAGE_VERSION));
+	}
+
 #if defined(_WIN32)
 	// Find the extension function
 	wglSwapIntervalEXT = (PFNWGLSWAPINTERVALEXTPROC)wglGetProcAddress("wglSwapIntervalEXT");

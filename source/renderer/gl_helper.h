@@ -13,6 +13,8 @@ GL Helper
 
 struct gl_info_s {
 	bool	support_version_45_;
+	bool	support_version_41_;	// OpenGL 4.1+ (Core Profile — shaders/41)
+	bool	legacy_glsl_;			// true when only OpenGL 2.1 / GLSL 1.20 is available (Wine/Mac)
 } ;
 
 extern gl_info_s g_gl_info;
