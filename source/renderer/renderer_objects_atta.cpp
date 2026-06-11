@@ -204,6 +204,41 @@ static bool StemInFamily(const std::string& stem, const std::string& prefix) {
     return true;
 }
 
+// Run the bundled standalone converter (editor/tools/igi1conv.exe) and wait.
+// The editor delegates ALL .mtp generation to igi1conv — its `dat to-mtp`
+// reproduces the original game .mtp byte-for-byte, whereas an in-process
+// incremental MTP write corrupted the model→texture mapping (transparent /
+// wrong textures in-game and after reload). Returns true on exit code 0.
+static bool RunIgi1conv(const std::string& args, std::string& err) {
+    const std::string exe = Utils::GetExeDirectory() + "\\editor\\tools\\igi1conv.exe";
+    if (!std::filesystem::exists(exe)) {
+        err = "igi1conv.exe not found: " + exe;
+        return false;
+    }
+    std::string cmdLine = "\"" + exe + "\" " + args;
+
+    STARTUPINFOA si = {};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi = {};
+    std::vector<char> buf(cmdLine.begin(), cmdLine.end());
+    buf.push_back('\0');
+
+    if (!CreateProcessA(nullptr, buf.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+        err = "CreateProcess failed (" + std::to_string(GetLastError()) + ")";
+        return false;
+    }
+    WaitForSingleObject(pi.hProcess, 120000);
+    DWORD code = 1;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    if (code != 0) { err = "igi1conv exit code " + std::to_string(code); return false; }
+    return true;
+}
+
 bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId,
                                           const std::function<void(size_t,size_t)>& onProgress) {
     const std::string levelDir = Utils::GetIGIRootPath() + "\\missions\\location0\\level" +
@@ -432,7 +467,11 @@ bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId,
                             "' already mapped in " + datPath);
                     }
 
-                    // 4b. Back up the .mtp once, then add models natively via MTP_AddModel.
+                    // 4b. Back up the .mtp once, then REGENERATE it from the updated
+                    // .dat via the bundled igi1conv converter. `dat to-mtp` reproduces
+                    // the game's binary .mtp exactly (verified byte-identical to the
+                    // originals), so the model→texture mapping stays correct in-game
+                    // and after reload. The editor no longer writes .mtp in-process.
                     if (datReady && std::filesystem::exists(mtpPath)) {
                         const std::string mtpBackup = mtpPath + ".orig";
                         if (!std::filesystem::exists(mtpBackup)) {
@@ -443,18 +482,14 @@ bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId,
                                 Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: "
                                     "could not back up .mtp: " + mtpBackup + " (" + ec.message() + ")");
                         }
-                        int mtpAdded = 0;
-                        for (const auto& fm : familyModels) {
-                            std::string merr;
-                            if (MTP_AddModel(mtpPath, mtpPath, fm.first, GetTextureIdsForModel(fm.first), merr)) {
-                                ++mtpAdded;
-                            } else {
-                                Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: "
-                                    "MTP_AddModel failed for " + fm.first + ": " + merr);
-                            }
+                        std::string convErr;
+                        if (RunIgi1conv("dat to-mtp \"" + datPath + "\" -o \"" + mtpPath + "\"", convErr)) {
+                            Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: regenerated " +
+                                mtpPath + " from .dat via igi1conv");
+                        } else {
+                            Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: "
+                                "igi1conv dat to-mtp failed: " + convErr);
                         }
-                        Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: updated " + mtpPath +
-                            " natively (" + std::to_string(mtpAdded) + " model(s) added/confirmed)");
                     } else if (datReady) {
                         Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: "
                             ".mtp not found, skipping MTP update: " + mtpPath);
