@@ -84,8 +84,9 @@ DATFile DAT_Parse(const std::string& filepath) {
             // Read exactly declaredTextureCount textures so VNAM/BANM/shadow sections can follow.
             // level1.dat declares 426 but has 427 entries; the extra token is consumed harmlessly
             // as a failed VNAM count parse and silently caught below.
-            int texLimit = std::min(result.declaredTextureCount,
-                                    (int)(tokens.size() - cursor));
+            int texRemaining = (int)(tokens.size() - cursor);
+            int texLimit = result.declaredTextureCount < texRemaining
+                         ? result.declaredTextureCount : texRemaining;
             for (int i = 0; i < texLimit; ++i) {
                 result.allTextures.push_back(tokens[cursor++]);
             }
