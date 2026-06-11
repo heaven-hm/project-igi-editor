@@ -76,6 +76,8 @@ target_precompile_headers(igi-editor PRIVATE source/pch.h)
 set_source_files_properties(
   source/app.cpp
   source/app_input.cpp
+  source/app_view.cpp
+  source/app_lookup.cpp
   source/renderer/renderer_flat_sky_layers.cpp
   source/renderer/renderer_objects.cpp
   source/renderer/renderer_objects_atta.cpp
