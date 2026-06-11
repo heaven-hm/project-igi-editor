@@ -269,6 +269,7 @@ target_sources(igi_tests PRIVATE
     source/logger.cpp
     source/level/task_schema.cpp
     source/level/level_objects.cpp
+    source/level/level_objects_serialize.cpp
     source/cli/verify_level_core.cpp
     source/parsers/dat_parser.cpp
     source/parsers/graph_parser.cpp
