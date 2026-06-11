@@ -92,6 +92,10 @@ set_source_files_properties(
   source/parsers/graph_parser.cpp
   source/cli/asset_extractor.cpp
   source/level/terrain.cpp
+  source/level/terrain_io.cpp
+  source/level/terrain_lod.cpp
+  source/level/terrain_mesh.cpp
+  source/level/terrain_query.cpp
   source/parsers/qvm_decompiler.cpp
   source/parsers/qsc_lexer.cpp
   source/parsers/qsc_parser.cpp
