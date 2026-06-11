@@ -527,6 +527,8 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		}
 		if (key == 27) { // ESC: clear search focus or close menu
 			if (pause_active_input_ != -1) { pause_active_input_ = -1; return; }
+			TogglePauseMenu();
+			return;
 		}
 		if (pause_active_input_ == 1) {
 			// Search text input

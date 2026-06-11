@@ -483,11 +483,11 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             model = glm::rotate(model, (float)obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f)); // Roll
         }
 
-        // For weapons, they are authored with Y-up (legacy OBJ style), so they stand upright.
-        // We rotate them by 90 degrees on Pitch (X axis) to lay them flat on the ground.
-        bool isWeapon = IsWeaponModel(obj.modelId) || obj.type == "GunPickup" || obj.type == "AmmoPickup";
+        // Weapon/ammo pickups are authored with barrel along model +Y (standing upright).
+        // Rotate 90° around world Z so barrel maps to world +X — weapon lies flat on ground.
+        bool isWeapon = IsWeaponModel(obj.modelId) || obj.type == "GunPickup" || obj.type == "AmmoPickup" || obj.type == "GenericPickup";
         if (isWeapon) {
-            model = glm::rotate(model, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+            model = glm::rotate(model, glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
         }
 
         // 3. Scale

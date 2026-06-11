@@ -891,66 +891,62 @@ void Renderer::Draw(const draw_params_s &params,
       } else {
         draw_text_sm(tooltip_x, tooltip_y, "Terrain ID: -1", 1.0f, 1.0f, 1.0f);
       }
+    }
 
-      // Terrain-edit overlay: 3D brush-radius ring hugging the terrain surface +
-      // active brush name label.
-      if (task_tree_view.terrain_edit_enabled_) {
-        const int vpW = params.view_define_->viewport_width_;
-        const int vpH = params.view_define_->viewport_height_;
+    // Terrain-edit overlay: 3D brush-radius rings + brush name label.
+    // Rendered independently of hover state so rings appear on right-click regardless
+    // of whether an object is under the cursor or where the task tree panel is.
+    if (!task_tree_view.pause_mode_ && task_tree_view.terrain_edit_enabled_) {
+      const int vpW = params.view_define_->viewport_width_;
+      const int vpH = params.view_define_->viewport_height_;
 
-        // Same world->clip transform the 3D scene + terrain-ID lookup use.
-        glm::mat4 worldToClip =
-            mat_proj_ * mat_view_ *
-            glm::scale(glm::mat4(1.0f), glm::vec3(RENDERER_MODEL_SCALE_DOWN));
+      glm::mat4 worldToClip =
+          mat_proj_ * mat_view_ *
+          glm::scale(glm::mat4(1.0f), glm::vec3(RENDERER_MODEL_SCALE_DOWN));
 
-        glm::vec3 centerWorld;
-        bool haveCenter =
-            params.terrain_z_at_world_xy_ &&
-            UnprojectCursorToWorld(task_tree_view.mouse_x_, task_tree_view.mouse_y_,
-                                   vpW, vpH, worldToClip, centerWorld);
+      glm::vec3 centerWorld;
+      bool haveCenter =
+          params.terrain_z_at_world_xy_ &&
+          UnprojectCursorToWorld(task_tree_view.mouse_x_, task_tree_view.mouse_y_,
+                                 vpW, vpH, worldToClip, centerWorld);
 
-        if (haveCenter) {
-          const double cx = centerWorld.x;
-          const double cy = centerWorld.y;
-          // Surface height at the center; fall back to the unprojected z.
-          float centerZ = centerWorld.z;
-          params.terrain_z_at_world_xy_(cx, cy, centerZ);
+      if (haveCenter) {
+        const double cx = centerWorld.x;
+        const double cy = centerWorld.y;
+        float centerZ = centerWorld.z;
+        params.terrain_z_at_world_xy_(cx, cy, centerZ);
 
-          const int segments = 48;
-          // Project a world point onto the surface, then to GL screen coords.
-          // Returns false if behind the camera (clip.w<=0); caller skips the vertex.
-          auto emit_ring = [&](double radius) {
-            glBegin(GL_LINE_LOOP);
-            for (int i = 0; i < segments; ++i) {
-              double a = (double)i * 6.283185307 / (double)segments;
-              double px = cx + radius * cos(a);
-              double py = cy + radius * sin(a);
-              float pz = centerZ;
-              params.terrain_z_at_world_xy_(px, py, pz); // keep centerZ on miss
-              glm::vec4 clip = worldToClip *
-                  glm::vec4((float)px, (float)py, pz, 1.0f);
-              if (clip.w <= 0.0f) continue; // behind camera; skip point
-              float sx = (clip.x / clip.w * 0.5f + 0.5f) * vpW;
-              float sy = (clip.y / clip.w * 0.5f + 0.5f) * vpH; // already GL bottom-up
-              glVertex2f(sx, sy);
-            }
-            glEnd();
-          };
+        const int segments = 48;
+        auto emit_ring = [&](double radius) {
+          glBegin(GL_LINE_LOOP);
+          for (int i = 0; i < segments; ++i) {
+            double a = (double)i * 6.283185307 / (double)segments;
+            double px = cx + radius * cos(a);
+            double py = cy + radius * sin(a);
+            float pz = centerZ;
+            params.terrain_z_at_world_xy_(px, py, pz);
+            glm::vec4 clip = worldToClip *
+                glm::vec4((float)px, (float)py, pz, 1.0f);
+            if (clip.w <= 0.0f) continue;
+            float sx = (clip.x / clip.w * 0.5f + 0.5f) * vpW;
+            float sy = (clip.y / clip.w * 0.5f + 0.5f) * vpH;
+            glVertex2f(sx, sy);
+          }
+          glEnd();
+        };
 
-          glLineWidth(2.0f);
-          glColor3f(1.0f, 0.5f, 0.0f); // orange outer ring
-          emit_ring(task_tree_view.terrain_brush_radius_);
-          glColor4f(1.0f, 0.6f, 0.1f, 0.6f); // inner falloff ring at half radius
-          emit_ring(task_tree_view.terrain_brush_radius_ * 0.5);
-          glLineWidth(1.0f);
-        }
-
-        // Active brush name under the existing "Terrain ID" tooltip line.
-        static const char* kBrushNames[4] = { "Raise", "Lower", "Soften", "Flatten" };
-        int b = task_tree_view.terrain_brush_;
-        if (b < 0) b = 0; if (b > 3) b = 3;
-        draw_text_sm(tooltip_x, tooltip_y + 16, kBrushNames[b], 1.0f, 0.7f, 0.2f);
+        glLineWidth(2.0f);
+        glColor3f(1.0f, 0.5f, 0.0f);
+        emit_ring(task_tree_view.terrain_brush_radius_);
+        glColor4f(1.0f, 0.6f, 0.1f, 0.6f);
+        emit_ring(task_tree_view.terrain_brush_radius_ * 0.5);
+        glLineWidth(1.0f);
       }
+
+      static const char* kBrushNames[4] = { "Raise", "Lower", "Soften", "Flatten" };
+      int b = task_tree_view.terrain_brush_;
+      if (b < 0) b = 0; if (b > 3) b = 3;
+      draw_text_sm(tooltip_x, tooltip_y + 16, kBrushNames[b], 1.0f, 0.7f, 0.2f);
     }
 
     // On-screen terrain editor panel (bottom-right): 5 brush buttons + a 2x2 grid
