@@ -76,6 +76,8 @@ target_precompile_headers(igi-editor PRIVATE source/pch.h)
 set_source_files_properties(
   source/app.cpp
   source/app_input.cpp
+  source/app_input_mouse.cpp
+  source/app_input_keyboard.cpp
   source/app_view.cpp
   source/app_lookup.cpp
   source/app_editor.cpp
