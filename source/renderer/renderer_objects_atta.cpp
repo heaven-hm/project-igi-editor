@@ -210,7 +210,7 @@ static bool StemInFamily(const std::string& stem, const std::string& prefix) {
 // incremental MTP write corrupted the model→texture mapping (transparent /
 // wrong textures in-game and after reload). Returns true on exit code 0.
 static bool RunIgi1conv(const std::string& args, std::string& err) {
-    const std::string exe = Utils::GetExeDirectory() + "\\editor\\tools\\igi1conv.exe";
+    const std::string exe = Utils::GetExeDirectory() + "\\editor\\tools\\igi1conv\\igi1conv.exe";
     if (!std::filesystem::exists(exe)) {
         err = "igi1conv.exe not found: " + exe;
         return false;

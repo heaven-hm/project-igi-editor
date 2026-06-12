@@ -2,13 +2,15 @@
 #
 # Best-effort: before building the editor, pull the latest released igi1conv.exe
 # from the standalone converter repo (jones-hm/project-igi-conv) and refresh the
-# bundled copy at assets/editor/tools/igi1conv.exe.
+# bundled exe at assets/editor/tools/igi1conv/igi1conv.exe.
 #
-# This is intentionally non-fatal: if GitHub is unreachable, the release has no
-# igi1conv.exe asset yet, or the download looks bogus, we keep the committed
-# binary so offline builds always work.
+# igi1conv ships as a Qt application; the full folder (exe + Qt DLLs) is committed
+# under assets/editor/tools/igi1conv/ and copied to bin/<cfg>/editor/tools/igi1conv/
+# by the POST_BUILD step. This script only refreshes the exe itself — the Qt
+# runtime DLLs stay as committed. Falls back to the committed binary when GitHub
+# is unreachable or the release asset is not yet published.
 
-set(_igi1conv_dst "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/tools/igi1conv.exe")
+set(_igi1conv_dst "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/tools/igi1conv/igi1conv.exe")
 set(_igi1conv_version "v1.6.0")
 set(_igi1conv_sha256 "c79da40b239291e46be488e21012f80f423515b8db72d838a036e29e0269198f")
 set(_igi1conv_url "https://github.com/jones-hm/project-igi-conv/releases/download/${_igi1conv_version}/igi1conv.exe")

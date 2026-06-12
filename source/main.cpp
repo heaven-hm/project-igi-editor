@@ -568,7 +568,7 @@ int main(int argc, char **argv) {
     const std::vector<std::string> requiredEditorPaths = {
       "\\editor\\shaders",
       "\\editor\\qed",
-      "\\editor\\tools\\igi1conv.exe",
+      "\\editor\\tools\\igi1conv\\igi1conv.exe",
     };
     for (const auto& rel : requiredEditorPaths) {
       if (!std::filesystem::exists(exeDir + rel)) {

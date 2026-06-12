@@ -128,4 +128,4 @@ __pycache__/
 *.qsc
 *.qas
 *qvm.worktrees
-!assets/editor/tools/igi1conv.exe
+!assets/editor/tools/igi1conv/**
