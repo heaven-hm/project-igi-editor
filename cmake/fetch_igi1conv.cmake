@@ -9,8 +9,8 @@
 # binary so offline builds always work.
 
 set(_igi1conv_dst "${CMAKE_CURRENT_SOURCE_DIR}/assets/editor/tools/igi1conv.exe")
-set(_igi1conv_version "v1.0.0")
-set(_igi1conv_sha256 "7df362e107cae9c638885842a637d1e77da60edf7e0213dba1940ab5572ea258")
+set(_igi1conv_version "v1.6.0")
+set(_igi1conv_sha256 "a714ad1e911b3495b9ab0b1c4cec42452bdefd026c8137b8338e94fae955a3f3")
 set(_igi1conv_url "https://github.com/jones-hm/project-igi-conv/releases/download/${_igi1conv_version}/igi1conv.exe")
 set(_igi1conv_tmp "${CMAKE_CURRENT_BINARY_DIR}/igi1conv_latest.exe")
 
