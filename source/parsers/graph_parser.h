@@ -43,6 +43,18 @@ struct GraphFile {
     std::string             error;
 };
 
+// Visual/semantic classification of a node, derived from its criteria string.
+// Precedence when multiple keywords are present: Door > Stair > View > Default.
+enum class GraphNodeKind { Default, Door, View, Stair };
+
+// Classify a node by its criteria text (case-sensitive substring match,
+// e.g. "NODECRITERIA_DOOR" -> Door). Empty/unknown criteria -> Default.
+GraphNodeKind GRAPH_NodeKind(const GraphNode& node);
+
+// Find a node by id. Returns nullptr if absent.
+GraphNode*       GRAPH_FindNode(GraphFile& graph, int id);
+const GraphNode* GRAPH_FindNode(const GraphFile& graph, int id);
+
 // Parse a navigation graph .dat file.
 // Filepath example: missions/location0/level1/graphs/graph1.dat
 GraphFile GRAPH_Parse(const std::string& filepath);

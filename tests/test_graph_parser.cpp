@@ -95,6 +95,52 @@ TEST_F(GraphParserTest, SaveRoundTripPersistsModifiedPosition) {
     std::filesystem::remove(out);
 }
 
+// ------------------------------------------------------------
+//  GRAPH_NodeKind classification (pure, no game file)
+// ------------------------------------------------------------
+
+static GraphNode NodeWithCriteria(const std::string& c) {
+    GraphNode n; n.id = 1; n.criteria = c; return n;
+}
+
+TEST(GraphNodeKindTest, DoorCriteriaIsDoor) {
+    EXPECT_EQ(GRAPH_NodeKind(NodeWithCriteria("NODECRITERIA_DOOR")), GraphNodeKind::Door);
+}
+TEST(GraphNodeKindTest, ViewCriteriaIsView) {
+    EXPECT_EQ(GRAPH_NodeKind(NodeWithCriteria("NODECRITERIA_VIEW")), GraphNodeKind::View);
+}
+TEST(GraphNodeKindTest, StairCriteriaIsStair) {
+    EXPECT_EQ(GRAPH_NodeKind(NodeWithCriteria("NODECRITERIA_STAIR")), GraphNodeKind::Stair);
+}
+TEST(GraphNodeKindTest, EmptyCriteriaIsDefault) {
+    EXPECT_EQ(GRAPH_NodeKind(NodeWithCriteria("")), GraphNodeKind::Default);
+}
+TEST(GraphNodeKindTest, UnknownCriteriaIsDefault) {
+    EXPECT_EQ(GRAPH_NodeKind(NodeWithCriteria("SOMETHING_ELSE")), GraphNodeKind::Default);
+}
+TEST(GraphNodeKindTest, DoorTakesPrecedenceOverView) {
+    EXPECT_EQ(GRAPH_NodeKind(NodeWithCriteria("DOOR_VIEW")), GraphNodeKind::Door);
+}
+
+// ------------------------------------------------------------
+//  GRAPH_FindNode lookup (pure, no game file)
+// ------------------------------------------------------------
+
+TEST(GraphFindNodeTest, FindsExistingId) {
+    GraphFile g;
+    GraphNode a; a.id = 10; GraphNode b; b.id = 25;
+    g.nodes = { a, b };
+    const GraphNode* found = GRAPH_FindNode(g, 25);
+    ASSERT_NE(found, nullptr);
+    EXPECT_EQ(found->id, 25);
+}
+TEST(GraphFindNodeTest, ReturnsNullForMissingId) {
+    GraphFile g;
+    GraphNode a; a.id = 10;
+    g.nodes = { a };
+    EXPECT_EQ(GRAPH_FindNode(g, 999), nullptr);
+}
+
 TEST_F(GraphParserTest, SaveLeavesOtherNodesUnchanged) {
     GraphFile graph = GRAPH_Parse(GraphPathMulti());
     ASSERT_TRUE(graph.valid);

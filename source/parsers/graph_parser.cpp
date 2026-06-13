@@ -105,6 +105,26 @@ struct Buffer {
 // GRAPH_Parse
 // ---------------------------------------------------------------------------
 
+GraphNodeKind GRAPH_NodeKind(const GraphNode& node) {
+    const std::string& c = node.criteria;
+    if (c.find("DOOR")  != std::string::npos) return GraphNodeKind::Door;
+    if (c.find("STAIR") != std::string::npos) return GraphNodeKind::Stair;
+    if (c.find("VIEW")  != std::string::npos) return GraphNodeKind::View;
+    return GraphNodeKind::Default;
+}
+
+GraphNode* GRAPH_FindNode(GraphFile& graph, int id) {
+    for (GraphNode& n : graph.nodes)
+        if (n.id == id) return &n;
+    return nullptr;
+}
+
+const GraphNode* GRAPH_FindNode(const GraphFile& graph, int id) {
+    for (const GraphNode& n : graph.nodes)
+        if (n.id == id) return &n;
+    return nullptr;
+}
+
 // ---------------------------------------------------------------------------
 // GRAPH_Save — overwrite node positions in-place, preserving everything else.
 // Walks the tagged node records the same way GRAPH_Parse does and patches the
