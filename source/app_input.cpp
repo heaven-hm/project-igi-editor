@@ -613,15 +613,17 @@ void App::DispatchEventBindings() {
 		camera_strafe_free_ = !camera_strafe_free_;
 		status_message_ = camera_strafe_free_ ? "Strafe lock: ON" : "Strafe lock: OFF";
 	}
-	if (Check("TerrainBrushCycle")) {
-		edit_brush_ = (edit_brush_ + 1) % 4;
-		static const char* kNames[] = {"Raise","Lower","Soften","Flatten"};
-		status_message_ = std::string("Terrain brush: ") + kNames[edit_brush_];
+	if (terrain_edit_enabled_) {
+		if (Check("TerrainBrushCycle")) {
+			edit_brush_ = (edit_brush_ + 1) % 4;
+			static const char* kNames[] = {"Raise","Lower","Soften","Flatten"};
+			status_message_ = std::string("Terrain brush: ") + kNames[edit_brush_];
+		}
+		if (Check("TerrainBrushRadiusDec"))   AdjustBrushRadius(0.8);
+		if (Check("TerrainBrushRadiusInc"))   AdjustBrushRadius(1.25);
+		if (Check("TerrainBrushStrengthDec")) AdjustBrushStrength(-1.0);
+		if (Check("TerrainBrushStrengthInc")) AdjustBrushStrength(1.0);
 	}
-	if (Check("TerrainBrushRadiusDec"))   AdjustBrushRadius(0.8);
-	if (Check("TerrainBrushRadiusInc"))   AdjustBrushRadius(1.25);
-	if (Check("TerrainBrushStrengthDec")) AdjustBrushStrength(-1.0);
-	if (Check("TerrainBrushStrengthInc")) AdjustBrushStrength(1.0);
 }
 
 

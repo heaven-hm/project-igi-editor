@@ -140,6 +140,7 @@ void Config::CreateDefault() {
     data_.objectFilePath = "";
     data_.interpolation = 0;
     data_.renderZNear = 2.8672f;
+    data_.graphNodeSize = 14;
     data_.cameraOriX = data_.cameraOriY = data_.cameraOriZ = 0.0f;
     data_.cameraRadiusX = data_.cameraRadiusY = 0.0f;
     data_.cameraPosX = data_.cameraPosY = data_.cameraPosZ = 0.0f;
@@ -228,6 +229,7 @@ void Config::Load() {
                 else if (key == "TaskFileName") data_.taskFileName = val;
                 else if (key == "Interpolation") data_.interpolation = std::stoi(val);
                 else if (key == "SetObjectFile") data_.objectFilePath = val;
+                else if (key == "QGraphNodeSize") data_.graphNodeSize = std::max(1, std::stoi(val));
             }
             if (key == "SetCameraOrientation" && args.size() >= 3) {
                 data_.cameraOriX = std::stof(args[0]);
@@ -381,6 +383,7 @@ void Config::Save() {
         file << "QEDSetObjectFile(\"" << data_.objectFilePath << "\");\n";
         file << "QEDInterpolation(" << data_.interpolation << ");\n";
         file << "QEDRenderZNear(" << data_.renderZNear << ");\n";
+        file << "QGraphNodeSize(" << data_.graphNodeSize << ");\n";
         file << "QEDSetCameraOrientation(" << data_.cameraOriX << ", " << data_.cameraOriY << ", " << data_.cameraOriZ << ");\n";
         file << "QEDSetCameraRadius(" << data_.cameraRadiusX << ", " << data_.cameraRadiusY << ");\n";
         file << "QEDSetCameraPosition(" << data_.cameraPosX << ", " << data_.cameraPosY << ", " << data_.cameraPosZ << ");\n";

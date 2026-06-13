@@ -83,6 +83,13 @@ void Renderer::BeginLoadLevel() {
   flat_sky_layers_.UnloadAllTexs();
   terrain_.UnloadAllTexs();
   objects_.ClearCaches();
+  graph_overlay_ = GraphFile{};
+  graph_overlay_visible_ = false;
+  graph_overlay_dirty_ = false;
+  graph_overlay_selected_ = -1;
+  graph_overlay_path_.clear();
+  graph_overlay_taskid_.clear();
+  graph_overlay_area_.clear();
 }
 
 void Renderer::SetupClearColor(const glm::vec4 &color) {

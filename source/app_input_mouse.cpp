@@ -77,6 +77,8 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 					x, y, window_state_.viewport_width_, window_state_.viewport_height_);
 				if (picked >= 0) {
 					renderer_.SetGraphSelected(picked);
+					show_hud_ = false;
+					prop_editor_open_ = false;
 					glm::dvec3 p;
 					if (renderer_.GetGraphNodePos(picked, p)) {
 						graph_node_manip_.active_  = true;
@@ -89,6 +91,7 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 					return;
 				}
 				renderer_.SetGraphSelected(-1);  // clicked empty space: deselect, fall through
+				show_hud_ = true;
 			}
 
 			if (enableCameraMode) {
@@ -404,12 +407,14 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 			}
 			else if (edit_mode_ && !enableCameraMode) {
 				if (terrain_edit_enabled_) {
+					// Left-click while terrain edit is open: exit terrain mode if an object is
+					// clicked, otherwise EditorProcessClick sculpts terrain at cursor.
 					int picked = PickObjectAtScreenPos(x, y);
 					if (picked >= 0) {
 						SetTerrainEditEnabled(false);
 					}
 				}
-				EditorProcessClick(); 
+				EditorProcessClick();
 				// Update manipulation data AFTER selection, so we get the newly selected object
 				marker_manip_.start_x_ = x;
 				marker_manip_.start_y_ = y;
@@ -439,22 +444,29 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 		}
 	}
 
-	// Right-click: open property editor for the object under cursor
-	if (button == GLUT_RIGHT_BUTTON && state == GLUT_DOWN && !pause_mode_ && !enableCameraMode) {
-		int target = hover_object_index_;
-		if (target >= 0) {
-			if (terrain_edit_enabled_) {
-				SetTerrainEditEnabled(false);
+	// Right-click: open property editor for the object under cursor, or sculpt terrain.
+	if (button == GLUT_RIGHT_BUTTON) {
+		if (state == GLUT_DOWN) {
+			mouse_state_.right_button_down_ = true;
+			if (!pause_mode_ && !enableCameraMode) {
+				int target = hover_object_index_;
+				if (target >= 0) {
+					if (terrain_edit_enabled_) {
+						SetTerrainEditEnabled(false);
+					}
+					selected_object_index_ = target;
+					prop_editor_open_ = true; prop_panel_scroll_ = 0; prop_text_edit_field_ = -1; prop_edit_obj_index_ = -1;
+					LoadAIScriptForSelected();
+				} else {
+					prop_editor_open_ = false;
+					// Right-click on empty space: open terrain editor (hold to sculpt)
+					if (!terrain_edit_enabled_) {
+						SetTerrainEditEnabled(true);
+					}
+				}
 			}
-			selected_object_index_ = target;
-			prop_editor_open_ = true; prop_panel_scroll_ = 0; prop_text_edit_field_ = -1; prop_edit_obj_index_ = -1;
-			LoadAIScriptForSelected();
-		} else {
-			prop_editor_open_ = false;
-			// Right Click on empty space toggles terrain editor
-			if (!terrain_edit_enabled_) {
-				SetTerrainEditEnabled(true);
-			}
+		} else if (state == GLUT_UP) {
+			mouse_state_.right_button_down_ = false;
 		}
 	}
 

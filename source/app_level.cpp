@@ -44,6 +44,18 @@ void App::LoadLevel(int level_no) {
 				} catch (const std::exception& e) {
 					Logger::Get().Log(LogLevel::ERR, "[App] Failed to create level backup: " + std::string(e.what()));
 				}
+			} else if (std::filesystem::exists(backupLevelDir)) {
+				// Sync graphs/ subfolder into backup if it was missing when backup was first created.
+				std::string graphsSrc = gameLevelDir + "\\graphs";
+				std::string graphsDst = backupLevelDir + "\\graphs";
+				if (std::filesystem::exists(graphsSrc) && !std::filesystem::exists(graphsDst)) {
+					try {
+						std::filesystem::copy(graphsSrc, graphsDst, std::filesystem::copy_options::recursive);
+						Logger::Get().Log(LogLevel::INFO, "[App] Synced graphs/ into backup for level " + std::to_string(level_no));
+					} catch (const std::exception& e) {
+						Logger::Get().Log(LogLevel::ERR, "[App] Failed to sync graphs/ to backup: " + std::string(e.what()));
+					}
+				}
 			}
 		}
 		

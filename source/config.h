@@ -103,6 +103,7 @@ struct ConfigData {
     std::string objectFilePath;
     int interpolation;
     float renderZNear;
+    int graphNodeSize;
 
     // Camera State
     float cameraOriX, cameraOriY, cameraOriZ;

@@ -7,6 +7,7 @@
 #include "graph_overlay.h"
 #include <vector>
 #include <unordered_map>
+#include <limits>
 
 static FntFont g_editorFont;
 static GLuint  g_editorFontTex = 0;
@@ -2693,7 +2694,7 @@ void Renderer::DrawGraphNodePanel(
   };
 
   // Six numeric rows: label + value, with [-]/[+] buttons.
-  const char* names[kNumericFields] = { "H", "V", "Z", "Gamma", "Radius", "Mat" };
+  const char* names[kNumericFields] = { "X", "Y", "Z", "Gamma", "Radius", "Mat" };
   double vals[kNumericFields] = { w.x, w.y, w.z, node.gamma, node.radius, (double)node.material };
   for (int f = 0; f < kNumericFields; ++f) {
     int rx, ry, rw, rh; GetButtonRect(kXDn + f * 2, rx, ry, rw, rh);
@@ -2722,17 +2723,29 @@ int Renderer::PickGraphNodeAtScreen(int mx, int my, int vpW, int vpH) {
   const glm::mat4 worldToClip =
       mat_proj_ * mat_view_ *
       glm::scale(glm::mat4(1.0f), glm::vec3(RENDERER_MODEL_SCALE_DOWN));
+  const float baseH = (float)Config::Get().graphNodeSize * 100.0f;
+  const float kMinThreshPx = 14.0f;
   int   bestId = -1;
-  float bestD2 = 14.0f * 14.0f;
+  float bestD2 = std::numeric_limits<float>::max();
   for (const GraphNode& n : graph_overlay_.nodes) {
+    const float H = baseH * std::max(1.0f, (float)n.radius);
     const glm::dvec3 w = graph_overlay_offset_ + glm::dvec3(n.x, n.y, n.z);
     const glm::vec4 clip = worldToClip * glm::vec4((float)w.x, (float)w.y, (float)w.z, 1.0f);
     if (clip.w <= 0.0f) continue;
     const float sx = (clip.x / clip.w * 0.5f + 0.5f) * vpW;
-    const float sy = (-clip.y / clip.w * 0.5f + 0.5f) * vpH;  // top-left (matches GLUT mouse)
+    const float sy = (-clip.y / clip.w * 0.5f + 0.5f) * vpH;
+    // Project center+(H,0,0) to compute the node's screen-space half-extent so the
+    // hit threshold matches the visible box size at any camera distance.
+    float thresh = kMinThreshPx;
+    const glm::vec4 eClip = worldToClip * glm::vec4((float)w.x + H, (float)w.y, (float)w.z, 1.0f);
+    if (eClip.w > 0.0f) {
+      const float ex = (eClip.x / eClip.w * 0.5f + 0.5f) * vpW;
+      const float ey = (-eClip.y / eClip.w * 0.5f + 0.5f) * vpH;
+      thresh = std::max(kMinThreshPx, std::sqrt((ex - sx) * (ex - sx) + (ey - sy) * (ey - sy)));
+    }
     const float dx = sx - (float)mx, dy = sy - (float)my;
     const float d2 = dx * dx + dy * dy;
-    if (d2 < bestD2) { bestD2 = d2; bestId = n.id; }
+    if (d2 < thresh * thresh && d2 < bestD2) { bestD2 = d2; bestId = n.id; }
   }
   return bestId;
 }
@@ -2747,7 +2760,7 @@ static std::string BuildGraphNodeInfo(const GraphFile& g, const glm::dvec3& offs
   std::string s;
   snprintf(buf, sizeof(buf), "Node %d", id);                       s  = buf;
   s += "\nCriteria: " + (n->criteria.empty() ? std::string("(none)") : n->criteria);
-  snprintf(buf, sizeof(buf), "\nH: %.1f  V: %.1f  Z: %.1f", w.x, w.y, w.z); s += buf;
+  snprintf(buf, sizeof(buf), "\nX: %.1f  Y: %.1f  Z: %.1f", w.x, w.y, w.z); s += buf;
   snprintf(buf, sizeof(buf), "\nGamma: %.3f  Radius: %.3f", n->gamma, n->radius); s += buf;
 
   std::string links; int cnt = 0;
@@ -2941,15 +2954,17 @@ void Renderer::DrawGraphNodes3D(const draw_params_s& params) {
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-  // Box half-extent in IGI world units. 200 units gives a cube that appears
-  // building-sized when close (20-30 px) and shrinks to dots at level scale.
-  const float H = 200.0f;
+  // Box half-extent in IGI world units, driven by QGraphNodeSize config and per-node radius.
+  const float baseH = (float)Config::Get().graphNodeSize * 100.0f;
 
   // Draw solid cube faces with per-face shading (no GL lighting needed).
   glBegin(GL_QUADS);
   for (const GraphNode& n : graph_overlay_.nodes) {
+    const float H = baseH * std::max(1.0f, (float)n.radius);
     const glm::dvec3 w = graph_overlay_offset_ + glm::dvec3(n.x, n.y, n.z);
-    const float cx = (float)w.x, cy = (float)w.y, cz = (float)w.z;
+    const float cx = (float)w.x, cy = (float)w.y;
+    // Box sits entirely above the node's Z so it never clips into the ground.
+    const float zBot = (float)w.z, zTop = zBot + H * 2.0f;
 
     float r, g, b;
     if (n.id == graph_overlay_selected_)      { r=1.0f;  g=0.6f;  b=0.0f;  }
@@ -2962,27 +2977,27 @@ void Renderer::DrawGraphNodes3D(const draw_params_s& params) {
 
     // Top face (z+) — brightest
     glColor4f(r, g, b, 1.0f);
-    glVertex3f(cx-H, cy-H, cz+H); glVertex3f(cx+H, cy-H, cz+H);
-    glVertex3f(cx+H, cy+H, cz+H); glVertex3f(cx-H, cy+H, cz+H);
+    glVertex3f(cx-H, cy-H, zTop); glVertex3f(cx+H, cy-H, zTop);
+    glVertex3f(cx+H, cy+H, zTop); glVertex3f(cx-H, cy+H, zTop);
 
     // Front/back faces (y±) — medium
     glColor4f(r*0.72f, g*0.72f, b*0.72f, 1.0f);
-    glVertex3f(cx-H, cy-H, cz-H); glVertex3f(cx+H, cy-H, cz-H);
-    glVertex3f(cx+H, cy-H, cz+H); glVertex3f(cx-H, cy-H, cz+H);
-    glVertex3f(cx+H, cy+H, cz-H); glVertex3f(cx-H, cy+H, cz-H);
-    glVertex3f(cx-H, cy+H, cz+H); glVertex3f(cx+H, cy+H, cz+H);
+    glVertex3f(cx-H, cy-H, zBot); glVertex3f(cx+H, cy-H, zBot);
+    glVertex3f(cx+H, cy-H, zTop); glVertex3f(cx-H, cy-H, zTop);
+    glVertex3f(cx+H, cy+H, zBot); glVertex3f(cx-H, cy+H, zBot);
+    glVertex3f(cx-H, cy+H, zTop); glVertex3f(cx+H, cy+H, zTop);
 
     // Left/right faces (x±) — slightly darker
     glColor4f(r*0.58f, g*0.58f, b*0.58f, 1.0f);
-    glVertex3f(cx-H, cy+H, cz-H); glVertex3f(cx-H, cy-H, cz-H);
-    glVertex3f(cx-H, cy-H, cz+H); glVertex3f(cx-H, cy+H, cz+H);
-    glVertex3f(cx+H, cy-H, cz-H); glVertex3f(cx+H, cy+H, cz-H);
-    glVertex3f(cx+H, cy+H, cz+H); glVertex3f(cx+H, cy-H, cz+H);
+    glVertex3f(cx-H, cy+H, zBot); glVertex3f(cx-H, cy-H, zBot);
+    glVertex3f(cx-H, cy-H, zTop); glVertex3f(cx-H, cy+H, zTop);
+    glVertex3f(cx+H, cy-H, zBot); glVertex3f(cx+H, cy+H, zBot);
+    glVertex3f(cx+H, cy+H, zTop); glVertex3f(cx+H, cy-H, zTop);
 
     // Bottom face (z-) — darkest
     glColor4f(r*0.38f, g*0.38f, b*0.38f, 1.0f);
-    glVertex3f(cx+H, cy-H, cz-H); glVertex3f(cx-H, cy-H, cz-H);
-    glVertex3f(cx-H, cy+H, cz-H); glVertex3f(cx+H, cy+H, cz-H);
+    glVertex3f(cx+H, cy-H, zBot); glVertex3f(cx-H, cy-H, zBot);
+    glVertex3f(cx-H, cy+H, zBot); glVertex3f(cx+H, cy+H, zBot);
   }
   glEnd();
 
@@ -2990,26 +3005,31 @@ void Renderer::DrawGraphNodes3D(const draw_params_s& params) {
   if (graph_overlay_selected_ >= 0) {
     const GraphNode* sn = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
     if (sn) {
+      const float H = baseH * std::max(1.0f, (float)sn->radius);
       const glm::dvec3 sw = graph_overlay_offset_ + glm::dvec3(sn->x, sn->y, sn->z);
-      const float cx=(float)sw.x, cy=(float)sw.y, cz=(float)sw.z, OH=H*1.08f;
+      const float cx=(float)sw.x, cy=(float)sw.y, OH=H*1.08f;
+      // Outline sits 8% oversized around the box; box runs [cz, cz+2H] so outline runs
+      // [cz-(OH-H), cz+2H+(OH-H)] = [cz-0.08H, cz+2.08H].
+      const float oBot = (float)sw.z - (OH - H);
+      const float oTop = (float)sw.z + H*2.0f + (OH - H);
       glColor4f(1.0f, 0.9f, 0.2f, 1.0f);
       glLineWidth(2.5f);
       glBegin(GL_LINES);
-      // Bottom ring
-      glVertex3f(cx-OH,cy-OH,cz-OH); glVertex3f(cx+OH,cy-OH,cz-OH);
-      glVertex3f(cx+OH,cy-OH,cz-OH); glVertex3f(cx+OH,cy+OH,cz-OH);
-      glVertex3f(cx+OH,cy+OH,cz-OH); glVertex3f(cx-OH,cy+OH,cz-OH);
-      glVertex3f(cx-OH,cy+OH,cz-OH); glVertex3f(cx-OH,cy-OH,cz-OH);
+      // Bottom ring (at ground level, slightly below box bottom)
+      glVertex3f(cx-OH,cy-OH,oBot); glVertex3f(cx+OH,cy-OH,oBot);
+      glVertex3f(cx+OH,cy-OH,oBot); glVertex3f(cx+OH,cy+OH,oBot);
+      glVertex3f(cx+OH,cy+OH,oBot); glVertex3f(cx-OH,cy+OH,oBot);
+      glVertex3f(cx-OH,cy+OH,oBot); glVertex3f(cx-OH,cy-OH,oBot);
       // Top ring
-      glVertex3f(cx-OH,cy-OH,cz+OH); glVertex3f(cx+OH,cy-OH,cz+OH);
-      glVertex3f(cx+OH,cy-OH,cz+OH); glVertex3f(cx+OH,cy+OH,cz+OH);
-      glVertex3f(cx+OH,cy+OH,cz+OH); glVertex3f(cx-OH,cy+OH,cz+OH);
-      glVertex3f(cx-OH,cy+OH,cz+OH); glVertex3f(cx-OH,cy-OH,cz+OH);
+      glVertex3f(cx-OH,cy-OH,oTop); glVertex3f(cx+OH,cy-OH,oTop);
+      glVertex3f(cx+OH,cy-OH,oTop); glVertex3f(cx+OH,cy+OH,oTop);
+      glVertex3f(cx+OH,cy+OH,oTop); glVertex3f(cx-OH,cy+OH,oTop);
+      glVertex3f(cx-OH,cy+OH,oTop); glVertex3f(cx-OH,cy-OH,oTop);
       // Verticals
-      glVertex3f(cx-OH,cy-OH,cz-OH); glVertex3f(cx-OH,cy-OH,cz+OH);
-      glVertex3f(cx+OH,cy-OH,cz-OH); glVertex3f(cx+OH,cy-OH,cz+OH);
-      glVertex3f(cx+OH,cy+OH,cz-OH); glVertex3f(cx+OH,cy+OH,cz+OH);
-      glVertex3f(cx-OH,cy+OH,cz-OH); glVertex3f(cx-OH,cy+OH,cz+OH);
+      glVertex3f(cx-OH,cy-OH,oBot); glVertex3f(cx-OH,cy-OH,oTop);
+      glVertex3f(cx+OH,cy-OH,oBot); glVertex3f(cx+OH,cy-OH,oTop);
+      glVertex3f(cx+OH,cy+OH,oBot); glVertex3f(cx+OH,cy+OH,oTop);
+      glVertex3f(cx-OH,cy+OH,oBot); glVertex3f(cx-OH,cy+OH,oTop);
       glEnd();
     }
   }

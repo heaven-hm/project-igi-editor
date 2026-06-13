@@ -116,6 +116,7 @@ private:
 
   struct mouse_state_s {
     bool left_button_down_;
+    bool right_button_down_;
     int prior_x_;
     int prior_y_;
   };
