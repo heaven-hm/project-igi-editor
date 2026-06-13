@@ -2511,7 +2511,9 @@ void Renderer::Draw(const draw_params_s &params,
 // AIGraph task to graph<taskId>.dat. Read-only display.
 bool Renderer::LoadGraphOverlayFile(const std::string& graphFilePath) {
   graph_overlay_ = GRAPH_Parse(graphFilePath);
+  graph_overlay_path_ = graphFilePath;
   graph_overlay_selected_ = -1;
+  graph_overlay_dirty_ = false;
 
   if (graph_overlay_.valid && !graph_overlay_.nodes.empty()) {
     Logger::Get().Log(LogLevel::INFO,
@@ -2522,6 +2524,31 @@ bool Renderer::LoadGraphOverlayFile(const std::string& graphFilePath) {
   }
   Logger::Get().Log(LogLevel::INFO, "[GRAPH] Overlay: no usable graph at " + graphFilePath);
   return false;
+}
+
+bool Renderer::GetGraphNodePos(int id, glm::dvec3& out) const {
+  const GraphNode* n = GRAPH_FindNode(graph_overlay_, id);
+  if (!n) return false;
+  out = glm::dvec3(n->x, n->y, n->z);
+  return true;
+}
+
+void Renderer::SetGraphNodePos(int id, const glm::dvec3& p) {
+  GraphNode* n = GRAPH_FindNode(graph_overlay_, id);
+  if (!n) return;
+  n->x = p.x; n->y = p.y; n->z = p.z;
+  graph_overlay_dirty_ = true;
+}
+
+bool Renderer::SaveGraphOverlay() {
+  if (!graph_overlay_.valid || graph_overlay_path_.empty()) return false;
+  if (!GRAPH_Save(graph_overlay_path_, graph_overlay_path_, graph_overlay_)) {
+    Logger::Get().Log(LogLevel::ERR, "[GRAPH] Save failed: " + graph_overlay_path_);
+    return false;
+  }
+  graph_overlay_dirty_ = false;
+  Logger::Get().Log(LogLevel::INFO, "[GRAPH] Saved graph to: " + graph_overlay_path_);
+  return true;
 }
 
 int Renderer::PickGraphNodeAtScreen(int mx, int my, int vpW, int vpH) {

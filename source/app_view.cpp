@@ -581,6 +581,45 @@ void App::SnapObjectsToTerrain() {
     Logger::Get().Log(LogLevel::INFO, "[App] Snap complete. snapped=" + std::to_string(snapped) + " skipped=" + std::to_string(skipped) + " failed=" + std::to_string(failed));
 }
 
+void App::UpdateGraphNodeManipulation(int x, int y) {
+	const int id = renderer_.GraphSelected();
+	if (id < 0) return;
+
+	const int mods = glutGetModifiers();
+	const bool ctrl = (mods & GLUT_ACTIVE_CTRL);
+
+	// Cumulative pixel displacement from drag start.
+	const int dx = x - graph_node_manip_.start_x_;
+	const int dy = y - graph_node_manip_.start_y_;
+	const float moveSensitivity = 200.0f;  // same mapping as object manipulation
+
+	const glm::vec3 right = viewer_.right_;
+	glm::dvec3 np;
+	if (ctrl) {
+		// Vertical edit: horizontal via screen-right, height (Z) via -dy.
+		const glm::vec3 up(0.0f, 0.0f, 1.0f);
+		np = graph_node_manip_.start_pos_ +
+		     glm::dvec3(right * (float)dx * moveSensitivity +
+		                up    * (float)-dy * moveSensitivity);
+	} else {
+		// Default: move in the horizontal H/V plane (camera-relative).
+		const glm::vec3 fwd = glm::normalize(glm::vec3(viewer_.forward_.x, viewer_.forward_.y, 0.0f));
+		np = graph_node_manip_.start_pos_ +
+		     glm::dvec3(right * (float)dx * moveSensitivity +
+		                fwd   * (float)-dy * moveSensitivity);
+	}
+
+	renderer_.SetGraphNodePos(id, np);
+
+	// Live telemetry near the cursor (reuses the object-move status line).
+	const glm::dvec3 d = np - graph_node_manip_.start_pos_;
+	char buf[192];
+	snprintf(buf, sizeof(buf),
+	         "Node %d  H: %.1f  V: %.1f  Z: %.1f   dH: %.1f  dV: %.1f  dZ: %.1f",
+	         id, np.x, np.y, np.z, d.x, d.y, d.z);
+	status_message_ = buf;
+}
+
 void App::UpdateMarkerManipulation() {
 	if (selected_object_index_ < 0) return;
 	auto& objects = level_.GetLevelObjects().GetObjects();

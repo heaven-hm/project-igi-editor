@@ -463,6 +463,13 @@ public:
 	// Pick the nearest graph node to screen (mx,my) using the last frame's
 	// matrices; returns the node id or -1. (mx,my) are GLUT top-left coords.
 	int						PickGraphNodeAtScreen(int mx, int my, int vpW, int vpH);
+	// Read / edit a node's world position (IGI units) by id. SetGraphNodePos
+	// marks the overlay dirty so it can be saved back to its .dat.
+	bool					GetGraphNodePos(int id, glm::dvec3& out) const;
+	void					SetGraphNodePos(int id, const glm::dvec3& p);
+	bool					GraphOverlayDirty() const { return graph_overlay_dirty_; }
+	// Save edited node positions back to the loaded graph<taskId>.dat.
+	bool					SaveGraphOverlay();
     void                    SetSplineTerrainQuery(std::function<bool(double, double, float&)> fn) { splines_.SetTerrainQuery(std::move(fn)); }
 	glm::vec3				GetMeshExtents(const std::string& modelId, bool isBuilding) { return objects_.GetMeshExtents(modelId, isBuilding); }
 	float					GetMeshZOffset(const std::string& modelId, bool isBuilding) { return objects_.GetMeshZOffset(modelId, isBuilding); }
@@ -529,7 +536,9 @@ private:
 
 	// Navigation-graph overlay state.
 	GraphFile				graph_overlay_;
+	std::string				graph_overlay_path_;
 	bool					graph_overlay_visible_ = false;
+	bool					graph_overlay_dirty_ = false;
 	int						graph_overlay_selected_ = -1;
 	// Draw the graph overlay (nodes/edges/labels) using the active screen-space
 	// GL state; `draw_text_sm` is the caller's label-drawing lambda.

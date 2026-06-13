@@ -369,6 +369,15 @@ private:
   } marker_manip_;
   bool manipulation_dirty_ = false;
 
+  // Graph-node drag state (parallel to marker_manip_, for AIGraph node editing).
+  struct graph_node_manip_s {
+    bool active_ = false;
+    int  start_x_ = 0;
+    int  start_y_ = 0;
+    glm::dvec3 start_pos_;
+  } graph_node_manip_;
+  void UpdateGraphNodeManipulation(int x, int y);
+
   void Frame(float delta_seconds);
   void DispatchEventBindings();
 

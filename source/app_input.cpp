@@ -394,6 +394,12 @@ void App::DispatchEventBindings() {
 		return;
 	}
 	if (Check("SaveObjectFile")) {
+		// While editing an AIGraph overlay, Ctrl+S writes the edited node
+		// positions straight back to graph<taskId>.dat in the game.
+		if (renderer_.IsGraphOverlayVisible() && renderer_.GraphOverlayDirty()) {
+			status_message_ = renderer_.SaveGraphOverlay() ? "Graph saved." : "Graph save FAILED.";
+			return;
+		}
 		// Ctrl+S → open a path textbox and write the live objects QSC to that path.
 		// (Whole-level save/compile lives in the pause menu.)
 		int lvl = level_.GetLevelNo();

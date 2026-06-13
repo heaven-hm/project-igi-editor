@@ -41,14 +41,27 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 		if (GLUT_DOWN == state) {
 			mouse_state_.left_button_down_ = true;
 
-			// Graph overlay: Ctrl+left-click selects the nearest navigation node.
-			if (renderer_.IsGraphOverlayVisible() && (glutGetModifiers() & GLUT_ACTIVE_CTRL)) {
+			// Graph overlay editing: left-click on a node selects it and begins a
+			// drag; clicking empty space deselects. Only intercepts the click when
+			// the overlay is visible and a node is actually under the cursor, so
+			// normal object/terrain selection is unaffected.
+			if (renderer_.IsGraphOverlayVisible() && !enableCameraMode) {
 				int picked = renderer_.PickGraphNodeAtScreen(
 					x, y, window_state_.viewport_width_, window_state_.viewport_height_);
-				renderer_.SetGraphSelected(picked);
-				Logger::Get().Log(LogLevel::INFO,
-					"[App] Graph node selected: " + std::to_string(picked));
-				return;
+				if (picked >= 0) {
+					renderer_.SetGraphSelected(picked);
+					glm::dvec3 p;
+					if (renderer_.GetGraphNodePos(picked, p)) {
+						graph_node_manip_.active_  = true;
+						graph_node_manip_.start_x_ = x;
+						graph_node_manip_.start_y_ = y;
+						graph_node_manip_.start_pos_ = p;
+					}
+					Logger::Get().Log(LogLevel::INFO,
+						"[App] Graph node selected: " + std::to_string(picked));
+					return;
+				}
+				renderer_.SetGraphSelected(-1);  // clicked empty space: deselect, fall through
 			}
 
 			if (enableCameraMode) {
@@ -384,6 +397,7 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 			mouse_state_.left_button_down_ = false;
 			edit_dragging_ = false;
 			orbit_active_ = false;
+			graph_node_manip_.active_ = false;
 			prop_field_index_ = -1; // C2: stop dragging property field
 			prop_drag_obj_index_ = -1;
 			prop_drag_speed_ = 0.f;
@@ -454,7 +468,11 @@ void App::Input_OnMotion(int x, int y) {
 			input_.mouse_delta_x_ = dx;
 			input_.mouse_delta_y_ = dy;
 
-			if (edit_mode_ && selected_object_index_ >= 0 && !terrain_edit_enabled_) {
+			// Graph-node drag takes priority over object manipulation when active.
+			if (graph_node_manip_.active_ && renderer_.GraphSelected() >= 0) {
+				UpdateGraphNodeManipulation(x, y);
+			}
+			else if (edit_mode_ && selected_object_index_ >= 0 && !terrain_edit_enabled_) {
 				UpdateMarkerManipulation();
 			}
 		}
