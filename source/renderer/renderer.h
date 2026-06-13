@@ -89,6 +89,56 @@ namespace TerrainPalette {
 }
 
 /*
+ Graph-node properties panel layout (left side). Shared by the renderer (draw)
+ and App (hit-test), in TOP-DOWN screen coords. Shown when a graph node is
+ selected while the navigation-graph overlay is visible.
+*/
+namespace GraphNodePanel {
+	static constexpr int PX = 10, PY = 70, PW = 320;
+	static constexpr int HEADER_H = 28, ROW_H = 26, BTN = 22;
+	static constexpr int kNumericFields = 6;   // X, Y, Z, Gamma, Radius, Material
+
+	enum Index {
+		kXDn=0, kXUp, kYDn, kYUp, kZDn, kZUp,
+		kGDn, kGUp, kRDn, kRUp, kMDn, kMUp,
+		kCrDoor, kCrView, kCrStair,
+		kDelete, kSave, kCount
+	};
+
+	inline void GetButtonRect(int idx, int& x, int& y, int& w, int& h) {
+		const int rowsTop = PY + HEADER_H;
+		if (idx >= kXDn && idx <= kMUp) {
+			const int f = idx / 2; const bool up = (idx & 1);
+			y = rowsTop + f * ROW_H + 2; w = BTN; h = BTN;
+			x = up ? (PX + PW - BTN - 6) : (PX + PW - 2*BTN - 12);
+			return;
+		}
+		const int critY = rowsTop + kNumericFields * ROW_H + 4;
+		if (idx >= kCrDoor && idx <= kCrStair) {
+			const int i = idx - kCrDoor; w = 80; h = BTN;
+			x = PX + 8 + i * (w + 6); y = critY; return;
+		}
+		const int actY = critY + ROW_H + 8;
+		if (idx == kDelete) { x = PX + 8;   y = actY; w = 140; h = BTN + 2; return; }
+		if (idx == kSave)   { x = PX + 158; y = actY; w = 140; h = BTN + 2; return; }
+		x = y = w = h = 0;
+	}
+	inline int PanelHeight() {
+		return HEADER_H + kNumericFields * ROW_H + 4 + ROW_H + 8 + (BTN + 2) + 10;
+	}
+	inline bool InPanel(int mx, int my) {
+		return mx >= PX && mx <= PX + PW && my >= PY && my <= PY + PanelHeight();
+	}
+	inline int HitTest(int mx, int my) {
+		for (int i = 0; i < kCount; ++i) {
+			int x, y, w, h; GetButtonRect(i, x, y, w, h);
+			if (mx >= x && mx <= x + w && my >= y && my <= y + h) return i;
+		}
+		return -1;
+	}
+}
+
+/*
 ================================================================================
  Property-panel layout — single source of truth shared by the renderer (drawing)
  and the input handler (hit-testing). All rects are in SCREEN top-down pixels
@@ -483,6 +533,16 @@ public:
 	void					ScaleSelectedGraphNode(float factor);  // radius *= factor; factor<=0 resets to 1
 	int						CreateGraphNode();                     // adds a node near the selection; returns new id
 	void					DeleteSelectedGraphNode();             // removes the selected node and its edges
+	// Fine edits for the properties panel (operate on the selected node, mark dirty):
+	void					NudgeSelectedGraphNode(double dx, double dy, double dz);
+	void					AdjustSelectedGraphGamma(float d);
+	void					AdjustSelectedGraphRadius(float d);
+	void					AdjustSelectedGraphMaterial(int d);
+	void					ToggleSelectedGraphCriteria(const std::string& key);  // "DOOR"/"VIEW"/"STAIR"
+	bool					GetSelectedGraphNode(GraphNode& out) const;
+	// Draw the left-side properties panel for the selected node.
+	void					DrawGraphNodePanel(const draw_params_s& params,
+								const std::function<void(int,int,const char*,float,float,float)>& draw_text_sm);
     void                    SetSplineTerrainQuery(std::function<bool(double, double, float&)> fn) { splines_.SetTerrainQuery(std::move(fn)); }
 	glm::vec3				GetMeshExtents(const std::string& modelId, bool isBuilding) { return objects_.GetMeshExtents(modelId, isBuilding); }
 	float					GetMeshZOffset(const std::string& modelId, bool isBuilding) { return objects_.GetMeshZOffset(modelId, isBuilding); }

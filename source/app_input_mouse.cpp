@@ -41,6 +41,33 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 		if (GLUT_DOWN == state) {
 			mouse_state_.left_button_down_ = true;
 
+			// Graph node properties panel (left side): handle button clicks first.
+			if (renderer_.IsGraphOverlayVisible() && renderer_.GraphSelected() >= 0 &&
+			    !enableCameraMode && GraphNodePanel::InPanel(x, y)) {
+				const double POS = 256.0; const float GAM = 0.1f, RAD = 0.25f;
+				switch (GraphNodePanel::HitTest(x, y)) {
+					case GraphNodePanel::kXDn: renderer_.NudgeSelectedGraphNode(-POS, 0, 0); break;
+					case GraphNodePanel::kXUp: renderer_.NudgeSelectedGraphNode(+POS, 0, 0); break;
+					case GraphNodePanel::kYDn: renderer_.NudgeSelectedGraphNode(0, -POS, 0); break;
+					case GraphNodePanel::kYUp: renderer_.NudgeSelectedGraphNode(0, +POS, 0); break;
+					case GraphNodePanel::kZDn: renderer_.NudgeSelectedGraphNode(0, 0, -POS); break;
+					case GraphNodePanel::kZUp: renderer_.NudgeSelectedGraphNode(0, 0, +POS); break;
+					case GraphNodePanel::kGDn: renderer_.AdjustSelectedGraphGamma(-GAM); break;
+					case GraphNodePanel::kGUp: renderer_.AdjustSelectedGraphGamma(+GAM); break;
+					case GraphNodePanel::kRDn: renderer_.AdjustSelectedGraphRadius(-RAD); break;
+					case GraphNodePanel::kRUp: renderer_.AdjustSelectedGraphRadius(+RAD); break;
+					case GraphNodePanel::kMDn: renderer_.AdjustSelectedGraphMaterial(-1); break;
+					case GraphNodePanel::kMUp: renderer_.AdjustSelectedGraphMaterial(+1); break;
+					case GraphNodePanel::kCrDoor:  renderer_.ToggleSelectedGraphCriteria("DOOR"); break;
+					case GraphNodePanel::kCrView:  renderer_.ToggleSelectedGraphCriteria("VIEW"); break;
+					case GraphNodePanel::kCrStair: renderer_.ToggleSelectedGraphCriteria("STAIR"); break;
+					case GraphNodePanel::kDelete:  renderer_.DeleteSelectedGraphNode(); break;
+					case GraphNodePanel::kSave:    SaveCurrentLevel(); status_message_ = "Graph + level saved."; break;
+					default: break;
+				}
+				return;  // consume any click inside the panel
+			}
+
 			// Graph overlay editing: left-click on a node selects it and begins a
 			// drag; clicking empty space deselects. Only intercepts the click when
 			// the overlay is visible and a node is actually under the cursor, so

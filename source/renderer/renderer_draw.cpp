@@ -956,6 +956,9 @@ void Renderer::Draw(const draw_params_s &params,
     if (graph_overlay_visible_) {
       DrawGraphOverlayInternal(params, draw_text_sm,
                                task_tree_view.mouse_x_, task_tree_view.mouse_y_);
+      // Left-side properties panel for the selected node.
+      if (graph_overlay_selected_ >= 0)
+        DrawGraphNodePanel(params, draw_text_sm);
     }
 
     // On-screen terrain editor panel (bottom-right): 5 brush buttons + a 2x2 grid
@@ -2599,6 +2602,113 @@ void Renderer::DeleteSelectedGraphNode() {
   graph_overlay_selected_ = -1;
   graph_overlay_dirty_ = true;
   Logger::Get().Log(LogLevel::INFO, "[GRAPH] Deleted node " + std::to_string(id));
+}
+
+void Renderer::NudgeSelectedGraphNode(double dx, double dy, double dz) {
+  GraphNode* n = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
+  if (!n) return;
+  n->x += dx; n->y += dy; n->z += dz;
+  graph_overlay_dirty_ = true;
+}
+void Renderer::AdjustSelectedGraphGamma(float d) {
+  GraphNode* n = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
+  if (!n) return;
+  n->gamma += d;
+  graph_overlay_dirty_ = true;
+}
+void Renderer::AdjustSelectedGraphRadius(float d) {
+  GraphNode* n = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
+  if (!n) return;
+  n->radius += d;
+  if (n->radius < 0.05f) n->radius = 0.05f;
+  graph_overlay_dirty_ = true;
+}
+void Renderer::AdjustSelectedGraphMaterial(int d) {
+  GraphNode* n = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
+  if (!n) return;
+  n->material += d;
+  if (n->material < 0)  n->material = 0;
+  if (n->material > 23) n->material = 23;
+  graph_overlay_dirty_ = true;
+}
+void Renderer::ToggleSelectedGraphCriteria(const std::string& key) {
+  GraphNode* n = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
+  if (!n) return;
+  if (n->criteria.find(key) != std::string::npos) n->criteria.clear();
+  else n->criteria = "NODECRITERIA_" + key;
+  graph_overlay_dirty_ = true;
+}
+bool Renderer::GetSelectedGraphNode(GraphNode& out) const {
+  const GraphNode* n = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
+  if (!n) return false;
+  out = *n;
+  return true;
+}
+
+void Renderer::DrawGraphNodePanel(
+    const draw_params_s& params,
+    const std::function<void(int,int,const char*,float,float,float)>& draw_text_sm) {
+  GraphNode node;
+  if (!GetSelectedGraphNode(node)) return;
+
+  const int vpH = params.view_define_->viewport_height_;
+  const glm::dvec3 w = graph_overlay_offset_ + glm::dvec3(node.x, node.y, node.z);
+
+  // Filled quad from a top-down rect (convert to GL bottom-up).
+  auto quad = [&](int x, int y, int wd, int ht, float r, float g, float b, float a) {
+    const float y0 = (float)(vpH - y), y1 = (float)(vpH - (y + ht));
+    glColor4f(r, g, b, a);
+    glBegin(GL_QUADS);
+    glVertex2f((float)x, y1); glVertex2f((float)(x + wd), y1);
+    glVertex2f((float)(x + wd), y0); glVertex2f((float)x, y0);
+    glEnd();
+  };
+  using namespace GraphNodePanel;
+  glEnable(GL_BLEND);
+
+  // Panel background + border.
+  quad(PX, PY, PW, PanelHeight(), 0.06f, 0.06f, 0.09f, 0.92f);
+  glColor4f(1.0f, 0.6f, 0.0f, 0.9f); glLineWidth(1.0f);
+  glBegin(GL_LINE_LOOP);
+  glVertex2f((float)PX, (float)(vpH - PY));
+  glVertex2f((float)(PX + PW), (float)(vpH - PY));
+  glVertex2f((float)(PX + PW), (float)(vpH - (PY + PanelHeight())));
+  glVertex2f((float)PX, (float)(vpH - (PY + PanelHeight())));
+  glEnd();
+
+  char buf[96];
+  snprintf(buf, sizeof(buf), "Graph Node  %d", node.id);
+  draw_text_sm(PX + 8, PY + 6, buf, 1.0f, 0.85f, 0.4f);
+
+  // A button helper: filled rect + centered-ish label.
+  auto button = [&](int idx, const char* label, bool active) {
+    int x, y, bw, bh; GetButtonRect(idx, x, y, bw, bh);
+    if (active) quad(x, y, bw, bh, 0.95f, 0.55f, 0.10f, 0.95f);
+    else        quad(x, y, bw, bh, 0.20f, 0.20f, 0.24f, 0.95f);
+    draw_text_sm(x + 5, y + 4, label, 1.0f, 1.0f, 1.0f);
+  };
+
+  // Six numeric rows: label + value, with [-]/[+] buttons.
+  const char* names[kNumericFields] = { "H", "V", "Z", "Gamma", "Radius", "Mat" };
+  double vals[kNumericFields] = { w.x, w.y, w.z, node.gamma, node.radius, (double)node.material };
+  for (int f = 0; f < kNumericFields; ++f) {
+    int rx, ry, rw, rh; GetButtonRect(kXDn + f * 2, rx, ry, rw, rh);
+    if (f < 5) snprintf(buf, sizeof(buf), "%s: %.2f", names[f], vals[f]);
+    else       snprintf(buf, sizeof(buf), "%s: %d", names[f], node.material);
+    draw_text_sm(PX + 8, ry + 4, buf, 0.85f, 0.9f, 1.0f);
+    button(kXDn + f * 2, "-", false);
+    button(kXDn + f * 2 + 1, "+", false);
+  }
+
+  // Criteria toggles.
+  draw_text_sm(PX + 8, GraphNodePanel::PY + HEADER_H + kNumericFields * ROW_H - 18, "Criteria:", 0.85f, 0.9f, 1.0f);
+  button(kCrDoor,  "DOOR",  node.criteria.find("DOOR")  != std::string::npos);
+  button(kCrView,  "VIEW",  node.criteria.find("VIEW")  != std::string::npos);
+  button(kCrStair, "STAIR", node.criteria.find("STAIR") != std::string::npos);
+
+  // Actions.
+  button(kDelete, "Delete Node", false);
+  button(kSave,   graph_overlay_dirty_ ? "Save Graph *" : "Save Graph", false);
 }
 
 int Renderer::PickGraphNodeAtScreen(int mx, int my, int vpW, int vpH) {
