@@ -3,6 +3,9 @@
 #include "utils.h"
 #include <string>
 #include <cmath>
+#include <cstring>
+#include <fstream>
+#include <algorithm>
 #include <filesystem>
 
 // ============================================================
@@ -143,6 +146,102 @@ TEST_F(GraphParserTest, WriteSupportsAddingAndRemovingNodes) {
     const GraphNode* a = GRAPH_FindNode(r, 999);
     ASSERT_NE(a, nullptr);
     EXPECT_DOUBLE_EQ(a->x, 1.0);
+    std::filesystem::remove(out);
+}
+
+TEST_F(GraphParserTest, WriteRegeneratesAdjacencyWithoutDeletedNode) {
+    GraphFile g = GRAPH_Parse(GraphPathMulti());  // graph7: nodes + edges
+    ASSERT_TRUE(g.valid);
+    ASSERT_GT(g.edges.size(), 0u);
+
+    // Delete a node that participates in an edge (mirrors the editor delete).
+    const int delId = g.edges.front().node1;
+    g.nodes.erase(std::remove_if(g.nodes.begin(), g.nodes.end(),
+        [&](const GraphNode& n) { return n.id == delId; }), g.nodes.end());
+    g.edges.erase(std::remove_if(g.edges.begin(), g.edges.end(),
+        [&](const GraphEdge& e) { return e.node1 == delId || e.node2 == delId; }), g.edges.end());
+
+    const std::string out = TempOut("igi_graph_adj.dat");
+    ASSERT_TRUE(GRAPH_Write(GraphPathMulti(), out, g));
+
+    // The adjacency matrix must no longer reference the deleted node.
+    std::ifstream f(out, std::ios::binary);
+    std::vector<char> d((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    f.close();
+    int mn = 0; std::memcpy(&mn, d.data() + 12, 4);
+    ASSERT_GT(mn, delId);
+    auto refAt = [&](int r, int c) {
+        int v; std::memcpy(&v, d.data() + 30 + ((size_t)r * mn + c) * 8, 4); return v;
+    };
+    for (int k = 0; k < mn; ++k) {
+        EXPECT_EQ(refAt(delId, k), -1) << "deleted node row not cleared at col " << k;
+        EXPECT_EQ(refAt(k, delId), -1) << "deleted node col not cleared at row " << k;
+    }
+    std::filesystem::remove(out);
+}
+
+TEST_F(GraphParserTest, WriteAdjacencyMatchesEdges) {
+    GraphFile g = GRAPH_Parse(GraphPathMulti());
+    ASSERT_TRUE(g.valid);
+    ASSERT_GT(g.edges.size(), 0u);
+
+    const std::string out = TempOut("igi_graph_adj2.dat");
+    ASSERT_TRUE(GRAPH_Write(GraphPathMulti(), out, g));
+    std::ifstream f(out, std::ios::binary);
+    std::vector<char> d((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    f.close();
+    int mn = 0; std::memcpy(&mn, d.data() + 12, 4);
+    auto refAt = [&](int r, int c) {
+        int v; std::memcpy(&v, d.data() + 30 + ((size_t)r * mn + c) * 8, 4); return v;
+    };
+    // Every edge sets matrix[a][b]=a and matrix[b][a]=b.
+    for (const GraphEdge& e : g.edges) {
+        if (e.node1 <= 0 || e.node2 <= 0 || e.node1 >= mn || e.node2 >= mn) continue;
+        EXPECT_EQ(refAt(e.node1, e.node2), e.node1);
+        EXPECT_EQ(refAt(e.node2, e.node1), e.node2);
+    }
+    std::filesystem::remove(out);
+}
+
+TEST_F(GraphParserTest, WriteReproducesOriginalRoutingTable) {
+    // Pristine backup so the adjacency reflects the game's own routing table.
+    const std::string src = Utils::GetIGIRootPath() +
+        "\\editor\\backup\\level1\\graphs\\graph8.dat";
+    GraphFile g = GRAPH_Parse(src);
+    if (!g.valid) GTEST_SKIP() << "no pristine backup graph8";
+
+    const std::string out = TempOut("igi_graph_repro.dat");
+    ASSERT_TRUE(GRAPH_Write(src, out, g));
+
+    auto readAll = [](const std::string& p) {
+        std::ifstream f(p, std::ios::binary);
+        std::vector<char> d((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        return d;
+    };
+    std::vector<char> o = readAll(src), w = readAll(out);
+    ASSERT_EQ(o.size(), w.size());
+    int mn = 0; std::memcpy(&mn, o.data() + 12, 4);
+
+    auto cell = [&](std::vector<char>& d, int r, int c, int& ref, float& dist) {
+        const size_t off = 30 + ((size_t)r * mn + c) * 8;
+        std::memcpy(&ref, d.data() + off, 4);
+        std::memcpy(&dist, d.data() + off + 4, 4);
+    };
+    int mismatch = 0;
+    for (int r = 0; r < mn && mismatch < 6; ++r)
+        for (int c = 0; c < mn && mismatch < 6; ++c) {
+            int ro, rw; float dO, dW;
+            cell(o, r, c, ro, dO); cell(w, r, c, rw, dW);
+            // Same reachability (both -1 or both set), and matching distance.
+            if ((ro == -1) != (rw == -1)) {
+                ++mismatch; ADD_FAILURE() << "reachability differs at [" << r << "][" << c
+                    << "] orig=" << ro << " new=" << rw;
+            } else if (ro != -1 && std::fabs(dO - dW) > 1.0f) {
+                ++mismatch; ADD_FAILURE() << "distance differs at [" << r << "][" << c
+                    << "] orig=" << dO << " new=" << dW;
+            }
+        }
+    EXPECT_EQ(mismatch, 0);
     std::filesystem::remove(out);
 }
 
