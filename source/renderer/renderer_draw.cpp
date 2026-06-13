@@ -2708,6 +2708,17 @@ void Renderer::DrawGraphOverlayInternal(
     draw_text_sm((int)sx + (int)HS + 2, vpH - (int)sy - 6, lbl, 1.0f, 1.0f, 1.0f);
   }
 
+  // --- Title banner: graph id + Area (from graph_level<N>.json) + counts. ---
+  {
+    char title[160];
+    snprintf(title, sizeof(title), "Graph %s%s%s   (%zu nodes, %zu links)",
+             graph_overlay_taskid_.empty() ? "?" : graph_overlay_taskid_.c_str(),
+             graph_overlay_area_.empty() ? "" : " - ",
+             graph_overlay_area_.c_str(),
+             graph_overlay_.nodes.size(), graph_overlay_.edges.size());
+    draw_text_sm(360, 22, title, 1.0f, 0.85f, 0.4f);
+  }
+
   // --- Info tooltip for the hovered node (or, if none, the selected node). ---
   if (activeId >= 0) {
     const std::string info = BuildGraphNodeInfo(graph_overlay_, graph_overlay_offset_, activeId);

@@ -463,6 +463,9 @@ public:
 	bool					IsGraphOverlayVisible() const { return graph_overlay_visible_; }
 	void					SetGraphSelected(int id) { graph_overlay_selected_ = id; }
 	int						GraphSelected() const { return graph_overlay_selected_; }
+	// Metadata for the loaded graph (task id + Area name from graph_level<N>.json).
+	void					SetGraphOverlayMeta(const std::string& taskId, const std::string& area)
+								{ graph_overlay_taskid_ = taskId; graph_overlay_area_ = area; }
 	// Pick the nearest graph node to screen (mx,my) using the last frame's
 	// matrices; returns the node id or -1. (mx,my) are GLUT top-left coords.
 	int						PickGraphNodeAtScreen(int mx, int my, int vpW, int vpH);
@@ -541,6 +544,8 @@ private:
 	GraphFile				graph_overlay_;
 	glm::dvec3				graph_overlay_offset_{0.0};  // AIGraph task world pos (node coords are local to it)
 	std::string				graph_overlay_path_;
+	std::string				graph_overlay_taskid_;       // AIGraph task id (graph<id>.dat)
+	std::string				graph_overlay_area_;         // Area name from graph_level<N>.json
 	bool					graph_overlay_visible_ = false;
 	bool					graph_overlay_dirty_ = false;
 	int						graph_overlay_selected_ = -1;

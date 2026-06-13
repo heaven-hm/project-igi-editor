@@ -4,6 +4,36 @@
  *          Split from app_input.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include <fstream>
+
+// Look up the human-readable Area name for an AIGraph from
+// <exe>\editor\tools\QGraphs\graph_level<N>.json (array of {Graph, Area}).
+// Parsed manually to match the project's other JSON readers. "" if not found.
+static std::string LookupGraphArea(int level, const std::string& graphId) {
+    if (graphId.empty()) return "";
+    const int want = atoi(graphId.c_str());
+    const std::string path = Utils::GetExeDirectory() +
+        "\\editor\\tools\\QGraphs\\graph_level" + std::to_string(level) + ".json";
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return "";
+    const std::string d((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    size_t pos = 0;
+    while ((pos = d.find("\"Graph\"", pos)) != std::string::npos) {
+        const size_t colon = d.find(':', pos + 7);
+        if (colon == std::string::npos) break;
+        const int g = atoi(d.c_str() + colon + 1);
+        const size_t ap = d.find("\"Area\"", colon);
+        if (ap == std::string::npos) break;
+        const size_t ac = d.find(':', ap + 6);
+        const size_t q1 = (ac == std::string::npos) ? std::string::npos : d.find('"', ac + 1);
+        const size_t q2 = (q1 == std::string::npos) ? std::string::npos : d.find('"', q1 + 1);
+        const std::string area = (q1 != std::string::npos && q2 != std::string::npos)
+                                 ? d.substr(q1 + 1, q2 - q1 - 1) : "";
+        if (g == want) return area;
+        pos = (q2 != std::string::npos) ? q2 : (ap + 6);
+    }
+    return "";
+}
 
 void App::DispatchEventBindings() {
 	// Guard: skip dispatch while any text-input modal is open
@@ -368,10 +398,14 @@ void App::DispatchEventBindings() {
 					"\\missions\\location0\\level" + std::to_string(last_loaded_level_) +
 					"\\graphs\\graph" + g.taskId + ".dat";
 				// Node coords are local to the AIGraph task's graph origin (its world pos).
+				const std::string area = LookupGraphArea(last_loaded_level_, g.taskId);
 				Logger::Get().Log(LogLevel::INFO, "[App] Graph task " + g.taskId +
-					" world offset=(" + std::to_string(g.pos.x) + ", " +
+					" (" + area + ") world offset=(" + std::to_string(g.pos.x) + ", " +
 					std::to_string(g.pos.y) + ", " + std::to_string(g.pos.z) + ")");
-				if (renderer_.LoadGraphOverlayFile(path, g.pos)) renderer_.ToggleGraphOverlay();  // show
+				if (renderer_.LoadGraphOverlayFile(path, g.pos)) {
+					renderer_.SetGraphOverlayMeta(g.taskId, area);
+					renderer_.ToggleGraphOverlay();  // show
+				}
 			}
 		} else {
 			Logger::Get().Log(LogLevel::INFO, "[App] ShowGraphNodes: select an AIGraph task first");
