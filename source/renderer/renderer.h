@@ -455,7 +455,10 @@ public:
 	// Navigation-graph overlay: load a specific graph .dat (graph<taskId>.dat for
 	// the selected AIGraph task) for display over the 3D view, toggle visibility,
 	// and query state. Returns true if the graph loaded with at least one node.
-	bool					LoadGraphOverlayFile(const std::string& graphFilePath);
+	// Node positions in the file are LOCAL to the AIGraph task's graph origin;
+	// `worldOffset` is that task's world position and is added for display/pick.
+	bool					LoadGraphOverlayFile(const std::string& graphFilePath,
+								const glm::dvec3& worldOffset);
 	void					ToggleGraphOverlay() { graph_overlay_visible_ = !graph_overlay_visible_; }
 	bool					IsGraphOverlayVisible() const { return graph_overlay_visible_; }
 	void					SetGraphSelected(int id) { graph_overlay_selected_ = id; }
@@ -536,6 +539,7 @@ private:
 
 	// Navigation-graph overlay state.
 	GraphFile				graph_overlay_;
+	glm::dvec3				graph_overlay_offset_{0.0};  // AIGraph task world pos (node coords are local to it)
 	std::string				graph_overlay_path_;
 	bool					graph_overlay_visible_ = false;
 	bool					graph_overlay_dirty_ = false;

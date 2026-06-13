@@ -2509,9 +2509,11 @@ void Renderer::Draw(const draw_params_s &params,
 
 // Load a single navigation graph for display. The caller maps the selected
 // AIGraph task to graph<taskId>.dat. Read-only display.
-bool Renderer::LoadGraphOverlayFile(const std::string& graphFilePath) {
+bool Renderer::LoadGraphOverlayFile(const std::string& graphFilePath,
+                                    const glm::dvec3& worldOffset) {
   graph_overlay_ = GRAPH_Parse(graphFilePath);
   graph_overlay_path_ = graphFilePath;
+  graph_overlay_offset_ = worldOffset;
   graph_overlay_selected_ = -1;
   graph_overlay_dirty_ = false;
 
@@ -2529,14 +2531,17 @@ bool Renderer::LoadGraphOverlayFile(const std::string& graphFilePath) {
 bool Renderer::GetGraphNodePos(int id, glm::dvec3& out) const {
   const GraphNode* n = GRAPH_FindNode(graph_overlay_, id);
   if (!n) return false;
-  out = glm::dvec3(n->x, n->y, n->z);
+  // Return world position (file coords are local to the task graph origin).
+  out = graph_overlay_offset_ + glm::dvec3(n->x, n->y, n->z);
   return true;
 }
 
-void Renderer::SetGraphNodePos(int id, const glm::dvec3& p) {
+void Renderer::SetGraphNodePos(int id, const glm::dvec3& worldPos) {
   GraphNode* n = GRAPH_FindNode(graph_overlay_, id);
   if (!n) return;
-  n->x = p.x; n->y = p.y; n->z = p.z;
+  // Store back as local coords so the saved .dat stays in its native space.
+  const glm::dvec3 local = worldPos - graph_overlay_offset_;
+  n->x = local.x; n->y = local.y; n->z = local.z;
   graph_overlay_dirty_ = true;
 }
 
@@ -2553,9 +2558,12 @@ bool Renderer::SaveGraphOverlay() {
 
 int Renderer::PickGraphNodeAtScreen(int mx, int my, int vpW, int vpH) {
   if (!graph_overlay_.valid || graph_overlay_.nodes.empty()) return -1;
+  // Fold the task offset into the matrix so node LOCAL coords project to world:
+  // clip = proj*view*scale*translate(offset) * local.
   const glm::mat4 worldToClip =
       mat_proj_ * mat_view_ *
-      glm::scale(glm::mat4(1.0f), glm::vec3(RENDERER_MODEL_SCALE_DOWN));
+      glm::scale(glm::mat4(1.0f), glm::vec3(RENDERER_MODEL_SCALE_DOWN)) *
+      glm::translate(glm::mat4(1.0f), glm::vec3(graph_overlay_offset_));
   return GRAPH_PickNode(graph_overlay_, worldToClip,
                         (float)mx, (float)my, (float)vpW, (float)vpH, 14.0f);
 }
@@ -2568,12 +2576,14 @@ void Renderer::DrawGraphOverlayInternal(
   const int vpW = params.view_define_->viewport_width_;
   const int vpH = params.view_define_->viewport_height_;
 
-  // Same world->clip transform the 3D scene uses (proj * view * scale_down).
+  // Same world->clip transform the 3D scene uses (proj * view * scale_down),
+  // plus translate(offset) so node LOCAL coords land at task world position.
   const glm::mat4 worldToClip =
       mat_proj_ * mat_view_ *
-      glm::scale(glm::mat4(1.0f), glm::vec3(RENDERER_MODEL_SCALE_DOWN));
+      glm::scale(glm::mat4(1.0f), glm::vec3(RENDERER_MODEL_SCALE_DOWN)) *
+      glm::translate(glm::mat4(1.0f), glm::vec3(graph_overlay_offset_));
 
-  // Project a world point to GL screen pixels (bottom-up origin); false if behind.
+  // Project a node LOCAL point to GL screen pixels (bottom-up origin); false if behind.
   auto project = [&](double x, double y, double z, float& sx, float& sy) -> bool {
     const glm::vec4 clip = worldToClip * glm::vec4((float)x, (float)y, (float)z, 1.0f);
     if (clip.w <= 0.0f) return false;

@@ -363,10 +363,15 @@ void App::DispatchEventBindings() {
 			if (renderer_.IsGraphOverlayVisible()) {
 				renderer_.ToggleGraphOverlay();  // hide
 			} else {
+				const LevelObject& g = objs[selected_object_index_];
 				const std::string path = Utils::GetIGIRootPath() +
 					"\\missions\\location0\\level" + std::to_string(last_loaded_level_) +
-					"\\graphs\\graph" + objs[selected_object_index_].taskId + ".dat";
-				if (renderer_.LoadGraphOverlayFile(path)) renderer_.ToggleGraphOverlay();  // show
+					"\\graphs\\graph" + g.taskId + ".dat";
+				// Node coords are local to the AIGraph task's graph origin (its world pos).
+				Logger::Get().Log(LogLevel::INFO, "[App] Graph task " + g.taskId +
+					" world offset=(" + std::to_string(g.pos.x) + ", " +
+					std::to_string(g.pos.y) + ", " + std::to_string(g.pos.z) + ")");
+				if (renderer_.LoadGraphOverlayFile(path, g.pos)) renderer_.ToggleGraphOverlay();  // show
 			}
 		} else {
 			Logger::Get().Log(LogLevel::INFO, "[App] ShowGraphNodes: select an AIGraph task first");
