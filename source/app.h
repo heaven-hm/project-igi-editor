@@ -179,8 +179,17 @@ private:
   int edit_scroll_x_ = 0;
   int last_tree_click_index_ = -1;
   int last_tree_click_time_ms_ = 0;
-  std::vector<std::string> edit_undo_stack_;
-  std::vector<std::string> edit_redo_stack_;
+  // Unified undo/redo state capturing all editable elements
+  struct UndoState {
+      std::vector<LevelObject> objects;
+      std::string ai_script_path;
+      std::string ai_script_text;
+      bool        ai_script_dirty = false;
+      int         terrain_mod_options = 0;
+      std::vector<uint8_t> terrain_hmp;   // snapshot of terrain height-map pixel buffer
+      GraphFile   graph_overlay;
+      bool        graph_overlay_visible = false;
+  };
 
   // C1: Custom SPR cursor — multi-mode
   enum class CursorMode {
@@ -308,9 +317,14 @@ private:
   int level_root_index_;
   std::vector<LevelObject> clipboard_;
 
-  std::vector<std::vector<LevelObject>> object_undo_stack_;
-  std::vector<std::vector<LevelObject>> object_redo_stack_;
+  std::vector<UndoState> undo_stack_;
+  std::vector<UndoState> redo_stack_;
   bool undo_state_pushed_for_manip_ = false;
+
+  // Auto-save state
+  bool    auto_save_enabled_ = false;
+  int     auto_save_interval_seconds_ = 300;
+  int64_t auto_save_last_time_ms_ = 0;
 
   int64_t prior_frame_time_;
 
@@ -399,6 +413,8 @@ private:
                                     const glm::dmat3 &deltaWorld,
                                     const glm::dvec3 &pivot);
   void PushUndoState();
+  void ToggleAutoSave();
+  void AdjustAutoSaveInterval(int delta_seconds);
   // C2: property-panel text-edit helpers.
   void
   CommitPropTextEdit(); // writes prop_text_buf_ to argTokens; clears edit state

@@ -45,6 +45,10 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 			if (renderer_.IsGraphOverlayVisible() && renderer_.GraphSelected() >= 0 &&
 			    !enableCameraMode && GraphNodePanel::InPanel(x, y)) {
 				const double POS = 256.0; const float GAM = 0.1f, RAD = 0.25f;
+				if (GraphNodePanel::HitTest(x, y) >= 0) {
+					// Any graph node panel action is undoable
+					PushUndoState();
+				}
 				switch (GraphNodePanel::HitTest(x, y)) {
 					case GraphNodePanel::kXDn: renderer_.NudgeSelectedGraphNode(-POS, 0, 0); break;
 					case GraphNodePanel::kXUp: renderer_.NudgeSelectedGraphNode(+POS, 0, 0); break;
@@ -81,6 +85,8 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 					prop_editor_open_ = false;
 					glm::dvec3 p;
 					if (renderer_.GetGraphNodePos(picked, p)) {
+						// Capture graph state before the drag so a move is undoable.
+						PushUndoState();
 						graph_node_manip_.active_  = true;
 						graph_node_manip_.start_x_ = x;
 						graph_node_manip_.start_y_ = y;
@@ -270,7 +276,7 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 			if (pause_mode_) {
 				// *** Layout MUST match renderer_draw.cpp pause menu exactly ***
 				const int menu_w = 460;
-				const int menu_h = 480;
+				const int menu_h = 560;
 				const int menu_x = (window_state_.viewport_width_  - menu_w) / 2;
 				const int screen_menu_top = (window_state_.viewport_height_ - menu_h) / 2;
 
@@ -293,6 +299,7 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 					}
 					int RESET_ROW = btn_idx++;
 					int SAVE_ROW = btn_idx++;
+					int AUTOSAVE_ROW = btn_idx++;
 					int QUIT_ROW = btn_idx++;
 
 					auto btn_hit2 = [&](int idx) -> bool {
@@ -340,6 +347,17 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_DSC_ROW)) { ToggleTerrainModOption(4); }
 					else if (btn_hit2(RESET_ROW)) { ResetLevel(); TogglePauseMenu(); }
 					else if (btn_hit2(SAVE_ROW)) { SaveCurrentLevel(); }
+					else if (btn_hit2(AUTOSAVE_ROW)) {
+						const int sz_box_w = 50, btn_w = 22, gap = 6;
+						const int label_w = 130, label_gap = 16;
+						const int group_w = label_w + label_gap + btn_w + gap + sz_box_w + gap + btn_w;
+						int gx = menu_x + (menu_w - group_w) / 2;
+						int minus_x = gx + label_w + label_gap;
+						int plus_x  = minus_x + btn_w + gap + sz_box_w + gap;
+						if      (x >= minus_x && x < minus_x + btn_w) AdjustAutoSaveInterval(-10);
+						else if (x >= plus_x  && x < plus_x  + btn_w) AdjustAutoSaveInterval(10);
+						else if (x >= gx      && x < minus_x)         ToggleAutoSave();
+					}
 					else if (btn_hit2(QUIT_ROW)) { exit(0); }
 
 					pause_active_input_ = clicked_input;
@@ -427,6 +445,7 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 		}
 		else if (GLUT_UP == state) {
 			mouse_state_.left_button_down_ = false;
+			undo_state_pushed_for_manip_ = false; // reset undo guard for next click-drag
 			edit_dragging_ = false;
 			orbit_active_ = false;
 			graph_node_manip_.active_ = false;

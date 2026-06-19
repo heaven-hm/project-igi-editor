@@ -33,31 +33,24 @@ void App::LoadLevel(int level_no) {
 			Logger::Get().Log(LogLevel::ERR, errorMsg);
 			throw std::runtime_error(errorMsg);
 		}
-		if (Config::Get().enableBackup) {
-			std::string gameLevelDir = Utils::GetIGIRootPath() + "\\missions\\location0\\level" + std::to_string(level_no);
-			std::string backupLevelDir = Utils::GetExeDirectory() + "\\editor\\backup\\level" + std::to_string(level_no);
-			if (!std::filesystem::exists(backupLevelDir) && std::filesystem::exists(gameLevelDir)) {
-				try {
-					std::filesystem::create_directories(backupLevelDir);
-					std::filesystem::copy(gameLevelDir, backupLevelDir, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing);
-					Logger::Get().Log(LogLevel::INFO, "[App] Backup created for level " + std::to_string(level_no) + " at " + backupLevelDir);
-				} catch (const std::exception& e) {
-					Logger::Get().Log(LogLevel::ERR, "[App] Failed to create level backup: " + std::string(e.what()));
-				}
-			} else if (std::filesystem::exists(backupLevelDir)) {
-				// Sync graphs/ subfolder into backup if it was missing when backup was first created.
-				std::string graphsSrc = gameLevelDir + "\\graphs";
-				std::string graphsDst = backupLevelDir + "\\graphs";
-				if (std::filesystem::exists(graphsSrc) && !std::filesystem::exists(graphsDst)) {
-					try {
-						std::filesystem::copy(graphsSrc, graphsDst, std::filesystem::copy_options::recursive);
-						Logger::Get().Log(LogLevel::INFO, "[App] Synced graphs/ into backup for level " + std::to_string(level_no));
-					} catch (const std::exception& e) {
-						Logger::Get().Log(LogLevel::ERR, "[App] Failed to sync graphs/ to backup: " + std::string(e.what()));
-					}
-				}
+	// Always create a pristine full-folder backup of the level on first load.
+	// Reset Level (pause menu) restores from this backup, so it must capture the
+	// ENTIRE level folder — objects, ai, graphs, models, textures, terrain —
+	// before any edits are made. Only create it once per level (if it doesn't
+	// exist); subsequent loads reuse the existing backup.
+	{
+		std::string gameLevelDir = Utils::GetIGIRootPath() + "\\missions\\location0\\level" + std::to_string(level_no);
+		std::string backupLevelDir = Utils::GetExeDirectory() + "\\editor\\backup\\level" + std::to_string(level_no);
+		if (!std::filesystem::exists(backupLevelDir) && std::filesystem::exists(gameLevelDir)) {
+			try {
+				std::filesystem::create_directories(backupLevelDir);
+				std::filesystem::copy(gameLevelDir, backupLevelDir, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing);
+				Logger::Get().Log(LogLevel::INFO, "[App] Backup created for level " + std::to_string(level_no) + " at " + backupLevelDir);
+			} catch (const std::exception& e) {
+				Logger::Get().Log(LogLevel::ERR, "[App] Failed to create level backup: " + std::string(e.what()));
 			}
 		}
+	}
 		
 		selected_object_index_ = -1;
 		hover_object_index_ = -1;
@@ -252,6 +245,12 @@ void App::FlushAttaProxiesToMef() {
 void App::SaveCurrentLevel() {
 	try {
 		Logger::Get().Log(LogLevel::INFO, "[App] SaveCurrentLevel() called");
+
+		// Flush any in-flight property-panel edit (especially the AI script text
+		// editor) before serializing. Otherwise pressing SaveState while the AI
+		// script box still has focus would save the stale ai_script_text_ and
+		// silently drop the user's edits.
+		CommitPropTextEdit();
 
 		// Before serializing objects.qsc, sync the AIGraph task's declared
 		// Graphdata counts (node_count = argTokens[7], edge_count = argTokens[9])

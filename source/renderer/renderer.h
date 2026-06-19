@@ -464,6 +464,9 @@ public:
 		int    terrain_brush_          = 0;   // 0=Raise,1=Lower,2=Soften,3=Flatten
 		double terrain_brush_radius_   = 0.0; // world-space brush radius (for cursor ring scale)
 		double terrain_brush_strength_ = 0.0; // brush strength (settings readout)
+		// Auto-save state
+		bool   auto_save_enabled_        = false;
+		int    auto_save_interval_seconds_ = 300;
 	};
 
 
@@ -529,6 +532,10 @@ public:
 	size_t					GraphOverlayEdgeCount() const { return graph_overlay_.edges.size(); }
 	// Save the full edited graph back to the loaded graph<taskId>.dat.
 	bool					SaveGraphOverlay();
+	// Snapshot / restore the overlay graph state for undo/redo.
+	GraphFile				GetGraphOverlaySnapshot() const { return graph_overlay_; }
+	void					RestoreGraphOverlay(const GraphFile& snap) { graph_overlay_ = snap; graph_overlay_dirty_ = true; }
+	void					SetGraphOverlayVisible(bool v) { graph_overlay_visible_ = v; }
 	// Edit controls (operate on the selected node), marking the overlay dirty:
 	void					ScaleSelectedGraphNode(float factor);  // radius *= factor; factor<=0 resets to 1
 	int						CreateGraphNode();                     // adds a node near the selection; returns new id

@@ -101,6 +101,7 @@ void App::LoadAIScriptForSelected() {
 // objects.qsc, then clear edit focus. Handles the note (-2) and any field box.
 void App::CommitPropTextEdit() {
 	if (prop_text_edit_field_ == -1) return;
+	PushUndoState();
 
 	// AI Script Path field: update path, reload and decompile the new .qvm.
 	if (prop_text_edit_field_ == PropPanel::kAIScriptPathField) {
@@ -253,11 +254,21 @@ void App::CommitPropTextEdit() {
 }
 
 void App::PushUndoState() {
-	auto& objects = level_.GetLevelObjects().GetObjects();
-	object_undo_stack_.push_back(objects);
-	object_redo_stack_.clear();
-	if (object_undo_stack_.size() > 20)
-		object_undo_stack_.erase(object_undo_stack_.begin());
+	UndoState state;
+	state.objects = level_.GetLevelObjects().GetObjects();
+	state.ai_script_path = ai_script_path_;
+	state.ai_script_text = ai_script_text_;
+	state.ai_script_dirty = ai_script_dirty_;
+	state.terrain_mod_options = terrain_mod_options_;
+	state.terrain_hmp = level_.SnapshotTerrainHMP();
+	if (renderer_.IsGraphOverlayVisible()) {
+		state.graph_overlay = renderer_.GetGraphOverlaySnapshot();
+		state.graph_overlay_visible = true;
+	}
+	undo_stack_.push_back(std::move(state));
+	redo_stack_.clear();
+	if (undo_stack_.size() > 20)
+		undo_stack_.erase(undo_stack_.begin());
 }
 
 void App::SaveAndReloadObjects() {
@@ -281,21 +292,90 @@ void App::RebuildLevelModelIds() {
 }
 
 void App::Undo() {
-	if (object_undo_stack_.empty()) { status_message_ = "Nothing to undo"; return; }
-	auto& objects = level_.GetLevelObjects().GetObjects();
-	object_redo_stack_.push_back(objects);
-	objects = object_undo_stack_.back();
-	object_undo_stack_.pop_back();
+	if (undo_stack_.empty()) { status_message_ = "Nothing to undo"; return; }
+	// Save current state to redo stack
+	UndoState current;
+	current.objects = level_.GetLevelObjects().GetObjects();
+	current.ai_script_path = ai_script_path_;
+	current.ai_script_text = ai_script_text_;
+	current.ai_script_dirty = ai_script_dirty_;
+	current.terrain_mod_options = terrain_mod_options_;
+	current.terrain_hmp = level_.SnapshotTerrainHMP();
+	if (renderer_.IsGraphOverlayVisible()) {
+		current.graph_overlay = renderer_.GetGraphOverlaySnapshot();
+		current.graph_overlay_visible = true;
+	}
+	redo_stack_.push_back(std::move(current));
+
+	// Restore from undo stack
+	const UndoState& s = undo_stack_.back();
+	level_.GetLevelObjects().GetObjects() = s.objects;
+	ai_script_path_ = s.ai_script_path;
+	ai_script_text_ = s.ai_script_text;
+	ai_script_dirty_ = s.ai_script_dirty;
+	terrain_mod_options_ = s.terrain_mod_options;
+	level_.RestoreTerrainHMP(s.terrain_hmp);
+
+	if (s.graph_overlay_visible) {
+		renderer_.RestoreGraphOverlay(s.graph_overlay);
+		if (!renderer_.IsGraphOverlayVisible())
+			renderer_.SetGraphOverlayVisible(true);
+	} else {
+		if (renderer_.IsGraphOverlayVisible())
+			renderer_.SetGraphOverlayVisible(false);
+	}
+
+	undo_stack_.pop_back();
+	// Mark ATTA proxies as modified so FlushAttaProxiesToMef() rewrites their
+	// local positions back into the MEF binary. Without this, undoing a building
+	// ATTA move left the MEF at the post-edit position while the proxy's world
+	// pos reverted — the 3D view and the saved level disagreed.
+	for (auto& o : level_.GetLevelObjects().GetObjects())
+		if (o.isAttaProxy) o.modified = true;
+	FlushAttaProxiesToMef();
 	SaveAndReloadObjects();
 	status_message_ = "Undo";
 }
 
 void App::Redo() {
-	if (object_redo_stack_.empty()) { status_message_ = "Nothing to redo"; return; }
-	auto& objects = level_.GetLevelObjects().GetObjects();
-	object_undo_stack_.push_back(objects);
-	objects = object_redo_stack_.back();
-	object_redo_stack_.pop_back();
+	if (redo_stack_.empty()) { status_message_ = "Nothing to redo"; return; }
+	// Save current state to undo stack
+	UndoState current;
+	current.objects = level_.GetLevelObjects().GetObjects();
+	current.ai_script_path = ai_script_path_;
+	current.ai_script_text = ai_script_text_;
+	current.ai_script_dirty = ai_script_dirty_;
+	current.terrain_mod_options = terrain_mod_options_;
+	current.terrain_hmp = level_.SnapshotTerrainHMP();
+	if (renderer_.IsGraphOverlayVisible()) {
+		current.graph_overlay = renderer_.GetGraphOverlaySnapshot();
+		current.graph_overlay_visible = true;
+	}
+	undo_stack_.push_back(std::move(current));
+
+	// Restore from redo stack
+	const UndoState& s = redo_stack_.back();
+	level_.GetLevelObjects().GetObjects() = s.objects;
+	ai_script_path_ = s.ai_script_path;
+	ai_script_text_ = s.ai_script_text;
+	ai_script_dirty_ = s.ai_script_dirty;
+	terrain_mod_options_ = s.terrain_mod_options;
+	level_.RestoreTerrainHMP(s.terrain_hmp);
+
+	if (s.graph_overlay_visible) {
+		renderer_.RestoreGraphOverlay(s.graph_overlay);
+		if (!renderer_.IsGraphOverlayVisible())
+			renderer_.SetGraphOverlayVisible(true);
+	} else {
+		if (renderer_.IsGraphOverlayVisible())
+			renderer_.SetGraphOverlayVisible(false);
+	}
+
+	redo_stack_.pop_back();
+	// Same ATTA-proxy resync as Undo — see comment there.
+	for (auto& o : level_.GetLevelObjects().GetObjects())
+		if (o.isAttaProxy) o.modified = true;
+	FlushAttaProxiesToMef();
 	SaveAndReloadObjects();
 	status_message_ = "Redo";
 }

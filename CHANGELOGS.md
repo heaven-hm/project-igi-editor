@@ -1,5 +1,38 @@
 # Changelogs
 
+## 3.3.0-pre — Auto-Save, Unified Undo/Redo & AI Script Hotkey Support
+
+### ✨ New Features
+- **Auto-Save System**: New pause-menu "Auto Save" row that displays current state ("Auto Save Enabled" / "Auto Save Disabled") and an interval spinner with `-`/`+` buttons (10s steps, 10s–3600s range). Toggle with `Ctrl+Shift+A`, increase/decrease interval with `Ctrl+Shift+]` / `Ctrl+Shift+[`. When enabled, the editor auto-saves the current level at the configured interval.
+- **SaveState (Ctrl+W) & SaveObjectFile (Ctrl+S) read from qedkeybindings.qsc**: All save hotkeys are now dispatched via `DispatchEventBindings` using bindings loaded from `editor\qed\qedkeybindings.qsc` — no hardcoded keys.
+- **AI Script Editor hotkey support**: `Ctrl+W` and `Ctrl+S` now commit the in-flight AI script edit and save the `.qvm` even when the AI script textbox is focused. The text editor pre-checks save bindings and commits the edit before letting the key reach the dispatcher.
+- **Pause-menu Save button works while AI textbox is focused**: ESC closing the property panel now commits the AI script edit instead of discarding it.
+
+### 🐛 Bug Fixes
+- **Fixed: AI Script not saved via Ctrl+W / Ctrl+S**: The text editor block was intercepting all keys while the AI textbox was focused, so `Ctrl+W` was being inserted as a printable character instead of triggering `SaveState`. Now the editor checks for save hotkeys first, commits the AI edit, and lets the binding fire.
+- **Fixed: ESC discarded AI script edits**: Pressing ESC while editing AI script text no longer discards the in-flight edit — it commits `prop_text_buf_` to `ai_script_text_` and sets `ai_script_dirty_=true`.
+- **Fixed: Undo/Redo broke building ATTA positions**: After restoring the objects vector, ATTA proxy objects are now marked `modified=true` and `FlushAttaProxiesToMef()` rewrites the MEF binary. Previously the MEF kept post-edit local positions while the proxy's world pos reverted, causing the 3D view and saved level to disagree.
+- **Fixed: Pause-menu AutoSave row not updating display**: The pause-mode `task_tree_view` struct was missing `auto_save_enabled_` and `auto_save_interval_seconds_` fields, so the renderer always showed defaults (`false`, `300s`) regardless of the actual state. Now both fields are passed in the pause-mode path.
+- **Fixed: ResetLevel did not fully reset graphs/AI/textures**: ResetLevel now does a full folder replacement (`remove_all` + `copy recursive`) instead of in-place `overwrite_existing`, so deleted graph nodes, removed AI scripts, and any other stale files are all reverted. The backup is now always created on first level load (not gated on `enableBackup`) and captures the entire `missions\location0\levelX\` folder.
+- **Fixed: AutoSave config not reloaded on startup**: `QEDAutoSaveEnabled` and `QEDAutoSaveInterval` were saved to `qedconfig.qsc` but never read back. The parser now restores both on launch.
+- **Fixed: Terrain undo/redo didn't restore heightmap edits**: Added `SnapshotHMP()` / `RestoreHMP()` on `Terrain` (and a public pass-through on `Level`) that byte-copies the loaded HMP file body. Undo/redo now captures and restores the full heightmap buffer so brush edits can be rolled back.
+- **Fixed: Editor created a `content` folder in the install path**: All asset cache stamps moved from `output_dir\content\cache` to `output_dir\editor\cache`; the terrain extract dir moved from `content\terrains` to `editor\terrains`. The editor no longer writes anywhere outside `editor\`.
+
+### ⌨️ New Keybindings
+| Event | Binding | Action |
+|-------|---------|--------|
+| `ToggleAutoSave` | `<Ctrl><Shift><A>` | Toggle auto-save on/off |
+| `AutoSaveIntervalUp` | `<Ctrl><Shift><]>` | Increase auto-save interval by 10s |
+| `AutoSaveIntervalDown` | `<Ctrl><Shift><[>` | Decrease auto-save interval by 10s |
+
+### 🔧 Technical Changes
+- **Unified `UndoState`**: Snapshots all editable state in one struct — objects (including ATTA proxy fields, spline data, lighting, scale), AI script (path/text/dirty), terrain HMP buffer, terrain mod options, and graph overlay (nodes/edges/visibility). One undo covers every edit type.
+- **`Undo` / `Redo` re-flush ATTA proxies** after restoring the object list, so MEF binaries stay in sync with the proxy world positions.
+- **`ResetLevel` always restores from full-folder backup** when one exists; the backup is created on first load of each level.
+- **Cache and terrain extract dirs moved under `editor\`** so the install path stays clean.
+
+---
+
 ## 3.2.0-pre — Graph Link Editing, Legacy Format & Edge Visibility
 
 ### ✨ New Features

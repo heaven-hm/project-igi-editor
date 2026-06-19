@@ -1,14 +1,17 @@
 # Project IGI Editor - Version History
 
-## Current Version: 2.9.0
+## Current Version: 3.3.0-pre
 
 ---
 
 ## Version Timeline
 
 | Version | Release Date | Status | Major Features |
-|---------|--------------|--------|-----------------|
-| **2.9.0** | 2026-06-09 | Latest | New Terrain editor, support for foreign models from other levels, pause menu terrain expand/collapse fix, immediate 3D brush rings refresh |
+|---------|--------------|--------|----------------|
+| **3.3.0-pre** | 2026-06-19 | Pre-release | Auto-save system (toggle + interval), unified undo/redo (objects/AI/terrain/graphs/ATTA), AI script save via Ctrl+W/Ctrl+S, full-folder level reset with backup, hotkey-driven from qedkeybindings.qsc |
+| **3.2.0-pre** | 2026-06-17 | Pre-release | Graph link editing (add/remove), legacy tagged graph format support, edge visibility fix |
+| **3.1.0-pre** | 2026-06-16 | Pre-release | Visual 3D Graph Editor (nodes, edges, area labels) |
+| **2.9.0** | 2026-06-09 | Stable | New Terrain editor, support for foreign models from other levels, pause menu terrain expand/collapse fix, immediate 3D brush rings refresh |
 | **2.8.0** | 2026-06-04 | Stable | Inline AI Script Editor, mini-notepad with scrolling & arrow keys, autocomplete everywhere, find-shortcut fixes |
 | **2.7.0** | 2026-06-04 | Stable | 3D Model Viewer, Autocomplete Task, exact keybinding match & task tree fixes |
 | **2.6.0** | 2026-06-03 | Stable | Properties Editor UI, Attachments support, SplineObjs & Font/Sprite fixes |

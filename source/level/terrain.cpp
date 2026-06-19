@@ -148,6 +148,7 @@ void Terrain::FreeCubeDataPools() {
 void Terrain::Unload() {
 	File_FreeBuf(hmp_);
 	hmp_ = nullptr;
+	hmp_sz_ = 0;
 	File_FreeBuf(bit_);
 	bit_ = nullptr;
 	SAFE_FREE(ctr_);
@@ -169,6 +170,23 @@ void Terrain::Unload() {
 
 const Terrain::ctr_node_s* Terrain::GetCtr() const {
 	return ctr_;
+}
+
+std::vector<uint8_t> Terrain::SnapshotHMP() const {
+	std::vector<uint8_t> snap;
+	if (!hmp_ || hmp_sz_ <= 0) return snap;
+	const uint8_t* bytes = (const uint8_t*)hmp_;
+	snap.assign(bytes, bytes + hmp_sz_);
+	return snap;
+}
+
+void Terrain::RestoreHMP(const std::vector<uint8_t>& snap) {
+	if (!hmp_ || hmp_sz_ <= 0) return;          // no height-map loaded for this level
+	if (snap.empty() || (int32_t)snap.size() != hmp_sz_) return; // size mismatch -> ignore
+	memcpy(hmp_, snap.data(), (size_t)hmp_sz_);
+	// height_map_items_[] pointers stay valid: they point into hmp_, which is
+	// unchanged in address. The next terrain Update() recomputes vertex Z from
+	// the restored pixel data, so render caches refresh automatically.
 }
 
 void Terrain::ClearCubeDataHash() {

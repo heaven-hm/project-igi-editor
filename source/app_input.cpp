@@ -388,13 +388,13 @@ void App::DispatchEventBindings() {
 	// ---- GraphNode ----
 	// Graph node edit controls (only while the overlay is shown).
 	if (renderer_.IsGraphOverlayVisible()) {
-		if (Check("ScaleGraphNode"))       { renderer_.ScaleSelectedGraphNode(0.0f); return; }  // reset radius
-		if (Check("ScaleGraphNodeHalfe"))  { renderer_.ScaleSelectedGraphNode(0.5f); return; }
-		if (Check("ScaleGraphNodeDouble")) { renderer_.ScaleSelectedGraphNode(2.0f); return; }
-		if (Check("CreateGraphNode"))      { renderer_.CreateGraphNode();           return; }
-		if (Check("DeleteGraphNode"))      { renderer_.DeleteSelectedGraphNode();    return; }
-		if (Check("AddGraphLink"))         { status_message_ = renderer_.AddGraphLinkStep();        return; }
-		if (Check("RemoveGraphLink"))      { status_message_ = renderer_.RemoveGraphLinkStep();     return; }
+		if (Check("ScaleGraphNode"))       { PushUndoState(); renderer_.ScaleSelectedGraphNode(0.0f); return; }  // reset radius
+		if (Check("ScaleGraphNodeHalfe"))  { PushUndoState(); renderer_.ScaleSelectedGraphNode(0.5f); return; }
+		if (Check("ScaleGraphNodeDouble")) { PushUndoState(); renderer_.ScaleSelectedGraphNode(2.0f); return; }
+		if (Check("CreateGraphNode"))      { PushUndoState(); renderer_.CreateGraphNode();           return; }
+		if (Check("DeleteGraphNode"))      { PushUndoState(); renderer_.DeleteSelectedGraphNode();    return; }
+		if (Check("AddGraphLink"))         { PushUndoState(); status_message_ = renderer_.AddGraphLinkStep();        return; }
+		if (Check("RemoveGraphLink"))      { PushUndoState(); status_message_ = renderer_.RemoveGraphLinkStep();     return; }
 		if (Check("ToggleGraphNodeLabels")) {
 			renderer_.ToggleGraphLabels();
 			status_message_ = renderer_.GraphLabelsVisible() ? "Graph labels: ON" : "Graph labels: OFF";
@@ -442,6 +442,9 @@ void App::DispatchEventBindings() {
 		Config::Get().saveConfigOnExit = !Config::Get().saveConfigOnExit;
 		status_message_ = Config::Get().saveConfigOnExit ? "Save on exit: ON" : "Save on exit: OFF";
 	}
+	if (Check("ToggleAutoSave")) { ToggleAutoSave(); return; }
+	if (Check("AutoSaveIntervalUp")) { AdjustAutoSaveInterval(10); return; }
+	if (Check("AutoSaveIntervalDown")) { AdjustAutoSaveInterval(-10); return; }
 	if (Check("SaveState")) {
 		SaveCurrentLevel();
 		int lvl = level_.GetLevelNo();
@@ -668,15 +671,32 @@ void App::ResetLevel() {
 	}
 #endif
 
-	if (Config::Get().enableBackup) {
+	// Always restore from backup — backup is created on every level load so it
+	// captures the pristine state of the full level folder (objects, ai, graphs,
+	// models, textures, terrain). A full folder replacement (remove + copy)
+	// ensures deleted graph nodes, removed AI scripts, etc. are all reverted.
+	{
 		std::string gameLevelDir = Utils::GetIGIRootPath() + "\\missions\\location0\\level" + std::to_string(levelNo);
 		std::string backupLevelDir = Utils::GetExeDirectory() + "\\editor\\backup\\level" + std::to_string(levelNo);
-		
+
 		Logger::Get().Log(LogLevel::INFO, "[App] Restoring level from backup: " + backupLevelDir + " to " + gameLevelDir);
-		
+
 		if (std::filesystem::exists(backupLevelDir)) {
 			try {
-				std::filesystem::copy(backupLevelDir, gameLevelDir, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing);
+				// Full replacement: remove the entire game level folder, then
+				// copy the pristine backup over it. This guarantees graphs/,
+				// ai/, models/, textures/ — every subfolder — is reset, not
+				// just overwritten in-place (which leaves stale files behind).
+				std::error_code ec;
+				std::filesystem::remove_all(gameLevelDir, ec);
+				if (ec) {
+					Logger::Get().Log(LogLevel::WARNING, "[App] remove_all failed (" + ec.message() + "), trying copy overwrite");
+					std::filesystem::copy(backupLevelDir, gameLevelDir,
+						std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing);
+				} else {
+					std::filesystem::copy(backupLevelDir, gameLevelDir,
+						std::filesystem::copy_options::recursive);
+				}
 				Logger::Get().Log(LogLevel::INFO, "[App] Level reset successfully from backup.");
 			} catch (const std::exception& e) {
 				Logger::Get().Log(LogLevel::ERR, "[App] Failed to restore from backup: " + std::string(e.what()));
@@ -684,8 +704,6 @@ void App::ResetLevel() {
 		} else {
 			Logger::Get().Log(LogLevel::ERR, "[App] Cannot reset level: No backup found at " + backupLevelDir);
 		}
-	} else {
-		Logger::Get().Log(LogLevel::INFO, "[App] Reset level skipped because QEDBackup is not enabled in config.");
 	}
 
 	// Remove local objects.qsc so it recompiles fresh from QVM

@@ -95,6 +95,9 @@ bool App::Init(int argc, char** argv) {
 
 	ConfigData& cfg = Config::Get();
 
+	auto_save_enabled_ = cfg.auto_save_enabled;
+	auto_save_interval_seconds_ = cfg.auto_save_interval_seconds;
+	auto_save_last_time_ms_ = Sys_Milliseconds();
 
 	// read options from command line
 	draw_params_.overlay_wireframe_ = Arg_OptionIdx(argc, argv, "-wireframe") > 0;
@@ -350,6 +353,16 @@ void App::OnIdle() {
 }
 
 void App::Frame(float delta_seconds) {
+	// Auto-save timer
+	if (auto_save_enabled_ && !pause_mode_ && level_.GetLevelNo() > 0) {
+		int64_t now = Sys_Milliseconds();
+		if (now - auto_save_last_time_ms_ >= (int64_t)auto_save_interval_seconds_ * 1000) {
+			auto_save_last_time_ms_ = now;
+			SaveCurrentLevel();
+			status_message_ = "Auto-saved level " + std::to_string(level_.GetLevelNo());
+		}
+	}
+
 	if (pause_mode_) {
 		// Skip all updates when paused, just render
 		UpdateViewDefine();
@@ -424,6 +437,8 @@ void App::Frame(float delta_seconds) {
 			.terrain_brush_          = edit_brush_,
 			.terrain_brush_radius_   = edit_brush_radius_,
 			.terrain_brush_strength_ = edit_brush_strength_,
+			.auto_save_enabled_        = auto_save_enabled_,
+			.auto_save_interval_seconds_ = auto_save_interval_seconds_,
 		};
 		draw_params_.level_objects_ = &level_.GetLevelObjects();
 		draw_params_.selected_object_index_ = selected_object_index_;
@@ -579,6 +594,8 @@ void App::Frame(float delta_seconds) {
 		.terrain_brush_          = edit_brush_,
 		.terrain_brush_radius_   = edit_brush_radius_,
 		.terrain_brush_strength_ = edit_brush_strength_,
+		.auto_save_enabled_        = auto_save_enabled_,
+		.auto_save_interval_seconds_ = auto_save_interval_seconds_,
 	};
 
 	renderer_.Draw(draw_params_, task_tree_view);
@@ -717,5 +734,23 @@ float App::GetSelectedObjectScale() const {
 #include <glm/ext/matrix_projection.hpp>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
+
+void App::ToggleAutoSave() {
+	auto_save_enabled_ = !auto_save_enabled_;
+	auto_save_last_time_ms_ = Sys_Milliseconds();
+	Config::Get().auto_save_enabled = auto_save_enabled_;
+	Config::Save();
+	status_message_ = auto_save_enabled_ ? "Auto-save: ON" : "Auto-save: OFF";
+}
+
+void App::AdjustAutoSaveInterval(int delta_seconds) {
+	auto_save_interval_seconds_ += delta_seconds;
+	if (auto_save_interval_seconds_ < 10)   auto_save_interval_seconds_ = 10;
+	if (auto_save_interval_seconds_ > 3600) auto_save_interval_seconds_ = 3600;
+	auto_save_last_time_ms_ = Sys_Milliseconds();
+	Config::Get().auto_save_interval_seconds = auto_save_interval_seconds_;
+	Config::Save();
+	status_message_ = "Auto-save interval: " + std::to_string(auto_save_interval_seconds_) + "s";
+}
 
 

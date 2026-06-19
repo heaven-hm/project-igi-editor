@@ -546,47 +546,77 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		if (caret < 0) caret = 0;
 		if (caret > (int)prop_text_buf_.size()) caret = (int)prop_text_buf_.size();
 		bool multiline = IsPropFieldMultiline(prop_text_edit_field_);
-		if (key == 27) { // ESC — cancel (revert)
-			prop_text_edit_field_ = -1;
-			return;
+
+		// Before the text editor swallows the key, check if it matches a save
+		// hotkey from qedkeybindings.qsc (e.g. Ctrl+W = SaveState, Ctrl+S =
+		// SaveObjectFile). If so, commit the in-flight edit first so the AI
+		// script text is saved, then let the binding fire.
+		{
+			auto& bindings = Config::Get().eventBindings_;
+			auto matchBinding = [&](const std::string& name) -> bool {
+				auto it = bindings.find(name);
+				return it != bindings.end() && Utils::IsKeyBindingPressedExact(it->second);
+			};
+			if (matchBinding("SaveState") || matchBinding("SaveObjectFile") ||
+			    matchBinding("SaveSubTaskObjectFile") || matchBinding("SaveSubTaskObjectFileParent")) {
+				CommitPropTextEdit();
+				// Fall through to DispatchEventBindings below.
+			}
+			else if (matchBinding("ToggleSaveStateOnExit") || matchBinding("ToggleAutoSave") ||
+			         matchBinding("AutoSaveIntervalUp") || matchBinding("AutoSaveIntervalDown")) {
+				CommitPropTextEdit();
+				// Fall through to DispatchEventBindings below.
+			}
 		}
-		if (key == 13) { // Enter
-			if (multiline) {              // VarString/String256: insert newline
-				prop_text_buf_.insert(prop_text_buf_.begin() + caret, '\n');
+
+		// If the edit was just committed by a save hotkey, prop_text_edit_field_
+		// is now -1 and this block is skipped — the key reaches DispatchEventBindings.
+		if (prop_text_edit_field_ == -1) {
+			// fall through to DispatchEventBindings
+		}
+		else {
+			if (key == 27) { // ESC — cancel (revert)
+				prop_text_edit_field_ = -1;
+				return;
+			}
+			if (key == 13) { // Enter
+				if (multiline) {              // VarString/String256: insert newline
+					prop_text_buf_.insert(prop_text_buf_.begin() + caret, '\n');
+					caret++;
+					UpdateAIScriptScroll();
+				} else {                      // single-line: commit
+					CommitPropTextEdit();
+				}
+				return;
+			}
+			if (key == 8) { // Backspace — delete before caret
+				if (caret > 0) {
+					prop_text_buf_.erase(prop_text_buf_.begin() + (caret - 1));
+					caret--;
+					UpdateAIScriptScroll();
+					UpdateAIScriptPathHScroll();
+				}
+				return;
+			}
+			if (key == 127) { // Delete — delete at caret
+				if (caret < (int)prop_text_buf_.size())
+					prop_text_buf_.erase(prop_text_buf_.begin() + caret);
+				UpdateAIScriptScroll();
+				return;
+			}
+			if (key == '\t') { // Tab → inline autocomplete (reliable trigger; GLUT may eat Ctrl+Space)
+				InlineAutocomplete();
+				return;
+			}
+			if (key >= 32 && key <= 126) { // printable: insert at caret
+				prop_text_buf_.insert(prop_text_buf_.begin() + caret, (char)key);
 				caret++;
 				UpdateAIScriptScroll();
-			} else {                      // single-line: commit
-				CommitPropTextEdit();
-			}
-			return;
-		}
-		if (key == 8) { // Backspace — delete before caret
-			if (caret > 0) {
-				prop_text_buf_.erase(prop_text_buf_.begin() + (caret - 1));
-				caret--;
-				UpdateAIScriptScroll();
 				UpdateAIScriptPathHScroll();
+				return;
 			}
 			return;
 		}
-		if (key == 127) { // Delete — delete at caret
-			if (caret < (int)prop_text_buf_.size())
-				prop_text_buf_.erase(prop_text_buf_.begin() + caret);
-			UpdateAIScriptScroll();
-			return;
-		}
-		if (key == '\t') { // Tab → inline autocomplete (reliable trigger; GLUT may eat Ctrl+Space)
-			InlineAutocomplete();
-			return;
-		}
-		if (key >= 32 && key <= 126) { // printable: insert at caret
-			prop_text_buf_.insert(prop_text_buf_.begin() + caret, (char)key);
-			caret++;
-			UpdateAIScriptScroll();
-			UpdateAIScriptPathHScroll();
-			return;
-		}
-		return;
 	}
 
 	// File dialog input (SaveSubTask / LoadSubTask)
@@ -1132,10 +1162,10 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 
 	if (key == 27) { // ESC
 		if (show_help_) { show_help_ = false; return; }
-		if (prop_editor_open_) { // close the property panel first
+		if (prop_editor_open_) { // close the property panel — commit any edit first
+			CommitPropTextEdit();
 			prop_editor_open_ = false;
 			prop_field_index_ = -1;
-			prop_text_edit_field_ = -1;
 			return;
 		}
 		TogglePauseMenu();

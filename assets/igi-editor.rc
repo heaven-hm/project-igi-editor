@@ -3,8 +3,8 @@
 101 ICON "igi-editor.ico"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     3,1,0,0
-PRODUCTVERSION  3,1,0,0
+FILEVERSION     3,3,0,0
+PRODUCTVERSION  3,3,0,0
 FILEFLAGSMASK   0x3fL
 #ifdef _DEBUG
 FILEFLAGS       0x1L
@@ -21,12 +21,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "HeavenHM"
             VALUE "FileDescription",  "IGI-1 Level Editor"
-            VALUE "FileVersion",      "3.1.0-pre"
+            VALUE "FileVersion",      "3.3.0-pre"
             VALUE "InternalName",     "igi1ed"
             VALUE "LegalCopyright",   "Copyright (C) HeavenHM"
             VALUE "OriginalFilename", "igi1ed.exe"
             VALUE "ProductName",      "IGI-1 Editor"
-            VALUE "ProductVersion",   "3.1.0-pre"
+            VALUE "ProductVersion",   "3.3.0-pre"
         END
     END
     BLOCK "VarFileInfo"

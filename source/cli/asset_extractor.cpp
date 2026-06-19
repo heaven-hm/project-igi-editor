@@ -147,7 +147,7 @@ bool AssetExtractor::EnsureLevelAssets(int level_no,
     std::string texOut   = output_dir + "\\editor\\textures\\" + levelName;
     std::string modelOut = output_dir + "\\editor\\models\\" + levelName;
 
-    std::string cacheDir   = output_dir + "\\content\\cache";
+    std::string cacheDir   = output_dir + "\\editor\\cache";
     std::string texStamp   = cacheDir + "\\" + levelName + "_textures.stamp";
     std::string modelStamp = cacheDir + "\\" + levelName + "_models.stamp";
 
@@ -172,7 +172,7 @@ bool AssetExtractor::EnsureCommonAssets(const std::string& igi_path,
     const std::string modelRes  = commonDir + "\\models\\location0.res";
     const std::string texOut    = output_dir + "\\editor\\textures\\common";
     const std::string modelOut  = output_dir + "\\editor\\models\\common";
-    const std::string cacheDir  = output_dir + "\\content\\cache";
+    const std::string cacheDir  = output_dir + "\\editor\\cache";
     const std::string texStamp  = cacheDir + "\\common_textures.stamp";
     const std::string modelStamp= cacheDir + "\\common_models.stamp";
 
@@ -191,7 +191,7 @@ void AssetExtractor::EnsureAllLevelTextures(const std::string& igi_path,
     if (s_done) return;
     s_done = true;
 
-    const std::string cacheDir = output_dir + "\\content\\cache";
+    const std::string cacheDir = output_dir + "\\editor\\cache";
     for (int lvl = 1; lvl <= 14; ++lvl) {
         const std::string levelName = "level" + std::to_string(lvl);
         const std::string texRes  = igi_path + "\\missions\\location0\\" + levelName +
@@ -207,7 +207,7 @@ void AssetExtractor::ClearLevelAssets(int level_no, const std::string& output_di
     std::string levelName = "level" + std::to_string(level_no);
     const std::string modelsDir   = output_dir + "\\editor\\models\\" + levelName;
     const std::string texturesDir = output_dir + "\\editor\\textures\\" + levelName;
-    const std::string cacheDir    = output_dir + "\\content\\cache";
+    const std::string cacheDir    = output_dir + "\\editor\\cache";
     const std::string texStamp    = cacheDir + "\\" + levelName + "_textures.stamp";
     const std::string modelStamp  = cacheDir + "\\" + levelName + "_models.stamp";
 
@@ -227,8 +227,8 @@ void AssetExtractor::CleanupExtractedAssets(const std::string& output_dir) {
     std::error_code ec;
     const std::string modelsDir   = output_dir + "\\editor\\models";
     const std::string texturesDir = output_dir + "\\editor\\textures";
-    const std::string terrainDir  = output_dir + "\\content\\terrains";
-    const std::string cacheDir    = output_dir + "\\content\\cache";
+    const std::string terrainDir  = output_dir + "\\editor\\terrains";
+    const std::string cacheDir    = output_dir + "\\editor\\cache";
 
     if (fs::exists(modelsDir, ec)) {
         fs::remove_all(modelsDir, ec);

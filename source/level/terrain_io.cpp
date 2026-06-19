@@ -434,6 +434,7 @@ bool Terrain::LoadHMPFile(load_params_s & params) {
 	if (!File_LoadBinary(filename, hmp_, hmp_sz)) {
 		return false;
 	}
+	hmp_sz_ = hmp_sz;
 
 	hmp_item_s* head = (hmp_item_s*)hmp_;
 

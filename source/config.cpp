@@ -127,6 +127,8 @@ void Config::CreateDefault() {
     data_.displayTaskNote = true;
     data_.allowDynamicSwitching = false;
     data_.saveConfigOnExit = true;
+    data_.auto_save_enabled = false;
+    data_.auto_save_interval_seconds = 300;
     data_.runEvent = true;
     data_.cameraLock = false;
     data_.enableBackup = false;
@@ -222,6 +224,8 @@ void Config::Load() {
                 else if (key == "Backup") data_.enableBackup = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "UseEditorFont") data_.useEditorFont = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "SystemFontSize") { int s = std::stoi(val); data_.systemFontSize = std::max(8, std::min(32, s)); }
+                else if (key == "AutoSaveEnabled") data_.auto_save_enabled = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "AutoSaveInterval") data_.auto_save_interval_seconds = std::stoi(val);
                 else if (key == "FindTaskName") data_.findTaskName = val;
                 else if (key == "FindTaskNote") data_.findTaskNote = val;
                 else if (key == "FindTaskID") data_.findTaskID = val;
@@ -370,6 +374,8 @@ void Config::Save() {
         file << "QEDDisplayTaskNote(" << (data_.displayTaskNote ? "TRUE" : "FALSE") << ");\n";
         file << "QEDAllowDynamicSwitching(" << (data_.allowDynamicSwitching ? "TRUE" : "FALSE") << ");\n";
         file << "QEDSaveConfigOnExit(" << (data_.saveConfigOnExit ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDAutoSaveEnabled(" << (data_.auto_save_enabled ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDAutoSaveInterval(" << data_.auto_save_interval_seconds << ");\n";
         file << "QEDRunEvent(" << (data_.runEvent ? "TRUE" : "FALSE") << ");\n";
         file << "QEDCameraLock(" << (data_.cameraLock ? "TRUE" : "FALSE") << ");\n";
         file << "QEDBackup(" << (data_.enableBackup ? "TRUE" : "FALSE") << ");\n";

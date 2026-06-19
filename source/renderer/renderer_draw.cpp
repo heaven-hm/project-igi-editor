@@ -1366,7 +1366,7 @@ void Renderer::Draw(const draw_params_s &params,
 
     if (task_tree_view.pause_mode_) {
       const int menu_w = 460;
-      const int menu_h = 480;
+      const int menu_h = 560;
       const int menu_x = (params.view_define_->viewport_width_ - menu_w) / 2;
       const int menu_y = (params.view_define_->viewport_height_ - menu_h) / 2;
       const int viewport_h = params.view_define_->viewport_height_;
@@ -1445,6 +1445,8 @@ void Renderer::Draw(const draw_params_s &params,
       btn_labels.push_back("Reset Level");
       const int SAVE_ROW = btn_labels.size();
       btn_labels.push_back("Save Level");
+      const int AUTOSAVE_ROW = btn_labels.size();
+      btn_labels.push_back("Auto Save");
       const int QUIT_ROW = btn_labels.size();
       btn_labels.push_back("Quit");
 
@@ -1539,6 +1541,26 @@ void Renderer::Draw(const draw_params_s &params,
           }
           draw_text_sys(menu_x + menu_w / 2 - 40, screen_btn_y, btn_labels[i],
                         hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
+
+        } else if (i == AUTOSAVE_ROW) {
+          const int sz_box_w = 50, btn_w = 22, gap = 6;
+          const int label_w = 130, label_gap = 16;
+          const int group_w = label_w + label_gap + btn_w + gap + sz_box_w + gap + btn_w;
+          int gx = menu_x + (menu_w - group_w) / 2;
+          const char* auto_lbl = task_tree_view.auto_save_enabled_
+                                     ? "Auto Save Enable"
+                                     : "Auto Save Disable";
+          draw_text_sys(gx, screen_btn_y, auto_lbl,
+                        hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
+          int minus_x = gx + label_w + label_gap;
+          int box_x   = minus_x + btn_w + gap;
+          int plus_x  = box_x + sz_box_w + gap;
+          int rt = gl_btn_y - 14, rb = gl_btn_y + 10;
+          char secbuf[16];
+          snprintf(secbuf, sizeof(secbuf), "%ds", task_tree_view.auto_save_interval_seconds_);
+          sbox(minus_x, btn_w,    "-",     rt, rb, screen_btn_y);
+          sbox(box_x,   sz_box_w, secbuf,  rt, rb, screen_btn_y);
+          sbox(plus_x,  btn_w,    "+",     rt, rb, screen_btn_y);
 
         } else {
           if (hovered) {

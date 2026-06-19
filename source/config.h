@@ -90,6 +90,8 @@ struct ConfigData {
     bool displayTaskNote;
     bool allowDynamicSwitching;
     bool saveConfigOnExit;
+    bool auto_save_enabled;
+    int auto_save_interval_seconds;
     bool runEvent;
     bool cameraLock;
     bool enableBackup;

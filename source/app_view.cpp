@@ -301,6 +301,11 @@ void App::EditorProcessClick() {
 	std::vector<LevelObject>& objects = lo.GetObjects();
 
 	if (terrain_edit_enabled_) {
+		// Push undo state once per click-drag sequence for terrain edits
+		if (!undo_state_pushed_for_manip_) {
+			PushUndoState();
+			undo_state_pushed_for_manip_ = true;
+		}
 		// Terrain edit mode: build ray from camera through mouse and edit terrain
 		glm::dmat4 proj_matrix = glm::perspective(
 			(double)view_define_.fovy_,
@@ -658,7 +663,7 @@ void App::UpdateMarkerManipulation() {
 	marker_manip_.mode_ = current_mode;
 
 	// Push undo state once at the start of each new manipulation gesture
-	if (marker_manip_.mode_ != ManipulationMode::None) {
+	if (marker_manip_.mode_ != ManipulationMode::None || terrain_edit_enabled_) {
 		if (!undo_state_pushed_for_manip_) {
 			PushUndoState();
 			undo_state_pushed_for_manip_ = true;
