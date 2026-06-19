@@ -413,7 +413,12 @@ void App::Frame(float delta_seconds) {
 			.find_result_idx_      = find_result_idx_,
 			.selected_obj_is_ai    = (selected_object_index_ >= 0 &&
 				selected_object_index_ < (int)level_.GetLevelObjects().GetObjects().size() &&
-				ai_model_ids_.count(level_.GetLevelObjects().GetObjects()[selected_object_index_].modelId) > 0),
+				(ai_model_ids_.count(level_.GetLevelObjects().GetObjects()[selected_object_index_].modelId) > 0 ||
+				 [&]() {
+					const std::string& t = level_.GetLevelObjects().GetObjects()[selected_object_index_].type;
+					return t == "HumanSoldier" || t == "HumanSoldierFemale" ||
+					       t == "HumanPlayer" || t == "HumanSoldierRPG" || t == "HumanAI";
+				 }())),
 			.help_scroll_offset_   = help_scroll_offset_,
 			.help_entries_         = &help_entries_,
 			.show_task_type_       = show_task_type_,
@@ -568,7 +573,12 @@ void App::Frame(float delta_seconds) {
 		.find_result_idx_      = find_result_idx_,
 		.selected_obj_is_ai    = (selected_object_index_ >= 0 &&
 			selected_object_index_ < (int)level_.GetLevelObjects().GetObjects().size() &&
-			ai_model_ids_.count(level_.GetLevelObjects().GetObjects()[selected_object_index_].modelId) > 0),
+			(ai_model_ids_.count(level_.GetLevelObjects().GetObjects()[selected_object_index_].modelId) > 0 ||
+			 [&]() {
+				const std::string& t = level_.GetLevelObjects().GetObjects()[selected_object_index_].type;
+				return t == "HumanSoldier" || t == "HumanSoldierFemale" ||
+				       t == "HumanPlayer" || t == "HumanSoldierRPG" || t == "HumanAI";
+			 }())),
 		.help_scroll_offset_   = help_scroll_offset_,
 		.help_entries_         = &help_entries_,
 		.show_task_type_       = show_task_type_,

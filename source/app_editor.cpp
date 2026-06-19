@@ -63,27 +63,67 @@ void App::LoadAIScriptForSelected() {
 	if (selected_object_index_ >= (int)objects.size()) return;
 	const auto& obj = objects[selected_object_index_];
 
-	// Only AI model types get the script section.
-	if (ai_model_ids_.find(obj.modelId) == ai_model_ids_.end()) return;
+	// Only AI model types get the script section. Check both the modelId
+	// (against the AITYPE_ set from IGIModels.json) AND the object type —
+	// HumanSoldier/HumanSoldierFemale/HumanPlayer/HumanSoldierRPG are always
+	// AI containers even if their modelId isn't tagged AITYPE_ in the JSON.
+	bool isAiType = (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale" ||
+	                 obj.type == "HumanPlayer" || obj.type == "HumanSoldierRPG" ||
+	                 obj.type == "HumanAI");
+	bool isAiModel = (ai_model_ids_.find(obj.modelId) != ai_model_ids_.end());
+	if (!isAiType && !isAiModel) return;
 
 	// The .qvm belongs to the HumanAI child task (not the HumanSoldier parent).
-	// If this object IS the HumanAI, use its own ID; otherwise find the HumanAI child.
+	// If this object IS the HumanAI, use its own ID; otherwise walk the children
+	// recursively to find a HumanAI — the AI task can be nested several levels
+	// deep (e.g. HumanSoldier → Gun → HumanAI). Limit the search depth so a
+	// malformed tree doesn't hang the editor.
 	const LevelObject* aiTask = nullptr;
 	if (obj.type == "HumanAI") {
 		aiTask = &obj;
 	} else {
-		for (int ci : obj.childrenIndices) {
-			if (ci < 0 || ci >= (int)objects.size()) continue;
-			if (objects[ci].deleted) continue;
-			if (objects[ci].type == "HumanAI") { aiTask = &objects[ci]; break; }
+		const int kMaxAIDepth = 15;
+		std::vector<int> frontier = obj.childrenIndices;
+		int depth = 0;
+		while (!frontier.empty() && depth < kMaxAIDepth) {
+			std::vector<int> next;
+			for (int ci : frontier) {
+				if (ci < 0 || ci >= (int)objects.size()) continue;
+				if (objects[ci].deleted) continue;
+				if (objects[ci].type == "HumanAI") {
+					aiTask = &objects[ci];
+					frontier.clear();
+					break;
+				}
+				for (int gc : objects[ci].childrenIndices) next.push_back(gc);
+			}
+			if (aiTask) break;
+			frontier = std::move(next);
+			++depth;
+		}
+		if (!aiTask) {
+			Logger::Get().Log(LogLevel::WARNING,
+				"[App] HumanAI not found under HumanSoldier '" + obj.name +
+				"' (taskId=" + obj.taskId + ") within " + std::to_string(kMaxAIDepth) +
+				" levels of children — AI script not loaded");
 		}
 	}
-	if (!aiTask || aiTask->taskId.empty()) return;
+	if (!aiTask || aiTask->taskId.empty()) {
+		if (aiTask)
+			Logger::Get().Log(LogLevel::WARNING,
+				"[App] HumanAI found but taskId is empty for '" + obj.name +
+				"' (taskId=" + obj.taskId + ") — AI script not loaded");
+		return;
+	}
 
 	int levelNo = level_.GetLevelNo();
 	std::string aiDir = Utils::GetIGIRootPath() +
 	                    "\\missions\\location0\\level" + std::to_string(levelNo) + "\\ai";
 	ai_script_path_ = aiDir + "\\" + aiTask->taskId + ".qvm";
+	Logger::Get().Log(LogLevel::INFO,
+		"[App] AI script loaded for " + obj.type + " '" + obj.name +
+		"' (taskId=" + obj.taskId + ") -> HumanAI taskId=" + aiTask->taskId +
+		" path=" + ai_script_path_);
 
 	if (!std::filesystem::exists(ai_script_path_)) {
 		ai_script_text_ = "// .qvm not found: " + ai_script_path_;

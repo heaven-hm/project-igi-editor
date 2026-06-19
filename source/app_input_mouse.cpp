@@ -289,6 +289,7 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 					int RESUME_ROW = btn_idx++;
 					int FONT_ROW = btn_idx++;
 					int LEVEL_ROW = btn_idx++;
+					int AUTOSAVE_ROW = btn_idx++;
 					int SEARCH_ROW = btn_idx++;
 					int TERRAIN_HEADER_ROW = btn_idx++;
 					int TERRAIN_TEX_ROW = -1, TERRAIN_HGT_ROW = -1, TERRAIN_DSC_ROW = -1;
@@ -299,12 +300,13 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 					}
 					int RESET_ROW = btn_idx++;
 					int SAVE_ROW = btn_idx++;
-					int AUTOSAVE_ROW = btn_idx++;
 					int QUIT_ROW = btn_idx++;
 
+					const int row_h = 38;
+					const int first_row_y = screen_menu_top + 90;
 					auto btn_hit2 = [&](int idx) -> bool {
-						int ry = screen_menu_top + 85 + idx * 35;
-						return (y >= ry - 15 && y <= ry + 15);
+						int ry = first_row_y + idx * row_h;
+						return (y >= ry - 16 && y <= ry + 16);
 					};
 
 					if      (btn_hit2(RESUME_ROW)) { TogglePauseMenu(); }
@@ -340,13 +342,6 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 							pause_level_input_ = std::to_string(cur);
 						}
 					}
-					else if (btn_hit2(SEARCH_ROW)) { clicked_input = 1; }
-					else if (btn_hit2(TERRAIN_HEADER_ROW)) { pause_terrain_expanded_ = !pause_terrain_expanded_; }
-					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_TEX_ROW)) { ToggleTerrainModOption(1); }
-					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_HGT_ROW)) { ToggleTerrainModOption(2); }
-					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_DSC_ROW)) { ToggleTerrainModOption(4); }
-					else if (btn_hit2(RESET_ROW)) { ResetLevel(); TogglePauseMenu(); }
-					else if (btn_hit2(SAVE_ROW)) { SaveCurrentLevel(); }
 					else if (btn_hit2(AUTOSAVE_ROW)) {
 						const int sz_box_w = 50, btn_w = 22, gap = 6;
 						const int label_w = 130, label_gap = 16;
@@ -358,6 +353,13 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 						else if (x >= plus_x  && x < plus_x  + btn_w) AdjustAutoSaveInterval(10);
 						else if (x >= gx      && x < minus_x)         ToggleAutoSave();
 					}
+					else if (btn_hit2(SEARCH_ROW)) { clicked_input = 1; }
+					else if (btn_hit2(TERRAIN_HEADER_ROW)) { pause_terrain_expanded_ = !pause_terrain_expanded_; }
+					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_TEX_ROW)) { ToggleTerrainModOption(1); }
+					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_HGT_ROW)) { ToggleTerrainModOption(2); }
+					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_DSC_ROW)) { ToggleTerrainModOption(4); }
+					else if (btn_hit2(RESET_ROW)) { ResetLevel(); TogglePauseMenu(); }
+					else if (btn_hit2(SAVE_ROW)) { SaveCurrentLevel(); }
 					else if (btn_hit2(QUIT_ROW)) { exit(0); }
 
 					pause_active_input_ = clicked_input;
