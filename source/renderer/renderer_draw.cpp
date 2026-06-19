@@ -1401,10 +1401,14 @@ void Renderer::Draw(const draw_params_s &params,
       glLineWidth(1.0f);
 
       int screen_menu_top = (viewport_h - menu_h) / 2;
-      draw_text_sys(menu_x + menu_w / 2 - 45, screen_menu_top + 22, "IGI EDITOR",
-                0.0f, 1.0f, 0.0f);
-      draw_text_sys(menu_x + menu_w / 2 - 35, screen_menu_top + 46, "PAUSED", 0.8f,
-                0.8f, 0.8f);
+      // Title — centered, bright green
+      const char* title = "IGI EDITOR";
+      draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(title) * 4),
+                 screen_menu_top + 22, title, 0.0f, 1.0f, 0.0f);
+      // Subtitle — centered, dim white
+      const char* subtitle = "PAUSED";
+      draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(subtitle) * 4),
+                 screen_menu_top + 46, subtitle, 0.8f, 0.8f, 0.8f);
 
       // Font row is rendered specially (index 1): a "Font: <type>" toggle on the
       // left plus a [-] [size] [+] size control on the right, all on one line.
@@ -1427,6 +1431,8 @@ void Renderer::Draw(const draw_params_s &params,
       btn_labels.push_back(font_btn_label);
       const int LEVEL_ROW = btn_labels.size();
       btn_labels.push_back("Select Level");
+      const int AUTOSAVE_ROW = btn_labels.size();
+      btn_labels.push_back("Auto Save");
       const int SEARCH_ROW = btn_labels.size();
       btn_labels.push_back("Model Search");
       const int TERRAIN_HEADER_ROW = btn_labels.size();
@@ -1445,15 +1451,17 @@ void Renderer::Draw(const draw_params_s &params,
       btn_labels.push_back("Reset Level");
       const int SAVE_ROW = btn_labels.size();
       btn_labels.push_back("Save Level");
-      const int AUTOSAVE_ROW = btn_labels.size();
-      btn_labels.push_back("Auto Save");
       const int QUIT_ROW = btn_labels.size();
       btn_labels.push_back("Quit");
 
       const int NUM_BTNS = btn_labels.size();
 
+      // Consistent row spacing — 38px between centres for a clean, airy layout
+      const int row_h = 38;
+      const int first_row_y = screen_menu_top + 90;
+
       auto row_screen_y = [&](int idx) {
-        return screen_menu_top + 85 + idx * 35;
+        return first_row_y + idx * row_h;
       };
 
       // Shared spinner-box draw helper (reused for FONT_ROW and LEVEL_ROW)
@@ -1528,7 +1536,8 @@ void Renderer::Draw(const draw_params_s &params,
           draw_text_sys(box_x + 5, screen_btn_y, buf.c_str(), 1.0f, 1.0f, 1.0f);
 
         } else if (i == TERRAIN_HEADER_ROW) {
-          draw_text_sys(menu_x + menu_w / 2 - 50, screen_btn_y, btn_labels[i], 0.0f, 0.8f, 0.0f);
+          draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(btn_labels[i]) * 4),
+                        screen_btn_y, btn_labels[i], 0.0f, 0.8f, 0.0f);
         } else if (i == TERRAIN_TEX_ROW || i == TERRAIN_HGT_ROW || i == TERRAIN_DSC_ROW) {
           if (hovered) {
             glEnable(GL_BLEND);
@@ -1539,7 +1548,8 @@ void Renderer::Draw(const draw_params_s &params,
             glEnd();
             glDisable(GL_BLEND);
           }
-          draw_text_sys(menu_x + menu_w / 2 - 40, screen_btn_y, btn_labels[i],
+          draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(btn_labels[i]) * 4),
+                        screen_btn_y, btn_labels[i],
                         hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
 
         } else if (i == AUTOSAVE_ROW) {
@@ -1548,8 +1558,8 @@ void Renderer::Draw(const draw_params_s &params,
           const int group_w = label_w + label_gap + btn_w + gap + sz_box_w + gap + btn_w;
           int gx = menu_x + (menu_w - group_w) / 2;
           const char* auto_lbl = task_tree_view.auto_save_enabled_
-                                     ? "Auto Save Enable"
-                                     : "Auto Save Disable";
+                                     ? "Save Enable"
+                                     : "Save Disable";
           draw_text_sys(gx, screen_btn_y, auto_lbl,
                         hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
           int minus_x = gx + label_w + label_gap;
