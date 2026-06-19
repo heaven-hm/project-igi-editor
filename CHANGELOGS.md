@@ -1,6 +1,6 @@
 # Changelogs
 
-## 3.1.1-pre — Graph Link Editing, Legacy Format & Edge Visibility
+## 3.2.0-pre — Graph Link Editing, Legacy Format & Edge Visibility
 
 ### ✨ New Features
 - **Add/Remove Links (Two-Step Workflow)**: Navigation edges between graph nodes can now be added and removed interactively. Select node A, press `Alt++` to mark it as the link source (green double-ring indicator), select node B, press `Alt++` again to create the link. Use `Alt+-` to remove a link the same way.
