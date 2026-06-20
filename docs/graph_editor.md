@@ -427,7 +427,7 @@ The in-memory overlay is also cleared on any level switch via `Renderer::BeginLo
 
 | File                                   | Responsibility                                            |
 |----------------------------------------|-----------------------------------------------------------|
-| `source/parsers/graph_parser.h/.cpp`   | Binary `.dat` parse, `GRAPH_Save`, `GRAPH_Write`          |
+| `source/renderer/graph_writer.h/.cpp`   | Binary `.dat` parse (read: `igi1conv graph export`), `GRAPH_Save`, `GRAPH_Write` (full CRUD serializer) |
 | `source/renderer/graph_overlay.h`      | `GraphWorldToScreen`, `GRAPH_PickNode` (pure math, unit-tested) |
 | `source/renderer/graph_project.cpp`    | Implementation of `GraphWorldToScreen` and `GRAPH_PickNode` |
 | `source/renderer/renderer.h`           | Graph overlay state members, public API declarations      |

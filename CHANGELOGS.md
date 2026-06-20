@@ -1,5 +1,56 @@
 # Changelogs
 
+## 3.4.0-pre — igi1conv-Only Parsers Migration
+
+### 🛠️ Refactor
+- **Removed `source/parsers/` folder entirely.** Every file-conversion call in the editor now goes through the bundled `igi1conv.exe` (v1.7.0, located at `editor/tools/igi1conv/`). The new `source/utils_igi1conv.{h,cpp}` shared runner is the single spawner used by every consumer; previously the editor spawned `igi1conv` only for `dat to-mtp` via a private static in `renderer_objects_atta.cpp`.
+- **Single source of truth for asset conversion.** No more in-process duplicate code for formats the bundled CLI already handles — `dat export`, `mtp dump`, `qvm decompile`, `qsc compile`, `res list/extract/append`, `graph export`, `tex to-png/to-tga`, `mef export`, `fnt export`, `terrain export-lmp/export-ctr`.
+- **In-process loaders kept only where no CLI subcommand can supply the runtime data the editor needs every frame:**
+  - `mef_native` → `source/renderer/` (raw `ParsedGeometry` for GL upload)
+  - `fnt_parser` → `source/renderer/` (per-glyph UV/advance for HUD draw)
+  - `qsc_lexer`, `qsc_parser` → `source/level/` (AI script token/AST walk for app_editor)
+  - `terrain_files` → `source/level/` (LMP/CTR runtime mesh loaders)
+  - `qvm_parser`, `qvm_compiler`, `qvm_decompiler` → `source/level/` (used by `verify_level_core`, `--run-tests`, and the qvm roundtrip gtest)
+- **Writer classes relocated to consumer folders** (read side replaced by `igi1conv`; write side kept in C++ because no CLI subcommand covers it): `dat_writer`, `graph_writer`, `mtp_writer`, `tex_writer`, `res_writer`, `res_compiler`.
+- **Dead code removed:** `mef_parser` (ASCII MEF parser — never invoked), `mef_exporter` (dead helper), `mtp_tool` (the old `mtp_decoder.exe` runner — already superseded by `igi1conv dat to-mtp`).
+
+### 📦 New API
+- **`igi1conv::` namespace** in `source/utils_igi1conv.h` exposes high-level wrappers for every subcommand the editor needs:
+  `ResList`, `ResExtract`, `ResAppend`, `ResPack`, `DatExportJson`, `DatToMtp`, `MtpDumpJson`, `MtpInfo`, `GraphExportJson`, `GraphInfo`, `TexDecode`, `TexToPng`, `TexToTga`, `TexInfo`, `QvmDecompile`, `QvmInfo`, `QvmDisasm`, `QscCompile`, `QscValidate`, `FntExportPng`, `FntInfo`, `TerrainExportLmp`, `TerrainExportCtr`, `TerrainInfo`, `MefExportObj`, `MefInfo`.
+- Each helper constructs the right `igi1conv <cmd> ...` invocation, captures exit code, returns the produced path or stdout text, and logs the run through the existing `Logger::Get()` pipeline.
+- `MakeTempPath(suffix)` is exposed for callers that need a stable scratch path under the system temp dir.
+
+### 🐛 Bug Fixes
+- **No behavioural change to user-visible editor flow.** All 288 gtest cases run against the relocated parsers: 286 pass, 2 pre-existing writer byte-roundtrip failures (`GraphParserTest.WriteUnchangedIsByteIdentical`, `MtpWriterTest.PreservesUntouchedChunksByteForByte`) carry over from `feature/graph-editor` and are unrelated to this migration.
+- **The editor's runtime in-process AI-script edit pipeline** (qvm decompile → qsc edit → qvm recompile → re-validate) is unchanged; only the file paths the parsers live at changed.
+
+### 🔧 Build / Toolchain
+- `CMakeLists.txt`: dropped the `file(GLOB SOURCES_PARSERS "source/parsers/*.*")` line and the `target_include_directories(... source/parsers ...)` entry. The `igi_tests` `target_sources` list updated to point at the new locations (`source/renderer/{dat,graph,res,tex}_writer.cpp`, `source/level/{mtp_writer,qsc_lexer,qsc_parser,qvm_parser,qvm_compiler,qvm_decompiler,terrain_files}.cpp`, `source/renderer/{fnt_parser,res_compiler}.cpp`). The `SKIP_PRECOMPILE_HEADERS` block was rewritten with the same new locations.
+- `assets/editor/tools/igi1conv/` ships with v1.7.0; the `cmake/fetch_igi1conv.cmake` step still pulls the latest release from GitHub (v1.6.0 was the last "pinned" release, the editor overwrites it with the locally committed v1.7.0 when offline or unchanged).
+
+### 📁 File-level change summary
+| Moved from `source/parsers/` | → | New location |
+|---|---|---|
+| `mef_native.{h,cpp}` | → | `source/renderer/mef_native.{h,cpp}` |
+| `fnt_parser.{h,cpp}` | → | `source/renderer/fnt_parser.{h,cpp}` |
+| `qsc_lexer.{h,cpp}` | → | `source/level/qsc_lexer.{h,cpp}` |
+| `qsc_parser.{h,cpp}` | → | `source/level/qsc_parser.{h,cpp}` |
+| `qvm_parser.{h,cpp}` | → | `source/level/qvm_parser.{h,cpp}` |
+| `qvm_compiler.{h,cpp}` | → | `source/level/qvm_compiler.{h,cpp}` |
+| `qvm_decompiler.{h,cpp}` | → | `source/level/qvm_decompiler.{h,cpp}` |
+| `terrain_files.{h,cpp}` | → | `source/level/terrain_files.{h,cpp}` |
+| `dat_parser.{h,cpp}` | → | `source/renderer/dat_writer.{h,cpp}` |
+| `graph_parser.{h,cpp}` | → | `source/renderer/graph_writer.{h,cpp}` |
+| `mtp_parser.{h,cpp}` | → | `source/level/mtp_writer.{h,cpp}` |
+| `tex_parser.{h,cpp}` | → | `source/renderer/tex_writer.{h,cpp}` |
+| `res_parser.{h,cpp}` | → | `source/renderer/res_writer.{h,cpp}` |
+| `res_compiler.{h,cpp}` | → | `source/renderer/res_compiler.{h,cpp}` |
+| `mef_parser.{h,cpp}` | → | **deleted (dead)** |
+| `mef_exporter.{h,cpp}` | → | **deleted (dead)** |
+| `mtp_tool.{h,cpp}` | → | **deleted (dead)** |
+
+---
+
 ## 3.3.0-pre — Auto-Save, Unified Undo/Redo & AI Script Hotkey Support
 
 ### ✨ New Features

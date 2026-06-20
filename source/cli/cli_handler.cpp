@@ -23,7 +23,7 @@ bool CLIHandler::IsCLICommand(int argc, char **argv) {
 
 void CLIHandler::PrintHelp() {
   std::cout
-      << "IGI Editor v3.3.0-pre - Game Editor\n\n"
+      << "IGI Editor v3.4.0-pre - Game Editor\n\n"
       << "GUI Editor Mode Options:\n"
       << "  -level <num>            Load specific level (1-14)\n"
       << "  -w <width> -h <height>  Set window dimensions\n"

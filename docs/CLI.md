@@ -1,4 +1,4 @@
-# IGI Editor v3.3.0-pre — CLI & GUI Reference Guide
+# IGI Editor v3.4.0-pre — CLI & GUI Reference Guide
 
 The **IGI Editor** is a hybrid toolkit that operates in two primary modes:
 1. **Graphical User Interface (GUI) Application**: A real-time 3D viewport editor for heightmaps, objects, Splines, AI, and level layouts.

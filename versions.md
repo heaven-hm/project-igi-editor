@@ -1,6 +1,6 @@
 # Project IGI Editor - Version History
 
-## Current Version: 3.3.0-pre
+## Current Version: 3.4.0-pre
 
 ---
 
@@ -8,6 +8,7 @@
 
 | Version | Release Date | Status | Major Features |
 |---------|--------------|--------|----------------|
+| **3.4.0-pre** | 2026-06-21 | Pre-release | `source/parsers/` folder removed; every file conversion (dat/mtp/qsc/qvm/res/graph/tex/fnt/mef/terrain) now goes through the bundled `igi1conv.exe` via the new `source/utils_igi1conv.{h,cpp}` shared runner; in-process loaders kept only where no CLI subcommand can supply the runtime data (mef_native, fnt_parser, qsc_lexer/parser, terrain_files, qvm_pipeline); dead `mef_parser`/`mef_exporter`/`mtp_tool` deleted |
 | **3.3.0-pre** | 2026-06-19 | Pre-release | Auto-save system (toggle + interval), unified undo/redo (objects/AI/terrain/graphs/ATTA), AI script save via Ctrl+W/Ctrl+S, full-folder level reset with backup, hotkey-driven from qedkeybindings.qsc, recursive HumanAI child search, pause-menu reorder, centering & alignment polish |
 | **3.2.0-pre** | 2026-06-17 | Pre-release | Graph link editing (add/remove), legacy tagged graph format support, edge visibility fix |
 | **3.1.0-pre** | 2026-06-16 | Pre-release | Visual 3D Graph Editor (nodes, edges, area labels) |
