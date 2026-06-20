@@ -719,6 +719,10 @@ void App::ApplyPropPositionDrag() {
 		glm::dvec3 deltaPos = obj.pos - oldPos;
 		PropagateTransformToChildren(dragIdx, deltaPos, glm::dmat3(1.0), oldPos);
 		level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+		// Live-sync the graph overlay offset when the user drags an AIGraph
+		// task's position pad / Z slider — the 3D nodes/edges follow along
+		// while F7 is showing the graph.
+		SyncGraphOverlayOffsetFromAIGraph();
 		// Camera follows the object so it stays in view as it accelerates/travels.
 		viewer_.pos_ += glm::vec3(deltaPos);
 	}

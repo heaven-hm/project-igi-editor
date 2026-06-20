@@ -426,6 +426,10 @@ private:
   void SaveAndReloadObjects();
   void Undo();
   void Redo();
+  // If the graph overlay is visible and a loaded AIGraph task exists in the
+  // current objects list, copy that task's world pos into the renderer's
+  // overlay offset so the 3D nodes/edges follow the task live (F7 view).
+  void SyncGraphOverlayOffsetFromAIGraph();
   void PushTaskEditorUndoState();
   void UndoTaskEditorChange();
   void RedoTaskEditorChange();

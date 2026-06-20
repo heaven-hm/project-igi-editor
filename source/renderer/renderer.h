@@ -536,6 +536,13 @@ public:
 	GraphFile				GetGraphOverlaySnapshot() const { return graph_overlay_; }
 	void					RestoreGraphOverlay(const GraphFile& snap) { graph_overlay_ = snap; graph_overlay_dirty_ = true; }
 	void					SetGraphOverlayVisible(bool v) { graph_overlay_visible_ = v; }
+	// Live-update the world offset used to render the graph overlay. The graph
+	// nodes are stored in coords local to the AIGraph task's graph origin, so
+	// moving the task in the TaskTree (or via Undo/Redo) must keep the renderer's
+	// offset in sync or the 3D nodes/edges will stay at the stale position while
+	// F7 is showing the graph. The caller is responsible for matching taskId.
+	void					SetGraphOverlayOffset(const glm::dvec3& newOffset) { graph_overlay_offset_ = newOffset; }
+	const glm::dvec3&		GraphOverlayOffset() const { return graph_overlay_offset_; }
 	// Edit controls (operate on the selected node), marking the overlay dirty:
 	void					ScaleSelectedGraphNode(float factor);  // radius *= factor; factor<=0 resets to 1
 	int						CreateGraphNode();                     // adds a node near the selection; returns new id

@@ -291,6 +291,11 @@ void App::CommitPropTextEdit() {
 
 	obj.modified = true;
 	level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+
+	// Live-sync the graph overlay offset when the user moves the AIGraph
+	// task via the property panel — otherwise the 3D nodes/edges stay at the
+	// stale position while F7 is showing the graph.
+	SyncGraphOverlayOffsetFromAIGraph();
 }
 
 void App::PushUndoState() {
@@ -316,6 +321,31 @@ void App::SaveAndReloadObjects() {
 	EvaluateTrainTrackPositions();
 	SnapObjectsToTerrain();
 	RebuildLevelModelIds();
+	// Reloading objects recreates them from the QSC, so the AIGraph task's pos
+	// is the source of truth again — re-apply it to the graph overlay.
+	SyncGraphOverlayOffsetFromAIGraph();
+}
+
+void App::SyncGraphOverlayOffsetFromAIGraph() {
+	// No-op unless the user has pressed F7 to show the graph (the offset is
+	// only consumed by the overlay draw path; the on-disk graph<id>.dat never
+	// changes here, only the displayed world position does).
+	if (!renderer_.IsGraphOverlayVisible()) return;
+	const std::string& tid = renderer_.GraphOverlayTaskId();
+	if (tid.empty()) return;
+	for (const auto& o : level_.GetLevelObjects().GetObjects()) {
+		if (o.type == "AIGraph" && o.taskId == tid) {
+			const glm::dvec3& current = renderer_.GraphOverlayOffset();
+			if (current != o.pos) {
+				renderer_.SetGraphOverlayOffset(o.pos);
+				Logger::Get().Log(LogLevel::INFO,
+					"[App] Graph overlay offset live-synced to AIGraph " + tid +
+					" pos=(" + std::to_string(o.pos.x) + ", " +
+					std::to_string(o.pos.y) + ", " + std::to_string(o.pos.z) + ")");
+			}
+			return;
+		}
+	}
 }
 
 void App::RebuildLevelModelIds() {
@@ -374,6 +404,10 @@ void App::Undo() {
 		if (o.isAttaProxy) o.modified = true;
 	FlushAttaProxiesToMef();
 	SaveAndReloadObjects();
+	// The objects vector was just replaced with the snapshot; if a visible
+	// graph overlay's task id is present in the restored list, the AIGraph
+	// task's pos is now the canonical one and the overlay must follow it.
+	SyncGraphOverlayOffsetFromAIGraph();
 	status_message_ = "Undo";
 }
 
@@ -417,6 +451,8 @@ void App::Redo() {
 		if (o.isAttaProxy) o.modified = true;
 	FlushAttaProxiesToMef();
 	SaveAndReloadObjects();
+	// Same graph-overlay live-sync as Undo — see comment there.
+	SyncGraphOverlayOffsetFromAIGraph();
 	status_message_ = "Redo";
 }
 
