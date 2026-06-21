@@ -115,6 +115,8 @@ Release/
 *.py
 *.qsc
 models/
+.commandcode
+releases/
 
 # Dont Ignore
 !assets
