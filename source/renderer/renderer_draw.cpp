@@ -1864,9 +1864,12 @@ void Renderer::Draw(const draw_params_s &params,
                   int xb = w.x1 + 3 + measure_text_width(beforeB.c_str(), (int)beforeB.size());
                   glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
                   glColor4f(0.3f, 0.6f, 1.0f, 0.45f); // pale blue highlight
+                  // OpenGL Y is bottom-up — convert top-down `w.y1` via gl_y.
+                  int yt_top_gl = gl_y(w.y1 + 3);
+                  int yt_bot    = gl_y(w.y1 + 16);
                   glBegin(GL_QUADS);
-                  glVertex2i(xa, w.y1 + 3); glVertex2i(xb, w.y1 + 3);
-                  glVertex2i(xb, w.y1 + 16); glVertex2i(xa, w.y1 + 16);
+                  glVertex2i(xa, yt_top_gl); glVertex2i(xb, yt_top_gl);
+                  glVertex2i(xb, yt_bot);    glVertex2i(xa, yt_bot);
                   glEnd();
                   glDisable(GL_BLEND);
                 }
@@ -1914,10 +1917,13 @@ void Renderer::Draw(const draw_params_s &params,
                 std::string beforeB = txt.substr(ls, std::min(hi_b - ls, line_len));
                 int xa = w.x1 + 3 + measure_text_width(beforeA.c_str(), (int)beforeA.size());
                 int xb = w.x1 + 3 + measure_text_width(beforeB.c_str(), (int)beforeB.size());
-                int yt = w.y1 + 3 + rl * PropPanel::kBoxH;
+                // OpenGL Y is bottom-up — convert top-down `w.y1` via gl_y.
+                int yt_top = w.y1 + 3 + rl * PropPanel::kBoxH;
+                int yt_bot = gl_y(yt_top + 13);
+                int yt_top_gl = gl_y(yt_top);
                 glBegin(GL_QUADS);
-                glVertex2i(xa, yt); glVertex2i(xb, yt);
-                glVertex2i(xb, yt + 13); glVertex2i(xa, yt + 13);
+                glVertex2i(xa, yt_top_gl); glVertex2i(xb, yt_top_gl);
+                glVertex2i(xb, yt_bot);    glVertex2i(xa, yt_bot);
                 glEnd();
               }
               glDisable(GL_BLEND);

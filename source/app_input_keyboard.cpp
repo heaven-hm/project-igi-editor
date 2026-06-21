@@ -555,17 +555,25 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		// AI Script editor notepad-style shortcuts — ONLY when the AI Script text
 		// field is focused. Other property text fields ignore these so the
 		// editor-level Ctrl+F / Ctrl+N / Ctrl+W bindings still work as before.
+		//
+		// GLUT sends the ASCII control-character code for Ctrl+letter
+		// (1=SOH/A, 3=ETX/C, 0x18=CAN/X, 0x16=SYN/V, 0x19=EM/Y, 0x1A=SUB/Z)
+		// — NOT the letter itself. We also accept the letter codes so this
+		// keeps working if a host swallows the control code.
 		if (prop_text_edit_field_ == PropPanel::kAIScriptTextField) {
-			if (key == 'a' || key == 'A') { AiScriptSelectAll(); return; }
-			if (key == 'c' || key == 'C') { AiScriptCopy();     return; }
-			if (key == 'x' || key == 'X') { AiScriptCut();      return; }
-			if (key == 'v' || key == 'V') { AiScriptPaste();    return; }
+			const bool is_a = (key == 1  || key == 'a' || key == 'A');
+			const bool is_c = (key == 3  || key == 'c' || key == 'C');
+			const bool is_x = (key == 24 || key == 'x' || key == 'X');
+			const bool is_v = (key == 22 || key == 'v' || key == 'V');
+			const bool is_y = (key == 25 || key == 'y' || key == 'Y');
+			const bool is_z = (key == 26 || key == 'z' || key == 'Z');
+			if (is_a) { AiScriptSelectAll(); return; }
+			if (is_c) { AiScriptCopy();     return; }
+			if (is_x) { AiScriptCut();      return; }
+			if (is_v) { AiScriptPaste();    return; }
 			// Ctrl+Z = undo, Ctrl+Y / Ctrl+Shift+Z = redo
-			if (key == 'z' || key == 'Z') {
-				if (shiftDown) AiScriptRedo(); else AiScriptUndo();
-				return;
-			}
-			if (key == 'y' || key == 'Y') { AiScriptRedo(); return; }
+			if (is_z) { if (shiftDown) AiScriptRedo(); else AiScriptUndo(); return; }
+			if (is_y) { AiScriptRedo(); return; }
 		}
 		if (key == 14 && !shiftDown) { // Ctrl+N only (not Ctrl+Shift+N — that's TaskFindByTaskNote)
 			// Only open when a property text box is focused, so Enter knows which
