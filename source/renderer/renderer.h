@@ -613,8 +613,10 @@ public:
 	// Draw the left-side properties panel for the selected node.
 	void					DrawGraphNodePanel(const draw_params_s& params,
 								const std::function<void(int,int,const char*,float,float,float)>& draw_text_sm);
-    // Draw animated skeleton wireframe for the given bone transforms.
+    // Draw animated skeleton wireframe for the given bone transforms, connecting
+    // each bone to its real parent (boneParents, indexed by bone ID).
     void                    DrawAnimSkeleton(const std::vector<glm::mat4>& boneWorldTransforms,
+                                             const std::vector<int>& boneParents,
                                              const glm::mat4& objWorldMat);
     // CPU-skins the model's rest-pose mesh against the given (BEF) bone world
     // transforms and draws it as a solid mesh — the actual visible alternative
@@ -625,6 +627,14 @@ public:
     void                    DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
                                             const std::vector<glm::mat4>& boneWorldTransforms,
                                             const glm::mat4& objWorldMat);
+    // True if DrawSkinnedMesh can actually render modelId (skin geometry loads and has
+    // vertices/triangles). Callers must check this before skipping an object's static
+    // draw in favor of the skinned one — otherwise a model whose skin geometry fails to
+    // load goes permanently invisible (neither static nor skinned draw ever runs).
+    bool                    HasSkinGeometry(const std::string& modelId, bool isBuilding) {
+        const ParsedGeometry* geo = objects_.GetOrLoadSkinGeometry(modelId, isBuilding);
+        return geo && !geo->vertices.empty() && !geo->triangles.empty();
+    }
     void                    SetSplineTerrainQuery(std::function<bool(double, double, float&)> fn) { splines_.SetTerrainQuery(std::move(fn)); }
 	glm::vec3				GetMeshExtents(const std::string& modelId, bool isBuilding) { return objects_.GetMeshExtents(modelId, isBuilding); }
 	float					GetMeshZOffset(const std::string& modelId, bool isBuilding) { return objects_.GetMeshZOffset(modelId, isBuilding); }

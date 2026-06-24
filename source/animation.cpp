@@ -432,29 +432,25 @@ void AnimationRegistry::Evaluate(const AnimationClip* clip, float timeMs,
         });
     }
 
-    // Bone()/TranslationKeyFrameData() values in the .BEF text are raw IGI
-    // units (same convention as the binary IFF's TLST/BOTD chunks — "pre-
-    // multiplied by Sc=40.96" per the format docs), NOT pre-scaled despite
-    // AnimBone::restPos's stale comment. Divide down to match the scaled
-    // units (kMefNativeScale) the MEF-side skin geometry uses, so the two
-    // skeletons line up instead of one being ~40x too large.
-    const float kRawToScaled = 1.0f / 40.96f;
-
+    // BEF Bone() px/py/pz = iff.skeleton.translations[i*3] / Sc (Sc=40.96).
+    // They are already in the same unit space that gui_main.cpp uses for its
+    // bone transforms (trans / IGI_SCALE).  Do NOT divide by 40.96 again.
     for (size_t i = 0; i < numBones; ++i) {
-        glm::vec3 trans = clip->bones[i].restPos * kRawToScaled;
+        glm::vec3 trans = clip->bones[i].restPos;  // already in meters
 
         // Root bone: animated translation track overrides the rest offset.
+        // TranslationKeyFrameData values are also pre-divided by Sc in the BEF.
         if (i == 0 && !clip->translationKeys.empty()) {
             glm::vec3 rawTrans;
             SampleTrack(clip->translationKeys, timeMs, rawTrans,
                 [](const AnimTranslationKey& k) { return (float)k.time_ms; },
                 [](const AnimTranslationKey& k) { return k.pos; },
                 [](glm::vec3 a, glm::vec3 b, float t) { return glm::mix(a, b, t); });
-            trans = rawTrans * kRawToScaled;
+            trans = rawTrans;  // already in meters
         }
 
         glm::quat rot(1.f, 0.f, 0.f, 0.f);
-        auto it = keysByBone.find((int)i);
+        auto it = keysByBone.find(clip->bones[i].index);
         if (it != keysByBone.end() && !it->second.empty()) {
             const auto& keys = it->second;
             SampleTrack(keys, timeMs, rot,
@@ -475,19 +471,22 @@ void AnimationRegistry::EvaluateWorld(const AnimationClip* clip, float timeMs,
     std::vector<glm::mat4> local;
     Evaluate(clip, timeMs, local);
 
-    size_t numBones = clip->bones.size();
-    worldTransforms.resize(numBones);
+    int maxId = -1;
+    for (const auto& b : clip->bones) {
+        if (b.index > maxId) maxId = b.index;
+    }
+    if (maxId < 0) return;
 
+    worldTransforms.assign(maxId + 1, glm::mat4(1.f));
+
+    size_t numBones = clip->bones.size();
     for (size_t i = 0; i < numBones; ++i) {
-        if (clip->bones[i].parent < 0) {
-            worldTransforms[i] = local[i];
+        int id = clip->bones[i].index;
+        int p = clip->bones[i].parent;
+        if (p < 0 || p >= (int)worldTransforms.size()) {
+            worldTransforms[id] = local[i];
         } else {
-            int p = clip->bones[i].parent;
-            if (p >= 0 && p < (int)worldTransforms.size()) {
-                worldTransforms[i] = worldTransforms[p] * local[i];
-            } else {
-                worldTransforms[i] = local[i];
-            }
+            worldTransforms[id] = worldTransforms[p] * local[i];
         }
     }
 }

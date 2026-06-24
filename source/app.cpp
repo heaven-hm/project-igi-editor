@@ -463,35 +463,17 @@ void App::Frame(float delta_seconds) {
 		draw_params_.level_objects_ = &level_.GetLevelObjects();
 		draw_params_.selected_object_index_ = selected_object_index_;
 		draw_params_.show_magic_obj_spheres_ = show_magic_obj_spheres_;
-		draw_params_.skip_static_draw_index_ = GetSkinnedReplacementObjectIndex();
+		// Paused: the pause menu (a 2D overlay drawn at the end of renderer_.Draw)
+		// must sit in front of the scene, so do NOT draw the live skinned mesh after
+		// it (that painted the character on top of the menu). Instead keep the
+		// object's normal static mesh in the 3D pass — animation isn't advancing
+		// while paused anyway — by not skipping it here.
+		draw_params_.skip_static_draw_index_ = -1;
 		draw_params_.terrain_id_at_world_xy_ =
 			[this](double x, double y) { return level_.GetTerrainNodeId(x, y); };
 		draw_params_.terrain_z_at_world_xy_ =
 			[this](double x, double y, float& z) { return level_.GetTerrainZ(x, y, z); };
 	renderer_.Draw(draw_params_, task_tree_view);
-
-    // Draw animated skeleton overlay for selected object
-    if (show_anim_debug_) {
-        auto ait = animPlaybacks_.find(selected_object_index_);
-        if (ait != animPlaybacks_.end() && ait->second.clip) {
-            std::vector<glm::mat4> worldTransforms;
-            animRegistry_.EvaluateWorld(ait->second.clip, ait->second.currentTimeMs, worldTransforms);
-            if (!worldTransforms.empty()) {
-                auto& objs = level_.GetLevelObjects().GetObjects();
-                if (selected_object_index_ >= 0 && selected_object_index_ < (int)objs.size()) {
-                    const auto& obj = objs[selected_object_index_];
-                    glm::mat4 objMat(1.0f);
-                    objMat = glm::translate(objMat, glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z));
-                    objMat = glm::rotate(objMat, (float)obj.rot.z, glm::vec3(0, 0, 1));
-                    objMat = glm::rotate(objMat, (float)obj.rot.x, glm::vec3(1, 0, 0));
-                    objMat = glm::rotate(objMat, (float)obj.rot.y, glm::vec3(0, 1, 0));
-                    objMat = glm::scale(objMat, glm::vec3(40.96f * obj.scale));
-                    renderer_.DrawSkinnedMesh(obj.modelId, obj.isBuilding, worldTransforms, objMat);
-                    renderer_.DrawAnimSkeleton(worldTransforms, objMat);
-                }
-            }
-        }
-    }
 
 	DrawCustomCursor();
 	glutSwapBuffers();
@@ -666,13 +648,24 @@ void App::Frame(float delta_seconds) {
 
 	renderer_.Draw(draw_params_, task_tree_view);
 
-    // Draw animated skeleton overlay for selected object (normal frame)
-    if (show_anim_debug_) {
+    // Draw the live skinned mesh for the selected object's active animation.
+    // This MUST run whenever a clip is playing (not gated by F10) — the static
+    // mesh is already skipped via skip_static_draw_index_ above, so gating this
+    // would leave the object invisible. The bone wireframe stays gated by 'B'.
+    {
         auto ait = animPlaybacks_.find(selected_object_index_);
         if (ait != animPlaybacks_.end() && ait->second.clip) {
             std::vector<glm::mat4> worldTransforms;
             animRegistry_.EvaluateWorld(ait->second.clip, ait->second.currentTimeMs, worldTransforms);
             if (!worldTransforms.empty()) {
+                // boneParents is indexed by bone ID (same indexing EvaluateWorld uses for
+                // worldTransforms), so DrawAnimSkeleton can connect each bone to its real
+                // parent instead of assuming a flat chain of consecutive array indices.
+                std::vector<int> boneParents(worldTransforms.size(), -1);
+                for (const auto& b : ait->second.clip->bones) {
+                    if (b.index >= 0 && (size_t)b.index < boneParents.size())
+                        boneParents[b.index] = b.parent;
+                }
                 auto& objs = level_.GetLevelObjects().GetObjects();
                 if (selected_object_index_ >= 0 && selected_object_index_ < (int)objs.size()) {
                     const auto& obj = objs[selected_object_index_];
@@ -683,7 +676,8 @@ void App::Frame(float delta_seconds) {
                     objMat = glm::rotate(objMat, (float)obj.rot.y, glm::vec3(0, 1, 0));
                     objMat = glm::scale(objMat, glm::vec3(40.96f * obj.scale));
                     renderer_.DrawSkinnedMesh(obj.modelId, obj.isBuilding, worldTransforms, objMat);
-                    renderer_.DrawAnimSkeleton(worldTransforms, objMat);
+                    if (show_anim_skeleton_)
+                        renderer_.DrawAnimSkeleton(worldTransforms, boneParents, objMat);
                 }
             }
         }
@@ -839,9 +833,10 @@ void App::InitAnimationForObject(int objIndex) {
     // Import animations for this bone hierarchy if not already done
     if (!animRegistry_.ImportAnimations(obj.boneHierarchy)) return;
 
-    // Prefer the clip matching the object's "Stand Animation" id; fall back to the first clip.
+    // Only auto-play the object's actual "Stand Animation" clip. Do NOT fall back to
+    // an arbitrary first clip — that would visibly re-skin/replace an AI soldier with
+    // an unrelated animation even though its real animation was not found.
     const AnimationClip* clip = animRegistry_.GetClipByAnimId(obj.boneHierarchy, obj.standAnimation);
-    if (!clip) clip = animRegistry_.GetFirstClip(obj.boneHierarchy);
     if (!clip) return;
 
     AnimPlayback pb;
@@ -1009,19 +1004,22 @@ void App::ToggleAnimationForObject(int objIndex, int animId) {
             pb.Start(clip);
             Logger::Get().Log(LogLevel::INFO, "[Anim] Playing '" + clip->name + "' for object " + std::to_string(objIndex));
         }
-        // Auto-reveal the skeleton overlay so the user actually sees the clip
-        // playing without having to separately press F10.
-        if (!show_anim_debug_) {
-            show_anim_debug_ = true;
-            Logger::Get().Log(LogLevel::INFO, "[Anim] Animation Debug Info auto-shown (was hidden)");
-        }
     }
 }
 
-int App::GetSkinnedReplacementObjectIndex() const {
-    if (!show_anim_debug_ || selected_object_index_ < 0) return -1;
+int App::GetSkinnedReplacementObjectIndex() {
+    if (selected_object_index_ < 0) return -1;
     auto it = animPlaybacks_.find(selected_object_index_);
     if (it == animPlaybacks_.end() || !it->second.clip) return -1;
+
+    auto& objs = level_.GetLevelObjects().GetObjects();
+    if (selected_object_index_ >= (int)objs.size()) return -1;
+    const auto& obj = objs[selected_object_index_];
+    // Only skip the static draw if the skinned replacement can actually render —
+    // otherwise a model whose skin geometry fails to load goes permanently
+    // invisible (neither the static nor the skinned draw ever produces anything).
+    if (!renderer_.HasSkinGeometry(obj.modelId, obj.isBuilding)) return -1;
+
     return selected_object_index_;
 }
 

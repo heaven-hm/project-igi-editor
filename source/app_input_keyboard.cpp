@@ -1307,6 +1307,15 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	// DEL key: delete selected task (hardcoded for standard keyboard ergonomics)
 	if (key == 127) { DeleteSelectedTask(); return; }
 
+	// B: toggle the animation skeleton (bone) wireframe overlay. Independent of
+	// F10's status panel — bones are hidden by default and only ever drawn when
+	// this is on, even while an animation is actively playing.
+	if (key == 'b' || key == 'B') {
+		show_anim_skeleton_ = !show_anim_skeleton_;
+		Logger::Get().Log(LogLevel::INFO, std::string("[App] Animation skeleton overlay ") + (show_anim_skeleton_ ? "shown" : "hidden"));
+		return;
+	}
+
 	if (pause_mode_) {
 		return;
 

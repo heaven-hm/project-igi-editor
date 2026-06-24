@@ -225,7 +225,8 @@ private:
 	AnimationRegistry animRegistry_;
 	std::unordered_map<int, AnimPlayback> animPlaybacks_; // object index -> playback state
 	std::unordered_map<int, std::vector<int>> animIdsCache_; // object index -> discovered AIAction_PlayAnimation ids
-	bool show_anim_debug_ = false; // F10: animation skeleton overlay + status panel (independent of F2/TaskTree)
+	bool show_anim_debug_ = false; // F10: animation status panel (independent of F2/TaskTree)
+	bool show_anim_skeleton_ = false; // B: bone wireframe overlay, off by default, independent of F10/playback state
 
 	// Level background music (game_music.wav, converted from ILSF -> PCM, looped via MCI)
 	bool music_playing_ = false;
@@ -241,10 +242,9 @@ private:
 	// Fills the property panel's "Animation Control" section state for the
 	// currently selected object (boneHierarchy stays -1 when not applicable).
 	void ComputePropAnimUiState(int& boneHierarchy, std::vector<int>& ids, int& activeId, bool& isPlaying);
-	// Returns selected_object_index_ when it has an active clip and the debug
-	// overlay is on (so its rigid mesh should be skipped in favor of the live
-	// skinned draw), else -1.
-	int GetSkinnedReplacementObjectIndex() const;
+	// Returns selected_object_index_ when it has an active clip (so its rigid
+	// mesh should be skipped in favor of the live skinned draw), else -1.
+	int GetSkinnedReplacementObjectIndex();
 
   // C2: Typed task property editor
   bool prop_editor_open_ = false;

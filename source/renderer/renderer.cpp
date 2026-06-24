@@ -177,7 +177,8 @@ void Renderer::SetupUBOMats(const view_define_s &vd) {
 }
 
 void Renderer::DrawAnimSkeleton(const std::vector<glm::mat4>& boneWorldTransforms,
-                                 const glm::mat4& objWorldMat) {
+                                const std::vector<int>& boneParents,
+                                const glm::mat4& objWorldMat) {
     if (boneWorldTransforms.empty()) return;
 
     GLint prevProg;
@@ -193,19 +194,31 @@ void Renderer::DrawAnimSkeleton(const std::vector<glm::mat4>& boneWorldTransform
     glPushMatrix();
     glLoadIdentity();
 
+    glDisable(GL_LIGHTING);  // must disable so glColor4f applies, not the lit material (which renders black)
     glDisable(GL_TEXTURE_2D);
     glDisable(GL_CULL_FACE);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
 
+    // Helper: compute world-space bone position. boneWorldTransforms already
+    // carries the BEF skeleton's absolute (animated) position — see
+    // DrawSkinnedMesh for why no extra MEF root offset is added here.
+    auto boneWorldPos = [&](size_t i) -> glm::vec4 {
+        glm::vec3 posInBefSpace = glm::vec3(boneWorldTransforms[i] * glm::vec4(0.f, 0.f, 0.f, 1.f));
+        return objWorldMat * glm::vec4(posInBefSpace, 1.f);
+    };
+
     glLineWidth(3.0f);
     glBegin(GL_LINES);
-    for (size_t i = 1; i < boneWorldTransforms.size(); ++i) {
-        glm::vec4 childPos = objWorldMat * boneWorldTransforms[i] * glm::vec4(0, 0, 0, 1);
-        glm::vec4 parentPos = objWorldMat * boneWorldTransforms[i - 1] * glm::vec4(0, 0, 0, 1);
+    for (size_t i = 0; i < boneWorldTransforms.size(); ++i) {
+        if (i >= boneParents.size()) break;
+        int p = boneParents[i];
+        if (p < 0 || (size_t)p >= boneWorldTransforms.size()) continue;
+        glm::vec4 childPos  = boneWorldPos(i);
+        glm::vec4 parentPos = boneWorldPos((size_t)p);
         glColor4f(0.2f, 0.9f, 0.2f, 0.7f);
         glVertex4f(parentPos.x, parentPos.y, parentPos.z, parentPos.w);
-        glVertex4f(childPos.x, childPos.y, childPos.z, childPos.w);
+        glVertex4f(childPos.x,  childPos.y,  childPos.z,  childPos.w);
     }
     glEnd();
 
@@ -213,13 +226,16 @@ void Renderer::DrawAnimSkeleton(const std::vector<glm::mat4>& boneWorldTransform
     glColor4f(0.6f, 1.0f, 0.6f, 1.0f);
     glBegin(GL_POINTS);
     for (size_t i = 0; i < boneWorldTransforms.size(); ++i) {
-        glm::vec4 worldPos = objWorldMat * boneWorldTransforms[i] * glm::vec4(0, 0, 0, 1);
-        glVertex4f(worldPos.x, worldPos.y, worldPos.z, worldPos.w);
+        glm::vec4 wp = boneWorldPos(i);
+        glVertex4f(wp.x, wp.y, wp.z, wp.w);
     }
     glEnd();
 
     glLineWidth(1.0f);
     glPointSize(1.0f);
+
+    glEnable(GL_LIGHTING);
+    glEnable(GL_TEXTURE_2D);
 
     glMatrixMode(GL_PROJECTION);
     glPopMatrix();
@@ -246,11 +262,12 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
     const std::vector<glm::vec3>& boneRestPos = rpIt->second;
     if (boneRestPos.empty()) return;
 
-    // The BEF skeleton's root is conventionally at local (0,0,0); the MEF's
-    // root sits at its own absolute rest position. Shift the deformed mesh
-    // back into the MEF's frame after animating in BEF-relative space.
-    const glm::vec3 rootOffset = boneRestPos[0] * kMefNativeScale;
-
+    // boneWorldTransforms (from the BEF clip) already carry the skeleton's
+    // absolute animated position — see TranslationKeyFrameData in the .BEF,
+    // which stores the root bone's full world height, not a local offset from
+    // zero. So at rest, boneWorldTransforms[b] == boneRestPos[b]*kMefNativeScale
+    // and deformedPos reduces to exactly rv.pos (no extra root shift needed;
+    // adding one here previously double-counted the root height).
     std::vector<glm::vec3> deformedPos(geo->vertices.size());
     std::vector<glm::vec3> deformedNormal(geo->vertices.size());
     for (size_t i = 0; i < geo->vertices.size(); ++i) {
@@ -262,7 +279,7 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
             continue;
         }
         glm::vec3 localOffset = rv.pos - boneRestPos[b] * kMefNativeScale;
-        deformedPos[i] = glm::vec3(boneWorldTransforms[b] * glm::vec4(localOffset, 1.0f)) + rootOffset;
+        deformedPos[i] = glm::vec3(boneWorldTransforms[b] * glm::vec4(localOffset, 1.0f));
         deformedNormal[i] = glm::mat3(boneWorldTransforms[b]) * rv.normal;
     }
 
@@ -297,21 +314,27 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
 
-    // Simple fixed light direction, lit in world space via the object's rotation only.
-    // Guard against degenerate (zero-length) source normals — some skeletal
-    // models' raw XTRV normals aren't reliable — which would otherwise NaN
-    // through normalize()/dot() and render the whole mesh black.
-    const glm::vec3 lightDir = glm::normalize(glm::vec3(0.4f, -0.6f, 0.7f));
-    const glm::mat3 normalMat = glm::mat3(objWorldMat);
+    // Fixed world-space light direction (biased upward/forward so characters are
+    // well-lit from above, matching a simple sky-light approximation).
+    // NOTE: deformedNormal[i] is already in bone-local/world space (it was
+    // transformed by boneWorldTransforms[b] during skinning above). Do NOT
+    // multiply it by normalMat(objWorldMat) again — that is a double-transform
+    // that makes normals point in wrong directions and renders the mesh black.
+    const glm::vec3 lightDir = glm::normalize(glm::vec3(0.3f, 0.5f, 0.8f));
+    const float kAmbient = 0.40f;  // minimum brightness so no face is fully black
+
+    // Disable legacy GL lighting so glColor4f/glTexCoord2f actually apply.
+    glDisable(GL_LIGHTING);
 
     auto litColor = [&](uint32_t vi) {
-        glm::vec3 n = normalMat * deformedNormal[vi];
+        // deformedNormal is already transformed by the bone matrix, use it directly.
+        glm::vec3 n = deformedNormal[vi];
         float nLen = glm::length(n);
-        float diff = 1.0f;
+        float diff = kAmbient;  // default: ambient only for degenerate normals
         if (nLen > 1e-5f) {
-            diff = glm::dot(n / nLen, lightDir);
-            if (!std::isfinite(diff)) diff = 1.0f;
-            diff = glm::clamp(diff, 0.5f, 1.0f);
+            float d = glm::dot(n / nLen, lightDir);
+            if (!std::isfinite(d)) d = 0.0f;
+            diff = kAmbient + (1.0f - kAmbient) * glm::clamp(d, 0.0f, 1.0f);
         }
         glColor4f(diff, diff, diff, 1.0f);
     };
@@ -322,34 +345,42 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
         glVertex4f(worldPos.x, worldPos.y, worldPos.z, worldPos.w);
     };
 
-    // Single pass over ALL triangles with one bound texture. Per-render-block
-    // texture switching was dropping/garbling geometry (geo->renderBlocks'
-    // triangle ranges don't reliably tile the full triangle list the way the
-    // static mesh builder's regrouped subMeshes do) — drawing every triangle
-    // in one go guarantees the full, correct shape; only the per-block detail
-    // (e.g. a separate face texture) is sacrificed.
-    GLuint tex = fallbackTexture;
-    if (tex == 0) {
-        for (const auto& [slot, t] : slotToTexture) { if (t != 0) { tex = t; break; } }
-    }
-    if (tex != 0) {
-        glEnable(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, tex);
-    } else {
-        glDisable(GL_TEXTURE_2D);
-    }
-    glBegin(GL_TRIANGLES);
-    for (const auto& tri : geo->triangles) {
-        for (int k = 0; k < 3; ++k) {
-            uint32_t vi = tri[k];
-            if (vi >= deformedPos.size()) continue;
-            emitVertex(vi);
+    // Draw per render-block, binding each block's own material texture — same
+    // triangleStart/triangleCount ranges into geo->triangles that the static
+    // (rigid) mesh build in model.cpp uses, so multi-material characters
+    // (skin/clothes/face/etc.) get their correct textures instead of one
+    // flat body texture for the whole mesh.
+    auto drawRange = [&](size_t start, size_t count, GLuint tex) {
+        if (tex != 0) {
+            glEnable(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, tex);
+        } else {
+            glDisable(GL_TEXTURE_2D);
         }
-    }
-    glEnd();
+        glBegin(GL_TRIANGLES);
+        for (size_t t = start; t < start + count && t < geo->triangles.size(); ++t) {
+            const auto& tri = geo->triangles[t];
+            for (int k = 0; k < 3; ++k) {
+                uint32_t vi = tri[k];
+                if (vi < deformedPos.size()) emitVertex(vi);
+            }
+        }
+        glEnd();
+    };
 
-    glDisable(GL_TEXTURE_2D);
-    glDisable(GL_CULL_FACE);
+    if (!geo->renderBlocks.empty()) {
+        for (const auto& block : geo->renderBlocks) {
+            if (block.triangleCount == 0) continue;
+            auto it = slotToTexture.find(block.materialSlot);
+            GLuint tex = (it != slotToTexture.end() && it->second != 0) ? it->second : fallbackTexture;
+            drawRange(block.triangleStart, block.triangleCount, tex);
+        }
+    } else {
+        drawRange(0, geo->triangles.size(), fallbackTexture);
+    }
+
+    glEnable(GL_LIGHTING);   // restore legacy lighting state disabled above
+    glEnable(GL_TEXTURE_2D); // restore in case caller relies on it
 
     glMatrixMode(GL_PROJECTION);
     glPopMatrix();
