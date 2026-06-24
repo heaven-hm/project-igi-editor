@@ -105,6 +105,15 @@ public:
     // cache was built from). Returns nullptr if the model can't be found.
     const ParsedGeometry* GetOrLoadSkinGeometry(const std::string& modelId, bool isBuilding);
 
+    // Lightmap textures for the "Calculate Light Mapping" button, keyed by
+    // the EXACT placement's taskId (not modelId) — mesh_cache_ is shared per
+    // modelId across every placement of a building, so storing these on
+    // SubMesh would make two placements of the same model show whichever
+    // lightmap was calculated last. The draw loop looks this up per-object.
+    void SetLightmapForTask(const std::string& taskId, std::vector<GLuint> textures);
+    void ClearLightmapForTask(const std::string& taskId);
+    const std::vector<GLuint>* GetLightmapForTask(const std::string& taskId) const;
+
 private:
     int current_level_ = 1;
     std::map<std::string, Mesh> mesh_cache_;
@@ -116,6 +125,7 @@ private:
     mutable std::map<std::string, int> texture_level_map_;
     std::map<std::string, std::vector<AttachInfo>> attachment_cache_;
     std::map<std::string, ParsedGeometry> skin_geometry_cache_;
+    std::map<std::string, std::vector<GLuint>> lightmap_textures_by_task_;
     // Per-pick-pass capture of pickable ATTA sub-models (see AttaPickEntry).
     std::vector<AttaPickEntry> atta_pick_entries_;
     // Keys (model@pos) of EditRigidObj tasks; an ATTA matching one is suppressed

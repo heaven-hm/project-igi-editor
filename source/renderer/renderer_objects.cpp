@@ -13,12 +13,32 @@ bool Renderer_Objects::IsSkippedModelId(const std::string& modelId) {
     return modelId == "colbox" || modelId == "colbox2" || modelId == "colbox4" || modelId == "colbox66";
 }
 
+void Renderer_Objects::SetLightmapForTask(const std::string& taskId, std::vector<GLuint> textures) {
+    ClearLightmapForTask(taskId);
+    lightmap_textures_by_task_[taskId] = std::move(textures);
+}
+
+void Renderer_Objects::ClearLightmapForTask(const std::string& taskId) {
+    auto it = lightmap_textures_by_task_.find(taskId);
+    if (it == lightmap_textures_by_task_.end()) return;
+    for (GLuint tex : it->second) {
+        if (tex != 0) glDeleteTextures(1, &tex);
+    }
+    lightmap_textures_by_task_.erase(it);
+}
+
+const std::vector<GLuint>* Renderer_Objects::GetLightmapForTask(const std::string& taskId) const {
+    auto it = lightmap_textures_by_task_.find(taskId);
+    return it != lightmap_textures_by_task_.end() ? &it->second : nullptr;
+}
+
 // ─── Shader Sources ───────────────────────────────────────────────────────────
 static const char* OBJ_VERT_SRC = R"(
 #version 330 core
 layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_normal;
 layout(location = 2) in vec2 a_uv;
+layout(location = 3) in vec2 a_uv2;
 
 layout(std140) uniform Matrices {
     mat4 u_unused1;
@@ -31,6 +51,7 @@ uniform mat4 u_model;
 
 out vec3 v_normal;
 out vec2 v_uv;
+out vec2 v_uv2;
 out vec3 v_fragPos;
 
 void main() {
@@ -38,6 +59,7 @@ void main() {
     v_fragPos       = worldPos.xyz;
     v_normal        = mat3(transpose(inverse(u_model))) * a_normal;
     v_uv            = a_uv;
+    v_uv2           = a_uv2;
     gl_Position     = u_mvp * u_model * vec4(a_pos, 1.0);
 }
 
@@ -47,12 +69,15 @@ static const char* OBJ_FRAG_SRC = R"(
 #version 330 core
 in vec3 v_normal;
 in vec2 v_uv;
+in vec2 v_uv2;
 in vec3 v_fragPos;
 
 uniform vec3 u_dirlight;   // directional light RGB
 uniform vec3 u_ambient;    // ambient light RGB
 uniform sampler2D u_texture;
 uniform int u_useTexture;
+uniform sampler2D u_lightmap;
+uniform int u_useLightmap; // 0 = no calculated lightmap for this submesh
 uniform float u_alpha;     // material alpha (1.0 = opaque, <1.0 = transparent)
 uniform vec4 u_baseColor;  // Base color when no texture
 uniform vec3 u_tint; // per-object multiplicative tint (default white); magenta = missing-in-res warning
@@ -73,6 +98,10 @@ void main() {
     vec3 light = u_ambient + u_dirlight * (diff + spec);
 
     vec4 texColor = (u_useTexture != 0) ? texture(u_texture, v_uv) : u_baseColor;
+
+    if (u_useLightmap != 0) {
+        texColor.rgb *= texture(u_lightmap, v_uv2).rgb;
+    }
 
     float finalAlpha = (u_useTexture != 0 ? texColor.a : 1.0) * u_alpha;
 
@@ -398,6 +427,8 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     GLint loc_ambient  = glGetUniformLocation(shader_program_, "u_ambient");
     GLint loc_useTex   = glGetUniformLocation(shader_program_, "u_useTexture");
     GLint loc_tex      = glGetUniformLocation(shader_program_, "u_texture");
+    GLint loc_lightmap    = glGetUniformLocation(shader_program_, "u_lightmap");
+    GLint loc_useLightmap = glGetUniformLocation(shader_program_, "u_useLightmap");
     GLint loc_alpha    = glGetUniformLocation(shader_program_, "u_alpha");
     GLint loc_baseColor = glGetUniformLocation(shader_program_, "u_baseColor");
     GLint loc_tint     = glGetUniformLocation(shader_program_, "u_tint");
@@ -607,7 +638,9 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                     }
                 }
                 bool mixedMesh = hasTextured && hasUntextured;
-                for (const auto& sub : mesh.subMeshes) {
+                const std::vector<GLuint>* lightmaps = GetLightmapForTask(obj.taskId);
+                for (size_t si = 0; si < mesh.subMeshes.size(); ++si) {
+                    const auto& sub = mesh.subMeshes[si];
                     if (sub.VAO == 0 || sub.vertexCount == 0) continue;
                     (void)mixedMesh; // render all submeshes — floors/stories must not be skipped
 
@@ -665,6 +698,17 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                         glUniform3f(loc_dirlight, color.r * 0.6f, color.g * 0.6f, color.b * 0.6f);
                         glUniform3f(loc_ambient,  color.r * 0.4f, color.g * 0.4f, color.b * 0.4f);
                         glUniform1i(loc_useTex, 0);
+                    }
+
+                    // Lightmap: bind texture unit 1 for this exact placement, if the
+                    // "Calculate Light Mapping" button has been run on it.
+                    if (lightmaps && si < lightmaps->size() && (*lightmaps)[si] != 0) {
+                        glActiveTexture(GL_TEXTURE1);
+                        glBindTexture(GL_TEXTURE_2D, (*lightmaps)[si]);
+                        glUniform1i(loc_lightmap, 1);
+                        glUniform1i(loc_useLightmap, 1);
+                    } else {
+                        glUniform1i(loc_useLightmap, 0);
                     }
 
                     glBindVertexArray(sub.VAO);

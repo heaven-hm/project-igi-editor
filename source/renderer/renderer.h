@@ -662,6 +662,10 @@ public:
 	static constexpr int kAttaPickBase = Renderer_Objects::kAttaPickBase;
 	bool GetAttaPickEntry(int entry, AttaPickEntry& out) const { return objects_.GetAttaPickEntry(entry, out); }
 	void SuppressAtta(const std::string& key) { objects_.SuppressAtta(key); }
+	void SetLightmapForTask(const std::string& taskId, std::vector<GLuint> textures) {
+		objects_.SetLightmapForTask(taskId, std::move(textures));
+	}
+	void ClearLightmapForTask(const std::string& taskId) { objects_.ClearLightmapForTask(taskId); }
 	void ClearSuppressedAttas() { objects_.ClearSuppressedAttas(); }
 	bool SuppressAttachmentInMef(const std::string& parentModelId, const std::string& attModelId, const glm::vec3& localPos) {
 		return objects_.SuppressAttachmentInMef(parentModelId, attModelId, localPos);
