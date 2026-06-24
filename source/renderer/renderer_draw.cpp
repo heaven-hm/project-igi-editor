@@ -1794,9 +1794,11 @@ void Renderer::Draw(const draw_params_s &params,
               if (cscp && !cscp->empty()) child_schemas.push_back({ci, cscp});
           }
 
+          bool showLightmapButton = (obj.type == "Building" || obj.type == "EditRigidObj");
           PropPanel::Layout L = PropPanel::BuildLayout(schema, task_tree_view.selected_obj_is_ai, child_schemas,
                                                         task_tree_view.prop_anim_bone_hierarchy_,
-                                                        task_tree_view.prop_anim_ids_);
+                                                        task_tree_view.prop_anim_ids_,
+                                                        showLightmapButton);
 
           // Apply vertical scroll: shift all widget Y positions.
           const int scroll = task_tree_view.prop_panel_scroll_;
@@ -2349,6 +2351,10 @@ void Renderer::Draw(const draw_params_s &params,
                   draw_edit_box(w, PropPanel::kAIScriptTextField,
                                 task_tree_view.ai_script_text_, true,
                                 task_tree_view.ai_script_vscroll_, 0);
+              } else if (w.kind == K::LightmapButton) {
+                  quad(w.x1, w.y1, w.x2, w.y2, 0.0f, 0.0f, 0.0f, 0.40f);
+                  border(w.x1, w.y1, w.x2, w.y2, 1.0f, 1.0f, 1.0f);
+                  draw_text(w.x1 + 6, w.y1 + 12, "Calculate Light Mapping", 1.0f, 0.9f, 0.2f);
               }
               y = w.y2 + 6;
           }

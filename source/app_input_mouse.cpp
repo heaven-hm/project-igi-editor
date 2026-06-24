@@ -148,7 +148,8 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 						}
 						int animBoneHierarchy; std::vector<int> animIds; int animActiveId; bool animIsPlaying;
 						ComputePropAnimUiState(animBoneHierarchy, animIds, animActiveId, animIsPlaying);
-						PropPanel::Layout L = PropPanel::BuildLayout(schema, is_ai, children, animBoneHierarchy, animIds);
+						bool showLightmapButton = (obj.type == "Building" || obj.type == "EditRigidObj");
+						PropPanel::Layout L = PropPanel::BuildLayout(schema, is_ai, children, animBoneHierarchy, animIds, showLightmapButton);
 						// Apply the same vertical scroll the renderer uses so hit-tests align.
 						if (prop_panel_scroll_ > 0)
 							for (auto& w : L.widgets) { w.y1 -= prop_panel_scroll_; w.y2 -= prop_panel_scroll_; }
@@ -188,6 +189,9 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 
 								if (w.kind == K::AnimIdButton) {
 									if (w.comp >= 0) ToggleAnimationForObject(selected_object_index_, w.comp);
+									return;
+								} else if (w.kind == K::LightmapButton) {
+									CalculateLightmapForSelectedObject();
 									return;
 								} else if (w.kind == K::NoteBox) {
 									prop_edit_obj_index_ = tIdx;
