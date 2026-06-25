@@ -123,8 +123,9 @@ void main() {
     // direct + shadow), so it REPLACES the dynamic light term for this
     // submesh. u_lightmapScale re-lights it live for the object's current
     // orientation (1,1,1 when the object hasn't moved since the bake).
+    // IGI multiplies lightmap color by 2.0 to allow overbrightening (warm colors).
     if (u_useLightmap != 0) {
-        light = texture(u_lightmap, v_uv2).rgb * u_lightmapScale;
+        light = texture(u_lightmap, v_uv2).rgb * 2.0 * u_lightmapScale;
     }
 
     float finalAlpha = (u_useTexture != 0 ? texColor.a : 1.0) * u_alpha;
@@ -478,6 +479,15 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     GLint loc_model    = glGetUniformLocation(shader_program_, "u_model");
     GLint loc_dirlight = glGetUniformLocation(shader_program_, "u_dirlight");
     GLint loc_ambient  = glGetUniformLocation(shader_program_, "u_ambient");
+
+    static bool logged_light_once = false;
+    if (!logged_light_once) {
+        Logger::Get().Log(LogLevel::INFO, "[Renderer] Lighting params: front=(" + std::to_string(sun_front_color_.r) + "," + std::to_string(sun_front_color_.g) + "," + std::to_string(sun_front_color_.b) + ") back=(" + std::to_string(sun_back_color_.r) + "," + std::to_string(sun_back_color_.g) + "," + std::to_string(sun_back_color_.b) + ") gamma=" + std::to_string(global_gamma_));
+        logged_light_once = true;
+    }
+
+    glUniform3f(loc_dirlight, sun_front_color_.x, sun_front_color_.y, sun_front_color_.z);
+    glUniform3f(loc_ambient,  sun_back_color_.x,  sun_back_color_.y,  sun_back_color_.z);
     // Use the level's actual sun direction so dynamic-lit (non-lightmapped) objects
     // face the same light source as the game. Falls back to a sensible default if
     // the level hasn't set a sun direction yet.

@@ -1818,7 +1818,7 @@ void Renderer::Draw(const draw_params_s &params,
             }
           }
 
-          bool showLightmapButton = (obj.type == "Building" || obj.type == "EditRigidObj");
+          bool showLightmapButton = (obj.type == "Building" || obj.type == "EditRigidObj") && !obj.isAttaProxy;
           PropPanel::Layout L = PropPanel::BuildLayout(schema, task_tree_view.selected_obj_is_ai, child_schemas,
                                                         task_tree_view.prop_anim_bone_hierarchy_,
                                                         task_tree_view.prop_anim_ids_,

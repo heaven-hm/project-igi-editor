@@ -308,6 +308,7 @@ void App::DrawProgressOverlay(const char* title, int pct, const char* stage) {
 	int vh = window_state_.viewport_height_;
 	if (vw <= 0 || vh <= 0) return;
 	glViewport(0, 0, vw, vh);
+	glDisable(GL_SCISSOR_TEST); // prevent ImGui from clipping the overlay
 	glClearColor(0.02f, 0.06f, 0.02f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	glDisable(GL_DEPTH_TEST);
@@ -354,6 +355,7 @@ void App::DrawProgressOverlay(const char* title, int pct, const char* stage) {
 	glMatrixMode(GL_PROJECTION); glPopMatrix();
 	glMatrixMode(GL_MODELVIEW);  glPopMatrix();
 	glEnable(GL_DEPTH_TEST);
+	glutMainLoopEvent();
 	glutSwapBuffers();
 }
 
