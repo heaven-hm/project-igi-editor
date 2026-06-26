@@ -23,6 +23,11 @@ glm::vec3 Renderer_Objects::GetMeshExtents(const std::string& modelId, bool isBu
     return mesh.halfExtents;
 }
 
+glm::vec3 Renderer_Objects::GetMeshCenter(const std::string& modelId, bool isBuilding) {
+    Mesh mesh = GetOrLoadMesh(modelId, isBuilding);
+    return mesh.center;
+}
+
 Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding) {
     std::string cacheKey = std::to_string(current_level_) + ":" + (isBuilding ? "building:" : "object:") + modelId;
     Logger::Get().Log(LogLevel::DEBUG,

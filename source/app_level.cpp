@@ -300,8 +300,8 @@ void App::LoadLevel(int level_no) {
 						if (resolved && time >= bestTime) continue;
 						double beta  = std::stod(kf.argTokens[3]);
 						double gamma = std::stod(kf.argTokens[4]);
-						glm::vec3 front(std::stof(kf.argTokens[5]) / 255.0f, std::stof(kf.argTokens[6]) / 255.0f, std::stof(kf.argTokens[7]) / 255.0f);
-						glm::vec3 back (std::stof(kf.argTokens[8]) / 255.0f, std::stof(kf.argTokens[9]) / 255.0f, std::stof(kf.argTokens[10]) / 255.0f);
+						glm::vec3 front(std::stof(kf.argTokens[5]), std::stof(kf.argTokens[6]), std::stof(kf.argTokens[7]));
+						glm::vec3 back (std::stof(kf.argTokens[8]), std::stof(kf.argTokens[9]), std::stof(kf.argTokens[10]));
 						// Beta is the angle FROM THE ZENITH (straight up), not from the
 						// horizon — beta=30 deg observed in this level's daytime keyframe
 						// must mean a near-overhead sun (60 deg elevation) for roofs to be
@@ -353,6 +353,40 @@ void App::LoadLevel(int level_no) {
 				break;
 			}
 			renderer_.SetGlobalGamma(gamma);
+		}
+
+		// RainEffect (Task_DeclareParameters("RainEffect","Is Rain","bool8",
+		// "Traceline start","Real32","Traceline end","Real32","Is Active","VarString",
+		// "Rain Alpha","Real32")) is per-level: present+active on levels with rain
+		// (e.g. level3), entirely absent on levels without it (e.g. level2) — absence
+		// just means no rain, not a parse failure. argTokens: [0]=taskId,
+		// [1]="RainEffect",[2]=name,[3]=IsRain(BOOL "TRUE"/"FALSE"),
+		// [4]=TracelineStart(meters),[5]=TracelineEnd(meters),
+		// [6]=IsActive(quoted VarString "0"/"1"),[7]=RainAlpha.
+		{
+			bool rainActive = false;
+			float rainStartM = 0.0f, rainEndM = 0.0f, rainAlpha = 0.0f;
+			for (const auto& re : objects) {
+				if (re.type != "RainEffect" || re.argTokens.size() < 8) continue;
+				try {
+					bool isRain = (re.argTokens[3] == "TRUE");
+					std::string isActiveTok = re.argTokens[6];
+					if (isActiveTok.size() >= 2 && isActiveTok.front() == '"' && isActiveTok.back() == '"')
+						isActiveTok = isActiveTok.substr(1, isActiveTok.size() - 2);
+					bool isActive = !isActiveTok.empty() && isActiveTok != "0";
+					rainStartM = std::stof(re.argTokens[4]);
+					rainEndM = std::stof(re.argTokens[5]);
+					rainAlpha = std::stof(re.argTokens[7]);
+					rainActive = isRain && isActive;
+					Logger::Get().Log(LogLevel::INFO, "[App] RainEffect resolved: active=" +
+						std::to_string(rainActive) + " start=" + std::to_string(rainStartM) +
+						"m end=" + std::to_string(rainEndM) + "m alpha=" + std::to_string(rainAlpha));
+				} catch (const std::exception& e) {
+					Logger::Get().Log(LogLevel::WARNING, std::string("[App] RainEffect unparsable (") + e.what() + ")");
+				}
+				break; // first RainEffect task only
+			}
+			renderer_.SetRainEffect(rainActive, rainStartM, rainEndM, rainAlpha);
 		}
 
 		// Log all loaded objects for verification script

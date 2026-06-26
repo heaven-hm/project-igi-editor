@@ -452,47 +452,76 @@ void Level::LoadStartPosInfo(const QSC* qsc_objects, glm::vec3& start_pos, float
 
 void Level::LoadFogInfo(const QSC* qsc_objects, IRenderResLoader* render_res_loader) {
 	glm::vec4 fog_color(0.15f, 0.15f, 0.15f, 1.0f);
-	float fog_far = 30000.0f;
+	float fog_far_meters = 30000.0f;
 
 	const QSC::func_s* qsc_funcs[1024];
 	int num_func = qsc_objects->FindFuncByStr("GlobalLightKeyframe", qsc_funcs);
-	if (num_func) {
-		const QSC::func_s* f = qsc_funcs[0];	// read first function
+
+	// GlobalLightKeyframe declares 51 parameters ending in "Time" (Real32) —
+	// same animated-keyframe shape as Dirlight/DirlightKeyframe. A level can
+	// list more than one (observed: level3 has Time=12 and Time=100 entries)
+	// and NOT in chronological order, so blindly reading qsc_funcs[0] picked
+	// whichever the decompiler happened to emit first rather than the
+	// default/lowest-Time state. Mirror app_level.cpp's Dirlight selection:
+	// among all keyframes found, pick the one with the smallest Time.
+	bool haveBest = false;
+	float bestTime = 0.0f;
+	float bestFogColor[3] = { fog_color.r, fog_color.g, fog_color.b };
+	float bestFogFarMeters = fog_far_meters;
+
+	for (int fi = 0; fi < num_func; ++fi) {
+		const QSC::func_s* f = qsc_funcs[fi];
+
+		float curFogColor[3] = { fog_color.r, fog_color.g, fog_color.b };
+		float curFogDensity = 0.0f;
+		float curTime = 0.0f;
+		bool haveDensity = false;
 
 		int arg_idx = 0;
-		const QSC::arg_s * a = f->args_;
+		const QSC::arg_s* a = f->args_;
 		while (a) {
-
 			if (a->type_ == QSC::arg_s::type_t::DBL) {
+				// Task_New args are [0]=task id, [1]=func name, [2]=instance name,
+				// THEN the declared GlobalLightKeyframe parameters begin (same
+				// +3 leading-arg offset confirmed for FlatSky against objects.qsc):
+				// [3]=PushButton, [4-6]=Ambient terrain RGB, [7-9]=Fog terrain RGB,
+				// [10]=Fog density terrain, [11]=Link setting terrain, ...,
+				// last arg = Time. Colors are already-normalized 0-1 floats.
 				switch (arg_idx) {
-				// GlobalLightKeyframe arg layout (0-based, bool FALSE at 0):
-				// [0]=PushButton, [1-3]=Ambient terrain RGB, [4-6]=Fog terrain RGB,
-				// [7]=Fog density, [8]=Link setting
-				case 4:
-					fog_color.r = (float)a->dbl_ / 255.0f;
-					break;
-				case 5:
-					fog_color.g = (float)a->dbl_ / 255.0f;
-					break;
-				case 6:
-					fog_color.b = (float)a->dbl_ / 255.0f;
-					break;
-				case 7:
-					fog_far = (1.0f / (float)a->dbl_) * 7200.0f;
-					break;
+				case 7: curFogColor[0] = (float)a->dbl_; break;
+				case 8: curFogColor[1] = (float)a->dbl_; break;
+				case 9: curFogColor[2] = (float)a->dbl_; break;
+				case 10: curFogDensity = (float)a->dbl_; haveDensity = true; break;
 				}
+				curTime = (float)a->dbl_; // last DBL seen by loop end == Time
 			}
-
 			a = a->next_;
 			arg_idx++;
+		}
 
-			if (arg_idx >= 8) {
-				break;
-			}
+		if (haveDensity && (!haveBest || curTime < bestTime)) {
+			haveBest = true;
+			bestTime = curTime;
+			bestFogColor[0] = curFogColor[0];
+			bestFogColor[1] = curFogColor[1];
+			bestFogColor[2] = curFogColor[2];
+			// Fog density of 0 is a valid "no fog at this keyframe" state
+			// (observed: level3's night keyframe) — keep the far/no-fog default.
+			bestFogFarMeters = (curFogDensity > 0.0f) ? (1.0f / curFogDensity) * 7200.0f : fog_far_meters;
 		}
 	}
 
-	render_res_loader->SetupFog(fog_color, fog_far);
+	if (haveBest) {
+		fog_color.r = bestFogColor[0];
+		fog_color.g = bestFogColor[1];
+		fog_color.b = bestFogColor[2];
+		fog_far_meters = bestFogFarMeters;
+	}
+
+	// fog_far_meters is derived from the QSC fog-density value in meters; the
+	// renderer's fog distance check operates in world units (v_fragPos/u_cameraPos
+	// are WORLD_UNITS_PER_METER per meter), so convert before handing it off.
+	render_res_loader->SetupFog(fog_color, fog_far_meters * WORLD_UNITS_PER_METER);
 }
 
 void Level::LoadSkydomeInfo(const QSC* qsc_objects, IRenderResLoader* render_res_loader) {
@@ -510,74 +539,75 @@ void Level::LoadSkydomeInfo(const QSC* qsc_objects, IRenderResLoader* render_res
 		while (a) {
 
 			if (a->type_ == QSC::arg_s::type_t::DBL) {
-				// FlatSky arg layout (0-based, no leading bool):
-				// [0]=FogAmount, [1]=ZPos, [2]=Distance,
-				// [3-5]=FogColor RGB, [6]=SnapBool(skip), [7]=Angle,
-				// [8-10]=TopColor RGB, [11-13]=MidColor1 RGB,
-				// [14-16]=MidColor2 RGB, [17-19]=BotColor1 RGB, [20-22]=BotColor2 RGB
-				// Note: args 0-2 (fog_amount, z_pos, distance) are intentionally not
+				// Task_New args are [0]=task id, [1]=func name, [2]=instance name,
+				// THEN the declared FlatSky parameters begin (confirmed via raw
+				// arg dump against objects.qsc): [3]=FogAmount, [4]=ZPos,
+				// [5]=Distance, [6-8]=FogColor RGB, [9]=SnapBool, [10]=Angle,
+				// [11-13]=TopColor RGB, [14-16]=MidColor1 RGB,
+				// [17-19]=MidColor2 RGB, [20-22]=BotColor1 RGB, [23-25]=BotColor2 RGB
+				// Note: fog_amount/z_pos/distance (args 3-5) are intentionally not
 				// parsed so the flat-sky layer stays invisible; the editor uses the
 				// skydome gradient for the sky background instead.
 				switch (arg_idx) {
-				case 3:
+				case 6:
 					flat_sky_fog_color.r = (float)a->dbl_;
 					break;
-				case 4:
+				case 7:
 					flat_sky_fog_color.g = (float)a->dbl_;
 					break;
-				case 5:
+				case 8:
 					flat_sky_fog_color.b = (float)a->dbl_;
 					break;
-				// arg 6 = SkyDome Snap Colours (bool8) — not DBL, skipped automatically
-				case 7:
+				// arg 9 = SkyDome Snap Colours (bool8) — not DBL, skipped automatically
+				case 10:
 					sd.angle_ = glm::radians((float)a->dbl_);
 					break;
-				case 8:
+				case 11:
 					sd.top_color1_[0] = (float)a->dbl_;
 					sd.top_color2_[0] = (float)a->dbl_;
 					break;
-				case 9:
+				case 12:
 					sd.top_color1_[1] = (float)a->dbl_;
 					sd.top_color2_[1] = (float)a->dbl_;
 					break;
-				case 10:
+				case 13:
 					sd.top_color1_[2] = (float)a->dbl_;
 					sd.top_color2_[2] = (float)a->dbl_;
 					break;
-				case 11:
+				case 14:
 					sd.middle_color1_[0] = (float)a->dbl_;
 					break;
-				case 12:
+				case 15:
 					sd.middle_color1_[1] = (float)a->dbl_;
 					break;
-				case 13:
+				case 16:
 					sd.middle_color1_[2] = (float)a->dbl_;
 					break;
-				case 14:
+				case 17:
 					sd.middle_color2_[0] = (float)a->dbl_;
 					break;
-				case 15:
+				case 18:
 					sd.middle_color2_[1] = (float)a->dbl_;
 					break;
-				case 16:
+				case 19:
 					sd.middle_color2_[2] = (float)a->dbl_;
 					break;
-				case 17:
+				case 20:
 					sd.bottom_color1_[0] = (float)a->dbl_;
 					break;
-				case 18:
+				case 21:
 					sd.bottom_color1_[1] = (float)a->dbl_;
 					break;
-				case 19:
+				case 22:
 					sd.bottom_color1_[2] = (float)a->dbl_;
 					break;
-				case 20:
+				case 23:
 					sd.bottom_color2_[0] = (float)a->dbl_;
 					break;
-				case 21:
+				case 24:
 					sd.bottom_color2_[1] = (float)a->dbl_;
 					break;
-				case 22:
+				case 25:
 					sd.bottom_color2_[2] = (float)a->dbl_;
 					break;
 				}

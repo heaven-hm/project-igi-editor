@@ -235,6 +235,7 @@ void Renderer::Draw(const draw_params_s &params,
                   params.show_magic_obj_spheres_, params.skip_static_draw_indices_);
     splines_.Draw(params.level_objects_->GetObjects(), ubo_mats_,
                   objects_.GetShaderProgram());
+    rain_.Draw(ubo_mats_, params.view_define_->pos_);
   }
 
   // 3D navigation-graph pass: solid boxes + edges, depth-tested, before the HUD.

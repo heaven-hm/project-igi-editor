@@ -359,9 +359,17 @@ void App::Input_OnSpecial(int key, int x, int y) {
 	}
 
 	// F10 always toggles the Animation Debug overlay (skeleton wireframe + status
-	// panel) — independent of F2/TaskTree.
+	// panel) — independent of F2/TaskTree, and also toggles Developer Mode for Debug Commands.
 	if (key == GLUT_KEY_F10) {
 		show_anim_debug_ = !show_anim_debug_;
+		developer_mode_ = !developer_mode_;
+		if (developer_mode_) {
+			debug_cmd_mgr_.Start();
+			Logger::Get().Log(LogLevel::INFO, "[App] Developer Mode ON - Command Watcher Started");
+		} else {
+			debug_cmd_mgr_.Stop();
+			Logger::Get().Log(LogLevel::INFO, "[App] Developer Mode OFF - Command Watcher Stopped");
+		}
 		Logger::Get().Log(LogLevel::INFO, std::string("[App] Animation Debug Info ") + (show_anim_debug_ ? "shown" : "hidden"));
 		return;
 	}

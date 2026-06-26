@@ -953,10 +953,9 @@ int App::PickObjectAtScreenPos(int screen_x, int screen_y) {
 
 	return renderer_.PickObjectAtScreen(
 		screen_x, screen_y, w, h,
-		view_define_,
-		objects,
-		renderer_.DRAW_OBJECTS | renderer_.DRAW_BUILDINGS | renderer_.DRAW_PROPS
-	);
+		view_define_, level_.GetLevelObjects().GetObjects(),
+		renderer_.DRAW_OBJECTS | renderer_.DRAW_BUILDINGS | renderer_.DRAW_PROPS,
+		selected_object_index_);
 }
 
 void App::PromoteAttaToObject(int entry) {

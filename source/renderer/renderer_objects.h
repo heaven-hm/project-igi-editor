@@ -78,9 +78,11 @@ public:
                            GLuint ubo_mats,
                            const std::vector<LevelObject>& objects,
                            int draw_parts,
-                           const glm::vec3& camera_pos);
+                           const glm::vec3& camera_pos,
+                           int selected_object_index);
     static bool IsSkippedModelId(const std::string& modelId);
     glm::vec3 GetMeshExtents(const std::string& modelId, bool isBuilding);
+    glm::vec3 GetMeshCenter(const std::string& modelId, bool isBuilding);
     float GetMeshZOffset(const std::string& modelId, bool isBuilding);
     Mesh GetOrLoadMesh(const std::string& modelId, bool isBuilding);
     // Render one model centered in a viewport rectangle, auto-rotated by (rotX,rotY)
@@ -248,7 +250,8 @@ private:
     void DrawAttachmentsForPicking(const std::string& parentModelId, bool isBuilding,
                                    const glm::mat4& parentWorldMat, float parentScale,
                                    GLint loc_model, GLint loc_id, int parentObjIndex,
-                                   std::unordered_set<std::string>& drawn);
+                                   std::unordered_set<std::string>& drawn,
+                                   int selected_object_index);
     // True if this ATTA has been promoted/duplicated (live occupancy OR persistent).
     bool IsAttaPromoted(const std::string& modelId, const glm::vec3& worldPos) const {
         const std::string k = AttaOccupancyKey(modelId, worldPos);
@@ -281,5 +284,6 @@ private:
     void DrawForPicking(GLuint ubo_mats,
                         const std::vector<LevelObject>& objects,
                         int draw_parts,
-                        const glm::vec3& camera_pos);
+                        const glm::vec3& camera_pos,
+                        int selected_object_index);
 };

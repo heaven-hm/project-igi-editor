@@ -89,6 +89,7 @@ set_source_files_properties(
   source/renderer/renderer_objects_picking.cpp
   source/renderer/renderer_objects_texture.cpp
   source/renderer/renderer_objects_visual.cpp
+  source/renderer/renderer_rain.cpp
   source/renderer/renderer_skydome.cpp
   source/renderer/renderer_splines.cpp
   source/renderer/renderer_terrain.cpp
@@ -244,6 +245,7 @@ add_executable(igi_tests
     tests/test_res_stream_append.cpp
     tests/test_mef_native_lightmap.cpp
     tests/test_igi1conv_lightmap.cpp
+    tests/test_debug_command_parser.cpp
 )
 
 # Explicit runtime so igi_tests always matches igi-editor (/MDd Debug, /MD Release).

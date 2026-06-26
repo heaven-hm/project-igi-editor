@@ -708,6 +708,9 @@ int main(int argc, char **argv) {
 
   printf("%s", HINT);
 
+  // setup glut callbacks that might be needed during Init
+  glutDisplayFunc(OnDisplay);
+
   if (!g_app.Init(argc, argv)) {
     return 2;
   }
@@ -735,7 +738,6 @@ int main(int argc, char **argv) {
   glutSpecialUpFunc(OnSpecialUp);
   glutKeyboardFunc(OnKeyboard);
   glutKeyboardUpFunc(OnKeyboardUp);
-  glutDisplayFunc(OnDisplay);
   glutIdleFunc(OnIdle);
   glutCloseFunc(OnClose);
 

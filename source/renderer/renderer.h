@@ -12,6 +12,7 @@
 #include <utility>
 #include "renderer_objects.h"
 #include "renderer_splines.h"
+#include "renderer_rain.h"
 #include "../level/task_schema.h"
 #include "graph_writer.h"
 #include <functional>
@@ -662,13 +663,15 @@ public:
     }
     void                    SetSplineTerrainQuery(std::function<bool(double, double, float&)> fn) { splines_.SetTerrainQuery(std::move(fn)); }
 	glm::vec3				GetMeshExtents(const std::string& modelId, bool isBuilding) { return objects_.GetMeshExtents(modelId, isBuilding); }
+	glm::vec3				GetMeshCenter(const std::string& modelId, bool isBuilding) { return objects_.GetMeshCenter(modelId, isBuilding); }
 	float					GetMeshZOffset(const std::string& modelId, bool isBuilding) { return objects_.GetMeshZOffset(modelId, isBuilding); }
 	int						PickObjectAtScreen(int x, int y, int w, int h,
-												const view_define_s& vd,
-												const std::vector<LevelObject>& objects,
-												int draw_parts) {
+											   const view_define_s& vd,
+											   const std::vector<LevelObject>& objects,
+											   int draw_parts,
+											   int selected_object_index) {
 		SetupUBOMats(vd);
-		return objects_.PickObjectAtScreen(x, y, w, h, ubo_mats_, objects, draw_parts, vd.pos_);
+		return objects_.PickObjectAtScreen(x, y, w, h, ubo_mats_, objects, draw_parts, vd.pos_, selected_object_index);
 	}
 	// Pass-throughs for ATTA promotion (see Renderer_Objects).
 	static constexpr int kAttaPickBase = Renderer_Objects::kAttaPickBase;
@@ -698,6 +701,11 @@ public:
 		objects_.SetSunLight(dir, frontColor, backColor);
 	}
 	void SetGlobalGamma(float gamma) { objects_.SetGlobalGamma(gamma); }
+	// RainEffect QSC task (per-level, absent on levels with no rain like level2).
+	// startMeters/endMeters are the "Traceline start"/"Traceline end" fields.
+	void SetRainEffect(bool active, float startMeters, float endMeters, float alpha) {
+		rain_.SetParams(active, startMeters, endMeters, alpha);
+	}
 	void ClearSuppressedAttas() { objects_.ClearSuppressedAttas(); }
 	bool SuppressAttachmentInMef(const std::string& parentModelId, const std::string& attModelId, const glm::vec3& localPos) {
 		return objects_.SuppressAttachmentInMef(parentModelId, attModelId, localPos);
@@ -743,6 +751,7 @@ private:
 	Renderer_Terrain		terrain_;
 	Renderer_Objects		objects_;
 	Renderer_Splines		splines_;
+	Renderer_Rain			rain_;
 
 	glm::mat4				mat_proj_;
 	glm::mat4				mat_view_;

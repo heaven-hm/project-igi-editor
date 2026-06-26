@@ -147,7 +147,11 @@ bool App::Init(int argc, char** argv) {
 	bridge_.SetEnabled(show_hud_);
 	bridge_.Start();
 
-
+	if (Arg_OptionIdx(argc, argv, "--developer-mode") > -1) {
+		developer_mode_ = true;
+		debug_cmd_mgr_.Start();
+		Logger::Get().Log(LogLevel::INFO, "[App] Developer Mode ON via command line");
+	}
 	// Set initial cursor state
 	LoadAllCursors();
 	LoadHelpEntries();
@@ -360,6 +364,9 @@ void App::OnIdle() {
 }
 
 void App::Frame(float delta_seconds) {
+	if (developer_mode_) {
+		debug_cmd_mgr_.Update();
+	}
 	// Auto-save timer
 	if (auto_save_enabled_ && !pause_mode_ && level_.GetLevelNo() > 0) {
 		int64_t now = Sys_Milliseconds();

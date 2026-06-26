@@ -45,6 +45,10 @@ bool Renderer::Init() {
     return false;
   }
 
+  if (!rain_.Init()) {
+    return false;
+  }
+
   // init default state
   glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
 
@@ -72,6 +76,7 @@ bool Renderer::Init() {
 void Renderer::Shutdown() {
   terrain_.Shutdown();
   objects_.Shutdown();
+  rain_.Shutdown();
   flat_sky_layers_.Shutdown();
 
   skydome_.Shutdown();

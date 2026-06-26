@@ -10,6 +10,7 @@
 #include "level/res_model_set.h"
 #include "renderer/model.h"
 #include "animation.h"
+#include "debug_command_manager.h"
 #include <atomic>
 #include <optional>
 #include <set>
@@ -107,6 +108,8 @@ public:
   // key); // Removed
 
 private:
+  friend class DebugCommandManager;
+
   struct window_state_s {
     bool full_screen_;
     bool cursor_visible_;
@@ -164,6 +167,8 @@ private:
   int tree_scroll_offset_;
   bool tree_decl_expanded_;
   std::string status_message_;
+  DebugCommandManager debug_cmd_mgr_{this};
+  bool developer_mode_ = false;
 
   bool task_editor_open_ = false;
   bool task_picker_open_ = false;
