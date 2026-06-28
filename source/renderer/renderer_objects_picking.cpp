@@ -112,10 +112,7 @@ void Renderer_Objects::DrawAttachmentsForPicking(
             glm::mat4 leafModel = glm::scale(childWorldMat, glm::vec3(40.96f * parentScale));
             glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(leafModel));
             
-            // Only allow picking the individual ATTA proxy if its PARENT is already selected!
-            // Otherwise, clicking the ATTA geometry should select the PARENT object.
-            int pickId = (parentObjIndex == selected_object_index) ? (kAttaPickBase + 1 + entry) : (parentObjIndex + 1);
-            glUniform1i(loc_id, pickId);
+            glUniform1i(loc_id, kAttaPickBase + 1 + entry);
 
             if (!subMesh.subMeshes.empty()) {
                 for (const auto& sub : subMesh.subMeshes) {

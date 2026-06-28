@@ -168,6 +168,18 @@ public:
         fog_color_ = color; fog_far_ = far_dist;
     }
 
+    // Indoor ambient fallback: each Building/EditRigidObj's LightmapInfo child
+    // declares a dim "Indoors ambient light" (e.g. 0.08) used as fallback when
+    // no baked lightmap exists, so interiors look dark/warm like the game instead
+    // of receiving full outdoor sun. Populated per level load from app_level.cpp.
+    void SetIndoorAmbientForTask(const std::string& taskId, const glm::vec3& rgb) {
+        indoor_ambient_by_task_[taskId] = rgb;
+    }
+    const glm::vec3* GetIndoorAmbientForTask(const std::string& taskId) const {
+        auto it = indoor_ambient_by_task_.find(taskId);
+        return it != indoor_ambient_by_task_.end() ? &it->second : nullptr;
+    }
+
 private:
     int current_level_ = 1;
     bool lightmaps_enabled_ = false;
@@ -177,7 +189,8 @@ private:
     glm::vec3 global_ambient_  = glm::vec3(0.15f, 0.15f, 0.15f);
     float global_gamma_ = 1.0f;
     glm::vec3 fog_color_ = glm::vec3(0.15f, 0.15f, 0.15f);
-    float fog_far_ = 30000.0f;
+    float fog_far_ = 1e9f; // huge default = no fog until SetupFog() is called from level.cpp
+    std::map<std::string, glm::vec3> indoor_ambient_by_task_; // taskId -> LightmapInfo "Indoors ambient light"
     std::map<std::string, std::pair<glm::dvec3, glm::dvec3>> lightmap_bake_pose_by_task_; // taskId -> (pos, rot)
     std::map<std::string, Mesh> mesh_cache_;
     std::map<std::string, GLuint> texture_cache_;

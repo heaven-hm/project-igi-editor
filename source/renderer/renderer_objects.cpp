@@ -339,7 +339,10 @@ void Renderer_Objects::ClearCaches() {
     // 1104 in level1 and task 1104 in level6 are unrelated. Without clearing
     // these on a level switch, a previous level's baked lightmap (and its bake
     // pose) would bind to the new level's same-numbered task.
+    // indoor_ambient_by_task_ is also per-level (rebuilt from LightmapInfo tasks
+    // on each level load in app_level.cpp), so clear it here too.
     ClearAllLightmaps();
+    indoor_ambient_by_task_.clear();
     Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Cleared per-task lightmap caches on level switch");
 }
 
@@ -745,8 +748,18 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 // Use the level's actual sun colors so non-lightmapped objects pick up
                 // the same warm/cool tint as the game. Scale front by 0.65 so even a
                 // fully-lit face stays within [0,1] when summed with the back (ambient).
-                const glm::vec3 kDefDirlight = sun_front_color_ * 0.65f;
-                const glm::vec3 kDefAmbient  = global_ambient_;
+                // Exception: buildings whose LightmapInfo declares a dim "Indoors ambient
+                // light" (~0.08) use that as fallback instead of full outdoor sun — so
+                // interiors look dark and warm like the game rather than bright outdoors.
+                glm::vec3 kDefDirlight = sun_front_color_ * 0.65f;
+                glm::vec3 kDefAmbient  = global_ambient_;
+                {
+                    const glm::vec3* indoorAmb = GetIndoorAmbientForTask(obj.taskId);
+                    if (indoorAmb && !hasWorkingLightmap) {
+                        kDefDirlight = glm::vec3(0.0f);
+                        kDefAmbient  = *indoorAmb;
+                    }
+                }
 
                 // Precompute the per-channel modulation lambda for lightmapped submeshes.
                 auto blockScale = [&](const glm::vec3& nLocal) -> glm::vec3 {

@@ -703,6 +703,9 @@ public:
 		objects_.SetSunLight(dir, frontColor, backColor);
 	}
 	void SetGlobalGamma(float gamma) { objects_.SetGlobalGamma(gamma); }
+	void SetIndoorAmbientForTask(const std::string& taskId, const glm::vec3& rgb) {
+		objects_.SetIndoorAmbientForTask(taskId, rgb);
+	}
 	// RainEffect QSC task (per-level, absent on levels with no rain like level2).
 	// startMeters/endMeters are the "Traceline start"/"Traceline end" fields.
 	void SetRainEffect(bool active, float startMeters, float endMeters, float alpha) {

@@ -380,6 +380,28 @@ void App::LoadLevel(int level_no) {
 			renderer_.SetGlobalAmbient(globalAmbient);
 		}
 
+		// Each Building/EditRigidObj's nested LightmapInfo task declares its own
+		// dim "Indoors ambient light" (observed 0.08 vs the outdoor ~0.3 ambient) —
+		// interiors are never meant to receive full outdoor sun. argTokens: [0]=taskId,
+		// [1]="LightmapInfo", [2]=name, [3]=TextureScale, [4]=Passes, [5]=HemicubeRes,
+		// [6]=DirlightRes, [7]=Gamma, [8]=MaxRadiosity, [9-11]=IndoorsAmbientRGB, [12]=Filename.
+		for (const auto& obj : objects) {
+			if (obj.type != "Building" && obj.type != "EditRigidObj") continue;
+			if (obj.taskId == "-1") continue; // not unique, would mis-bind
+			for (int ci : obj.childrenIndices) {
+				if (ci < 0 || ci >= (int)objects.size()) continue;
+				const auto& kf = objects[ci];
+				if (kf.type != "LightmapInfo" || kf.argTokens.size() < 12) continue;
+				try {
+					glm::vec3 indoorAmbient(std::stof(kf.argTokens[9]), std::stof(kf.argTokens[10]), std::stof(kf.argTokens[11]));
+					renderer_.SetIndoorAmbientForTask(obj.taskId, indoorAmbient);
+				} catch (const std::exception& e) {
+					Logger::Get().Log(LogLevel::WARNING, std::string("[App] LightmapInfo indoors-ambient unparsable for taskId=") + obj.taskId + ": " + e.what());
+				}
+				break;
+			}
+		}
+
 		// RainEffect (Task_DeclareParameters("RainEffect","Is Rain","bool8",
 		// "Traceline start","Real32","Traceline end","Real32","Is Active","VarString",
 		// "Rain Alpha","Real32")) is per-level: present+active on levels with rain
