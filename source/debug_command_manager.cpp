@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "debug_command_manager.h"
 #include "app.h"
+#include "logger.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "../third_party/tinygltf/stb_image_write.h"
 #include "renderer/renderer.h"
@@ -48,7 +49,7 @@ void DebugCommandManager::WatcherThread() {
                 std::string token;
                 iss >> token;
                 
-                if (token == "goto" || token == "capture-model") {
+                if (token == "goto" || token == "capture-model" || token == "delete" || token == "wireframe" || token == "draw-parts") {
                     DebugCommand cmd;
                     cmd.type = token;
                     while (iss >> token) {
@@ -56,6 +57,8 @@ void DebugCommandManager::WatcherThread() {
                             cmd.level = std::stoi(token.substr(6));
                         } else if (token.find("model=") == 0) {
                             cmd.modelId = token.substr(6);
+                        } else if (token.find("val=") == 0) {
+                            cmd.val = std::stoi(token.substr(4));
                         } else if (token.find("x=") == 0) {
                             cmd.x = std::stod(token.substr(2));
                             cmd.has_pos = true;
@@ -106,6 +109,16 @@ void DebugCommandManager::ProcessCommand(const DebugCommand& cmd) {
         GotoModel(cmd);
     } else if (cmd.type == "capture-model") {
         CaptureModel(cmd);
+    } else if (cmd.type == "delete") {
+        DeleteModel(cmd);
+    } else if (cmd.type == "wireframe") {
+        if (cmd.val) {
+            if (!app_->GetOverlayWireframe()) app_->ToggleOverlayWireframe();
+        } else {
+            if (app_->GetOverlayWireframe()) app_->ToggleOverlayWireframe();
+        }
+    } else if (cmd.type == "draw-parts") {
+        app_->SetDrawParts(cmd.val);
     }
 }
 
@@ -148,6 +161,44 @@ void DebugCommandManager::GotoModel(const DebugCommand& cmd) {
     }
 }
 
+void DebugCommandManager::DeleteModel(const DebugCommand& cmd) {
+    auto& objects = app_->level_.GetLevelObjects().GetObjects();
+    
+    double cx = cmd.x, cy = cmd.y, cz = cmd.z;
+    if (std::abs(cx) < 1000000.0 && std::abs(cy) < 1000000.0 && std::abs(cz) < 1000000.0) {
+        cx *= 256.0; cy *= 256.0; cz *= 256.0; // Assume meters, convert to engine units
+    }
+
+    int best_idx = -1;
+    double min_dist = 1e30;
+
+    for (size_t i = 0; i < objects.size(); ++i) {
+        if (!objects[i].deleted && objects[i].modelId == cmd.modelId) {
+            if (!cmd.has_pos) {
+                best_idx = (int)i;
+                break; // If no pos specified, pick first
+            }
+            double dx = objects[i].pos.x - cx;
+            double dy = objects[i].pos.y - cy;
+            double dz = objects[i].pos.z - cz;
+            double dist_sq = dx*dx + dy*dy + dz*dz;
+            if (dist_sq < min_dist) {
+                min_dist = dist_sq;
+                best_idx = (int)i;
+            }
+        }
+    }
+
+    if (best_idx != -1) {
+        objects[best_idx].deleted = true;
+        objects[best_idx].modified = true;
+        if (app_->selected_object_index_ == best_idx) {
+            app_->selected_object_index_ = -1;
+        }
+        Logger::Get().Log(LogLevel::INFO, "[App] Deleted model via developer command: " + cmd.modelId);
+    }
+}
+
 void DebugCommandManager::CaptureModel(const DebugCommand& cmd) {
     auto& objects = app_->level_.GetLevelObjects().GetObjects();
     
@@ -177,76 +228,95 @@ void DebugCommandManager::CaptureModel(const DebugCommand& cmd) {
     }
     
     if (target_idx == -1) return;
-    
+
     auto& obj = objects[target_idx];
     app_->selected_object_index_ = target_idx;
+
+    // Ensure all building lightmaps are loaded before capturing — they are not
+    // loaded by default; the user normally triggers this via the Escape menu.
+    // This call is idempotent (re-uploading the same OLM textures is harmless).
+    app_->CalculateLightmapsForAllObjects();
+
+    Logger::Get().Log(LogLevel::INFO, "[CaptureModel] Picked object " + std::to_string(target_idx) +
+        ", modelId=" + obj.modelId + ", taskId=" + obj.taskId + ", hasLightmap=" +
+        std::to_string(app_->renderer_.HasLightmapForTask(LightmapTaskKey(obj))));
     
-    // Retrieve mesh bounds to properly frame the model
-    glm::vec3 extents = app_->renderer_.GetMeshExtents(obj.modelId, obj.isBuilding);
-    glm::vec3 center = app_->renderer_.GetMeshCenter(obj.modelId, obj.isBuilding);
-    
-    float distance = glm::length(extents) * 40.96f * obj.scale * 2.5f;
-    if (distance < 5.0f) distance = 25.0f;
-    
-    // The visual center of the object in world space:
-    glm::mat4 objMat = glm::translate(glm::mat4(1.0f), glm::vec3(obj.pos));
-    objMat = glm::rotate(objMat, (float)obj.rot.z, glm::vec3(0.0f, 0.0f, 1.0f));
-    objMat = glm::rotate(objMat, (float)obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f));
-    objMat = glm::rotate(objMat, (float)obj.rot.x, glm::vec3(1.0f, 0.0f, 0.0f));
-    objMat = glm::scale(objMat, glm::vec3(40.96f * (float)obj.scale));
-    glm::vec3 worldCenter = glm::vec3(objMat * glm::vec4(center, 1.0f));
-    
+    // Camera parameters matching igi_game_plugin.exe defaults exactly so editor
+    // and game screenshots are taken from identical world-space positions.
+    // Units are native game world units (same as obj.pos).
+    static constexpr double kOrbitRadius     = 40000.0;  // exterior orbit radius
+    static constexpr double kExteriorHeight  = 20000.0;  // camera Z above obj.pos.z
+    static constexpr double kInteriorHeight  = 9750.0;   // eye Z above obj.pos.z inside
+
+    // Exterior pitch: tilt down to aim at the object (same as game plugin auto-pitch)
+    const float extPitchDeg = -glm::degrees(static_cast<float>(
+        std::atan2(kExteriorHeight, kOrbitRadius)));  // ≈ -26.57°
+
     int width = app_->window_state_.viewport_width_;
     int height = app_->window_state_.viewport_height_;
     std::vector<unsigned char> pixels(width * height * 3);
     std::vector<unsigned char> flipped(width * height * 3);
 
-    auto capture_angle = [&](const char* suffix, float angle_offset, float pitch_deg, float z_lift) {
-        // We set the viewer's yaw and pitch
-        app_->viewer_.yaw_ = -obj.rot.z + angle_offset;
-        app_->viewer_.pitch_ = pitch_deg;
+    // Editor yaw convention: yaw=0 → forward = +Y (north), same as game plugin.
+    // For orbit angle θ: camera is placed at (obj.x - sin(θ)*R, obj.y - cos(θ)*R),
+    // so the look-direction is +sin(θ), +cos(θ) in XY.
+    // Editor forward.x = -sin(yaw°) and forward.y = cos(yaw°), so:
+    //   lookYaw_editor = (360 - orbitYaw_deg) % 360
+    auto set_camera = [&](float camX, float camY, float camZ, float lookYawDeg, float pitchDeg) {
+        app_->viewer_.pos_   = glm::vec3(camX, camY, camZ);
+        app_->viewer_.yaw_   = lookYawDeg;
+        app_->viewer_.pitch_ = pitchDeg;
         app_->UpdateViewerVectors();
-        
-        glm::vec3 camTarget = worldCenter;
-        camTarget.z += z_lift;
-        
-        // Position camera back from the object's visual center
-        app_->viewer_.pos_ = camTarget - app_->viewer_.forward_ * distance;
-        
-        // IMPORTANT: Must sync view_define_ for the renderer to actually use this camera pos
         app_->UpdateViewDefine();
-        
-        // Render frame twice to ensure the double-buffer has the 3D scene in the back buffer
+    };
+
+    auto capture_shot = [&](const char* suffix) {
+        // Render twice: first pass fills back-buffer, swap puts it in front, second
+        // pass ensures the final scene is in the front buffer we read from.
         app_->OnDisplay();
         app_->OnDisplay();
-        
-        // Read from back buffer
+
+        glReadBuffer(GL_FRONT);
         glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
-        
-        // Flip image vertically
-        for (int y = 0; y < height; ++y) {
+        glReadBuffer(GL_BACK);
+
+        for (int y = 0; y < height; ++y)
             memcpy(&flipped[((height - 1 - y) * width * 3)], &pixels[(y * width * 3)], width * 3);
-        }
-        
+
         char filename[256];
-        snprintf(filename, sizeof(filename), "screenshots/Level%02d_Model%s_%s.png", cmd.level, cmd.modelId.c_str(), suffix);
+        snprintf(filename, sizeof(filename), "screenshots/Level%02d_Model%s_%s.png",
+                 cmd.level, cmd.modelId.c_str(), suffix);
         stbi_write_png(filename, width, height, 3, flipped.data(), width * 3);
     };
 
     _mkdir("screenshots");
-    
-    // 6 Exterior shots (every 60 degrees)
+
+    // 6 Exterior shots (every 60°) — mirrors game plugin's default 6-shot orbit
     for (int angle_deg = 0; angle_deg < 360; angle_deg += 60) {
+        const float rad = glm::radians((float)angle_deg);
+        const float camX = (float)obj.pos.x - std::sin(rad) * (float)kOrbitRadius;
+        const float camY = (float)obj.pos.y - std::cos(rad) * (float)kOrbitRadius;
+        const float camZ = (float)obj.pos.z + (float)kExteriorHeight;
+        const float lookYaw = (float)((360 - angle_deg) % 360);
+
+        set_camera(camX, camY, camZ, lookYaw, extPitchDeg);
+
         char suffix[32];
         snprintf(suffix, sizeof(suffix), "Ext_%03d", angle_deg);
-        capture_angle(suffix, (float)angle_deg, -15.0f, 256.0f * 10.0f); // Pitch down, lift camera 10 meters
+        capture_shot(suffix);
     }
-    
-    // 4 Interior shots (distance = 0, every 90 degrees)
-    distance = 0.0f;
+
+    // 4 Interior shots (every 90°) — camera at object position at eye height, horizontal
     for (int angle_deg = 0; angle_deg < 360; angle_deg += 90) {
+        const float camX = (float)obj.pos.x;
+        const float camY = (float)obj.pos.y;
+        const float camZ = (float)obj.pos.z + (float)kInteriorHeight;
+        const float lookYaw = (float)((360 - angle_deg) % 360);
+
+        set_camera(camX, camY, camZ, lookYaw, 0.0f);  // horizontal pitch
+
         char suffix[32];
         snprintf(suffix, sizeof(suffix), "Int_%03d", angle_deg);
-        capture_angle(suffix, (float)angle_deg, 0.0f, 256.0f * 1.5f); // Level pitch, eye height 1.5 meters
+        capture_shot(suffix);
     }
 }

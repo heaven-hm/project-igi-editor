@@ -119,15 +119,6 @@ void main() {
 
     vec4 texColor = (u_useTexture != 0) ? texture(u_texture, v_uv) : u_baseColor;
 
-    // The baked .olm lightmap already encodes full scene lighting (ambient +
-    // direct + shadow), so it REPLACES the dynamic light term for this
-    // submesh. u_lightmapScale re-lights it live for the object's current
-    // orientation (1,1,1 when the object hasn't moved since the bake).
-    // IGI multiplies lightmap color by 2.0 to allow overbrightening (warm colors).
-    if (u_useLightmap != 0) {
-        light = texture(u_lightmap, v_uv2).rgb * 2.0 * u_lightmapScale;
-    }
-
     float finalAlpha = (u_useTexture != 0 ? texColor.a : 1.0) * u_alpha;
 
     // Glass: even a perfectly clear pane (texture alpha ~0) must show a faint
@@ -138,7 +129,15 @@ void main() {
         light += vec3(spec * 1.5);
     }
 
-    vec3 litColor = light * texColor.rgb * u_tint;
+    // OLM stores ABSOLUTE lighting in [0,1] range. UV2 from MEF uses DirectX
+    // convention (V=0 at top), so flip V for OpenGL (V=0 at bottom).
+    vec3 litColor;
+    if (u_useLightmap != 0) {
+        vec2 olmUV = vec2(v_uv2.x, 1.0 - v_uv2.y);
+        litColor = texColor.rgb * texture(u_lightmap, olmUV).rgb * u_lightmapScale * u_tint;
+    } else {
+        litColor = light * texColor.rgb * u_tint;
+    }
     litColor = pow(max(litColor, 0.0), vec3(u_gamma));
 
     // Atmospheric fog: same linear formula as terrain_fog.frag.
@@ -487,7 +486,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     }
 
     glUniform3f(loc_dirlight, sun_front_color_.x, sun_front_color_.y, sun_front_color_.z);
-    glUniform3f(loc_ambient,  sun_back_color_.x,  sun_back_color_.y,  sun_back_color_.z);
+    glUniform3f(loc_ambient,  global_ambient_.x,  global_ambient_.y,  global_ambient_.z);
     // Use the level's actual sun direction so dynamic-lit (non-lightmapped) objects
     // face the same light source as the game. Falls back to a sensible default if
     // the level hasn't set a sun direction yet.
@@ -747,7 +746,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 // the same warm/cool tint as the game. Scale front by 0.65 so even a
                 // fully-lit face stays within [0,1] when summed with the back (ambient).
                 const glm::vec3 kDefDirlight = sun_front_color_ * 0.65f;
-                const glm::vec3 kDefAmbient  = sun_back_color_;
+                const glm::vec3 kDefAmbient  = global_ambient_;
 
                 // Precompute the per-channel modulation lambda for lightmapped submeshes.
                 auto blockScale = [&](const glm::vec3& nLocal) -> glm::vec3 {
@@ -762,7 +761,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                     glm::vec3 nO = glm::normalize(eul(bakedRot) * nLocal);
                     glm::vec3 nN = glm::normalize(eul(obj.rot)  * nLocal);
                     glm::vec3 sd = glm::length(sun_dir_) > 1e-6f ? glm::normalize(sun_dir_) : glm::vec3(0,0,1);
-                    auto L = [&](const glm::vec3& n){ return sun_back_color_ + sun_front_color_ * std::max(glm::dot(n, sd), 0.0f); };
+                    auto L = [&](const glm::vec3& n){ return global_ambient_ + sun_front_color_ * std::max(glm::dot(n, sd), 0.0f); };
                     glm::vec3 lo = L(nO), ln = L(nN);
                     const float eps = 1e-3f, maxF = 4.0f;
                     return glm::vec3(std::min(ln.x/std::max(lo.x,eps),maxF),
@@ -856,10 +855,10 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 bool hasTexture = (mesh.textureID > 0);
                 if (hasTexture) {
                     glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                    glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+                    glUniform3f(loc_ambient,  global_ambient_.r, global_ambient_.g, global_ambient_.b);
                 } else {
                     glUniform3f(loc_dirlight, 0.7f, 0.7f, 0.7f);
-                    glUniform3f(loc_ambient,  r * 0.4f, g * 0.4f, b * 0.4f);
+                    glUniform3f(loc_ambient,  r * global_ambient_.r, g * global_ambient_.g, b * global_ambient_.b);
                 }
                 if (mesh.textureID > 0) {
                     glUniform1i(loc_useTex, 1);

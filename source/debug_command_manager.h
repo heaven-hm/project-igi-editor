@@ -9,6 +9,7 @@
 struct DebugCommand {
     std::string type;
     int level = -1;
+    int val = 0;
     std::string modelId;
     bool has_pos = false;
     double x = 0.0;
@@ -32,6 +33,7 @@ private:
     void ProcessCommand(const DebugCommand& cmd);
     void GotoModel(const DebugCommand& cmd);
     void CaptureModel(const DebugCommand& cmd);
+    void DeleteModel(const DebugCommand& cmd);
 
     App* app_;
     std::thread watcher_thread_;

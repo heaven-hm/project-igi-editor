@@ -142,6 +142,8 @@ public:
     glm::vec3 GetSunDir() const { return sun_dir_; }
     glm::vec3 GetSunFrontColor() const { return sun_front_color_; }
     glm::vec3 GetSunBackColor() const { return sun_back_color_; }
+    glm::vec3 GetGlobalAmbient() const { return global_ambient_; }
+    void SetGlobalAmbient(const glm::vec3& amb) { global_ambient_ = amb; }
 
     // Escape-menu "Lightmaps" checkbox — when false, calculated lightmaps are
     // never bound during render regardless of SetLightmapForTask state.
@@ -172,6 +174,7 @@ private:
     glm::vec3 sun_dir_ = glm::vec3(0.5f, 1.0f, 0.5f);
     glm::vec3 sun_front_color_ = glm::vec3(0.6f, 0.6f, 0.6f);
     glm::vec3 sun_back_color_  = glm::vec3(0.4f, 0.4f, 0.4f);
+    glm::vec3 global_ambient_  = glm::vec3(0.15f, 0.15f, 0.15f);
     float global_gamma_ = 1.0f;
     glm::vec3 fog_color_ = glm::vec3(0.15f, 0.15f, 0.15f);
     float fog_far_ = 30000.0f;

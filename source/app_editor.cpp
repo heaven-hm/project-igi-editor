@@ -362,6 +362,13 @@ size_t App::ResolveAndApplyLightmap(LevelObject& obj, const std::string& qscPath
 	size_t uploaded = std::count_if(textures.begin(), textures.end(), [](GLuint t) { return t != 0; });
 	Logger::Get().Log(LogLevel::INFO, "[Lightmap] Uploaded " + std::to_string(uploaded) + "/" +
 		std::to_string(textures.size()) + " lightmap texture(s) for " + key);
+	// Log first 16 OLM paths so we can verify submesh→OLM assignment order
+	if (key == "1117") {
+		for (size_t i = 0; i < std::min(olmPaths.size(), size_t(16)); ++i) {
+			auto fn = olmPaths[i].substr(olmPaths[i].find_last_of("\\/") + 1);
+			Logger::Get().Log(LogLevel::INFO, "[Lightmap][1117] olm[" + std::to_string(i) + "] = " + fn);
+		}
+	}
 	renderer_.SetLightmapForTask(key, std::move(textures), obj.pos, obj.rot);
 	return uploaded;
 }
@@ -458,7 +465,7 @@ bool App::RecalcLightmapToOlm(LevelObject& obj, const std::string& qscPath) {
 	}
 	std::string recalcErr;
 	bool ok = igi1conv::LightmapRecalc(obj.modelId, qscPath, obj.taskId, mefPath,
-		bakedRot, obj.rot, renderer_.GetSunDir(), renderer_.GetSunFrontColor(), renderer_.GetSunBackColor(), recalcErr);
+		bakedRot, obj.rot, renderer_.GetSunDir(), renderer_.GetSunFrontColor(), renderer_.GetGlobalAmbient(), recalcErr);
 	if (!ok) {
 		Logger::Get().Log(LogLevel::WARNING, "[Lightmap] Write-back recalc failed for taskId=" + obj.taskId + ": " + recalcErr);
 		return false;

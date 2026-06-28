@@ -858,7 +858,7 @@ void Renderer_Objects::DrawAttachmentsRecursive(
                     // Same normal lighting for window/glass attachments so they stay
                     // clear and see-through (see top-level path — flat-gray reverted).
                     glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                    glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+                    glUniform3f(loc_ambient,  global_ambient_.r, global_ambient_.g, global_ambient_.b);
                     glUniform1i(loc_useTex, 1);
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, sub.textureID);
@@ -867,11 +867,11 @@ void Renderer_Objects::DrawAttachmentsRecursive(
                     // Untextured accessory (e.g. sunglasses): hash-color fallback, matching
                     // the untextured submesh path used for top-level objects above.
                     size_t hash = std::hash<std::string>{}(att.modelId);
-                    float hr = 0.4f + (float)(hash & 0xFF) / 255.0f * 0.4f;
-                    float hg = 0.4f + (float)((hash >> 8) & 0xFF) / 255.0f * 0.4f;
-                    float hb = 0.4f + (float)((hash >> 16) & 0xFF) / 255.0f * 0.4f;
+                    float hr = global_ambient_.r + (float)(hash & 0xFF) / 255.0f * global_ambient_.r;
+                    float hg = global_ambient_.g + (float)((hash >> 8) & 0xFF) / 255.0f * global_ambient_.g;
+                    float hb = global_ambient_.b + (float)((hash >> 16) & 0xFF) / 255.0f * global_ambient_.b;
                     glUniform3f(loc_dirlight, hr * 0.6f, hg * 0.6f, hb * 0.6f);
-                    glUniform3f(loc_ambient,  hr * 0.4f, hg * 0.4f, hb * 0.4f);
+                    glUniform3f(loc_ambient,  hr * global_ambient_.r, hg * global_ambient_.g, hb * global_ambient_.b);
                     glUniform1i(loc_useTex, 0);
                 }
                 glBindVertexArray(sub.VAO);
@@ -885,7 +885,7 @@ void Renderer_Objects::DrawAttachmentsRecursive(
             glBindVertexArray(0);
         } else if (subMesh.textureID > 0) {
             glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-            glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+            glUniform3f(loc_ambient,  global_ambient_.r, global_ambient_.g, global_ambient_.b);
             glUniform1i(loc_useTex, 1);
             GL_BindTexture2D(0, subMesh.textureID);
             glUniform1i(loc_tex, 0);

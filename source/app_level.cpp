@@ -342,17 +342,42 @@ void App::LoadLevel(int level_no) {
 		// [7-9]=scale RGB, [10]=gamma.
 		{
 			float gamma = 1.0f;
+			glm::vec3 globalAmbient(0.15f, 0.15f, 0.15f);
 			for (const auto& gl : objects) {
-				if (gl.type != "GlobalLight" || gl.argTokens.size() < 11) continue;
-				try {
-					gamma = std::stof(gl.argTokens[10]);
-					Logger::Get().Log(LogLevel::INFO, "[App] GlobalLight gamma resolved: " + std::to_string(gamma));
-				} catch (const std::exception& e) {
-					Logger::Get().Log(LogLevel::WARNING, std::string("[App] GlobalLight gamma unparsable (") + e.what() + "), using 1.0");
+				if (gl.type == "GlobalLight" && gl.argTokens.size() >= 11) {
+					try {
+						gamma = std::stof(gl.argTokens[10]);
+						Logger::Get().Log(LogLevel::INFO, "[App] GlobalLight gamma resolved: " + std::to_string(gamma));
+					} catch (const std::exception& e) {
+						Logger::Get().Log(LogLevel::WARNING, std::string("[App] GlobalLight gamma unparsable (") + e.what() + "), using defaults");
+					}
 				}
-				break;
+				if (gl.type == "GlobalLight") {
+					for (int ci : gl.childrenIndices) {
+						if (ci < 0 || ci >= (int)objects.size()) continue;
+						const auto& kf = objects[ci];
+						if (kf.type == "GlobalLightKeyframe" && kf.argTokens.size() >= 15) {
+							try {
+								globalAmbient.r = std::stof(kf.argTokens[12]); // Ambient color object category 1
+								globalAmbient.g = std::stof(kf.argTokens[13]);
+								globalAmbient.b = std::stof(kf.argTokens[14]);
+								Logger::Get().Log(LogLevel::INFO, "[App] GlobalLightKeyframe cat 1: " + std::to_string(globalAmbient.r) + "," + std::to_string(globalAmbient.g) + "," + std::to_string(globalAmbient.b));
+								if (kf.argTokens.size() >= 24) {
+									Logger::Get().Log(LogLevel::INFO, "[App] cat 2: " + kf.argTokens[15] + "," + kf.argTokens[16] + "," + kf.argTokens[17]);
+									Logger::Get().Log(LogLevel::INFO, "[App] cat 3: " + kf.argTokens[18] + "," + kf.argTokens[19] + "," + kf.argTokens[20]);
+									Logger::Get().Log(LogLevel::INFO, "[App] cat 4: " + kf.argTokens[21] + "," + kf.argTokens[22] + "," + kf.argTokens[23]);
+								}
+							} catch (const std::exception& e) {
+								Logger::Get().Log(LogLevel::WARNING, std::string("[App] GlobalLightKeyframe ambient unparsable (") + e.what() + "), using defaults");
+							}
+							break;
+						}
+					}
+					break;
+				}
 			}
 			renderer_.SetGlobalGamma(gamma);
+			renderer_.SetGlobalAmbient(globalAmbient);
 		}
 
 		// RainEffect (Task_DeclareParameters("RainEffect","Is Rain","bool8",
@@ -510,7 +535,7 @@ void App::LoadLevel(int level_no) {
 				std::to_string(level_no) + "\\lightmaps\\lightmaps.res";
 			if (std::filesystem::exists(lmRes)) {
 				Logger::Get().Log(LogLevel::INFO, "[Lightmap] Auto-loading baked lightmaps for level " + std::to_string(level_no));
-				// CalculateLightmapsForAllObjects(); // Removed because it blocks main thread for 3-5 mins
+				CalculateLightmapsForAllObjects();
 			}
 		}
 	}

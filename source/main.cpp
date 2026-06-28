@@ -723,7 +723,6 @@ int main(int argc, char **argv) {
     g_app.SetInitialStickToGround(true);
   }
   if (level_no > 0) {
-    g_app.LoadLevel(level_no);
     g_app.SetGameLevel(level_no);
   }
 

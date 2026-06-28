@@ -696,6 +696,8 @@ public:
 	glm::vec3 GetSunDir() const { return objects_.GetSunDir(); }
 	glm::vec3 GetSunFrontColor() const { return objects_.GetSunFrontColor(); }
 	glm::vec3 GetSunBackColor() const { return objects_.GetSunBackColor(); }
+	glm::vec3 GetGlobalAmbient() const { return objects_.GetGlobalAmbient(); }
+	void SetGlobalAmbient(const glm::vec3& amb) { objects_.SetGlobalAmbient(amb); }
 	void SetLightmapsEnabled(bool enabled) { objects_.SetLightmapsEnabled(enabled); }
 	void SetSunLight(const glm::vec3& dir, const glm::vec3& frontColor, const glm::vec3& backColor) {
 		objects_.SetSunLight(dir, frontColor, backColor);

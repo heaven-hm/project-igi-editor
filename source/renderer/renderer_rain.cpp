@@ -26,10 +26,10 @@ uniform float u_streakLen;   // world units
 void main() {
     float fallRange = max(u_heightStart - u_heightEnd, 1.0);
     float speed = (0.6 + a_seed.z * 0.8) * fallRange; // world units / second
-    float y = u_heightStart - mod(u_time * speed + a_seed.y * fallRange, fallRange);
+    float z = u_heightStart - mod(u_time * speed + a_seed.y * fallRange + u_cameraPos.z, fallRange);
 
-    vec2 cell = mod(a_seed.xy * u_boxSize, u_boxSize) - u_boxSize * 0.5;
-    vec3 worldPos = vec3(u_cameraPos.x + cell.x, y + a_isTop * u_streakLen, u_cameraPos.z + cell.y);
+    vec2 cell = mod(a_seed.xy * u_boxSize - u_cameraPos.xy, u_boxSize) - u_boxSize * 0.5;
+    vec3 worldPos = vec3(u_cameraPos.x + cell.x, u_cameraPos.y + cell.y, z + a_isTop * u_streakLen);
 
     gl_Position = u_mvp * vec4(worldPos, 1.0);
 }
@@ -134,8 +134,8 @@ void Renderer_Rain::Draw(GLuint ubo_mats, const glm::vec3& cameraPos) {
     // RainEffect's Traceline start/end are raycast-occlusion heights (sky-to-ground
     // probe), not absolute world Y — re-anchor them to the camera each frame so the
     // rain band always surrounds wherever the player actually is in the level.
-    float heightStart = cameraPos.y + start_meters_ * WORLD_UNITS_PER_METER;
-    float heightEnd = cameraPos.y - end_meters_ * WORLD_UNITS_PER_METER;
+    float heightStart = cameraPos.z + start_meters_ * WORLD_UNITS_PER_METER;
+    float heightEnd = cameraPos.z - end_meters_ * WORLD_UNITS_PER_METER;
     if (heightStart <= heightEnd) return;
 
     glUseProgram(shader_program_);
