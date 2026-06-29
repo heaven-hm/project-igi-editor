@@ -1,6 +1,26 @@
 # Changelogs
 
-## 3.9.0-pre — Animations, Music, Lightmapping & More
+## 3.6.0 — Animations, Music, Lightmapping & More
+
+### ✨ Major Highlights
+
+- **🤖 AI Auto-Playing Animations** — Every eligible AI animates automatically at level load, all in parallel across worker threads. Resolution tries Stand Animation → AI-script actions → PatrolPath clips, with a bone-hierarchy default fallback so no AI stays static. Per-AI play/pause control via the property panel.
+
+- **🔫 AI Held Weapons** — Soldiers now hold their assigned weapon in-hand, attached to the "right hand" bone so it moves with the animation. Cutscene AI are excluded. Live weapon-id refresh when changing weapon in the TaskTree.
+
+- **🎵 Level Music + Escape-Menu Toggle** — Level-specific `.wav` auto-plays on load with seamless looping. New `[X] Music` checkbox in the pause menu starts/stops playback live. Pause-aware: music pauses/resumes with the editor.
+
+- **💡 Full Lightmap Bake-Apply Pipeline** — Select an object, click **Calculate Light Mapping**, and the editor bakes a ray-traced lightmap (real sun/gamma) and applies it live. Features live modulation slider, dynamic sun recalculation, per-taskId binding, clean default look.
+
+- **🎮 Escape-Menu Fog Controls** — Fog On/Off toggle + Fog Intensity spinner (0–200%) in Terrain Options, with visible effective-far distance effect.
+
+- **🖥️ Developer Mode & Automated Screenshots** — `--developer-mode` flag enables headless command polling (`add-model`, `capture-model`, `set-fog`) for fully automated multi-level screenshot testing.
+
+- **🔧 Cross-Level Foreign Model Extraction** — Fixed `.mef`/`.tex` extraction for models from other levels, cross-level `.res` fallback, and in-memory index rebuild — no more `429_02_1` fatal errors.
+
+---
+
+## 3.5.4-pre — Fog Controls & Foreign Model Extraction Fixes
 
 ### ✨ New Features
 - **Fog Intensity control (0–200%).** A new spinner row in Terrain Options adjusts `QEDFogIntensity` live via `Renderer::SetFogIntensity()`, which writes `g_fog_intensity` into the terrain fog UBO. The shader uses it to scale `effective_far = g_fog_far / intensity`, making the fog band expand/contract visibly at typical view distances. Default: 10%.
@@ -27,7 +47,7 @@
 
 ---
 
-## 3.8.0-pre — Developer Mode & Automated Screenshots
+## 3.5.3-pre — Developer Mode & Automated Screenshots
 
 ### ✨ New Features
 - **Developer mode (`--developer-mode`).** A new CLI flag that enables a background thread polling `editor/tools/debug-command.txt` for commands. Commands are parsed and queued for execution on the main thread each frame, enabling automated testing without user input.
@@ -48,7 +68,7 @@
 
 ---
 
-## 3.7.0-pre — Lightmap Bake-Apply Pipeline
+## 3.5.2-pre — Lightmap Bake-Apply Pipeline
 
 ### ✨ New Features
 - **Full lightmap bake-apply pipeline.** Select an object in the 3D viewport, click **Calculate Light Mapping** in its property panel, and the editor bakes a lightmap texture for it and applies it live. The pipeline: object-selection → UV2 extraction → sun-direction resolve → ray-traced occlusion → PNG encode → GL texture upload → per-taskId binding in the object fragment shader.
@@ -78,7 +98,7 @@
 
 ---
 
-## 3.6.0-pre — AI Held Weapons & Escape-Menu Music Toggle
+## 3.5.1-pre — AI Held Weapons & Escape-Menu Music Toggle
 
 ### ✨ New Features
 - **AI soldiers now hold their assigned weapon in-hand.** Each `HumanSoldier`-family task in `objects.qvm` carries a `Gun*` weapon child whose `WEAPON_ID_*` enum is resolved to the same render model used by `GunPickup`/`AmmoPickup` (via the existing `ResolvePickupModelId`). The weapon mesh is attached to the soldier's **"right hand"** bone (located by name in the parsed MEF bone list) so it moves with the hand as the animation plays. Static/paused AI hold the weapon at the rest-pose hand position.
