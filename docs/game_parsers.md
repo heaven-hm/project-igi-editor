@@ -1,6 +1,6 @@
 # IGI Editor — Parsers Reference
 
-> **Repo:** [jones-hm/project-igi1ed](https://github.com/jones-hm/project-igi1ed)  
+> **Repo:** [heaven-hm/project-igi1ed](https://github.com/heaven-hm/project-igi1ed)  
 > **Source path:** `source/parsers/` · `source/cli/cli_handler.cpp`
 
 ***

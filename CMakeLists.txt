@@ -203,7 +203,7 @@ else()
 endif()
 
 # ─── igi1conv: prebuilt standalone asset converter ───────────────────────────
-# The converter now lives in its own repo (https://github.com/jones-hm/project-igi-conv).
+# The converter now lives in its own repo (https://github.com/heaven-hm/project-igi-conv).
 # The editor consumes only the committed prebuilt binary, which the POST_BUILD
 # step above copies from assets/editor/tools/ to bin/<cfg>/editor/tools/igi1conv.exe.
 # Before building, fetch_igi1conv.cmake pulls the latest released igi1conv.exe
