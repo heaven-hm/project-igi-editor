@@ -349,7 +349,7 @@
 This release is a major milestone: the standalone asset converter is now a first-class Qt application (`igi1conv`) living in its own repository, the editor codebase has been split into clearly separated modules, and a batch of code-review bugs has been resolved.
 
 ### 🔧 igi1conv — Standalone Asset Converter (Qt)
-- **Dedicated repo**: `igi1conv` is developed at [project-igi-conv](https://github.com/jones-hm/project-igi-conv) and bundled prebuilt with each editor release.
+- **Dedicated repo**: `igi1conv` is developed at [project-igi-conv](https://github.com/heaven-hm/project-igi-conv) and bundled prebuilt with each editor release.
 - **Qt application**: Ships with a full graphical GUI mode and a headless CLI mode. The editor invokes only the CLI internally (`dat to-mtp`, etc.).
 - **Full Qt package**: The entire runtime (exe + Qt5Core/Qt5Gui/Qt5Widgets/Qt5Svg DLLs, platform plugins, image formats) is bundled at `editor/tools/igi1conv/` — no separate Qt installation required.
 - **v1.6.0**: Updated to `igi1conv` v1.6.0 with improved asset conversion accuracy.

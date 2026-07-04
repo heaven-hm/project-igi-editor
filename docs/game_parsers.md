@@ -1,6 +1,6 @@
 # IGI Editor — Parsers Reference
 
-> **Repo:** [jones-hm/project-igi1ed](https://github.com/jones-hm/project-igi1ed)  
+> **Repo:** [heaven-hm/project-igi1ed](https://github.com/heaven-hm/project-igi1ed)  
 > **Architecture (3.4.0-pre+):** All file conversion goes through the bundled `igi1conv.exe` (v1.7.0, located at `editor/tools/igi1conv/`). The editor's only in-process parsers are the few that feed runtime data every frame (`mef_native`, `fnt_parser`, `qsc_lexer`/`qsc_parser`, `terrain_files`, and the qvm pipeline used by `verify_level_core` / `--run-tests`).  
 > **Source path:** `source/utils_igi1conv.{h,cpp}` is the shared spawner. Per-consumer parsers live next to their primary consumer (`source/renderer/`, `source/level/`).
 

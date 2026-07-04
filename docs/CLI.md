@@ -3,7 +3,7 @@
 The **IGI Editor** is a hybrid toolkit that operates in two primary modes:
 1. **Graphical User Interface (GUI) Application**: A real-time 3D viewport editor for heightmaps, objects, Splines, AI, and level layouts.
 2. **Editor CLI**: Headless commands for level verification, testing, and resource extraction.
-3. **igi1conv.exe**: Standalone asset converter, bundled at `editor/tools/igi1conv.exe` (built from the separate [project-igi-conv](https://github.com/jones-hm/project-igi-conv) repo).
+3. **igi1conv.exe**: Standalone asset converter, bundled at `editor/tools/igi1conv.exe` (built from the separate [project-igi-conv](https://github.com/heaven-hm/project-igi-conv) repo).
 
 ---
 
@@ -83,7 +83,7 @@ Extracts all model, texture, and terrain assets for level N to a directory (defa
 
 ## Asset Conversion
 
-The standalone converter `igi1conv.exe` ships in `editor/tools/igi1conv/` (full Qt package with runtime DLLs) but is developed and documented separately at **[project-igi-conv](https://github.com/jones-hm/project-igi-conv)**.
+The standalone converter `igi1conv.exe` ships in `editor/tools/igi1conv/` (full Qt package with runtime DLLs) but is developed and documented separately at **[project-igi-conv](https://github.com/heaven-hm/project-igi-conv)**.
 
 `igi1conv` is a **Qt application** — it has a graphical GUI mode and a headless CLI mode. The editor uses only the CLI mode internally.
 
