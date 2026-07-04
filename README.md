@@ -2,7 +2,7 @@
 
 **IGI Editor** is a professional 3D world and object manipulation toolkit for Project IGI. Inspired by the official [IGI 2 Editor](https://www.nexusmods.com/igi2covertstrike/mods/1) created by the original IGI Developers, it provides a modern interface for level research, object placement, and terrain modification.
 
-Professional 3D **modding** suite featuring click-to-select map selection, train and spline tools, a streamlined workspace menu, automated asset extraction, flawless native MEF model loading (including complex buildings and bone structures), integrated QVM decompilation, and a full headless CLI toolchain. It includes an **IGI 2 Style position and orientation properties editor, sliders, pushbuttons, etc.** The editor features fully integrated, **native support for game file formats (SPR, TEX, MEF, DAT, MTP) with absolutely no external tools required**! Supports editing and compiling for all 14 original game levels with native asset parity.
+Professional 3D **modding** suite featuring click-to-select map selection, train and spline tools, a streamlined workspace menu, automated asset extraction, flawless native MEF model loading (including complex buildings and bone structures), integrated QVM decompilation, and a full headless CLI toolchain. It includes an **IGI 2 Style position and orientation properties editor, sliders, pushbuttons, etc.** All asset conversion (DAT, MTP, QSC, QVM, RES, Graph, TEX, FNT, MEF, Terrain) is delegated to the bundled **`igi1conv.exe`** (v1.7.0, located at `editor/tools/igi1conv/`) through a single shared spawner (`source/utils_igi1conv.{h,cpp}`); only the runtime loaders that need data the CLI cannot supply every frame (mef_native, fnt_parser, qsc_lexer/parser, terrain_files) stay in-process. Supports editing and compiling for all 14 original game levels with native asset parity.
 
 This project is built upon the foundational work of the [Project-IGI-Terrain](https://github.com/hjcminus/Project-IGI-Terrain) repository. Special thanks to [hjcminus](https://github.com/hjcminus) for their research and for bringing this codebase to light. It is built using C++17 and OpenGL, and it is cross-platform, but it is mainly tested on Windows.
 
@@ -15,6 +15,13 @@ No game assets, models, textures, or any copyrighted content from Project I.G.I.
 are included in this repository or any releases.
 
 For full details, see [LEGAL.md](LEGAL.md).
+
+---
+
+## ⚠️ Pre-Releases Warning
+
+> [!WARNING]
+> Pre-releases labeled with the tag `pre-release` (such as `*-pre` or containing `pre`) are experimental. They may contain bugs and have experimental features added. It is highly recommended to download and use **stable versions** only.
 
 ---
 
@@ -95,12 +102,14 @@ With the release of our premium modding features, we have expanded our workspace
 - **IGI 2 Style Controls**: Seamless object translation and rotation using standard mouse-drag modifiers (Shift, Ctrl, A, B, G).
 - **Automated Path & Sync Pipeline**: Automatically handles compiler syncing, path mapping, and safe directory cleaning.
 - **Foreign Model Support**: Ability to load, import, and add foreign models from other levels directly into the active level workspace.
+- **Visual 3D Graph Editor**: Full-featured interactive 3D navigation graph editor to view, modify, and save pathfinding networks, node positions, materials, and connection links (defined in `.dat` files). Details in [docs/graph_editor.md](docs/graph_editor.md).
 
 ### Current Testing Status
 - **Building Editor**: Working - fully tested with Building objects.
 - **Terrain Editor**: Working - 3D terrain heightmap rendering and snapping fully functional.
 - **Task Tree & Objectives**: Working - interactive tree management, copy/paste, deletion, and insertion of new tasks fully operational.
 - **AI & Waypoint System**: Working - full editing of NPC patrol nodes and properties.
+- **Navigation Graph Editor**: Working - fully supports interactive 3D navigation nodes, path connections, and per-node property adjustments.
 - **Model Format**: Uses proprietary **Native MEF Models** natively loaded by the integrated MEF parser for optimal accuracy and parity with the game engine.
 - **Level Tested**: Supports compiling/decompiling all 14 original game levels. Note that only the first few levels are fully tested and verified. Levels from Level 5 onwards may have bugs or issues; if you find any, please create an issue on GitHub and report them to us! Thank you!
 
@@ -213,7 +222,7 @@ $env:IGI_TEST_LEVEL="10"; .\igi_tests.exe
 .\igi_tests.exe
 ```
 
-**230 tests** across 18 suites: QSC lexer/parser, QVM round-trips (synthetic + real game data for all 14 levels), file-format parsers (DAT, RES, TEX, MTP, FNT, Graph), verify-core units, and level-verification integration tests.
+**275 tests** across 28 suites: QSC lexer/parser, QVM round-trips (synthetic + real game data for all 14 levels), file-format parsers (DAT, RES, TEX, MTP, FNT, Graph), verify-core units, and level-verification integration tests. (2 pre-existing writer byte-roundtrip failures are carried over from `feature/graph-editor` and are unrelated to the 3.4.0-pre migration.)
 
 For the full test reference — suites, filters, fixture descriptions, and build/deploy instructions — see:
 👉 **[Test Suite Documentation](docs/TESTS.md)**
@@ -223,9 +232,9 @@ For the full test reference — suites, filters, fixture descriptions, and build
 ## 🛠️ Future Roadmap
 
 With the successful release of **Version 2.0.0**, core features like the **Native MEF Parser**, **Asset Extractor**, **QVM Toolchain**, **Task Tree Editor**, **Train & Spline Engine**, **Click-to-Select Map View**, and **Headless CLI** have been fully realized. Future milestones include:
-- **Native Game Convertor tool**: A native game converter tool called `gconv1` matching `gconv.exe` from the IGI 2 Editor to convert all IGI 1 files.
+- **Native Game Converter tool**: `igi1conv` — a standalone game asset converter matching `gconv.exe` from the IGI 2 Editor — developed in its own repo at [project-igi-conv](https://github.com/jones-hm/project-igi-conv). It ships as a **Qt application** with both a GUI mode and a headless CLI mode; the editor uses only the CLI. The full prebuilt package (exe + Qt runtime DLLs) is bundled at `editor/tools/igi1conv/`.
 - **Upgraded compatibility**: A better upgraded version to support the Neo Remastered mod.
-- **Visual 3D Graph Editor (Coming Soon)**: A full-featured Visual 3D Graph Editor displaying interactive nodes and visuals to seamlessly construct game logic, path routes, and area connections.
+- **Visual 3D Graph Editor (Completed)**: Full-featured interactive 3D Graph Editor displaying interactive nodes and visuals to seamlessly construct game logic, path routes, and area connections. See [docs/graph_editor.md](docs/graph_editor.md).
 - **Weapon & Item Configurator**: Rich telemetry overlays and visual UI for modifying active gun parameters, ammunition slots, and dropping custom inventory directly onto the battlefield.
 - **Full 14 Levels campaign run**: Complete, verified playthroughs of all custom compiled maps to guarantee total end-to-end stability.
 

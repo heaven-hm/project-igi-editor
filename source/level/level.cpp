@@ -11,11 +11,11 @@
 #include "logger.h"
 #include "utils.h"
 #include "cli/asset_extractor.h"
-#include "parsers/qvm_parser.h"
-#include "parsers/qvm_decompiler.h"
-#include "parsers/qsc_lexer.h"
-#include "parsers/qsc_parser.h"
-#include "parsers/qvm_compiler.h"
+#include "qvm_parser.h"
+#include "qvm_decompiler.h"
+#include "qsc_lexer.h"
+#include "qsc_parser.h"
+#include "qvm_compiler.h"
 
 
 
@@ -91,12 +91,9 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 	char filename[1024];
 	std::string exeDir = GetExeDirectory();
 
-	// Extract textures and models from IGI .res archives (cached per-level)
-	AssetExtractor::EnsureLevelAssets(params.level_no_, Utils::GetIGIRootPath(), exeDir);
-	// Extract textures from all other levels once per session so cross-level
-	// texture references (e.g. model 618 in level 3 whose textures live in level 6)
-	// are available for the FindTextureFile cross-level search.
-	// AssetExtractor::EnsureAllLevelTextures(Utils::GetIGIRootPath(), exeDir);
+	// Textures and models are now loaded directly from .res archives into memory
+	// by Renderer_Objects::LoadResCache (called in app_level.cpp before BeginLoadLevel).
+	// No disk extraction to editor/textures or editor/models is performed.
 
 	// Verify terrain folder exists in game directory
 	try {
@@ -122,7 +119,7 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 
 	Logger::Get().Log(LogLevel::INFO, "[Level] Decompiling objects.qvm for level " + std::to_string(params.level_no_));
 	DecompileObjects(params.level_no_);
-	Str_SPrintf(filename, 1024, "%s\\content\\qed\\temp\\objects.qsc", exeDir.c_str());
+	Str_SPrintf(filename, 1024, "%s\\editor\\qed\\temp\\objects.qsc", exeDir.c_str());
 
 	qsc_path_ = filename;
 
@@ -186,8 +183,8 @@ void Level::DecompileObjects(int levelNo) {
 
 	std::string exeDir = GetExeDirectory();
 	char destPath[1024];
-	std::filesystem::create_directories(exeDir + "\\content\\qed\\temp");
-	Str_SPrintf(destPath, 1024, "%s\\content\\qed\\temp\\objects.qsc", exeDir.c_str());
+	std::filesystem::create_directories(exeDir + "\\editor\\qed\\temp");
+	Str_SPrintf(destPath, 1024, "%s\\editor\\qed\\temp\\objects.qsc", exeDir.c_str());
 
 	try {
 		// Use internal C++ decompiler
@@ -222,7 +219,7 @@ bool Level::FilesDiffer(const std::string& file1, const std::string& file2) {
 
 void Level::CompileCurrentQSC(int level_no) {
 	std::string exeDir = GetExeDirectory();
-	std::string editorQSC = exeDir + "\\content\\qed\\temp\\objects.qsc";
+	std::string editorQSC = exeDir + "\\editor\\qed\\temp\\objects.qsc";
 
 	if (!std::filesystem::exists(editorQSC)) {
 		Logger::Get().Log(LogLevel::ERR, "[Level] FAILED: Source QSC not found: " + editorQSC);
@@ -308,7 +305,7 @@ void Level::Update(update_params_s& params) {
 
 void Level::SaveObjectsLocalOnly() {
 	std::string exeDir = GetExeDirectory();
-	std::string localQsc = exeDir + "\\content\\qed\\temp\\objects.qsc";
+	std::string localQsc = exeDir + "\\editor\\qed\\temp\\objects.qsc";
 	Logger::Get().Log(LogLevel::INFO, "[Level] Saving local live QSC to: " + localQsc);
 	level_objects_.SaveToQSC(localQsc);
 }
@@ -324,7 +321,7 @@ void Level::SaveChanges() {
 
 void Level::SaveAndReloadObjects() {
 	std::string exeDir = GetExeDirectory();
-	std::string localQsc = exeDir + "\\content\\qed\\temp\\objects.qsc";
+	std::string localQsc = exeDir + "\\editor\\qed\\temp\\objects.qsc";
 
 	// Helper to get a unique tree path for an object to preserve expansion state
 	auto GetObjectTreePath = [](const std::vector<LevelObject>& objects, int idx) -> std::string {
@@ -452,45 +449,77 @@ void Level::LoadStartPosInfo(const QSC* qsc_objects, glm::vec3& start_pos, float
 
 void Level::LoadFogInfo(const QSC* qsc_objects, IRenderResLoader* render_res_loader) {
 	glm::vec4 fog_color(0.15f, 0.15f, 0.15f, 1.0f);
-	float fog_far = 30000.0f;
+	float fog_far_meters = 30000.0f;
 
 	const QSC::func_s* qsc_funcs[1024];
 	int num_func = qsc_objects->FindFuncByStr("GlobalLightKeyframe", qsc_funcs);
-	if (num_func) {
-		const QSC::func_s* f = qsc_funcs[0];	// read first function
+
+	// GlobalLightKeyframe declares 51 parameters ending in "Time" (Real32) —
+	// same animated-keyframe shape as Dirlight/DirlightKeyframe. A level can
+	// list more than one (observed: level3 has Time=12 and Time=100 entries)
+	// and NOT in chronological order, so blindly reading qsc_funcs[0] picked
+	// whichever the decompiler happened to emit first rather than the
+	// default/lowest-Time state. Mirror app_level.cpp's Dirlight selection:
+	// among all keyframes found, pick the one with the smallest Time.
+	bool haveBest = false;
+	float bestTime = 0.0f;
+	float bestFogColor[3] = { fog_color.r, fog_color.g, fog_color.b };
+	float bestFogFarMeters = fog_far_meters;
+
+	for (int fi = 0; fi < num_func; ++fi) {
+		const QSC::func_s* f = qsc_funcs[fi];
+
+		float curFogColor[3] = { fog_color.r, fog_color.g, fog_color.b };
+		float curFogDensity = 0.0f;
+		float curTime = 0.0f;
+		bool haveDensity = false;
 
 		int arg_idx = 0;
-		const QSC::arg_s * a = f->args_;
+		const QSC::arg_s* a = f->args_;
 		while (a) {
-
 			if (a->type_ == QSC::arg_s::type_t::DBL) {
+				// Task_New args are [0]=task id, [1]=func name, [2]=instance name,
+				// THEN the declared GlobalLightKeyframe parameters begin (same
+				// +3 leading-arg offset confirmed for FlatSky against objects.qsc):
+				// [3]=PushButton, [4-6]=Ambient terrain RGB, [7-9]=Fog terrain RGB,
+				// [10]=Fog density terrain, [11]=Link setting terrain, ...,
+				// last arg = Time. Colors are already-normalized 0-1 floats.
 				switch (arg_idx) {
-				case 7:
-					fog_color.r = (float)a->dbl_;
-					break;
-				case 8:
-					fog_color.g = (float)a->dbl_;
-					break;
-				case 9:
-					fog_color.b = (float)a->dbl_;
-					break;
-				case 10:
-					// tune this
-					fog_far = (1.0f / (float)a->dbl_) * 7200.0f;
-					break;
+				case 7: curFogColor[0] = (float)a->dbl_; break;
+				case 8: curFogColor[1] = (float)a->dbl_; break;
+				case 9: curFogColor[2] = (float)a->dbl_; break;
+				case 10: curFogDensity = (float)a->dbl_; haveDensity = true; break;
 				}
+				curTime = (float)a->dbl_; // last DBL seen by loop end == Time
 			}
-
 			a = a->next_;
 			arg_idx++;
+		}
 
-			if (arg_idx > 10) {
-				break;
-			}
+		if (haveDensity && (!haveBest || curTime < bestTime)) {
+			haveBest = true;
+			bestTime = curTime;
+			bestFogColor[0] = curFogColor[0];
+			bestFogColor[1] = curFogColor[1];
+			bestFogColor[2] = curFogColor[2];
+			// Fog density of 0 is a valid "no fog at this keyframe" state
+			// (observed: level3's night keyframe) — keep the far/no-fog default.
+			// Factor 120: density=0.12 (level1 haze) → fog_far=1000m; density=0.5 → 240m.
+			bestFogFarMeters = (curFogDensity > 0.0f) ? (1.0f / curFogDensity) * 120.0f : fog_far_meters;
 		}
 	}
 
-	render_res_loader->SetupFog(fog_color, fog_far);
+	if (haveBest) {
+		fog_color.r = bestFogColor[0];
+		fog_color.g = bestFogColor[1];
+		fog_color.b = bestFogColor[2];
+		fog_far_meters = bestFogFarMeters;
+	}
+
+	// fog_far_meters is derived from the QSC fog-density value in meters; the
+	// renderer's fog distance check operates in world units (v_fragPos/u_cameraPos
+	// are WORLD_UNITS_PER_METER per meter), so convert before handing it off.
+	render_res_loader->SetupFog(fog_color, fog_far_meters * WORLD_UNITS_PER_METER);
 }
 
 void Level::LoadSkydomeInfo(const QSC* qsc_objects, IRenderResLoader* render_res_loader) {
@@ -508,16 +537,16 @@ void Level::LoadSkydomeInfo(const QSC* qsc_objects, IRenderResLoader* render_res
 		while (a) {
 
 			if (a->type_ == QSC::arg_s::type_t::DBL) {
+				// Task_New args are [0]=task id, [1]=func name, [2]=instance name,
+				// THEN the declared FlatSky parameters begin (confirmed via raw
+				// arg dump against objects.qsc): [3]=FogAmount, [4]=ZPos,
+				// [5]=Distance, [6-8]=FogColor RGB, [9]=SnapBool, [10]=Angle,
+				// [11-13]=TopColor RGB, [14-16]=MidColor1 RGB,
+				// [17-19]=MidColor2 RGB, [20-22]=BotColor1 RGB, [23-25]=BotColor2 RGB
+				// Note: fog_amount/z_pos/distance (args 3-5) are intentionally not
+				// parsed so the flat-sky layer stays invisible; the editor uses the
+				// skydome gradient for the sky background instead.
 				switch (arg_idx) {
-				case 3:
-					flat_sky_fog_amount_ = (float)a->dbl_;
-					break;
-				case 4:
-					flat_sky_z_pos_ = (float)a->dbl_;
-					break;
-				case 5:
-					flat_sky_distance_ = (float)a->dbl_;
-					break;
 				case 6:
 					flat_sky_fog_color.r = (float)a->dbl_;
 					break;
@@ -527,6 +556,7 @@ void Level::LoadSkydomeInfo(const QSC* qsc_objects, IRenderResLoader* render_res
 				case 8:
 					flat_sky_fog_color.b = (float)a->dbl_;
 					break;
+				// arg 9 = SkyDome Snap Colours (bool8) — not DBL, skipped automatically
 				case 10:
 					sd.angle_ = glm::radians((float)a->dbl_);
 					break;
@@ -578,7 +608,7 @@ void Level::LoadSkydomeInfo(const QSC* qsc_objects, IRenderResLoader* render_res
 				case 25:
 					sd.bottom_color2_[2] = (float)a->dbl_;
 					break;
-				}	// end swith
+				}
 			}
 
 			a = a->next_;

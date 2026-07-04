@@ -36,6 +36,7 @@
 *.ps1
 *.zip
 *.rc
+!assets/igi-editor.rc
 bin/*/shaders
 scratch/*
 # CMake
@@ -114,6 +115,8 @@ Release/
 *.py
 *.qsc
 models/
+.commandcode
+releases/
 
 # Dont Ignore
 !assets
@@ -124,6 +127,13 @@ models/
 # Caches
 __pycache__/
 *.pyc
+node_modules/
+.npm/
+.yarn/
+.pnpm-store/
 *.qsc
 *.qas
 *qvm.worktrees
+package.json
+package-lock.json
+!assets/editor/tools/igi1conv/**

@@ -1,21 +1,21 @@
 #include "pch.h"
 #include "cli_tests.h"
 #include "cli_handler.h"
-#include "parsers/res_parser.h"
-#include "parsers/mtp_parser.h"
-#include "parsers/tex_parser.h"
-#include "parsers/qvm_parser.h"
-#include "parsers/qvm_decompiler.h"
-#include "parsers/graph_parser.h"
-#include "parsers/terrain_files.h"
-#include "parsers/fnt_parser.h"
+#include "renderer/res_writer.h"
+#include "level/mtp_writer.h"
+#include "renderer/tex_writer.h"
+#include "level/qvm_parser.h"
+#include "level/qvm_decompiler.h"
+#include "renderer/graph_writer.h"
+#include "level/terrain_files.h"
+#include "renderer/fnt_parser.h"
 #include "utils.h"
 #include "common.h"
 #include "logger.h"
 #include "config.h"
-#include "parsers/qsc_lexer.h"
-#include "parsers/qsc_parser.h"
-#include "parsers/qvm_compiler.h"
+#include "level/qsc_lexer.h"
+#include "level/qsc_parser.h"
+#include "level/qvm_compiler.h"
 
 #include <iostream>
 #include <fstream>
@@ -495,8 +495,8 @@ static void TestOneFNT(const std::string& path, const std::string& tag) {
 }
 
 static void TestFNT() {
-    TestOneFNT("assets\\content\\qed\\editor.fnt", "editor");
-    TestOneFNT("assets\\content\\qed\\editorsm.fnt", "editorsm");
+    TestOneFNT("assets\\editor\\qed\\editor.fnt", "editor");
+    TestOneFNT("assets\\editor\\qed\\editorsm.fnt", "editorsm");
 
     FntFont missing = FNT_Parse("scratch\\cpp_tests\\nope.fnt");
     ASSERT_FALSE(missing.valid, "Nonexistent FNT file should be invalid");

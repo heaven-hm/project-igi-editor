@@ -1,0 +1,36 @@
+#include <windows.h>
+
+101 ICON "igi-editor.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     3,3,0,0
+PRODUCTVERSION  3,3,0,0
+FILEFLAGSMASK   0x3fL
+#ifdef _DEBUG
+FILEFLAGS       0x1L
+#else
+FILEFLAGS       0x0L
+#endif
+FILEOS          0x40004L
+FILETYPE        0x1L
+FILESUBTYPE     0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName",      "HeavenHM"
+            VALUE "FileDescription",  "IGI-1 Level Editor"
+            VALUE "FileVersion",      "3.3.0-pre"
+            VALUE "InternalName",     "igi1ed"
+            VALUE "LegalCopyright",   "Copyright (C) HeavenHM"
+            VALUE "OriginalFilename", "igi1ed.exe"
+            VALUE "ProductName",      "IGI-1 Editor"
+            VALUE "ProductVersion",   "3.3.0-pre"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

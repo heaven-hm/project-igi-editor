@@ -2,11 +2,11 @@
 #include "config.h"
 #include "logger.h"
 #include "utils.h"
-#include "parsers/qsc_lexer.h"
-#include "parsers/qsc_parser.h"
-#include "parsers/qvm_compiler.h"
-#include "parsers/qvm_parser.h"
-#include "parsers/qvm_decompiler.h"
+#include "level/qsc_lexer.h"
+#include "level/qsc_parser.h"
+#include "level/qvm_compiler.h"
+#include "level/qvm_parser.h"
+#include "level/qvm_decompiler.h"
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -80,11 +80,11 @@ static KeyBinding ParseKeyBinding(const std::string& binding) {
 }
 
 std::string Config::GetConfigPath() {
-    return Utils::GetExeDirectory() + "\\content\\qed\\qedconfig.qsc";
+    return Utils::GetExeDirectory() + "\\editor\\qed\\qedconfig.qsc";
 }
 
 std::string Config::GetKeybindingsPath() {
-    return Utils::GetExeDirectory() + "\\content\\qed\\qedkeybindings.qsc";
+    return Utils::GetExeDirectory() + "\\editor\\qed\\qedkeybindings.qsc";
 }
 
 void Config::CreateDefault() {
@@ -121,12 +121,17 @@ void Config::CreateDefault() {
     data_.enableLogging = true;
     data_.debugLogging = false;
     data_.enableLOD = true;
+    data_.enableLightmaps = false;
+    data_.enableFog = true;
+    data_.musicEnabled = true;
     data_.consoleAutoActivate = 2;
     data_.searchType = 133577004;
     data_.invertMouse = false;
     data_.displayTaskNote = true;
     data_.allowDynamicSwitching = false;
     data_.saveConfigOnExit = true;
+    data_.auto_save_enabled = false;
+    data_.auto_save_interval_seconds = 300;
     data_.runEvent = true;
     data_.cameraLock = false;
     data_.enableBackup = false;
@@ -140,6 +145,7 @@ void Config::CreateDefault() {
     data_.objectFilePath = "";
     data_.interpolation = 0;
     data_.renderZNear = 2.8672f;
+    data_.graphNodeSize = 14;
     data_.cameraOriX = data_.cameraOriY = data_.cameraOriZ = 0.0f;
     data_.cameraRadiusX = data_.cameraRadiusY = 0.0f;
     data_.cameraPosX = data_.cameraPosY = data_.cameraPosZ = 0.0f;
@@ -148,10 +154,10 @@ void Config::CreateDefault() {
 
 void Config::Init() {
     CreateDefault();
-    std::string contentDir = Utils::GetExeDirectory() + "\\content";
+    std::string contentDir = Utils::GetExeDirectory() + "\\editor";
     if (!std::filesystem::exists(contentDir)) {
-        Logger::Get().Log(LogLevel::FATAL, "FATAL: content directory not found: " + contentDir);
-        Utils::ShowError("ERROR: FATAL\ncontent directory not found:\n" + contentDir + "\nEditor will now exit.", "IGI Editor - Launch Error");
+        Logger::Get().Log(LogLevel::FATAL, "FATAL: editor directory not found: " + contentDir);
+        Utils::ShowError("ERROR: FATAL\neditor directory not found:\n" + contentDir + "\nEditor will now exit.", "IGI Editor - Launch Error");
         std::exit(1);
     }
     std::string qedDir = contentDir + "\\qed";
@@ -178,7 +184,7 @@ void Config::Init() {
 }
 
 void Config::Load() {
-    std::string qedDir = Utils::GetExeDirectory() + "\\content\\qed";
+    std::string qedDir = Utils::GetExeDirectory() + "\\editor\\qed";
     if (!std::filesystem::exists(qedDir)) return;
 
     auto ParseLine = [&](const std::string& line) {
@@ -211,6 +217,9 @@ void Config::Load() {
                 else if (key == "Logs" || key == "Enable" || key == "SaveConfigOnExit") data_.enableLogging = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "Debug") data_.debugLogging = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "Lod") data_.enableLOD = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "Lightmaps") data_.enableLightmaps = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "Fog") data_.enableFog = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "Music") data_.musicEnabled = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "ConsoleAutoActivate") data_.consoleAutoActivate = std::stoi(val);
                 else if (key == "SearchType") data_.searchType = std::stoll(val);
                 else if (key == "InvertMouse") data_.invertMouse = (val == "TRUE" || val == "true" || val == "1");
@@ -221,6 +230,8 @@ void Config::Load() {
                 else if (key == "Backup") data_.enableBackup = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "UseEditorFont") data_.useEditorFont = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "SystemFontSize") { int s = std::stoi(val); data_.systemFontSize = std::max(8, std::min(32, s)); }
+                else if (key == "AutoSaveEnabled") data_.auto_save_enabled = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "AutoSaveInterval") data_.auto_save_interval_seconds = std::stoi(val);
                 else if (key == "FindTaskName") data_.findTaskName = val;
                 else if (key == "FindTaskNote") data_.findTaskNote = val;
                 else if (key == "FindTaskID") data_.findTaskID = val;
@@ -228,6 +239,10 @@ void Config::Load() {
                 else if (key == "TaskFileName") data_.taskFileName = val;
                 else if (key == "Interpolation") data_.interpolation = std::stoi(val);
                 else if (key == "SetObjectFile") data_.objectFilePath = val;
+                else if (key == "QGraphNodeSize") data_.graphNodeSize = std::max(1, std::stoi(val));
+            }
+            if (key == "LevelMusic" && args.size() >= 2) {
+                try { data_.levelMusicFiles[std::stoi(args[0])] = args[1]; } catch (...) {}
             }
             if (key == "SetCameraOrientation" && args.size() >= 3) {
                 data_.cameraOriX = std::stof(args[0]);
@@ -368,9 +383,14 @@ void Config::Save() {
         file << "QEDDisplayTaskNote(" << (data_.displayTaskNote ? "TRUE" : "FALSE") << ");\n";
         file << "QEDAllowDynamicSwitching(" << (data_.allowDynamicSwitching ? "TRUE" : "FALSE") << ");\n";
         file << "QEDSaveConfigOnExit(" << (data_.saveConfigOnExit ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDAutoSaveEnabled(" << (data_.auto_save_enabled ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDAutoSaveInterval(" << data_.auto_save_interval_seconds << ");\n";
         file << "QEDRunEvent(" << (data_.runEvent ? "TRUE" : "FALSE") << ");\n";
         file << "QEDCameraLock(" << (data_.cameraLock ? "TRUE" : "FALSE") << ");\n";
         file << "QEDBackup(" << (data_.enableBackup ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDLightmaps(" << (data_.enableLightmaps ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDFog(" << (data_.enableFog ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDMusic(" << (data_.musicEnabled ? "TRUE" : "FALSE") << ");\n";
         file << "QEDUseEditorFont(" << (data_.useEditorFont ? "TRUE" : "FALSE") << ");\n";
         file << "QEDSystemFontSize(" << data_.systemFontSize << ");\n";
         file << "QEDFindTaskName(\"" << data_.findTaskName << "\");\n";
@@ -381,10 +401,14 @@ void Config::Save() {
         file << "QEDSetObjectFile(\"" << data_.objectFilePath << "\");\n";
         file << "QEDInterpolation(" << data_.interpolation << ");\n";
         file << "QEDRenderZNear(" << data_.renderZNear << ");\n";
+        file << "QGraphNodeSize(" << data_.graphNodeSize << ");\n";
         file << "QEDSetCameraOrientation(" << data_.cameraOriX << ", " << data_.cameraOriY << ", " << data_.cameraOriZ << ");\n";
         file << "QEDSetCameraRadius(" << data_.cameraRadiusX << ", " << data_.cameraRadiusY << ");\n";
         file << "QEDSetCameraPosition(" << data_.cameraPosX << ", " << data_.cameraPosY << ", " << data_.cameraPosZ << ");\n";
         file << "QEDSetCameraMatrix(" << data_.cameraMatX << ", " << data_.cameraMatY << ", " << data_.cameraMatZ << ");\n";
+        for (const auto& [lvl, fname] : data_.levelMusicFiles) {
+            file << "QEDLevelMusic(" << lvl << ", \"" << fname << "\");\n";
+        }
         file.close();
     }
     // NOTE: qedkeybindings.qsc is a user-authored source of truth and is deliberately

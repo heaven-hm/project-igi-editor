@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 # target_precompile_headers
 #   Added in version 3.16
 
-project (igi_editor 
-  VERSION 1.5
+project (igi_editor
+  VERSION 3.0
   LANGUAGES C CXX)
 
 # Designated initializers, introduced in C++20
@@ -40,7 +40,6 @@ endif()
 file(GLOB SOURCES "source/*.h" "source/*.cpp")
 file(GLOB SOURCES_LEVEL "source/level/*.*")
 file(GLOB SOURCES_RENDERER "source/renderer/*.*")
-file(GLOB SOURCES_PARSERS "source/parsers/*.*")
 file(GLOB SOURCES_CLI "source/cli/*.*")
 file(GLOB SHADERS_41 "shaders/41/*.*")
 file(GLOB SHADERS_45 "shaders/45/*.*")
@@ -52,12 +51,11 @@ endif()
 
 source_group("level" FILES ${SOURCES_LEVEL})
 source_group("renderer" FILES ${SOURCES_RENDERER})
-source_group("parsers" FILES ${SOURCES_PARSERS})
 source_group("cli" FILES ${SOURCES_CLI})
 source_group("shaders/41" FILES ${SHADERS_41})
 source_group("shaders/45" FILES ${SHADERS_45})
 
-add_executable(igi-editor ${SOURCES} ${SOURCES_LEVEL} ${SOURCES_RENDERER} ${SOURCES_PARSERS} ${SOURCES_CLI} ${SHADERS_41} ${SHADERS_45})
+add_executable(igi-editor ${SOURCES} ${SOURCES_LEVEL} ${SOURCES_RENDERER} ${SOURCES_CLI} ${SHADERS_41} ${SHADERS_45})
 
 if (WIN32)
   set_target_properties(igi-editor PROPERTIES
@@ -75,30 +73,49 @@ target_precompile_headers(igi-editor PRIVATE source/pch.h)
 # stable while preserving PCH speed for the rest of the project.
 set_source_files_properties(
   source/app.cpp
+  source/app_input.cpp
+  source/app_input_mouse.cpp
+  source/app_input_keyboard.cpp
+  source/app_view.cpp
+  source/app_lookup.cpp
+  source/app_editor.cpp
+  source/app_ui.cpp
+  source/app_level.cpp
   source/renderer/renderer_flat_sky_layers.cpp
   source/renderer/renderer_objects.cpp
+  source/renderer/renderer_objects_atta.cpp
+  source/renderer/renderer_objects_mesh.cpp
+  source/renderer/renderer_objects_metadata.cpp
+  source/renderer/renderer_objects_picking.cpp
+  source/renderer/renderer_objects_texture.cpp
+  source/renderer/renderer_objects_visual.cpp
+  source/renderer/renderer_rain.cpp
   source/renderer/renderer_skydome.cpp
   source/renderer/renderer_splines.cpp
   source/renderer/renderer_terrain.cpp
   source/renderer/wic_loader.cpp
-  source/parsers/qvm_parser.cpp
-  source/parsers/res_parser.cpp
+  source/level/qvm_parser.cpp
+  source/renderer/res_writer.cpp
   source/level/res_model_set.cpp
-  source/parsers/res_compiler.cpp
-  source/parsers/dat_parser.cpp
-  source/parsers/mtp_parser.cpp
-  source/parsers/mtp_tool.cpp
-  source/parsers/tex_parser.cpp
-  source/parsers/graph_parser.cpp
+  source/renderer/res_compiler.cpp
+  source/renderer/dat_writer.cpp
+  source/level/mtp_writer.cpp
+  source/renderer/tex_writer.cpp
+  source/renderer/graph_writer.cpp
   source/cli/asset_extractor.cpp
   source/level/terrain.cpp
-  source/parsers/qvm_decompiler.cpp
-  source/parsers/qsc_lexer.cpp
-  source/parsers/qsc_parser.cpp
-  source/parsers/qvm_compiler.cpp
+  source/level/terrain_io.cpp
+  source/level/terrain_lod.cpp
+  source/level/terrain_mesh.cpp
+  source/level/terrain_query.cpp
+  source/level/qvm_decompiler.cpp
+  source/level/qsc_lexer.cpp
+  source/level/qsc_parser.cpp
+  source/level/qvm_compiler.cpp
   source/cli/cli_handler.cpp
   source/cli/cli_tests.cpp
   source/cli/verify_level.cpp
+  source/utils_igi1conv.cpp
   PROPERTIES SKIP_PRECOMPILE_HEADERS ON
 )
 
@@ -106,7 +123,6 @@ target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party/
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party/GL/include)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/source)
-target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/source/parsers)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/source/cli)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party/tinygltf)
 
@@ -121,7 +137,7 @@ if (WIN32)
   message("Selected GL library path: ${GL_LIB_DIR}")
 
   target_link_directories(igi-editor PRIVATE ${GL_LIB_DIR})
-  target_link_libraries(igi-editor PRIVATE freeglut glew32 OpenGL32)
+  target_link_libraries(igi-editor PRIVATE freeglut glew32 OpenGL32 winmm)
 
   # Increase PCH memory limit to fix compiler heap errors
   if (MSVC)
@@ -166,10 +182,10 @@ if (WIN32)
   endif()
 
   add_custom_command(TARGET igi-editor POST_BUILD
-    # Copy assets/content structure directly
+    # Copy assets/editor structure directly
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-      "${PROJECT_SOURCE_DIR}/assets/content"
-      "$<TARGET_FILE_DIR:igi-editor>/content"
+      "${PROJECT_SOURCE_DIR}/assets/editor"
+      "$<TARGET_FILE_DIR:igi-editor>/editor"
 
     # Copy files to root (DLLs and version)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -178,11 +194,20 @@ if (WIN32)
       "${PROJECT_SOURCE_DIR}/version"
       "$<TARGET_FILE_DIR:igi-editor>"
 
-    COMMENT "Copying runtime files to content/ structure"
+    COMMENT "Copying runtime files to editor/ structure"
   )
 else()
   target_link_libraries(igi-editor PRIVATE glut GL GLEW)
 endif()
+
+# ─── igi1conv: prebuilt standalone asset converter ───────────────────────────
+# The converter now lives in its own repo (https://github.com/jones-hm/project-igi-conv).
+# The editor consumes only the committed prebuilt binary, which the POST_BUILD
+# step above copies from assets/editor/tools/ to bin/<cfg>/editor/tools/igi1conv.exe.
+# Before building, fetch_igi1conv.cmake pulls the latest released igi1conv.exe
+# from GitHub (falling back to the committed copy when offline/unavailable).
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/fetch_igi1conv.cmake)
+# ─────────────────────────────────────────────────────────────────────────────
 
 include(FetchContent)
 FetchContent_Declare(
@@ -209,6 +234,7 @@ add_executable(igi_tests
     tests/test_dat_parser.cpp
     tests/test_dat_writer.cpp
     tests/test_graph_parser.cpp
+    tests/test_graph_overlay.cpp
     tests/test_res_parser.cpp
     tests/test_tex_parser.cpp
     tests/test_mtp_parser.cpp
@@ -217,6 +243,9 @@ add_executable(igi_tests
     tests/test_pickup_resolve.cpp
     tests/test_res_model_set.cpp
     tests/test_res_stream_append.cpp
+    tests/test_mef_native_lightmap.cpp
+    tests/test_igi1conv_lightmap.cpp
+    tests/test_debug_command_parser.cpp
 )
 
 # Explicit runtime so igi_tests always matches igi-editor (/MDd Debug, /MD Release).
@@ -227,7 +256,6 @@ if (MSVC)
 endif()
 
 target_include_directories(igi_tests PRIVATE source)
-target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/source/parsers)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/source/cli)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/glm-1.0.1)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/GL/include)
@@ -235,26 +263,31 @@ target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/tinygltf)
 target_link_libraries(igi_tests PRIVATE gtest_main)
 target_sources(igi_tests PRIVATE
-    source/parsers/qsc_lexer.cpp
-    source/parsers/qsc_parser.cpp
-    source/parsers/qvm_parser.cpp
-    source/parsers/qvm_compiler.cpp
-    source/parsers/qvm_decompiler.cpp
+    source/level/qsc_lexer.cpp
+    source/level/qsc_parser.cpp
+    source/level/qvm_parser.cpp
+    source/level/qvm_compiler.cpp
+    source/level/qvm_decompiler.cpp
     source/config.cpp
     source/utils.cpp
     source/common.cpp
     source/logger.cpp
     source/level/task_schema.cpp
     source/level/level_objects.cpp
+    source/level/level_objects_serialize.cpp
     source/cli/verify_level_core.cpp
-    source/parsers/dat_parser.cpp
-    source/parsers/graph_parser.cpp
-    source/parsers/res_parser.cpp
-    source/parsers/res_compiler.cpp
+    source/renderer/dat_writer.cpp
+    source/renderer/graph_writer.cpp
+    source/renderer/graph_project.cpp
+    source/renderer/res_writer.cpp
+    source/renderer/res_compiler.cpp
     source/level/res_model_set.cpp
-    source/parsers/tex_parser.cpp
-    source/parsers/mtp_parser.cpp
-    source/parsers/fnt_parser.cpp
+    source/renderer/tex_writer.cpp
+    source/level/mtp_writer.cpp
+    source/renderer/fnt_parser.cpp
+    source/level/terrain_files.cpp
+    source/renderer/mef_native.cpp
+    source/utils_igi1conv.cpp
 )
 
 # level_objects.cpp (and its pch.h header graph: app.h, renderer, level.h) relies

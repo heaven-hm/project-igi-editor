@@ -1,14 +1,19 @@
 # Project IGI Editor - Version History
 
-## Current Version: 2.9.0
+## Current Version: 3.4.1-pre
 
 ---
 
 ## Version Timeline
 
 | Version | Release Date | Status | Major Features |
-|---------|--------------|--------|-----------------|
-| **2.9.0** | 2026-06-09 | Latest | New Terrain editor, support for foreign models from other levels, pause menu terrain expand/collapse fix, immediate 3D brush rings refresh |
+|---------|--------------|--------|----------------|
+| **3.4.1-pre** | 2026-06-21 | Pre-release | Live graph-overlay sync when AIGraph task moves (F7 view follows the task live via property panel / position pad / Z slider / Undo / Redo); exact-match `TaskFindByTaskID` (pixel-perfect IDs, no substring); AI Script editor notepad surface (Ctrl+A/C/X/V/Z/Y + mouse drag selection) scoped to the AI Script text only; local AI Script undo/redo stack (capped at 100); selection highlight rendered on the correct visual lines |
+| **3.4.0-pre** | 2026-06-21 | Pre-release | `source/parsers/` folder removed; every file conversion (dat/mtp/qsc/qvm/res/graph/tex/fnt/mef/terrain) now goes through the bundled `igi1conv.exe` via the new `source/utils_igi1conv.{h,cpp}` shared runner; in-process loaders kept only where no CLI subcommand can supply the runtime data (mef_native, fnt_parser, qsc_lexer/parser, terrain_files, qvm_pipeline); dead `mef_parser`/`mef_exporter`/`mtp_tool` deleted |
+| **3.3.0-pre** | 2026-06-19 | Pre-release | Auto-save system (toggle + interval), unified undo/redo (objects/AI/terrain/graphs/ATTA), AI script save via Ctrl+W/Ctrl+S, full-folder level reset with backup, hotkey-driven from qedkeybindings.qsc, recursive HumanAI child search, pause-menu reorder, centering & alignment polish |
+| **3.2.0-pre** | 2026-06-17 | Pre-release | Graph link editing (add/remove), legacy tagged graph format support, edge visibility fix |
+| **3.1.0-pre** | 2026-06-16 | Pre-release | Visual 3D Graph Editor (nodes, edges, area labels) |
+| **2.9.0** | 2026-06-09 | Stable | New Terrain editor, support for foreign models from other levels, pause menu terrain expand/collapse fix, immediate 3D brush rings refresh |
 | **2.8.0** | 2026-06-04 | Stable | Inline AI Script Editor, mini-notepad with scrolling & arrow keys, autocomplete everywhere, find-shortcut fixes |
 | **2.7.0** | 2026-06-04 | Stable | 3D Model Viewer, Autocomplete Task, exact keybinding match & task tree fixes |
 | **2.6.0** | 2026-06-03 | Stable | Properties Editor UI, Attachments support, SplineObjs & Font/Sprite fixes |

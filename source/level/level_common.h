@@ -165,6 +165,9 @@ static_assert(sizeof(tex_head_v11_s) == 32, "bad size of tex_head_v11_s");
 #pragma pack(pop)
 
 bool	Tex_Load(const char* filename, pics_s& pics);
+// Decode a .tex file that is already in memory (no disk I/O).
+// The data buffer must remain valid until after GL_RegisterTexture is called.
+bool	Tex_LoadFromMemory(const uint8_t* data, size_t size, pics_s& pics);
 
 /*
 ================================================================================

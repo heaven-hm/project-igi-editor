@@ -409,7 +409,7 @@ int CLIHandler::VerifyLevel(const VerifyLevelParams& params) {
 #endif
     }
 
-    std::string modelNamesPath = igiPath + "\\content\\tools\\IGIModels.json";
+    std::string modelNamesPath = igiPath + "\\editor\\tools\\IGIModels.json";
     std::map<std::string, std::string> modelNames = LoadModelNames(modelNamesPath);
     if (modelNames.empty())
         std::cerr << "[WARN] IGIModels.json not found or empty: " << modelNamesPath << "\n";

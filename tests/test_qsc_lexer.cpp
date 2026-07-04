@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "parsers/qsc_lexer.h"
+#include "../source/level/qsc_lexer.h"
 
 using namespace qsc;
 

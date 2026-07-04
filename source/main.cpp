@@ -314,6 +314,13 @@ static void OnMenu(int menu) {
     break;
   case MENU_DRAW_TERRAIN_OPT_FOG:
     g_app.ToggleTerrainDrawOption(Renderer_Terrain::DRAW_TERRAIN_OPT_FOG);
+    // Sync object renderer fog with the terrain fog toggle and persist to config.
+    {
+        int dOpts = g_app.GetTerrainDrawOptions();
+        bool fogOn = (dOpts & Renderer_Terrain::DRAW_TERRAIN_OPT_FOG) != 0;
+        g_app.SetFogEnabled(fogOn);
+        Config::Get().enableFog = fogOn;
+    }
     g_update_menu_flags |= UPDATE_MENU_TERRAIN_OPTS;
     break;
   case MENU_TERRAIN_TEX_MOD:
@@ -553,16 +560,35 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  std::string contentPath = exeDir + "\\content";
+  std::string contentPath = exeDir + "\\editor";
   if (!std::filesystem::exists(contentPath) || !std::filesystem::is_directory(contentPath)) {
-    std::string errorMsg = "Fatal Error: 'content' directory not found in:\n" + exeDir +
-                           "\n\nPlease make sure the 'content' directory is present next to the editor executable.";
+    std::string errorMsg = "Fatal Error: 'editor' directory not found in:\n" + exeDir +
+                           "\n\nPlease make sure the 'editor' directory is present next to the editor executable.";
 #if defined(_WIN32)
     Utils::LogAndShowError(errorMsg, "IGI Editor - Launch Error");
 #else
     fprintf(stderr, "%s\n", errorMsg.c_str());
 #endif
     return 1;
+  }
+  {
+    const std::vector<std::string> requiredEditorPaths = {
+      "\\editor\\shaders",
+      "\\editor\\qed",
+      "\\editor\\tools\\igi1conv\\igi1conv.exe",
+    };
+    for (const auto& rel : requiredEditorPaths) {
+      if (!std::filesystem::exists(exeDir + rel)) {
+        std::string errorMsg = "Fatal Error: Required editor file missing:\n" + exeDir + rel +
+                               "\n\nPlease reinstall or restore the 'editor' directory.";
+#if defined(_WIN32)
+        Utils::LogAndShowError(errorMsg, "IGI Editor - Launch Error");
+#else
+        fprintf(stderr, "%s\n", errorMsg.c_str());
+#endif
+        return 1;
+      }
+    }
   }
 
   // setup path of res and shaders folders (GUI mode only)
@@ -689,6 +715,9 @@ int main(int argc, char **argv) {
 
   printf("%s", HINT);
 
+  // setup glut callbacks that might be needed during Init
+  glutDisplayFunc(OnDisplay);
+
   if (!g_app.Init(argc, argv)) {
     return 2;
   }
@@ -701,7 +730,6 @@ int main(int argc, char **argv) {
     g_app.SetInitialStickToGround(true);
   }
   if (level_no > 0) {
-    g_app.LoadLevel(level_no);
     g_app.SetGameLevel(level_no);
   }
 
@@ -716,7 +744,6 @@ int main(int argc, char **argv) {
   glutSpecialUpFunc(OnSpecialUp);
   glutKeyboardFunc(OnKeyboard);
   glutKeyboardUpFunc(OnKeyboardUp);
-  glutDisplayFunc(OnDisplay);
   glutIdleFunc(OnIdle);
   glutCloseFunc(OnClose);
 

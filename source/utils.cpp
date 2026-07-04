@@ -382,7 +382,7 @@ std::string GetLevelQSCPath(int level_no) {
 		return path;
 	}
 	std::string exeDir = GetExeDirectory();
-	std::string dir = exeDir + "\\content\\qed\\temp";
+	std::string dir = exeDir + "\\editor\\qed\\temp";
 	std::filesystem::create_directories(dir);
 	return dir + "\\objects.qsc";
 }

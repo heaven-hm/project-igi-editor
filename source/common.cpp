@@ -851,16 +851,16 @@ void Folders_Init() {
 	}
 
 	std::string exeDir = Utils::GetExeDirectory();
-	std::string contentDir = exeDir + "\\content";
+	std::string contentDir = exeDir + "\\editor";
 
 	namespace fs = std::filesystem;
 	if (!fs::exists(contentDir)) {
-		Logger::Get().Log(LogLevel::FATAL, "FATAL: content directory not found: " + contentDir);
-		Utils::ShowError("ERROR: FATAL\ncontent directory not found:\n" + contentDir + "\nEditor will now exit.");
+		Logger::Get().Log(LogLevel::FATAL, "FATAL: editor directory not found: " + contentDir);
+		Utils::ShowError("ERROR: FATAL\neditor directory not found:\n" + contentDir + "\nEditor will now exit.");
 		std::exit(1);
 	}
 
-	std::string toolsPath = exeDir + "\\content\\tools";
+	std::string toolsPath = exeDir + "\\editor\\tools";
 	if (!fs::exists(toolsPath)) {
 		Logger::Get().Log(LogLevel::FATAL, "FATAL: tools directory not found: " + toolsPath);
 		Utils::ShowError("ERROR: FATAL\ntools directory not found:\n" + toolsPath + "\nEditor will now exit.");
@@ -872,7 +872,7 @@ void Folders_Init() {
 	Str_SPrintf(g_folders.buildings_folder_, 1024, "%s/buildings", toolsPath.c_str());
 	Str_SPrintf(g_folders.ai_folder_, 1024, "%s/ai", toolsPath.c_str());
 
-	Str_SPrintf(g_folders.shader_folder_, 1024, "%s/content/shaders", exeDir.c_str());
+	Str_SPrintf(g_folders.shader_folder_, 1024, "%s/editor/shaders", exeDir.c_str());
 
 	// debug
 	/*

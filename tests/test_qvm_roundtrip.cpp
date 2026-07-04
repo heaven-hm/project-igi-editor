@@ -5,11 +5,11 @@
 #include <regex>
 #include <cstdio>
 #include <filesystem>
-#include "parsers/qsc_lexer.h"
-#include "parsers/qsc_parser.h"
-#include "parsers/qvm_compiler.h"
-#include "parsers/qvm_decompiler.h"
-#include "parsers/qvm_parser.h"
+#include "../source/level/qsc_lexer.h"
+#include "../source/level/qsc_parser.h"
+#include "../source/level/qvm_compiler.h"
+#include "../source/level/qvm_decompiler.h"
+#include "../source/level/qvm_parser.h"
 #include "utils.h"
 
 // ============================================================

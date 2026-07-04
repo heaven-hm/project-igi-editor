@@ -20,41 +20,12 @@ public:
   // Checks if the given arguments contain any of the headless CLI flags
   static bool IsCLICommand(int argc, char **argv);
 
-  // Processes the arguments and executes the corresponding parser
+  // Processes the arguments and executes the corresponding command
   // Returns 0 on success, non-zero on failure
   static int Process(int argc, char **argv);
   static int VerifyLevel(const VerifyLevelParams &params);
 
 private:
-  static int ParseMEF(const std::string &filepath);
-  static int ExportMEFToObj(const std::string &filepath,
-                            const std::string &outpath);
-  static int ExportMEFToAscii(const std::string &filepath,
-                              const std::string &outpath);
-  static int ExportMEFBundle(const std::string &filepath,
-                             const std::string &outDir,
-                             const std::string &datPath,
-                             const std::string &texDir);
-  static int ParseQVM(const std::string &filepath, bool decompile,
-                      const std::string &outpath);
-  static int LexQSC(const std::string &inpath);
-  static int ParseQSC(const std::string &inpath);
-  static int CompileQSC(const std::string &inpath, const std::string &outpath);
-  static int ParseRES(const std::string &filepath,
-                      const std::string &extract_name,
-                      const std::string &outpath);
-  static int ExtractAllRES(const std::string &filepath,
-                           const std::string &outdir);
-  static int ParseMTP(const std::string &filepath);
-  static int ParseDAT(const std::string &filepath, const std::string &outPath,
-                      const std::string &modelFilter, bool textMode = false);
-  static int ConvertMtpToDat(const std::string &mtpPath, const std::string &outPath);
-  static int ConvertDatToMtp(const std::string &datPath, const std::string &outPath);
-  static int ParseTerrain(const std::string &filepath);
-  static int ParseTEX(const std::string &filepath,
-                      const std::string &exportArg, const std::string &mode = "");
-  static int ParseFNT(const std::string &filepath, const std::string &exportPngPath = "");
-  static int ParseGraph(const std::string &filepath);
   static int ExtractLevelResources(int levelNo, const std::string &outDir);
   static void PrintHelp();
 };

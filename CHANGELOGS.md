@@ -1,5 +1,386 @@
 # Changelogs
 
+## 3.6.0-pre — Animations, Music, Lightmapping & More
+
+### ✨ Major Highlights
+
+- **🤖 AI Auto-Playing Animations** — Every eligible AI animates automatically at level load, all in parallel across worker threads. Resolution tries Stand Animation → AI-script actions → PatrolPath clips, with a bone-hierarchy default fallback so no AI stays static. Per-AI play/pause control via the property panel.
+
+- **🔫 AI Held Weapons** — Soldiers now hold their assigned weapon in-hand, attached to the "right hand" bone so it moves with the animation. Cutscene AI are excluded. Live weapon-id refresh when changing weapon in the TaskTree.
+
+- **🎵 Level Music + Escape-Menu Toggle** — Level-specific `.wav` auto-plays on load with seamless looping. New `[X] Music` checkbox in the pause menu starts/stops playback live. Pause-aware: music pauses/resumes with the editor.
+
+- **💡 Full Lightmap Bake-Apply Pipeline** — Select an object, click **Calculate Light Mapping**, and the editor bakes a ray-traced lightmap (real sun/gamma) and applies it live. Features live modulation slider, dynamic sun recalculation, per-taskId binding, clean default look.
+
+- **🎮 Escape-Menu Fog Controls** — Fog On/Off toggle + Fog Intensity spinner (0–200%) in Terrain Options, with visible effective-far distance effect.
+
+- **🖥️ Developer Mode & Automated Screenshots** — `--developer-mode` flag enables headless command polling (`add-model`, `capture-model`, `set-fog`) for fully automated multi-level screenshot testing.
+
+- **🔧 Cross-Level Foreign Model Extraction** — Fixed `.mef`/`.tex` extraction for models from other levels, cross-level `.res` fallback, and in-memory index rebuild — no more `429_02_1` fatal errors.
+
+---
+
+## 3.5.4-pre — Fog Controls & Foreign Model Extraction Fixes
+
+### ✨ New Features
+- **Fog Intensity control (0–200%).** A new spinner row in Terrain Options adjusts `QEDFogIntensity` live via `Renderer::SetFogIntensity()`, which writes `g_fog_intensity` into the terrain fog UBO. The shader uses it to scale `effective_far = g_fog_far / intensity`, making the fog band expand/contract visibly at typical view distances. Default: 10%.
+- **Fog On/Off toggle.** A `[X] Fog` / `[ ] Fog` checkbox in Terrain Options enables/disables fog rendering immediately. Toggling from OFF at 0% intensity auto-jumps to 100% so the user sees an effect.
+- **Default config saner defaults.** `enableFog=TRUE`, `fogIntensity=10`, `musicEnabled=TRUE`, `enableLightmaps=FALSE` — the editor now starts with fog visible at a mild level, music playing, and lightmaps off (matching the clean developer-look default).
+- **Debug commands for headless testing.** `add-model model=<id>` loads and adds a foreign model; `set-fog val=<0..200>` sets intensity; `capture-model level=<n> model=<id>` captures 10 screenshots around the model. Commands read from `editor/tools/debug-command.txt` polled every 200ms.
+- **Multi-level test harness.** `run_test_levels.ps1` runs levels 1, 3, 10, 8 in sequence, each loading a model, adding it as foreign, and capturing 10 screenshots.
+
+### 🐛 Bug Fixes
+- **Fixed: `Failed to load resource: 'LOCAL:textures/429_02_1.tex'` fatal on foreign model addition.** The texture-gathering loop only called `FindTextureFile` (disk scan), missing textures that exist only inside another level's `.res`. Added a `FindTextureData()` fallback that lazy-loads the host level's `.res` and extracts missing `.tex` siblings to `editor/textures/level<N>/` before packing them into the current level's `textures.res`.
+- **Fixed: Foreign model `.mef` files extracted to `content/models/level<N>/` (a path the renderer never reads).** Changed loose-file copy destination from `content/` to `editor/` for both models and textures, matching the existing `editor/` convention from commit `7f08808`.
+- **Fixed: In-memory `.res` indexes stale after `AddEntriesToRes`.** After packing new model/texture entries into the level's `.res`, the in-memory `res_model_indexes_` / `res_tex_indexes_` maps were not rebuilt, so the renderer couldn't find newly-added assets by name without a level reload. Now calls `RebuildIndex()` after every `AddEntriesToRes`.
+- **Fixed: Fog intensity did not change visually.** The *deployed* shader at `assets/editor/shaders/{41,45}/terrain_fog.frag` was stale — it lacked the `g_fog_intensity` UBO field and always used full intensity. Updated both source and deployed shaders to read `g_fog_intensity` for effective-far math. Also fixed the `ubo_fog_s` struct layout by adding `intensity_` (with correct std140 padding for the vec4-aligned UBO).
+- **Fixed: Family disk scan found ≤1 member for foreign models from other levels.** Added cross-level `.res` lazy-load: if the disk scan of the model's home level fails, load the home level's `.res` in-memory, find all `.mef` / `.tex` siblings in the same directory entry, and extract them to the editor content dir before packing into the current level.
+
+### 🔧 Technical
+- `source/renderer/renderer.cpp` / `renderer.h`: Added `SetFogIntensity()`, `WriteFogUBO()`, `ubo_fog_s::intensity_`.
+- `source/renderer/renderer_objects_atta.cpp`: `AddModelToLevelRes` — cross-level `.res` lazy-load, family sibling extraction, texture `FindTextureData()` fallback, in-memory index rebuild.
+- `source/renderer/renderer_draw.cpp` / `source/app_input_mouse.cpp`: Pause menu Terrain Options — Fog On/Off toggle + Fog Intensity spinner.
+- `source/config.cpp` / `config.h`: `fogIntensity` (int, default 10), `enableFog`, `musicEnabled`, `enableLightmaps`.
+- `source/debug_command_manager.cpp`: New `add-model`, `set-fog`, `capture-model` debug commands.
+- `shaders/{32,41,45}/terrain_fog.frag` + `assets/editor/shaders/{41,45}/terrain_fog.frag`: `g_fog_intensity` UBO and effective-far math.
+- `run_test_levels.ps1`: Multi-level automated test script.
+
+---
+
+## 3.5.3-pre — Developer Mode & Automated Screenshots
+
+### ✨ New Features
+- **Developer mode (`--developer-mode`).** A new CLI flag that enables a background thread polling `editor/tools/debug-command.txt` for commands. Commands are parsed and queued for execution on the main thread each frame, enabling automated testing without user input.
+- **Automated model screenshot pipeline.** `capture-model level=<n> model=<id>` orbits a free camera around the model at 6 cardinal exterior angles (0°/60°/120°/180°/240°/300°) and 4 interior angles (0°/90°/180°/270°) at eye height, saving PNGs directly to `IGI1_ROOT/screenshots/`. The camera is positioned via live coordinate injection into the renderer's viewport floats.
+- **Debug command set expanded:**
+  - `goto level=<n>` — load a specific level (same as Escape-menu Select Level).
+  - `add-model model=<id>` — add a foreign model from another level.
+  - `capture-model level=<n> model=<id> [x=<n> y=<n> z=<n>]` — full screenshot sweep with optional manual position override.
+  - `set-fog val=<0..200>` — set fog intensity percentage.
+  - `wireframe` / `draw-parts` / `delete` — toggle rendering modes and delete selected object.
+
+### 🔧 Technical
+- `source/debug_command_manager.{h,cpp}`: New `DebugCommandManager` class with a watcher thread, command queue, and parser for `key=value` arguments. The main app calls `ProcessCommandQueue()` once per frame to dispatch queued commands with full editor state access.
+- `source/app_editor.cpp`: `ProcessCommandQueue` dispatches each command type to the appropriate `App` method (e.g., `AddModelToLevelRes`, `Capture360Screenshots`, `SetFogIntensityPct`).
+- `source/app_input.cpp`: `Capture360Screenshots` positions the free camera at computed orbit points, forces redraws, and saves framebuffer reads to PNG.
+- `source/app.h`: Exposes `SetDeveloperMode(bool)` and `IsDeveloperMode()`; the polling thread is only spawned when `--developer-mode` is passed and disabled in release builds.
+- Commands are idempotent — repeated `capture-model` calls produce separate numbered screenshots without corrupting level state.
+
+---
+
+## 3.5.2-pre — Lightmap Bake-Apply Pipeline
+
+### ✨ New Features
+- **Full lightmap bake-apply pipeline.** Select an object in the 3D viewport, click **Calculate Light Mapping** in its property panel, and the editor bakes a lightmap texture for it and applies it live. The pipeline: object-selection → UV2 extraction → sun-direction resolve → ray-traced occlusion → PNG encode → GL texture upload → per-taskId binding in the object fragment shader.
+- **Real sun/gamma lighting.** Lightmap calculation respects the level's actual sun vector (read from `TerrainSun` in `objects.qvm`) and applies gamma correction, matching the warmth and direction of in-game lighting.
+- **Live lightmap modulation.** A slider in the Escape-menu Terrain Options section modulates lightmap brightness in real-time — no re-bake required. The UBO `g_lightmap_modulation` uniform is updated instantly.
+- **Fast load, clean default.** Levels load with a clean unlit look by default (`enableLightmaps=FALSE`). Toggling lightmaps on renders the baked atlas immediately. Lookup by taskId avoids stale/wrong textures from previous level loads.
+- **Dynamic sun recalculation.** Changing the sun direction in the property panel triggers an automatic lightmap recalculation for all baked objects, keeping lighting consistent.
+- **Lightmap button widget.** A new `LightmapButton` widget kind renders in the property panel when a bakeable object is selected, providing a "Calculate Light Mapping" click target with hover/active states matching the existing UI widget style.
+
+### 🐛 Bug Fixes
+- **Fixed: Lightmap overlay rendered over ATTA proxy UI elements.** The calculation overlay was competing with the existing ATTA proxy UI overlay. Added proper layering so ATTA proxy circles are drawn on top of lightmap previsualization.
+- **Fixed: `EnsureLightmapsUnpacked` silently wrote 0 files.** The unpack function iterated the level's `.olm` resource but the loop guard was comparing against an uninitialized count. Fixed index bounds and added file-existence logging.
+- **Fixed: `taskId=-1` collision cross-contaminated objects.** Objects without an explicit taskId (defaulting to -1) all shared the same lightmap slot, causing one object's bake to overwrite another's. Now non-unique taskIds fall back to a per-object hash key.
+- **Fixed: ATTA proxy objects included in batch-calculate.** Proxies have no renderable mesh and their UV2 data is garbage. The batch-calculate loop now skips all objects whose modelId resolves to an ATTA proxy (`modelType == 2`).
+- **Fixed: Indoor objects received outdoor-bright lighting.** Objects inside buildings now get a dimmer indoor fallback light value instead of the full outdoor sun, preventing blown-out interiors.
+- **Fixed: Lightmap warmth mismatch with game.** The overbright rendering pass was desaturating colors. Adjusted the tone-mapping curve to match the game's warmer, more saturated lightmap appearance.
+- **Fixed: Light and sky colors not reflected in lightmap.** The `TerrainAmbientLight` and `TerrainSunLight` colors from `objects.qvm` were parsed but not passed to the lightmap calculator. Now both are forwarded to `ComputeLightmapForObject` and affect the baked result.
+
+### 🔧 Technical
+- `source/app_editor.cpp`: `CalculateLightmapForSelectedObject` orchestrates the full pipeline — UV2 extraction, sun direction resolve, `igi1conv.exe` invocation for ray-traced occlusion, result readback, transfer to the renderer. Uses `std::async` for the heavy compute step so the UI stays responsive.
+- `source/renderer/renderer_objects.cpp`: `BindObjectLightmap(taskId)` binds the per-taskId GL texture for the active object shader. `GetLightmapTexture(taskId)` lazily creates/returns the atlas entry.
+- `source/renderer/renderer_draw.cpp`: The Escape-menu Terrain Options row for lightmap modulation. `SetLightmapModulation(value)` writes the UBO uniform.
+- `source/renderer/graph_writer.cpp`: Extended to read/write `TerrainAmbientLight` and `TerrainSunLight` from `objects.qvm`.
+- `source/renderer/olm_texture.cpp`: `.olm` → OpenGL texture loader. Handles the padded 32-bit-per-pixel format the game uses for lightmap atlases.
+- `source/level/level_objects.cpp`: Exposes the current level's `objects.qsc` path for UV2 extraction and sun vector readback.
+- `shaders/{41,45}/object.frag`: New `g_lightmap_modulation` UBO uniform, `g_lightmap_enabled` toggle, and the per-taskId sampler binding `g_lightmap_sampler`.
+
+---
+
+## 3.5.1-pre — AI Held Weapons & Escape-Menu Music Toggle
+
+### ✨ New Features
+- **AI soldiers now hold their assigned weapon in-hand.** Each `HumanSoldier`-family task in `objects.qvm` carries a `Gun*` weapon child whose `WEAPON_ID_*` enum is resolved to the same render model used by `GunPickup`/`AmmoPickup` (via the existing `ResolvePickupModelId`). The weapon mesh is attached to the soldier's **"right hand"** bone (located by name in the parsed MEF bone list) so it moves with the hand as the animation plays. Static/paused AI hold the weapon at the rest-pose hand position.
+  - **Cutscene / single-node AI are excluded.** If the soldier's `HumanAI` child references an AIGraph with ≤1 node, or whose name contains "cutscene", no weapon is attached — these are scripted cutscene actors, not combat AI. (Verified: level-1 task 1666 "Jones" with graph 2 / 1 node is correctly skipped.)
+  - **Live weapon-id refresh.** Changing a soldier's (or its weapon child's) Weapon ID in the TaskTree property panel re-resolves and updates the held weapon immediately in the editor — no reload required (`LevelObjects::ResolveSoldierWeapon`).
+  - Populates the previously-unused `primaryWeapon` / `graphId` / `graphName` AI tooltip fields as a side effect.
+- **Escape-menu Music on/off toggle.** A new `[X] Music` / `[ ] Music` checkbox row in the pause menu (between Model Search and Terrain Options) starts/stops level music live via `App::ToggleMusic()`; the checkbox reflects current playback state.
+
+### 🐛 Bug Fixes
+- **Fixed: attached weapons were invisible.** `DrawAttachedMesh` used the object shader but never bound the shared Matrices UBO, so the vertex shader had no `u_mvp` (Proj·View·GlobalScale) and the weapon rendered off-screen. Now binds the UBO like the main scene draw.
+- **Weapon orientation correction.** Weapon meshes are authored barrel-along-+Y; attached at the hand they came out vertical/upside-down. A fixed local correction (90° tilt to horizontal, horizontal flip to correct aim, then a 180° roll about the computed barrel axis to set it right-side-up) orients them like a held rifle without affecting position or aim.
+
+### 🔧 Technical
+- **Parser** (`level_objects.cpp`): new `HumanAI` (graph id), `Gun*` weapon-child (weapon enum), and extended `AIGraph` (node count) capture; new `LevelObject` fields `weaponModelId`, `graphNodeCount`, `aiGraphTaskId`, `weaponEnumId`.
+- **`Renderer_Objects::DrawAttachedMesh`** + `Renderer` forwarders, and `GetOrLoadSkinGeometry` exposed for hand-bone lookup.
+- Per-model "right hand" bone index cached in `App::handBoneIndexCache_` to avoid per-frame name scans.
+
+## 3.5.0-pre — Auto-Playing AI Animations in Parallel & Level Music
+
+### ✨ New Features
+- **Every AI animates automatically at level load — all in parallel.** The animation system now resolves every eligible AI's animation simultaneously across worker threads instead of only auto-playing those whose `standAnimation` field matches a real clip. For each AI, resolution tries Stand Animation → AI-script `AIAction_PlayAnimation` ids → PatrolPath predefined animations (in that order); the first match plays. If no animation is referenced, the AI falls back to the bone hierarchy's default clip (lowest `animId`), so no AI stays static by accident. Resolving can be heavy (spawning `igi1conv.exe` per AI to decompile `.qvm` scripts), so phase 1 imports all bone hierarchies sequentially, phase 2 spawns per-AI resolution across `std::async` worker threads, and phase 3 merges results back on the main thread — preventing data races while keeping the level-load latency low (~2s for 55 AI).
+- **Auto-played animations loop continuously.** Non-looping clips (whose BEF `tp_flag = 0`) now force-loop when auto-played, so every AI keeps animating instead of freezing after one cycle. This is editor-only behaviour (`AnimPlayback::forceLoop` flag); manually-toggled animations respect their clip's own loop flag.
+- **Parallel skinned-mesh rendering.** The static mesh skip list changed from a single object index to an `unordered_set<int>`, allowing all auto-playing AI to have their animated mesh drawn in parallel each frame instead of just one. Their individual animation state (playing/paused) is respected independently.
+- **Per-AI animation on/off control.** Each auto-played AI can be individually paused/resumed via the property panel's Animation Control section, without affecting other AI — clicking the animation toggle button for one AI pauses only that AI; others keep looping. Toggling off reverts that AI to its static mesh.
+- **Level music playback with auto-loop.** `PlayLevelMusic` loads the level-specific `.wav` (or game default `game_music.wav` if not overridden in `qedconfig.qsc`), plays it via Windows `mciSendString`, and `CheckMusicLoop` restarts it when it finishes (MCI "repeat" is unreliable for waveaudio, so manual restart ensures looping). Music respects pause mode — it pauses when the editor pauses and resumes when the user un-pauses.
+
+### 🐛 Bug Fixes
+- **Fixed: Only 4 of 29 AI were auto-playing on level 1.** Root cause: most AI don't have a `standAnimation` value; their animation comes from their AI script's `AIAction_PlayAnimation` or PatrolPath commands instead. The old auto-play only checked `standAnimation`, so it missed 23 AI. Now uses `GetOrComputeAnimationIds` to try all three sources in priority order, and falls back to the default clip if none resolve.
+- **Fixed: Auto-played non-looping clips froze after one cycle.** Clips were clamping `currentTimeMs` and setting `playing = false` at duration end. Added `AnimPlayback::forceLoop` so auto-play ignores the clip's `tp_flag` and keeps cycling forever.
+- **Fixed: Data race in `MakeTempPath` RNG.** The `static std::mt19937_64` was shared across concurrent worker threads spawned during animation resolution. Changed to `thread_local` so each thread has its own RNG state without synchronization.
+
+### 🔧 Technical
+- **Parallel animation resolution at level load (Phase 1-3):**
+  - **Phase 1 (main thread, sequential):** Import every distinct bone hierarchy's animation set before any worker thread touches the registry (prevents concurrent writes to the same cache map).
+  - **Phase 2 (worker threads, parallel):** Each AI gets a `std::async` task that computes its animation ids, tries each, and returns the first matching clip (read-only against registry and level objects).
+  - **Phase 3 (main thread, sequential):** Merge results into `animPlaybacks_` and `animIdsCache_` — no concurrent writers, just sequential map inserts.
+- **New API:** `AnimationRegistry::GetDefaultClip(boneHierarchy)` returns the lowest-`animId` clip for fallback. `App::ComputeAnimationIdsForObject(objIndex)` is the thread-safe cache-free helper used by parallel resolution.
+
+### 🎵 Music Integration
+- **Level music auto-plays on load** (via new `PlayLevelMusic(level_no)` call in `LoadLevel`).
+- **Per-level music override** in `qedconfig.qsc`: `QEDLevelMusic(level_no, "custom_music.wav")` sets a custom `.wav` for that level; unset levels use `game_music.wav`.
+- **Auto-loop via `CheckMusicLoop()`** called every frame: detects when the track finishes and restarts it (MCI workaround).
+- **Pause-aware:** `StopLevelMusic()` called on pause; `PlayLevelMusic()` resumes on un-pause.
+
+## 3.4.1-pre — Live Graph Sync, Exact-ID Find & AI Script Notepad
+
+### 🐛 Bug Fixes
+- **Fixed: AIGraph task move did not live-update the F7 graph overlay.** When the user moved the AIGraph task via the TaskTree property panel, the 2D position pad / Z slider, or Undo / Redo, the AIGraph task's world pos was updated but the renderer's `graph_overlay_offset_` stayed at the F7-press-time value — so the 3D nodes and edges drifted away from the task. Added `Renderer::SetGraphOverlayOffset` + `App::SyncGraphOverlayOffsetFromAIGraph`; the helper is a no-op unless the overlay is visible AND the moving task's `taskId` matches the overlay's `taskId`, so moving other objects does nothing and toggling F7 off suppresses the work. Wired into `CommitPropTextEdit`, `ApplyPropPositionDrag`, `Undo`, `Redo`, and `SaveAndReloadObjects`.
+- **Fixed: `TaskFindByTaskID` matched "7" against "73", "700", every "7" inside any id.** Task IDs are pixel-perfect identifiers, so the search was changed from `find()` substring to exact case-insensitive equality in both the live-while-typing path (`app_input_keyboard.cpp`) and the `TaskFindAgain` / Ctrl+Shift+F next-match path (`app_input.cpp`). Other find modes (`TextInTask`, `ByNote`, `TaskNameTypeId`) keep their substring behaviour.
+- **Fixed: AI Script editor's Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A / Ctrl+Z / Ctrl+Y were no-ops.** GLUT sends the ASCII control-character code for `Ctrl+letter` (1=SOH/A, 3=ETX/C, 0x18=CAN/X, 0x16=SYN/V, 0x19=EM/Y, 0x1A=SUB/Z) — not the letter itself. The handler was checking `'c' = 99` etc. and never matched. Now checks the control code (primary) and the letter code (fallback), matching the pattern the existing `Ctrl+N` / `Ctrl+O` handlers use.
+- **Fixed: AI Script editor selection highlight drew "way above" the text box.** The blue band quad used top-down `w.y1` Y directly but OpenGL is bottom-up; every other UI quad in the renderer uses `gl_y() = vh - sy`. Single-line and multi-line highlight passes now wrap their vertices in `gl_y()` so the band sits exactly on the selected characters.
+
+### ✨ New Features
+- **AI Script editor — full notepad surface, scoped to the AI Script text field only.** The shortcuts and mouse selection are gated on `prop_text_edit_field_ == kAIScriptTextField` (via `App::IsAIScriptTextFocused()`) so other property text fields, the find bar, `Ctrl+N` task picker, save bindings, and `Ctrl+H` continue to work unchanged.
+  - `Ctrl+A` Select all
+  - `Ctrl+C` / `Ctrl+X` / `Ctrl+V` Copy / cut / paste via Windows clipboard (`Utils::SetClipboardText` / `GetClipboardText`)
+  - `Ctrl+Z` Undo (AI-script-local stack, capped at 100 entries)
+  - `Ctrl+Y` / `Ctrl+Shift+Z` Redo
+  - `Shift+Left/Right/Up/Down/Home/End` Extend selection
+  - `Ctrl+Home` / `Ctrl+End` Start / end of buffer
+  - `Backspace` / `Delete` / `Enter` / printable typing — replace the active selection (Notepad behaviour)
+  - **Mouse**: click places caret and clears selection; `Shift+Click` extends from existing anchor; `Click+Drag` is live drag-selection with auto-scroll at the box edges; clicking elsewhere drops the selection.
+- **AI Script editor — local undo/redo.** `App::AiTextEdit` struct snapshots the full text + caret + anchor before each mutating op (insert, paste, cut, delete, replace) so `Ctrl+Z` / `Ctrl+Y` are O(1) and byte-perfect. New edits clear the redo stack (standard editor semantics). The undo/redo writes stay in the live buffer; only `Ctrl+S` / `Ctrl+W` (existing save bindings) commit to the `.qvm` on disk.
+- **Selection rendering.** New `prop_text_sel_anchor_` / `prop_text_sel_focus_` ints mirrored into the renderer's `task_tree_view`. A translucent blue band is drawn per visual line, beneath the text so characters stay readable.
+
+### ⌨️ New Keybindings (AI Script editor only)
+| Event | Binding | Action |
+|-------|---------|--------|
+| `AiScriptSelectAll` | `Ctrl+A` | Select all in the AI Script text |
+| `AiScriptCopy` | `Ctrl+C` | Copy selection (or whole buffer) to clipboard |
+| `AiScriptCut` | `Ctrl+X` | Cut selection (or whole buffer) to clipboard |
+| `AiScriptPaste` | `Ctrl+V` | Paste from clipboard at caret |
+| `AiScriptUndo` | `Ctrl+Z` | Undo last AI Script edit |
+| `AiScriptRedo` | `Ctrl+Y` / `Ctrl+Shift+Z` | Redo last undone edit |
+| `AiScriptExtendSel` | `Shift+Left/Right/Up/Down/Home/End` | Extend selection (no auto-commit) |
+| `AiScriptDragSel` | Click+Drag in AI Script text | Live drag-selection with edge auto-scroll |
+
+---
+
+## 3.4.0-pre — igi1conv-Only Parsers Migration
+
+### 🛠️ Refactor
+- **Removed `source/parsers/` folder entirely.** Every file-conversion call in the editor now goes through the bundled `igi1conv.exe` (v1.7.0, located at `editor/tools/igi1conv/`). The new `source/utils_igi1conv.{h,cpp}` shared runner is the single spawner used by every consumer; previously the editor spawned `igi1conv` only for `dat to-mtp` via a private static in `renderer_objects_atta.cpp`.
+- **Single source of truth for asset conversion.** No more in-process duplicate code for formats the bundled CLI already handles — `dat export`, `mtp dump`, `qvm decompile`, `qsc compile`, `res list/extract/append`, `graph export`, `tex to-png/to-tga`, `mef export`, `fnt export`, `terrain export-lmp/export-ctr`.
+- **In-process loaders kept only where no CLI subcommand can supply the runtime data the editor needs every frame:**
+  - `mef_native` → `source/renderer/` (raw `ParsedGeometry` for GL upload)
+  - `fnt_parser` → `source/renderer/` (per-glyph UV/advance for HUD draw)
+  - `qsc_lexer`, `qsc_parser` → `source/level/` (AI script token/AST walk for app_editor)
+  - `terrain_files` → `source/level/` (LMP/CTR runtime mesh loaders)
+  - `qvm_parser`, `qvm_compiler`, `qvm_decompiler` → `source/level/` (used by `verify_level_core`, `--run-tests`, and the qvm roundtrip gtest)
+- **Writer classes relocated to consumer folders** (read side replaced by `igi1conv`; write side kept in C++ because no CLI subcommand covers it): `dat_writer`, `graph_writer`, `mtp_writer`, `tex_writer`, `res_writer`, `res_compiler`.
+- **Dead code removed:** `mef_parser` (ASCII MEF parser — never invoked), `mef_exporter` (dead helper), `mtp_tool` (the old `mtp_decoder.exe` runner — already superseded by `igi1conv dat to-mtp`).
+
+### 📦 New API
+- **`igi1conv::` namespace** in `source/utils_igi1conv.h` exposes high-level wrappers for every subcommand the editor needs:
+  `ResList`, `ResExtract`, `ResAppend`, `ResPack`, `DatExportJson`, `DatToMtp`, `MtpDumpJson`, `MtpInfo`, `GraphExportJson`, `GraphInfo`, `TexDecode`, `TexToPng`, `TexToTga`, `TexInfo`, `QvmDecompile`, `QvmInfo`, `QvmDisasm`, `QscCompile`, `QscValidate`, `FntExportPng`, `FntInfo`, `TerrainExportLmp`, `TerrainExportCtr`, `TerrainInfo`, `MefExportObj`, `MefInfo`.
+- Each helper constructs the right `igi1conv <cmd> ...` invocation, captures exit code, returns the produced path or stdout text, and logs the run through the existing `Logger::Get()` pipeline.
+- `MakeTempPath(suffix)` is exposed for callers that need a stable scratch path under the system temp dir.
+
+### 🐛 Bug Fixes
+- **No behavioural change to user-visible editor flow.** All 288 gtest cases run against the relocated parsers: 286 pass, 2 pre-existing writer byte-roundtrip failures (`GraphParserTest.WriteUnchangedIsByteIdentical`, `MtpWriterTest.PreservesUntouchedChunksByteForByte`) carry over from `feature/graph-editor` and are unrelated to this migration.
+- **The editor's runtime in-process AI-script edit pipeline** (qvm decompile → qsc edit → qvm recompile → re-validate) is unchanged; only the file paths the parsers live at changed.
+
+### 🔧 Build / Toolchain
+- `CMakeLists.txt`: dropped the `file(GLOB SOURCES_PARSERS "source/parsers/*.*")` line and the `target_include_directories(... source/parsers ...)` entry. The `igi_tests` `target_sources` list updated to point at the new locations (`source/renderer/{dat,graph,res,tex}_writer.cpp`, `source/level/{mtp_writer,qsc_lexer,qsc_parser,qvm_parser,qvm_compiler,qvm_decompiler,terrain_files}.cpp`, `source/renderer/{fnt_parser,res_compiler}.cpp`). The `SKIP_PRECOMPILE_HEADERS` block was rewritten with the same new locations.
+- `assets/editor/tools/igi1conv/` ships with v1.7.0; the `cmake/fetch_igi1conv.cmake` step still pulls the latest release from GitHub (v1.6.0 was the last "pinned" release, the editor overwrites it with the locally committed v1.7.0 when offline or unchanged).
+
+### 📁 File-level change summary
+| Moved from `source/parsers/` | → | New location |
+|---|---|---|
+| `mef_native.{h,cpp}` | → | `source/renderer/mef_native.{h,cpp}` |
+| `fnt_parser.{h,cpp}` | → | `source/renderer/fnt_parser.{h,cpp}` |
+| `qsc_lexer.{h,cpp}` | → | `source/level/qsc_lexer.{h,cpp}` |
+| `qsc_parser.{h,cpp}` | → | `source/level/qsc_parser.{h,cpp}` |
+| `qvm_parser.{h,cpp}` | → | `source/level/qvm_parser.{h,cpp}` |
+| `qvm_compiler.{h,cpp}` | → | `source/level/qvm_compiler.{h,cpp}` |
+| `qvm_decompiler.{h,cpp}` | → | `source/level/qvm_decompiler.{h,cpp}` |
+| `terrain_files.{h,cpp}` | → | `source/level/terrain_files.{h,cpp}` |
+| `dat_parser.{h,cpp}` | → | `source/renderer/dat_writer.{h,cpp}` |
+| `graph_parser.{h,cpp}` | → | `source/renderer/graph_writer.{h,cpp}` |
+| `mtp_parser.{h,cpp}` | → | `source/level/mtp_writer.{h,cpp}` |
+| `tex_parser.{h,cpp}` | → | `source/renderer/tex_writer.{h,cpp}` |
+| `res_parser.{h,cpp}` | → | `source/renderer/res_writer.{h,cpp}` |
+| `res_compiler.{h,cpp}` | → | `source/renderer/res_compiler.{h,cpp}` |
+| `mef_parser.{h,cpp}` | → | **deleted (dead)** |
+| `mef_exporter.{h,cpp}` | → | **deleted (dead)** |
+| `mtp_tool.{h,cpp}` | → | **deleted (dead)** |
+
+---
+
+## 3.3.0-pre — Auto-Save, Unified Undo/Redo & AI Script Hotkey Support
+
+### ✨ New Features
+- **Auto-Save System**: New pause-menu "Auto Save" row that displays current state ("Save Enable" / "Save Disable") and an interval spinner with `-`/`+` buttons (10s steps, 10s–3600s range). Toggle with `Ctrl+Shift+A`, increase/decrease interval with `Ctrl+Shift+]` / `Ctrl+Shift+[`. When enabled, the editor auto-saves the current level at the configured interval.
+- **SaveState (Ctrl+W) & SaveObjectFile (Ctrl+S) read from qedkeybindings.qsc**: All save hotkeys are now dispatched via `DispatchEventBindings` using bindings loaded from `editor\qed\qedkeybindings.qsc` — no hardcoded keys.
+- **AI Script Editor hotkey support**: `Ctrl+W` and `Ctrl+S` now commit the in-flight AI script edit and save the `.qvm` even when the AI script textbox is focused. The text editor pre-checks save bindings and commits the edit before letting the key reach the dispatcher.
+- **Pause-menu Save button works while AI textbox is focused**: ESC closing the property panel now commits the AI script edit instead of discarding it.
+
+### 🐛 Bug Fixes
+- **Fixed: AI Script not saved via Ctrl+W / Ctrl+S**: The text editor block was intercepting all keys while the AI textbox was focused, so `Ctrl+W` was being inserted as a printable character instead of triggering `SaveState`. Now the editor checks for save hotkeys first, commits the AI edit, and lets the binding fire.
+- **Fixed: ESC discarded AI script edits**: Pressing ESC while editing AI script text no longer discards the in-flight edit — it commits `prop_text_buf_` to `ai_script_text_` and sets `ai_script_dirty_=true`.
+- **Fixed: Undo/Redo broke building ATTA positions**: After restoring the objects vector, ATTA proxy objects are now marked `modified=true` and `FlushAttaProxiesToMef()` rewrites the MEF binary. Previously the MEF kept post-edit local positions while the proxy's world pos reverted, causing the 3D view and saved level to disagree.
+- **Fixed: Pause-menu AutoSave row not updating display**: The pause-mode `task_tree_view` struct was missing `auto_save_enabled_` and `auto_save_interval_seconds_` fields, so the renderer always showed defaults (`false`, `300s`) regardless of the actual state. Now both fields are passed in the pause-mode path.
+- **Fixed: ResetLevel did not fully reset graphs/AI/textures**: ResetLevel now does a full folder replacement (`remove_all` + `copy recursive`) instead of in-place `overwrite_existing`, so deleted graph nodes, removed AI scripts, and any other stale files are all reverted. The backup is now always created on first level load (not gated on `enableBackup`) and captures the entire `missions\location0\levelX\` folder.
+- **Fixed: AutoSave config not reloaded on startup**: `QEDAutoSaveEnabled` and `QEDAutoSaveInterval` were saved to `qedconfig.qsc` but never read back. The parser now restores both on launch.
+- **Fixed: Terrain undo/redo didn't restore heightmap edits**: Added `SnapshotHMP()` / `RestoreHMP()` on `Terrain` (and a public pass-through on `Level`) that byte-copies the loaded HMP file body. Undo/redo now captures and restores the full heightmap buffer so brush edits can be rolled back.
+- **Fixed: Editor created a `content` folder in the install path**: All asset cache stamps moved from `output_dir\content\cache` to `output_dir\editor\cache`; the terrain extract dir moved from `content\terrains` to `editor\terrains`. The editor no longer writes anywhere outside `editor\`.
+
+### ⌨️ New Keybindings
+| Event | Binding | Action |
+|-------|---------|--------|
+| `ToggleAutoSave` | `<Ctrl><Shift><A>` | Toggle auto-save on/off |
+| `AutoSaveIntervalUp` | `<Ctrl><Shift><]>` | Increase auto-save interval by 10s |
+| `AutoSaveIntervalDown` | `<Ctrl><Shift><[>` | Decrease auto-save interval by 10s |
+
+### 🔧 Technical Changes
+- **Unified `UndoState`**: Snapshots all editable state in one struct — objects (including ATTA proxy fields, spline data, lighting, scale), AI script (path/text/dirty), terrain HMP buffer, terrain mod options, and graph overlay (nodes/edges/visibility). One undo covers every edit type.
+- **`Undo` / `Redo` re-flush ATTA proxies** after restoring the object list, so MEF binaries stay in sync with the proxy world positions.
+- **`ResetLevel` always restores from full-folder backup** when one exists; the backup is created on first load of each level.
+- **Cache and terrain extract dirs moved under `editor\`** so the install path stays clean.
+
+### 🐛 Bug Fixes (post-release patches)
+- **Fixed: HumanAI not found when nested under a non-AI child (e.g. `HumanSoldier → GunM16A2 → HumanAI`)**: `LoadAIScriptForSelected()` now walks the children tree recursively (BFS, up to 15 levels deep) instead of only checking direct children. Previously, when the `HumanAI` was nested inside another child task, the direct-child check failed and the AI script section showed nothing. If not found within 15 levels a warning is logged.
+- **Fixed: AI script editor section never appeared for HumanSoldiers whose modelId isn't tagged `AITYPE_` in IGIModels.json**: `LoadAIScriptForSelected()` and `selected_obj_is_ai` now also check the object type (`HumanSoldier`, `HumanSoldierFemale`, `HumanPlayer`, `HumanSoldierRPG`, `HumanAI`) in addition to the `ai_model_ids_` modelId set, so the AI Script section renders for all AI containers regardless of their modelId.
+- **Fixed: AI script load diagnostic logging**: when the AI script is successfully loaded, the path and resolved `HumanAI` taskId are logged; when `HumanAI` is found but has an empty `taskId`, a warning is logged.
+
+### ⌨️ Pause Menu Reorder & UI Polish
+- Pause menu now lists rows in this order: **Resume → Font → Select Level → Auto Save → Model Search → Terrain Options → Reset Level → Save Level → Quit**
+- Row spacing increased from 35px to 38px for a cleaner, less cramped layout; first row starts at a slightly higher position for better top padding
+- Title "IGI EDITOR" and subtitle "PAUSED" are now centered by measured text width (was hardcoded offset)
+- Terrain header and checkbox rows use the same `strlen * 4` centering as plain buttons, so all text is consistently aligned
+- Auto Save label shortened from "Auto Save Enable" / "Auto Save Disable" to **"Save Enable"** / **"Save Disable"** for a cleaner row
+- Click hit-zones updated to ±16px to match the new 38px row spacing
+
+### 🎯 Pause Menu Alignment Fixes
+- **Spinner rows now share identical layout**: Font / Select Level / Save Enable all use the same `btn_w=22`, `gap=6`, `val_w=44`, `label_gap=14` and compute label width dynamically from `strlen(lbl) * 6`. The whole label+spinner group is centered in the 460px menu, so the `- [val] +` group sits at the same horizontal position in every spinner row.
+- **Model Search text input box no longer overflows** the menu border — box width is now 200px (was 200px with a wider label) and the whole label+box group is centered.
+- **Centering math corrected**: button-label centering was using `strlen * 4` (only correct for 6-7 char strings like "PAUSED") which shifted longer strings like "Reset Level" and "Save Level" off-center. Changed to `strlen * 3` (half of the 6px font width) so all plain buttons center correctly relative to the menu's vertical axis. Title "IGI EDITOR" and subtitle "PAUSED" use the same correct formula.
+
+---
+
+### ✨ New Features
+- **Auto-Save System**: New pause-menu "Auto Save" row that displays current state ("Auto Save Enabled" / "Auto Save Disabled") and an interval spinner with `-`/`+` buttons (10s steps, 10s–3600s range). Toggle with `Ctrl+Shift+A`, increase/decrease interval with `Ctrl+Shift+]` / `Ctrl+Shift+[`. When enabled, the editor auto-saves the current level at the configured interval.
+- **SaveState (Ctrl+W) & SaveObjectFile (Ctrl+S) read from qedkeybindings.qsc**: All save hotkeys are now dispatched via `DispatchEventBindings` using bindings loaded from `editor\qed\qedkeybindings.qsc` — no hardcoded keys.
+- **AI Script Editor hotkey support**: `Ctrl+W` and `Ctrl+S` now commit the in-flight AI script edit and save the `.qvm` even when the AI script textbox is focused. The text editor pre-checks save bindings and commits the edit before letting the key reach the dispatcher.
+- **Pause-menu Save button works while AI textbox is focused**: ESC closing the property panel now commits the AI script edit instead of discarding it.
+
+### 🐛 Bug Fixes
+- **Fixed: AI Script not saved via Ctrl+W / Ctrl+S**: The text editor block was intercepting all keys while the AI textbox was focused, so `Ctrl+W` was being inserted as a printable character instead of triggering `SaveState`. Now the editor checks for save hotkeys first, commits the AI edit, and lets the binding fire.
+- **Fixed: ESC discarded AI script edits**: Pressing ESC while editing AI script text no longer discards the in-flight edit — it commits `prop_text_buf_` to `ai_script_text_` and sets `ai_script_dirty_=true`.
+- **Fixed: Undo/Redo broke building ATTA positions**: After restoring the objects vector, ATTA proxy objects are now marked `modified=true` and `FlushAttaProxiesToMef()` rewrites the MEF binary. Previously the MEF kept post-edit local positions while the proxy's world pos reverted, causing the 3D view and saved level to disagree.
+- **Fixed: Pause-menu AutoSave row not updating display**: The pause-mode `task_tree_view` struct was missing `auto_save_enabled_` and `auto_save_interval_seconds_` fields, so the renderer always showed defaults (`false`, `300s`) regardless of the actual state. Now both fields are passed in the pause-mode path.
+- **Fixed: ResetLevel did not fully reset graphs/AI/textures**: ResetLevel now does a full folder replacement (`remove_all` + `copy recursive`) instead of in-place `overwrite_existing`, so deleted graph nodes, removed AI scripts, and any other stale files are all reverted. The backup is now always created on first level load (not gated on `enableBackup`) and captures the entire `missions\location0\levelX\` folder.
+- **Fixed: AutoSave config not reloaded on startup**: `QEDAutoSaveEnabled` and `QEDAutoSaveInterval` were saved to `qedconfig.qsc` but never read back. The parser now restores both on launch.
+- **Fixed: Terrain undo/redo didn't restore heightmap edits**: Added `SnapshotHMP()` / `RestoreHMP()` on `Terrain` (and a public pass-through on `Level`) that byte-copies the loaded HMP file body. Undo/redo now captures and restores the full heightmap buffer so brush edits can be rolled back.
+- **Fixed: Editor created a `content` folder in the install path**: All asset cache stamps moved from `output_dir\content\cache` to `output_dir\editor\cache`; the terrain extract dir moved from `content\terrains` to `editor\terrains`. The editor no longer writes anywhere outside `editor\`.
+
+### ⌨️ New Keybindings
+| Event | Binding | Action |
+|-------|---------|--------|
+| `ToggleAutoSave` | `<Ctrl><Shift><A>` | Toggle auto-save on/off |
+| `AutoSaveIntervalUp` | `<Ctrl><Shift><]>` | Increase auto-save interval by 10s |
+| `AutoSaveIntervalDown` | `<Ctrl><Shift><[>` | Decrease auto-save interval by 10s |
+
+### 🔧 Technical Changes
+- **Unified `UndoState`**: Snapshots all editable state in one struct — objects (including ATTA proxy fields, spline data, lighting, scale), AI script (path/text/dirty), terrain HMP buffer, terrain mod options, and graph overlay (nodes/edges/visibility). One undo covers every edit type.
+- **`Undo` / `Redo` re-flush ATTA proxies** after restoring the object list, so MEF binaries stay in sync with the proxy world positions.
+- **`ResetLevel` always restores from full-folder backup** when one exists; the backup is created on first load of each level.
+- **Cache and terrain extract dirs moved under `editor\`** so the install path stays clean.
+
+---
+
+## 3.2.0-pre — Graph Link Editing, Legacy Format & Edge Visibility
+
+### ✨ New Features
+- **Add/Remove Links (Two-Step Workflow)**: Navigation edges between graph nodes can now be added and removed interactively. Select node A, press `Alt++` to mark it as the link source (green double-ring indicator), select node B, press `Alt++` again to create the link. Use `Alt+-` to remove a link the same way.
+- **Node Label Toggle**: On-screen node ID labels can now be toggled on/off with `Alt+L`. The title banner shows `[labels off]` when disabled.
+- **Legacy Graph Format Support**: Added a parser, full writer, and position-patch saver for the undocumented alternate tagged graph format (1-byte type tags: `0x05`=int32, `0x06`=float, `0x08`=Vec3d, `0x09`=string, no magic number). This fixes the "bad magic" error that prevented level 8's `graph1.dat` and `graph7.dat` (and other legacy graphs) from loading and displaying.
+
+### 🐛 Bug Fixes
+- **Fixed: "Bad magic" error on level 8 graph1**: Graph files using the legacy tagged format (no `0xFFEEDDCC` magic) are now auto-detected and parsed transparently — both standard and legacy formats produce the same editable `GraphFile` and support full add/remove/edit/save.
+- **Fixed: Links not visible / not above ground**: Edge lines were drawn at node Z (ground level), getting buried under terrain. Edges now render at the vertical centre of the node boxes (`z + H`) so they sit above ground and are clearly visible.
+
+### ⌨️ New Keybindings
+| Event | Binding | Action |
+|-------|---------|--------|
+| `AddGraphLink` | `<Alt><Plus>` | Two-step: mark source node, then link to target node |
+| `RemoveGraphLink` | `<Alt><Minus>` | Two-step: mark source node, then unlink target node |
+| `ToggleGraphNodeLabels` | `<Alt><L>` | Toggle on-screen node ID labels |
+
+### 🧪 Tests
+- Added 4 new tests for the legacy graph format: parse validity, node data sanity, write round-trip, and position-patch save.
+
+---
+
+## 3.1.0-pre — Visual 3D Graph Editor
+
+- Added: Visual 3D Graph Editor (interactive 3D nodes, material color coding, and path/edge rendering via F3 overlay).
+- Added: Binary parser, patch saver, and full writer serialization for AI navigation graph `.dat` files.
+- Added: Config option `QGraphNodeSize` to control node box sizing.
+- Fixed: Terrain sculpting vs object selection click conflicts, right-click triggers.
+- Fixed: Syncing of level graph subdirectories to backup folders.
+
+---
+
+## 3.0.0 — igi1conv Integration, Qt Bundling, Module Refactor & Bug Fixes
+
+This release is a major milestone: the standalone asset converter is now a first-class Qt application (`igi1conv`) living in its own repository, the editor codebase has been split into clearly separated modules, and a batch of code-review bugs has been resolved.
+
+### 🔧 igi1conv — Standalone Asset Converter (Qt)
+- **Dedicated repo**: `igi1conv` is developed at [project-igi-conv](https://github.com/jones-hm/project-igi-conv) and bundled prebuilt with each editor release.
+- **Qt application**: Ships with a full graphical GUI mode and a headless CLI mode. The editor invokes only the CLI internally (`dat to-mtp`, etc.).
+- **Full Qt package**: The entire runtime (exe + Qt5Core/Qt5Gui/Qt5Widgets/Qt5Svg DLLs, platform plugins, image formats) is bundled at `editor/tools/igi1conv/` — no separate Qt installation required.
+- **v1.6.0**: Updated to `igi1conv` v1.6.0 with improved asset conversion accuracy.
+- **Native MTP generation**: The editor delegates all `.mtp` generation to `igi1conv dat to-mtp`, which reproduces the original game `.mtp` byte-for-byte and fixes transparent/wrong-texture in-game issues.
+
+### 🗂️ Module Refactor
+- **renderer_objects** split into picking, mesh, visual, metadata, texture, and ATTA attachment subsystems.
+- **app** split into `app_input` (mouse + keyboard + dispatch), `app_editor`, `app_view`, `app_lookup`, `app_level`, and `app_ui` modules.
+- **terrain** implementation split into terrain_io, terrain_lod, terrain_mesh, and terrain_query.
+- **LevelObjects** QSC serialization extracted into its own module.
+
+### 🖥️ UI Improvements
+- **Level Spinner**: Level number selector added to the pause menu for quick level switching.
+- **Texture Panel Removed**: Texture list removed from the pause menu for a cleaner layout.
+- **Editor File Verification on Launch**: Missing `editor/` directory files are detected and reported with a clear error dialog before the editor reaches the render loop.
+
+### 🐛 Bug Fixes
+- **Arrow Keys**: Arrow keys no longer move the camera unless `SHIFT+ALT` is held — fixes accidental camera drift during text input.
+- **Weapon Orientation**: Corrected weapon/ammo model orientation so pickups display at the right angle in-game.
+- **ESC Menu Re-open**: Fixed regression where pressing ESC a second time failed to reopen the pause menu.
+- **Terrain Rings on Right-Click**: 3D brush rings now appear immediately when terrain is selected via right-click.
+- **DAT Round-Trip Loss**: Fixed data loss when a DAT file was written back after read.
+- **matCount Guard**: Added bounds check to prevent out-of-range material slot access.
+- **`std::exit` replaced**: Replaced bare `std::exit` calls with proper cleanup paths.
+- **VNAM Shadow**: Fixed variable shadowing bug in VNAM chunk parsing.
+- **vert_info Overflow**: Corrected vertex info buffer overflow on large meshes.
+- **JSON Parser**: Fixed edge-case crash in the embedded JSON parser on malformed input.
+- **Boundary-Aware Texture Matching**: `009_01_1` can no longer accidentally grab `1009_01_1.tex`.
+
+---
+
 ## 2.9.0 — New Terrain Editor, Foreign Models Support & UI Fixes
 This release introduces a new Terrain editor, support for loading and adding foreign models from other levels, and critical bug fixes to the pause menu layout and viewport interaction.
 

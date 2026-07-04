@@ -20,6 +20,12 @@ struct LevelObject {
     std::string secondaryWeapon; // Secondary weapon name from JSON
     std::string secondaryAmmo;    // Secondary ammo from JSON
     int team = 0; // 0 = Friendly, 1 = Enemy — read from argTokens at load; tooltip uses argTokens directly
+    int boneHierarchy = -1;  // HumanSoldier-family arg@9: index into common/ANIMS/<NNN>.IFF (-1 = none)
+    int standAnimation = -1; // HumanSoldier-family arg@10: animation_id of the default clip to play (-1 = none)
+    int graphNodeCount = -1; // AIGraph: Graphdata node_count (arg@7), -1 = not an AIGraph / not parsed
+    int aiGraphTaskId = -1;  // HumanAI: arg@4, the AIGraph task this AI patrols (-1 = none)
+    std::string weaponEnumId;  // Weapon-child task (type starts with "Gun"): its WEAPON_ID_* arg@3
+    std::string weaponModelId; // HumanSoldier: resolved real model id for its weapon child, held in hand (empty = no weapon / excluded)
     glm::dvec3 pos = glm::dvec3(0.0);
     glm::dvec3 original_pos = glm::dvec3(0.0);  // Original position from QSC for fallback matching
     glm::dvec3 rot = glm::dvec3(0.0);
@@ -68,6 +74,20 @@ struct LevelObject {
     int modelIdArgIdx = -1; // Index of the modelId argument in argTokens
 };
 
+// Stable per-placement key for a lightmap binding. Most objects use their unique
+// Task_New id. Nested / ATTA tasks all share the literal taskId "-1" (not unique),
+// so those key off their ORIGINAL authored position instead (which the QSC binding
+// is resolved against and which does NOT change when the object is moved in-editor,
+// keeping the key stable across edits). Used by both the apply path (App) and the
+// render path (Renderer_Objects) so they agree on where each lightmap is stored.
+inline std::string LightmapTaskKey(const LevelObject& obj) {
+    if (!obj.taskId.empty() && obj.taskId != "-1") return obj.taskId;
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "pos:%.1f,%.1f,%.1f",
+                  obj.original_pos.x, obj.original_pos.y, obj.original_pos.z);
+    return std::string(buf);
+}
+
 
 struct qtask_object_s : qtask_s {
     char model_id_[32];
@@ -89,6 +109,11 @@ public:
     // model id via IGIModels.json. Returns the input unchanged if it is not a known
     // enum (caller then renders/keeps the raw string).
     std::string ResolvePickupModelId(const std::string& enumId);
+    // (Re)compute the held-weapon model id for the soldier at the given index from
+    // its current children (weapon enum + AI graph), applying the single-node /
+    // cutscene exclusion. Called once per soldier at load and again after a live
+    // property edit so the weapon shown in the editor updates immediately.
+    void ResolveSoldierWeapon(int soldierIndex);
     const std::map<std::string, std::string>& GetModelNamesMap() const { return modelNames_; }
     void SaveToQSC(const std::string& qscPath);
     // Write ONLY the subtree rooted at idx (the task + its descendants) as a proper

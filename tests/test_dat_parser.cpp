@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "parsers/dat_parser.h"
+#include "../source/renderer/dat_writer.h"
 #include "utils.h"
 #include <string>
 

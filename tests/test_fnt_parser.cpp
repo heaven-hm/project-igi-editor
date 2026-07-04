@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "parsers/fnt_parser.h"
+#include "../source/renderer/fnt_parser.h"
 #include "utils.h"
 #include <string>
 #include <filesystem>

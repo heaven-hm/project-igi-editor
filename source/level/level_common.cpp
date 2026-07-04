@@ -436,6 +436,27 @@ bool Tex_Load(const char* filename, pics_s& pics) {
 	return load_ok;
 }
 
+bool Tex_LoadFromMemory(const uint8_t* data, size_t size, pics_s& pics) {
+	memset(&pics, 0, sizeof(pics));
+	if (!data || size < sizeof(tex_head_s)) return false;
+
+	const tex_head_s* head = reinterpret_cast<const tex_head_s*>(data);
+	if (head->ident_ != TEX_IDENT) return false;
+
+	bool load_ok = false;
+	if (head->version_ == 2)
+		load_ok = Tex_Loadv2(const_cast<tex_head_v2_s*>(reinterpret_cast<const tex_head_v2_s*>(data)), pics);
+	else if (head->version_ == 7)
+		load_ok = Tex_Loadv7(const_cast<tex_head_v7_s*>(reinterpret_cast<const tex_head_v7_s*>(data)), pics);
+	else if (head->version_ == 9)
+		load_ok = Tex_Loadv9(const_cast<tex_head_v9_s*>(reinterpret_cast<const tex_head_v9_s*>(data)), pics);
+	else if (head->version_ == 11)
+		load_ok = Tex_Loadv11(const_cast<tex_head_v11_s*>(reinterpret_cast<const tex_head_v11_s*>(data)), pics);
+
+	if (!load_ok) Pic_FreePics(pics);
+	return load_ok;
+}
+
 /*
 ================================================================================
  QSC

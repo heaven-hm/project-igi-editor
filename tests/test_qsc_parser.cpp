@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
-#include "parsers/qsc_lexer.h"
-#include "parsers/qsc_parser.h"
+#include "../source/level/qsc_lexer.h"
+#include "../source/level/qsc_parser.h"
 #include <sstream>
 
 using namespace qsc;
