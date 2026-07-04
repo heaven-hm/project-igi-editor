@@ -40,10 +40,10 @@ With the release of our premium modding features, we have expanded our workspace
 *3D viewport showing level models, objects, and real-time navigation.*
 
 ![IGI Editor Level 8](assets/screenshots/igi-editor-level8.png)
-*Level 8 Harbor terrain, dynamic structures, and Flight Camera visualization.*
+*Level 8 Re-supply, dynamic structures, and Flight Camera visualization.*
 
 ![IGI Editor Level 10](assets/screenshots/igi-editor-level10.png)
-*Level 10 Research Facility rendering, building placement, and real-time snapping.*
+*Level 10 Get Priboi rendering, building placement, and real-time snapping.*
 
 ### 🌳 Task & Objective Editor
 
