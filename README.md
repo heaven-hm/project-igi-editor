@@ -1,254 +1,301 @@
-# Brief
+# IGI Editor
 
-This project is the result of analysis decompiled IGI.exe c code from IDA Pro 7.9. <br>
+**IGI Editor** is a professional 3D world and object manipulation toolkit for Project IGI. Inspired by the official [IGI 2 Editor](https://www.nexusmods.com/igi2covertstrike/mods/1) created by the original IGI Developers, it provides a modern interface for level research, object placement, and terrain modification.
 
-It use OpenGL as rendering API. <br>
-Use shaders to replace old Direct3D7 fixed function pipeline. <br>
-Use glut as application framework <br>
-and migrate from x86 to x64 platform.
+Professional 3D **modding** suite featuring click-to-select map selection, train and spline tools, a streamlined workspace menu, automated asset extraction, flawless native MEF model loading (including complex buildings and bone structures), integrated QVM decompilation, and a full headless CLI toolchain. It includes an **IGI 2 Style position and orientation properties editor, sliders, pushbuttons, etc.** All asset conversion (DAT, MTP, QSC, QVM, RES, Graph, TEX, FNT, MEF, Terrain) is delegated to the bundled **`igi1conv.exe`** (v1.7.0, located at `editor/tools/igi1conv/`) through a single shared spawner (`source/utils_igi1conv.{h,cpp}`); only the runtime loaders that need data the CLI cannot supply every frame (mef_native, fnt_parser, qsc_lexer/parser, terrain_files) stay in-process. Supports editing and compiling for all 14 original game levels with native asset parity.
 
-# Folder structure
+This project is built upon the foundational work of the [Project-IGI-Terrain](https://github.com/hjcminus/Project-IGI-Terrain) repository. Special thanks to [hjcminus](https://github.com/hjcminus) for their research and for bringing this codebase to light. It is built using C++17 and OpenGL, and it is cross-platform, but it is mainly tested on Windows.
 
-├─ bin/				&emsp;&emsp;&emsp;&emsp;test program output binaries <br>
-├─ build/			&emsp;&emsp;&emsp;build directory (cmake) <br>
-├─ res/				&emsp;&emsp;&emsp;&emsp;test levels (1~13) <br>
-├─ shaders/			&emsp;&emsp;&emsp;OpenGL shader files <br>
-│  ├─ 4.1/			&emsp;&emsp;&emsp;GLSL 4.1  <br>
-│  └─ 4.5/			&emsp;&emsp;&emsp;GLSL 4.5  <br>
-├─ source/			&emsp;&emsp;&emsp;c++ source code  <br>
-└─ third_party/		&emsp;&emsp;external libraries  <br>
+---
 
-# How to build
+## ⚖️ Legal Notice
 
-Note: Only tested on x64 platform.
+**This tool requires a legally licensed copy of Project I.G.I. installed on your system.**
+No game assets, models, textures, or any copyrighted content from Project I.G.I.
+are included in this repository or any releases.
 
-## Build on windows
+For full details, see [LEGAL.md](LEGAL.md).
 
-Execute these commands or just run make.bat <br>
+---
 
-&gt; mkdir vcbuild <br>
-&gt; cd vcbuild <br>
-&gt; cmake .. <br>
+## ⚠️ Pre-Releases Warning
 
-This will generate igi_terrain.sln (or igi_terrain.xsln for msvc2026) in vcbuild folder.
+> [!WARNING]
+> Pre-releases labeled with the tag `pre-release` (such as `*-pre` or containing `pre`) are experimental. They may contain bugs and have experimental features added. It is highly recommended to download and use **stable versions** only.
 
-## Build on ubuntu
+---
 
-You need to install glut, glew development packages. <br>
+## 🎬 IGI Editor Video
+[![IGI Editor Video](https://img.youtube.com/vi/w4k5TRIy9eM/hqdefault.jpg)](https://www.youtube.com/watch?v=w4k5TRIy9eM)
 
-$ sudo apt install freeglut3-dev <br>
-$ sudo apt install libglew-dev <br>
+---
 
-build: <br>
+## 📸 Screenshots
 
-$ mkdir build <br>
-$ cd build <br>
-$ cmake .. <br>
-$ make <br>
+With the release of our premium modding features, we have expanded our workspace visualization with high-fidelity telemetry, dynamic objective tree views, and comprehensive level environment rendering.
 
-The output binary file will write to bin folder.
+### 🖥️ Main Editor & Navigation
 
-# Command line options:
+![IGI Editor Screenshot](assets/screenshots/igi-editor.png)
+*3D viewport showing level models, objects, and real-time navigation.*
 
-| Option                           | Description                       |
-|:---------------------------------|:----------------------------------|
-| -w &lt;width&gt;                 | Set start window width            |
-| -h &lt;height&gt;                | Set start window height           |
-| -wireframe                       | Init wireframe mode               |
-| -draw_parts &lt;flags&gt;        | Init draw parts                   |
-| -draw_terrain_opts &lt;flags&gt; | Init draw terrain options         |
-| -terrain_mod_opts &lt;flags&gt;  | Init terrain modification options |
-| -level &lt;level_no: 1~13&gt;    | Set start level                   |
-| -yaw   &lt;degree&gt;            | Set viewer start yaw              |
-| -pitch &lt;degree: -89~89&gt;    | Set viewer start pitch            |
+![IGI Editor Level 8](assets/screenshots/igi-editor-level8.png)
+*Level 8 Harbor terrain, dynamic structures, and Flight Camera visualization.*
 
-# Input
+![IGI Editor Level 10](assets/screenshots/igi-editor-level10.png)
+*Level 10 Research Facility rendering, building placement, and real-time snapping.*
 
-## keyboard
+### 🌳 Task & Objective Editor
 
-| Key       | Description                                             |
-|:----------|:--------------------------------------------------------|
-| Alt+Enter | Toggle windowed / full-screen mode                       |
-| F2        | Toggle overlay a wireframe mesh on top of solid surface |
-| F3        | Toggle clipping                                         |
-| F4        | Show / hide cursor                                      |
-| Page Up   | Twice the movement speed                                |
-| Page Down | Half the movement speed                                 |
-| Left      | Decrease Roll                                           |
-| Right     | Increase Roll                                           |
-| w         | Move forward                                            |
-| s         | Move backward                                           |
-| a         | Move left                                               |
-| d         | Move right                                              |
-| q         | Move straight up                                        |
-| z         | Move straight down                                      |
-| space key | Jump if clip mode turned on (F3 key)                    |
+![IGI Editor Task Tree](assets/screenshots/igi-editor-task-tree.png)
+*Visual Task Tree Editor for mission objective management.*
 
-## Context Menu
+![IGI Editor Task Tree Editor](assets/screenshots/igi-editor-task-edit.png)
+*Interactive Task Objective Editor modal for inline task renaming, notes updates, and direct live save/reload functionality.*
 
-(*)	radio option <br>
-[+] flag set	<br>
-[-] flag unset
+![IGI Editor Copy & Paste Task](assets/screenshots/igi-editor-copy-task.png)
+*Task Copy & Paste feature where you can copy and paste any task to replicate any objects with its object tree.*
 
-| Sub menu             | Description                                                      |
-|:-------------------- |:-----------------------------------------------------------------|
-| Wireframe            | Toggle overlay a wireframe mesh on top of solid surface          |
-| Draw Parts           | Toggle draw skydome / flat sky layer / terrain                   |
-| Terrain Draw Options | Toggle draw tiled texture / light map / fog                      |
-| Terrain Mod Options  | Toggle apply texture modifier / height map / discards            |
-| Choose Level         | Choose level: 1 ~ 13                                             |
-| Close                | Quit application                                                 |
+![IGI Editor Add New Task](assets/screenshots/igi-editor-new-task.png)
+*Adding a new task allows you to easily inject custom new Objects, Buildings, or AI units directly into the level.*
 
-### "Terrain Draw Options" sub menu
+### 🏔️ Terrain Editor
 
-| Menu Item | Description                                  |
-|:----------|:---------------------------------------------|
-| Texture   | Toggle draw tiled material textures          |
-| Light Map | Toggle overlay baked shadow map onto terrain |
-| Fog       | Toggle fog                                   |
+![IGI Editor Terrain Editor](assets/screenshots/igi-editor-terrain.png)
+*Interactive 3D Terrain Editor showing terrain sculpting, heightmap editing, and active wireframe brush.*
 
-### "Terrain Mod Options" sub menu
+### 📦 Object & Controls Editor
 
-| Menu Item        | Description                                                      |
-|:-----------------|:-----------------------------------------------------------------|
-| Texture Modifier | Toggle apply texture modifier (at most 4 tiled material textures can be combined together. e.g. grass, rock, dust) |
-| Height Map       | Adjust height value of specific area (bilinear interpolated), make it flat or bumpy. |
-| Discard Terrain  | Some buildings has underground part, to avoid player clipped by terrain mesh, the cube which contain the building need be discarded. |
+![IGI Editor Controls](assets/screenshots/igi-editor-controls.png) </br>
+*HUD telemetry displaying precise translation, rotation, and selection info.*
+
+### 🤖 AI Editor
+
+![IGI Editor AI](assets/screenshots/igi-editor-ai.png)
+*AI Unit identification and management interface.*
+
+### ⚙️ Debugging & Compilation
+
+![IGI Editor Debug Screenshot](assets/screenshots/igi-editor-debug.png)
+*Debug Console showing IGIPath resolution and QVM compilation pipeline.*
+
+---
+
+> **Tip:** This editor was tested on **Project IGI Neonix Remastered** ([Nexus Mods Link](https://www.nexusmods.com/projectigi/mods/5)) and it is highly recommended to use that mod alongside this editor for HD Textures, Terrain, and enhanced Gameplay.
+> 
+> ![Project IGI Neonix Remastered](assets/screenshots/igi-neonix-remastered.png)
+
+---
 
 
-# File Types
 
-## Common file types
+## 🚀 Features
 
-| File type | Description                                                      |
-|:----------|:-----------------------------------------------------------------|
-| qsc       | Decompiled qvm script (use tool: project-igi-qvm-editor)         |
-| tex       | Texture file, origin is at the up-left corner.                   |
+- **3D Terrain Rendering & Sculpting**: Fully rendered real-time 3D terrain with active snapping, grid drawing, and heightmap editing brushes.
+- **Flight Camera & 3D Navigation**: Full 6-DOF fly cam with fine-grained pageup/pagedown speed controls and teleportation tools.
+- **Visual Task Tree Editor**: Visual tree-view workspace for managing mission objectives, inserting new tasks (`Task_New`), duplicating nodes, copying/pasting selections, deleting nodes, and multi-step **Undo/Redo** support.
+- **Advanced Splines & Waypoints**: Complete spline system for procedural railway paths, mesh repeats, linear/curved segment configuration, and pathing lines.
+- **AI Behavior & Mission Layout**: Edit NPC soldier structures, patrol nodes, and AI scripts — featuring a full inline AI Script Editor with scrolling, arrow-key navigation, and compile-on-save directly inside the property panel.
+- **Inline AI Script Editor**: Select any HumanSoldier/HumanAI task to reveal a mini-notepad QSC editor with decompiled script preview, vertical scrolling, cursor navigation, autocomplete support, and automatic `.qvm` recompilation on save.
+- **Live Editor Real-Time Sync**: Direct communication between the editor and the IGI engine for instant visual and physical feedback.
+- **3D Object Placement & Manipulation**: Advanced 6-DOF controls for placing buildings, props, terminals, doors, cameras, and actors.
+- **IGI 2 Style Controls**: Seamless object translation and rotation using standard mouse-drag modifiers (Shift, Ctrl, A, B, G).
+- **Automated Path & Sync Pipeline**: Automatically handles compiler syncing, path mapping, and safe directory cleaning.
+- **Foreign Model Support**: Ability to load, import, and add foreign models from other levels directly into the active level workspace.
+- **Visual 3D Graph Editor**: Full-featured interactive 3D navigation graph editor to view, modify, and save pathfinding networks, node positions, materials, and connection links (defined in `.dat` files). Details in [docs/graph_editor.md](docs/graph_editor.md).
 
-## Terrain file types
+### Current Testing Status
+- **Building Editor**: Working - fully tested with Building objects.
+- **Terrain Editor**: Working - 3D terrain heightmap rendering and snapping fully functional.
+- **Task Tree & Objectives**: Working - interactive tree management, copy/paste, deletion, and insertion of new tasks fully operational.
+- **AI & Waypoint System**: Working - full editing of NPC patrol nodes and properties.
+- **Navigation Graph Editor**: Working - fully supports interactive 3D navigation nodes, path connections, and per-node property adjustments.
+- **Model Format**: Uses proprietary **Native MEF Models** natively loaded by the integrated MEF parser for optimal accuracy and parity with the game engine.
+- **Level Tested**: Supports compiling/decompiling all 14 original game levels. Note that only the first few levels are fully tested and verified. Levels from Level 5 onwards may have bugs or issues; if you find any, please create an issue on GitHub and report them to us! Thank you!
 
-| File type | Description                                                      |
-|:--------- |:---------------------------------------------------------------- |
-| ctr       | Octree                                                           |
-| cmd       | Cube mesh                                                        |
-| hmp       | Height map to modify some part of the terrain                    |
-| lmp       | Light map                                                        |
-| bit       | Bit file, mixing different texture make the terrain more diverse |
+### ⚠️ Known Issues
+A comprehensive list of all known rendering, game, and engine issues can be found in our **[Known Issues Guide](docs/KNOWN_ISSUES.md)**.
 
-# Terrain System
+---
 
-## World coordinate
+## 🔄 How It Works
 
-Right-handed, with y axis point forward, x axis point to right and z axis point up. <br>
-YAW is 0 when player facing Y axis, counter-clock wise is positive. <br>
-World range in each dimension is [-2^30, 2^30], 4096 world unit represent one meter.
+### Editor Flow
+* **Sync & Decompile**: Copies terrain and compiles/decompiles `QSC`/`QVM` files dynamically to keep level data in sync.
+* **Attachments (ATTA)**: If modifying attachments, decompiles/recompiles `MEF` files back to `.RES` to show changes.
+* **Asset Loading**: Loads icons, textures, and sprites from `qed` and level directories.
+* **Level Setup**: Parses QSC data, snaps MEF 3D models to the terrain heightmap, and positions the camera.
+* **Auto-Backup**: Automatically creates file backups on save if `backup = true` in config.
 
-The entire terrain mesh size is 128K * 128K. <br>
+---
 
+
+## 💻 Getting Started
+
+### Prerequisites
+- **OS**: Windows (x86)
+- **Compiler**: MSVC (Visual Studio 2022 recommended)
+- **Build System**: CMake
+- **IGI Game**: Full installation of Project IGI required for level data and assets
+
+### Build Instructions
+1. Clone the repository.
+2. Open the directory in a terminal.
+3. Run the following commands to build for **32-bit (Win32)**:
+   ```powershell
+   # Clean previous build if necessary
+   if (Test-Path build) { Remove-Item build -Recurse -Force }
    
-## Space partition and LOD
+   # Configure for 32-bit (Win32) using a specific Visual Studio instance
+   cmake -B build -G "Visual Studio 17 2022" -A Win32 -DCMAKE_GENERATOR_INSTANCE="C:/Program Files/Microsoft Visual Studio/2022/Community"
+   
+   # Build in Release mode
+   cmake --build build --config Release
+   ```
+4. Launch the editor:
+   ```powershell
+   .\bin\Release\igi1ed.exe -level 1 -draw_parts 49 -stick_to_ground
+   ```
 
-The algorithm use octree to partition the world. <br>
-Each octree node is called a cube. <br>
-The root cube size is 2^31, with lod level 0, <br>
-leaf cube size is 2^15 (32768), with lod level 16.
+#### 🎨 Selective Loading and Drawing (`-draw_parts` Bitmask)
+You can customize what parts of the level to load and render using the `-draw_parts` bitmask argument:
 
-The octree is different from traditional data structure. 
-child cube can be linked to different parent cubes even not has the same lod level,
-and each cube stored a transform flag (0-7) to change layout of linked mesh (defined in *.cmd file).
-The algorithm use the fractal nature of terrain, that's why the game can render a very large scene with very small ctr file.
+* **Only Buildings with Terrain** (Bitmask: `17` = `1` Terrain + `16` Buildings)
+  ```powershell
+  .\igi1ed.exe -level 1 -draw_parts 17 -stick_to_ground
+  ```
+* **Only Objects/Props with Terrain** (Bitmask: `33` = `1` Terrain + `32` Objects/Props)
+  ```powershell
+  .\igi1ed.exe -level 1 -draw_parts 33 -stick_to_ground
+  ```
+* **Only AI Units with Terrain** (Bitmask: `65` = `1` Terrain + `64` AI)
+  ```powershell
+  .\igi1ed.exe -level 1 -draw_parts 65 -stick_to_ground
+  ```
+  *(Note: AI models are stored as non-building objects (props) inside the engine. To visually render the 3D meshes of the AI units, combine with props to get `-draw_parts 97` which is `1` + `32` + `64`)*
 
-### cube transform flags
+---
 
-| trans flag | description                                                      |
-| :--------: | ---------------------------------------------------------------- |
-| 0          | no change                                                        |
-| 1          | rotate round Z axis  90 degrees (CCW)                            |
-| 2          | rotate round Z axis 180 degrees (CCW)                            |
-| 3          | rotate round Z axis -90 degrees (CCW)                            |
-| 4          | flip along YOZ plane                                             |
-| 5          | flip along YOZ plane and rotate round Z axis  90 degrees (CCW)   |
-| 6          | flip along YOZ plane and rotate round Z axis 180 degrees (CCW)   |
-| 7          | flip along YOZ plane and rotate round Z axis -90 degrees (CCW)   |
+## 🕹️ CLI & GUI Command-Line Options
 
-### child access order under each transform flag 
+The **IGI Editor** can be run as both a fully featured interactive 3D graphical suite and a high-performance, headless command-line asset tool:
 
-| trans flag | child access order in world space                                |
-| :--------: | ---------------------------------------------------------------- |
-| 0          | 0, 1, 2, 3, 4, 5, 6, 7                                           |
-| 1          | 2, 0, 3, 1, 6, 4, 7, 5                                           |
-| 2          | 3, 2, 1, 0, 7, 6, 5, 4                                           |
-| 3          | 1, 3, 0, 2, 5, 7, 4, 6                                           |
-| 4          | 1, 0, 3, 2, 5, 4, 7, 6                                           |
-| 5          | 3, 1, 2, 0, 7, 5, 6, 4                                           |
-| 6          | 2, 3, 0, 1, 6, 7, 4, 5                                           |
-| 7          | 0, 2, 1, 3, 4, 6, 5, 7                                           |
+*   **GUI Editor Mode**: Launch the graphical user interface to edit level data. Supports options like `-level <num>` (1-14), custom dimensions (`-w`, `-h`), ground snapping (`-stick_to_ground`), and selective rendering bitmasks (`-draw_parts`).
+*   **Headless CLI Mode**: Perform high-speed operations directly from your terminal. Parsers are provided for 3D meshes (`--mef`), script compiles (`--qsc`), reverse engineering bytecode (`--qvm`), extracting resource libraries (`--res`), textures (`--mtp`, `--tex`), navigation systems (`--graph`), terrain geometries (`--terrain`), database archives (`--dat`), and automated level integrations (`--verify-level`).
 
-### final transform flag when combined parent cube and child cube transform flag
+For a comprehensive list of all CLI commands, export options, selective rendering bitmask combinations, keyboard hotkeys, and hands-on examples, please check our detailed guide:
+👉 **[CLI & GUI Reference Guide](docs/CLI.md)**
 
-| parent cube trans flag | child cube final trans flag in each defined trans flag |
-| :--------: | ------------------------------------------------------------------ |
-| 0          | 0, 1, 2, 3, 4, 5, 6, 7                                             |
-| 1          | 1, 2, 3, 0, 5, 6, 7, 4                                             |
-| 2          | 2, 3, 0, 1, 6, 7, 4, 5                                             |
-| 3          | 3, 0, 1, 2, 7, 4, 5, 6                                             |
-| 4          | 4, 7, 6, 5, 0, 3, 2, 1                                             |
-| 5          | 5, 4, 7, 6, 1, 0, 3, 2                                             |
-| 6          | 6, 5, 4, 7, 2, 1, 0, 3                                             |
-| 7          | 7, 6, 5, 4, 3, 2, 1, 0                                             |
+And for detailed information about file formats of IGI game 👉 **[IGI File Formats](docs/file-formats.md)**
+
+---
+
+## ⌨️ Controls
+
+### Object Manipulation (IGI 2 Style)
+
+Select an object and use **LMB Drag** + Modifiers:
+
+| Modifier / Key | Action |
+| :--- | :--- |
+| **Shift** | Move on XY Plane |
+| **Ctrl** | Move on XZ Plane |
+| **A / B / G** | Rotate Alpha / Beta / Gamma axes |
+| **S** | Snap to Ground |
+| **Space** | Reset Orientation |
+| **F11** | Teleport camera to selected object instead |
+
+---
+
+## 🧪 Unit Testing & Level Verification
+
+`igi_tests.exe` is a standalone **GoogleTest** binary covering all core parsers, utilities, QVM round-trips, and level verification. It runs co-located with `igi1ed.exe` and the game files — no source tree needed at runtime.
+
+```powershell
+# Fast run — level 1 only (~18 seconds)
+$env:IGI_TEST_LEVEL="1"; .\igi_tests.exe
+
+# Run for a specific level
+$env:IGI_TEST_LEVEL="10"; .\igi_tests.exe
+
+# Run all 14 levels (~4 minutes)
+.\igi_tests.exe
+```
+
+**275 tests** across 28 suites: QSC lexer/parser, QVM round-trips (synthetic + real game data for all 14 levels), file-format parsers (DAT, RES, TEX, MTP, FNT, Graph), verify-core units, and level-verification integration tests. (2 pre-existing writer byte-roundtrip failures are carried over from `feature/graph-editor` and are unrelated to the 3.4.0-pre migration.)
+
+For the full test reference — suites, filters, fixture descriptions, and build/deploy instructions — see:
+👉 **[Test Suite Documentation](docs/TESTS.md)**
+
+---
+
+## 🛠️ Future Roadmap
+
+With the successful release of **Version 2.0.0**, core features like the **Native MEF Parser**, **Asset Extractor**, **QVM Toolchain**, **Task Tree Editor**, **Train & Spline Engine**, **Click-to-Select Map View**, and **Headless CLI** have been fully realized. Future milestones include:
+- **Native Game Converter tool**: `igi1conv` — a standalone game asset converter matching `gconv.exe` from the IGI 2 Editor — developed in its own repo at [project-igi-conv](https://github.com/jones-hm/project-igi-conv). It ships as a **Qt application** with both a GUI mode and a headless CLI mode; the editor uses only the CLI. The full prebuilt package (exe + Qt runtime DLLs) is bundled at `editor/tools/igi1conv/`.
+- **Upgraded compatibility**: A better upgraded version to support the Neo Remastered mod.
+- **Visual 3D Graph Editor (Completed)**: Full-featured interactive 3D Graph Editor displaying interactive nodes and visuals to seamlessly construct game logic, path routes, and area connections. See [docs/graph_editor.md](docs/graph_editor.md).
+- **Weapon & Item Configurator**: Rich telemetry overlays and visual UI for modifying active gun parameters, ammunition slots, and dropping custom inventory directly onto the battlefield.
+- **Full 14 Levels campaign run**: Complete, verified playthroughs of all custom compiled maps to guarantee total end-to-end stability.
+
+---
+
+## 🏆 Credits and Contributors
+
+Credits and contributions of the people in this project:
+
+- **[Artiom](https://github.com/NEWME0)** 👑 - **Game file formats** (*models, textures, animations*) and his **game conversion tools**. (**Huge Help!** )
+
+- **[GM123](https://www.youtube.com/@gm1233)** 👑 - **Game Models & Animations** (*MEF / IFF formats*) and **development tools**. (**Huge Help!**)
+
+- **[Neo](https://next.nexusmods.com/profile/xaeroneo?gameId=5664)** 👑 - **Guiding & testing** this project to match the *IGI 2 Editor style*. (**Huge Help!**)
+
+- [hjcminus](https://github.com/hjcminus) - **Terrain Editor** Project, which this project is based on.
+
+- **[Ferit](https://www.youtube.com/channel/UCpn_gZMkFVBUAe9SJK9hYQA)** 🌟 - **Game MEF/TEX file formats** and *IGI 2 style file formats* understanding.
+
+- **[Dark](https://www.youtube.com/@CRONOQUILLOFFICIAL)** 🌟 - **Early prototype building**, *testing tools*, and **editor features**.
+
+- **[Dimon](https://vk.com/dimonkrevedko)** 🌟 - **Graphs & Nodes** and his early [igi1-editor](https://vk.com/wall-275359_6439) *prototype project used for inspiration*.
+
+- **[Yoejin](https://vk.com/id436486682)** 🌟 - **MTP & Models** *structure and information*.
+
+- **[ORWA](https://www.youtube.com/@totalwartimelapses6359)** 🌟 - **Graphs Area and Nodes** *information and testing*.
+
+  
 
 
-In each frame, if a cube is too coarse (lod level < 7) or out-of view frustum, the cube will be clipped away.
+### **Historical Note on Early Prototype:**
+> There was an early prototype in year *2020* as a level editor for Project IGI created by **Dimon** which served as an initial inspiration for this project. Although it featured impressive 3D scene loading, it was never released to the public. The developer later became busier with life and work commitments, eventually abandoning the project and choosing not to publish it. You can view the original teaser post [here on VK](https://vk.com/wall-275359_6439).
+> 
+> ![Dimon's Prototype Editor](assets/screenshots/igi1-editor-prototype.png)
 
-Cube mesh contain parent vertices & child vertices.
-child vertices can be split from or merge to parent vertices based on LOD level of the cube.
+### 
+---
 
-Since generate cube mesh is time expensive, so the algorithm use a cache to speedup this calculation,
-leverage the frame-to-frame coherence. <br>
+## 📋 [Changelogs](CHANGELOGS.md)
 
-Here is a simplified recursive version of LUA like pseudo code to demonstrates how to determine cubes to rendering: <br>
+See the [CHANGELOGS.md](CHANGELOGS.md) for version history and detailed change logs.
 
-	function generate_render_cube(cube)
-		if cube_not_clipped_by_frustum(cube) then
-			active_check_value = calc_cube_active_value(cube)
-		
-			if active_check_value < 163 and cube.lod_level > 16 then
-				for child in cube.children do
-					generate_render_cube(child)
-				end
-			else
-				if cube.lod_level >= 7 then
-					add_cube_to_render_list(cube)
-				end
-			end
-		end
-	end
+---
 
-	generate_render_cube(root_cube)
-	
-	NOTE: 163 is a constant value defined in program.
+## Folder Structure
 
+### Local Repository Folders
+- **`shaders/`**: Core OpenGL GLSL shader source files
+- **`bin/`**: Pre-compiled binaries and required dynamic libraries (DLLs)
+- **`assets/`**: Editor assets (icons, screenshots in `assets/screenshots/`)
 
-### Some drawback
+---
 
-1. This algorithm use distance base geo-morphing (also texture morphing, only relevant‌ to observer's position, irrelevant‌ to observer's orientation). <br>
-   without pixel error control, so it will show rapid geometry morphing artifact. (This problem is reduced in IGI2).
+## 📞 Connect with us
 
-2. This algorithm dose not support T-junction free.
-   e.g. in level 9, player can see gap between different cubes when approaching the cliff.
+If you encounter any issues or have suggestions, feel free to reach out:
 
-# Note
+- **🎮 Discord**: Message me at `Jones_IGI#3954` or join our [Discord Server](https://discord.com/invite/QpbQrRFAER).
+- **📧 Email**: [igiproz.hm@gmail.com](mailto:igiproz.hm@gmail.com).
+- **🌟 GitHub**: Follow the project on [Jones-HM GitHub](https://github.com/Jones-HM/).
+- **📺 YouTube**: Subscribe to [IGI Research Devs](https://www.youtube.com/@igi-research-devs) for guides and walkthroughs.
 
-This project does not do a thorough testing, crash might occur occasionally.
-Feel free to report bugs to me. :)
-
-# References
-
-DirectX 7.0 Programmer's Reference. 1999. Microsoft Corporation. <br>
-Douglas Rogers. Implementing Fog in Direct3D. NVIDIA Corporation. <br>
-
-# Other github repositories
-
-https://github.com/NEWME0/Project-IGI <br>
-https://github.com/Jones-HM/project-igi-qvm-editor <br>
-https://github.com/elishacloud/dxwrapper <br>
+## Author
+Written and maintained by **Heaven-HM**.
