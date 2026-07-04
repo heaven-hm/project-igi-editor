@@ -18,6 +18,13 @@ For full details, see [LEGAL.md](LEGAL.md).
 
 ---
 
+## ⚠️ Pre-Releases Warning
+
+> [!WARNING]
+> Pre-releases labeled with the tag `pre-release` (such as `*-pre` or containing `pre`) are experimental. They may contain bugs and have experimental features added. It is highly recommended to download and use **stable versions** only.
+
+---
+
 ## 🎬 IGI Editor Video
 [![IGI Editor Video](https://img.youtube.com/vi/w4k5TRIy9eM/hqdefault.jpg)](https://www.youtube.com/watch?v=w4k5TRIy9eM)
 
