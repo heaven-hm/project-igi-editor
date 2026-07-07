@@ -1503,16 +1503,20 @@ void Renderer::Draw(const draw_params_s &params,
       btn_labels.push_back("Music");
       const int LIGHTMAPS_ROW = btn_labels.size();
       btn_labels.push_back("Lightmaps");
-      const int TERRAIN_HEADER_ROW = btn_labels.size();
-
       bool exp = task_tree_view.pause_terrain_expanded_;
+      const int TERRAIN_HEADER_ROW = btn_labels.size();
       btn_labels.push_back(exp ? "Terrain Options: [-]" : "Terrain Options: [+]");
 
-      int TERRAIN_TEX_ROW = -1, TERRAIN_HGT_ROW = -1, TERRAIN_DSC_ROW = -1;
+      int TERRAIN_TEX_ROW = -1, TERRAIN_HGT_ROW = -1, TERRAIN_DSC_ROW = -1, FOG_ROW = -1, FOG_INTENSITY_ROW = -1;
       if (exp) {
         TERRAIN_TEX_ROW = btn_labels.size(); btn_labels.push_back(bufTex);
         TERRAIN_HGT_ROW = btn_labels.size(); btn_labels.push_back(bufHgt);
         TERRAIN_DSC_ROW = btn_labels.size(); btn_labels.push_back(bufDsc);
+        FOG_ROW = btn_labels.size(); btn_labels.push_back("Fog");
+        FOG_INTENSITY_ROW = btn_labels.size();
+        char fogbuf[32];
+        snprintf(fogbuf, sizeof(fogbuf), "Fog Intensity: %d%%", task_tree_view.fog_intensity_);
+        btn_labels.push_back(fogbuf);
       }
 
       const int RESET_ROW = btn_labels.size();
@@ -1663,6 +1667,23 @@ void Renderer::Draw(const draw_params_s &params,
           draw_text_sys(menu_x + (menu_w - lmtw) / 2, screen_btn_y, lmbuf,
                         hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
 
+        } else if (i == FOG_ROW) {
+          // Fog on/off checkbox: "[X] Fog" / "[ ] Fog", centered, hover-highlighted.
+          if (hovered) {
+            glEnable(GL_BLEND);
+            glColor4f(0.0f, 0.8f, 0.0f, 0.35f);
+            glBegin(GL_QUADS);
+            glVertex2i(menu_x, gl_btn_y - 15); glVertex2i(menu_x + menu_w, gl_btn_y - 15);
+            glVertex2i(menu_x + menu_w, gl_btn_y + 15); glVertex2i(menu_x, gl_btn_y + 15);
+            glEnd();
+            glDisable(GL_BLEND);
+          }
+          char fogbuf[24];
+          snprintf(fogbuf, sizeof(fogbuf), "[%c] Fog", task_tree_view.fog_on_ ? 'X' : ' ');
+          int fogtw = (int)strlen(fogbuf) * 6;
+          draw_text_sys(menu_x + (menu_w - fogtw) / 2, screen_btn_y, fogbuf,
+                        hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
+
         } else if (i == TERRAIN_HEADER_ROW) {
           draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(btn_labels[i]) * 3),
                         screen_btn_y, btn_labels[i], 0.0f, 0.8f, 0.0f);
@@ -1679,6 +1700,25 @@ void Renderer::Draw(const draw_params_s &params,
           draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(btn_labels[i]) * 3),
                         screen_btn_y, btn_labels[i],
                         hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
+
+        } else if (i == FOG_INTENSITY_ROW) {
+          // Fog Intensity spinner: "Fog Intensity: N%"  [-] [+]
+          const int btn_w = 22, gap = 6, val_w = 44, label_gap = 14;
+          const char* lbl = "Fog Intensity:";
+          int label_px = (int)strlen(lbl) * 6;
+          int group_w = label_px + label_gap + btn_w + gap + val_w + gap + btn_w;
+          int gx = menu_x + (menu_w - group_w) / 2;
+          draw_text_sys(gx, screen_btn_y, lbl,
+                        hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
+          int minus_x = gx + label_px + label_gap;
+          int box_x   = minus_x + btn_w + gap;
+          int plus_x  = box_x + val_w + gap;
+          int rt = gl_btn_y - 14, rb = gl_btn_y + 10;
+          char pctbuf[16];
+          snprintf(pctbuf, sizeof(pctbuf), "%d%%", task_tree_view.fog_intensity_);
+          sbox(minus_x, btn_w, "-",    rt, rb, screen_btn_y);
+          sbox(box_x,   val_w, pctbuf,  rt, rb, screen_btn_y);
+          sbox(plus_x,  btn_w, "+",    rt, rb, screen_btn_y);
 
         } else {
           // Plain centered buttons: Resume, Reset Level, Save Level, Quit
