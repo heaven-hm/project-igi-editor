@@ -403,48 +403,52 @@ void App::LoadLevel(int level_no) {
 			}
 		}
 
-		// RainEffect (Task_DeclareParameters("RainEffect","Is Rain","bool8",
-		// "Traceline start","Real32","Traceline end","Real32","Is Active","VarString",
-		// "Rain Alpha","Real32")) is per-level: present+active on levels with rain
-		// (e.g. level3), entirely absent on levels without it (e.g. level2) — absence
-		// just means no rain, not a parse failure. argTokens: [0]=taskId,
-		// [1]="RainEffect",[2]=name,[3]=IsRain(BOOL "TRUE"/"FALSE"),
-		// [4]=TracelineStart(meters),[5]=TracelineEnd(meters),
-		// [6]=IsActive(quoted VarString "0"/"1"),[7]=RainAlpha.
+		// RainEffect gating (strict): ONLY enable rain for levels whose objects.qvm
+		// (parsed into LevelObjects) explicitly contains a RainEffect task with rain
+		// enabled. Levels without any RainEffect declaration in their objects.qvm
+		// must have zero rain — no carry-over, no default rain.
+		// argTokens layout from Task_DeclareParameters + Task_New as documented.
 		{
 			bool rainActive = false;
 			float rainStartM = 0.0f, rainEndM = 0.0f, rainAlpha = 0.0f;
 			bool foundRainEffect = false;
-			for (const auto& re : objects) {
-				if (re.type != "RainEffect" || re.argTokens.size() < 8) continue;
-				foundRainEffect = true;
-				try {
-					// IsRain stored as bare TRUE/FALSE in QSC (not quoted)
-					std::string isRainTok = re.argTokens[3];
-					if (!isRainTok.empty() && isRainTok.front() == '"')
-						isRainTok = isRainTok.substr(1, isRainTok.size() - 2);
-					bool isRain = (isRainTok == "TRUE" || isRainTok == "true");
-					std::string isActiveTok = re.argTokens[6];
-					if (isActiveTok.size() >= 2 && isActiveTok.front() == '"' && isActiveTok.back() == '"')
-						isActiveTok = isActiveTok.substr(1, isActiveTok.size() - 2);
-					bool isActive = !isActiveTok.empty() && isActiveTok != "0";
-					rainStartM = std::stof(re.argTokens[4]);
-					rainEndM = std::stof(re.argTokens[5]);
-					rainAlpha = std::stof(re.argTokens[7]);
-					rainActive = isRain && isActive;
-					Logger::Get().Log(LogLevel::INFO, "[App] RainEffect resolved: active=" +
-						std::to_string(rainActive) + " isRain=" + isRainTok +
-						" isActive=" + isActiveTok +
-						" start=" + std::to_string(rainStartM) +
-						"m end=" + std::to_string(rainEndM) + "m alpha=" + std::to_string(rainAlpha));
-				} catch (const std::exception& e) {
-					Logger::Get().Log(LogLevel::WARNING, std::string("[App] RainEffect unparsable (") + e.what() + ")");
+			// Only trust objects for the successfully loaded level (prevents using stale
+			// objects from a previous level if load failed or was interrupted).
+			if (last_loaded_level_ == level_no) {
+				for (const auto& re : objects) {
+					if (re.type != "RainEffect" || re.argTokens.size() < 8) continue;
+					foundRainEffect = true;
+					try {
+						// IsRain stored as bare TRUE/FALSE in QSC (not quoted)
+						std::string isRainTok = re.argTokens[3];
+						if (!isRainTok.empty() && isRainTok.front() == '"')
+							isRainTok = isRainTok.substr(1, isRainTok.size() - 2);
+						bool isRain = (isRainTok == "TRUE" || isRainTok == "true");
+						std::string isActiveTok = re.argTokens[6];
+						if (isActiveTok.size() >= 2 && isActiveTok.front() == '"' && isActiveTok.back() == '"')
+							isActiveTok = isActiveTok.substr(1, isActiveTok.size() - 2);
+						bool isActive = !isActiveTok.empty() && isActiveTok != "0";
+						rainStartM = std::stof(re.argTokens[4]);
+						rainEndM = std::stof(re.argTokens[5]);
+						rainAlpha = std::stof(re.argTokens[7]);
+						rainActive = isRain && isActive;
+						Logger::Get().Log(LogLevel::INFO, "[App] RainEffect resolved: active=" +
+							std::to_string(rainActive) + " isRain=" + isRainTok +
+							" isActive=" + isActiveTok +
+							" start=" + std::to_string(rainStartM) +
+							"m end=" + std::to_string(rainEndM) + "m alpha=" + std::to_string(rainAlpha));
+					} catch (const std::exception& e) {
+						Logger::Get().Log(LogLevel::WARNING, std::string("[App] RainEffect unparsable (") + e.what() + ")");
+					}
+					break; // first RainEffect task only
 				}
-				break; // first RainEffect task only
 			}
-			if (!foundRainEffect)
-				Logger::Get().Log(LogLevel::INFO, "[App] No RainEffect in level — rain disabled");
-			renderer_.SetRainEffect(rainActive, rainStartM, rainEndM, rainAlpha);
+			if (!foundRainEffect) {
+				Logger::Get().Log(LogLevel::INFO, "[App] No RainEffect declaration in level's objects.qvm — rain disabled");
+				renderer_.SetRainEffect(false, 0.0f, 0.0f, 0.0f);
+			} else {
+				renderer_.SetRainEffect(rainActive, rainStartM, rainEndM, rainAlpha);
+			}
 		}
 
 		// Log all loaded objects for verification script

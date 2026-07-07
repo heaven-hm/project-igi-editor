@@ -810,22 +810,22 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         // the child at the highest local Z (top of fuselage); the tail rotor is
         // at the most-negative local Y (far tail). modelType-3 ATTA children are
         // typically the rotor blades; fall through for any other children.
-        if (current_draw_obj_type_ == "Heli") {
-            float maxZ = att.pz, minY = att.py;
-            for (const auto& sib : attsR) {
-                if (sib.pz > maxZ) maxZ = sib.pz;
-                if (sib.py < minY) minY = sib.py;
-            }
-            const bool isMainRotor = (att.pz >= maxZ - 1.0f);
-            const bool isTailRotor = (!isMainRotor && att.py <= minY + 1.0f);
-            if (isMainRotor) {
-                float angle = elapsed_time_secs_ * 15.0f;  // ~143 RPM
-                childWorldMat = childWorldMat * glm::rotate(glm::mat4(1.0f), angle, glm::vec3(0, 0, 1));
-            } else if (isTailRotor) {
-                float angle = elapsed_time_secs_ * 25.0f;  // tail spins faster
-                childWorldMat = childWorldMat * glm::rotate(glm::mat4(1.0f), angle, glm::vec3(1, 0, 0));
-            }
-        }
+		if (current_draw_obj_type_ == "Heli") {
+			float maxZ = att.pz, minY = att.py;
+			for (const auto& sib : attsR) {
+				if (sib.pz > maxZ) maxZ = sib.pz;
+				if (sib.py < minY) minY = sib.py;
+			}
+			const bool isMainRotor = (att.pz >= maxZ - 1.0f);
+			const bool isTailRotor = (!isMainRotor && att.py <= minY + 1.0f);
+			if (isMainRotor) {
+				float angle = -elapsed_time_secs_ * 15.0f;  // reversed to match game rotor direction
+				childWorldMat = childWorldMat * glm::rotate(glm::mat4(1.0f), angle, glm::vec3(0, 0, 1));
+			} else if (isTailRotor) {
+				float angle = -elapsed_time_secs_ * 25.0f;  // reversed to match game rotor direction
+				childWorldMat = childWorldMat * glm::rotate(glm::mat4(1.0f), angle, glm::vec3(1, 0, 0));
+			}
+		}
 
         // If this ATTA has a proxy object editing it, skip rendering it here —
         // the proxy renders it — but still recurse into children.
