@@ -623,6 +623,13 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             glDepthMask(GL_TRUE);
         }
 
+        // Accumulate elapsed time for continuous animations (helicopter rotor spin).
+        {
+            extern float g_renderer_delta_secs;
+            elapsed_time_secs_ += g_renderer_delta_secs;
+            g_renderer_delta_secs = 0.0f;  // consume once per frame
+        }
+
         for (const auto& obj : objects) {
             if (obj.deleted) continue;
 
@@ -1016,6 +1023,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 rootWorldMat = glm::translate(rootWorldMat, glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z));
                 rootWorldMat = rootWorldMat * parentRot;
 
+                current_draw_obj_type_ = obj.type;  // tells DrawAttachmentsRecursive if parent is Heli (rotor spin)
                 std::unordered_set<std::string> drawn;
                 DrawAttachmentsRecursive(obj.modelId, obj.modelId, obj.isBuilding, rootWorldMat, isTransparentPass,
                                           loc_model, loc_dirlight, loc_ambient,

@@ -9,6 +9,7 @@
 // the editor is iconified and the game has keyboard focus.
 static WNDPROC g_origEditorWndProc = nullptr;
 static App*    g_appForHotkey      = nullptr;
+float g_renderer_delta_secs = 0.0f;  // frame delta for renderer continuous animations (rotor spin)
 
 static LRESULT CALLBACK EditorSubclassWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	if (msg == WM_HOTKEY && static_cast<int>(wParam) == HOTKEY_ID_TOGGLE_GAME) {
@@ -506,6 +507,7 @@ void App::Frame(float delta_seconds) {
 	ProcessInput(delta_seconds);
 
 	// Update animation playback (auto-play for AI NPCs)
+	g_renderer_delta_secs = delta_seconds;
 	UpdateAnimations(delta_seconds);
 	CheckMusicLoop();
 

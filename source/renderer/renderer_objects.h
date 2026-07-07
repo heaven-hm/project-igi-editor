@@ -217,6 +217,8 @@ private:
     std::vector<std::string> tmp_mef_paths_;  // temp files created by GetOrExtractMefTemp
 
     int current_level_ = 1;
+    float elapsed_time_secs_ = 0.0f;  // accumulated frame time for rotor spin animation
+    std::string current_draw_obj_type_;  // set per-object in Draw so ATTA children know parent type
     bool lightmaps_enabled_ = false;
     glm::vec3 sun_dir_ = glm::vec3(0.5f, 1.0f, 0.5f);
     glm::vec3 sun_front_color_ = glm::vec3(0.6f, 0.6f, 0.6f);

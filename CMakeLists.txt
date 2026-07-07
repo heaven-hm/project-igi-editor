@@ -220,6 +220,7 @@ FetchContent_Declare(
 # CRT), causing __imp__calloc_dbg / _CrtDbgReport link errors when mixing
 # gtest.lib with DLL-CRT object files.
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+set(FETCHCONTENT_FULLY_DISCONNECTED ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 enable_testing()
 
