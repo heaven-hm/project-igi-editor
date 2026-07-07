@@ -804,12 +804,12 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         childWorldMat = glm::translate(childWorldMat, worldPos);
         childWorldMat = childWorldMat * parentRot * attLocalRot;
 
-        // Helicopter rotor spin preview: rotor ATTA children of Heli objects spin
-        // continuously so the viewport reads as alive (the game itself animates
-        // rotors via runtime; we only preview in the editor). The main rotor is
-        // the child at the highest local Z (top of fuselage); the tail rotor is
-        // at the most-negative local Y (far tail). modelType-3 ATTA children are
-        // typically the rotor blades; fall through for any other children.
+		// Helicopter rotor spin preview: rotor ATTA children of Heli objects spin
+		// continuously so the viewport reads as alive (the game itself animates
+		// rotors via runtime; we only preview in the editor). The main rotor is
+		// the child at the highest local Z (top of fuselage); the tail rotor is
+		// at the most-negative local Y (far tail). modelType-3 ATTA children are
+		// typically the rotor blades; fall through for any other children.
 		if (current_draw_obj_type_ == "Heli") {
 			float maxZ = att.pz, minY = att.py;
 			for (const auto& sib : attsR) {
@@ -818,21 +818,50 @@ void Renderer_Objects::DrawAttachmentsRecursive(
 			}
 			const bool isMainRotor = (att.pz >= maxZ - 1.0f);
 			const bool isTailRotor = (!isMainRotor && att.py <= minY + 1.0f);
+
+			// Rebuild the placed transform from static ATTA data every frame.
+			// Hub is locked. Yaw constant, pitch animates for main rotor (2 orientation axes fixed by locking shaft column, 1 moving).
+			// Spin is applied in the placed attachment frame (post-multiply) so blades rotate 360 on their shaft with no orbit/translation.
+			glm::vec3 hub = worldPos;
+			glm::mat3 base;
+			base[0] = glm::vec3(childWorldMat[0]);
+			base[1] = glm::vec3(childWorldMat[1]);
+			base[2] = glm::vec3(childWorldMat[2]);
+
 			if (isMainRotor) {
-				// Rotate purely around the attachment's placed Y (up) axis, centered at its hub (worldPos).
-				// This guarantees spin in-place on its own axis with no position/translation change.
-				// Negative angle for CCW around the positive Y direction (flip sign per request).
-				glm::vec3 hub = worldPos;
-				glm::vec3 up = glm::vec3(childWorldMat[0][1], childWorldMat[1][1], childWorldMat[2][1]);
-				if (glm::length(up) > 0.0001f) up = glm::normalize(up); else up = glm::vec3(0, 1, 0);
-				float angle = -elapsed_time_secs_ * 15.0f;
-				glm::mat4 R = glm::rotate(glm::mat4(1.0f), angle, up);
-				glm::mat4 spinAtHub =
-				    glm::translate(glm::mat4(1.0f), hub) * R * glm::translate(glm::mat4(1.0f), -hub);
-				childWorldMat = spinAtHub * childWorldMat;
+				// Spin around placed column 0 (maps to pitch per IGI Yaw(Z)-Pitch(X)-Roll(Y) order).
+				// Post-multiply rotates geometry in attachment local; lock column 0 so disk tilt (yaw/roll of plane) stays fixed.
+				glm::vec3 n = base[0];
+				if (glm::length(n) > 0.0001f) n = glm::normalize(n); else n = glm::vec3(1,0,0);
+
+				float angle = elapsed_time_secs_ * 15.0f;  // positive; flip if blades spin opposite to expected
+				glm::mat4 Rloc = glm::rotate(glm::mat4(1.0f), angle, glm::vec3(1,0,0)); // local X (pitch)
+				glm::mat3 spun = base * glm::mat3(Rloc);
+				spun[0] = n;  // keep shaft axis fixed (yaw constant, disk plane tilt fixed)
+
+				childWorldMat[0] = glm::vec4(spun[0], 0.0f);
+				childWorldMat[1] = glm::vec4(spun[1], 0.0f);
+				childWorldMat[2] = glm::vec4(spun[2], 0.0f);
+				childWorldMat[3] = glm::vec4(hub, 1.0f);
 			} else if (isTailRotor) {
+				// Tail rotor spins around its own placed lateral axis.
+				int best = 0;
+				float bestAbs = glm::abs(base[0].x);
+				for (int c = 1; c < 3; ++c) {
+					if (glm::abs(base[c].x) > bestAbs) { bestAbs = glm::abs(base[c].x); best = c; }
+				}
+				glm::vec3 n = glm::normalize(base[best]);
+
 				float angle = -elapsed_time_secs_ * 25.0f;
-				childWorldMat = childWorldMat * glm::rotate(glm::mat4(1.0f), angle, glm::vec3(1, 0, 0));
+				glm::mat4 R = glm::rotate(glm::mat4(1.0f), angle, n);
+
+				glm::mat3 spun = glm::mat3(R) * base;
+				spun[best] = n;
+
+				childWorldMat[0] = glm::vec4(spun[0], 0.0f);
+				childWorldMat[1] = glm::vec4(spun[1], 0.0f);
+				childWorldMat[2] = glm::vec4(spun[2], 0.0f);
+				childWorldMat[3] = glm::vec4(hub, 1.0f);
 			}
 		}
 
