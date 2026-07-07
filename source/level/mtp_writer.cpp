@@ -291,20 +291,6 @@ static std::vector<uint8_t> BuildVNAM(const std::vector<std::string>& models,
     return vnam;
 }
 
-// Parse INST chunk to extract per-model texture counts in INST order.
-// INST format (no count prefix): repeated entries of (u32 modelIdx, u32 texCount, texCount*u32 texIdx)
-static std::vector<uint32_t> ParseInstTexCounts(const std::vector<uint8_t>& inst) {
-    std::vector<uint32_t> counts;
-    size_t pos = 0;
-    while (pos + 8 <= inst.size()) {
-        pos += 4; // skip modelIdx
-        uint32_t tc = ReadU32LE(inst.data() + pos); pos += 4;
-        counts.push_back(tc);
-        pos += tc * 4; // skip texIdx array
-    }
-    return counts;
-}
-
 struct MTPChunk {
     char fourcc[4];
     std::vector<uint8_t> data;
@@ -357,15 +343,13 @@ bool MTP_AddModel(const std::string& mtpPath, const std::string& outPath,
         if (offset % 2 != 0) offset++; // 2-byte alignment pad (not counted in size)
     }
 
-    // 3. Locate MODS, TEXF, INST, VNAM, GTT .
-    int modsIdx = -1, texfIdx = -1, instIdx = -1, vnamIdx = -1, gttIdx = -1;
+    // 3. Locate MODS, TEXF, INST (the only chunks MTP_AddModel rewrites).
+    int modsIdx = -1, texfIdx = -1, instIdx = -1;
     for (size_t i = 0; i < chunks.size(); ++i) {
         const uint8_t* fc = reinterpret_cast<const uint8_t*>(chunks[i].fourcc);
         if      (MatchFourCC(fc, "MODS")) modsIdx = (int)i;
         else if (MatchFourCC(fc, "TEXF")) texfIdx = (int)i;
         else if (MatchFourCC(fc, "INST")) instIdx = (int)i;
-        else if (MatchFourCC(fc, "VNAM")) vnamIdx = (int)i;
-        else if (MatchFourCC(fc, "GTT ")) gttIdx  = (int)i;
     }
     if (modsIdx < 0 || texfIdx < 0 || instIdx < 0) {
         err = "MTP missing required MODS/TEXF/INST chunk: " + mtpPath;
@@ -402,39 +386,11 @@ bool MTP_AddModel(const std::string& mtpPath, const std::string& outPath,
     }
 
     // 7. Re-encode MODS / TEXF bodies (only if model is new; TEXF may still grow).
-    uint32_t origTexCount = chunks[texfIdx].data.size() >= 4
-                            ? ReadU32LE(chunks[texfIdx].data.data()) : 0;
     chunks[modsIdx].data = EncodeStringArray(models);
     chunks[texfIdx].data = EncodeStringArray(textures);
 
-    // 7b. Rebuild VNAM using the verified format: count + offset_table + model-name pool.
-    // offset[i] = sum_{j<i}(4 + texCount_j * 4).  Tex counts come from the existing
-    // INST data (original entries) plus the new model's tex count if a new model was added.
-    if (vnamIdx >= 0) {
-        auto texCounts = ParseInstTexCounts(chunks[instIdx].data);
-        if (!modelAlreadyPresent)
-            texCounts.push_back((uint32_t)resolvedTexIdx.size());
-        chunks[vnamIdx].data = BuildVNAM(models, texCounts);
-    }
-    if (gttIdx >= 0 && chunks[gttIdx].data.size() >= 4) {
-        uint32_t gtCount = ReadU32LE(chunks[gttIdx].data.data());
-        uint32_t newCount = (uint32_t)textures.size();
-        if (gtCount < newCount) {
-            auto& gd = chunks[gttIdx].data;
-            gd[0] = (uint8_t)(newCount & 0xFF);
-            gd[1] = (uint8_t)((newCount >> 8)  & 0xFF);
-            gd[2] = (uint8_t)((newCount >> 16) & 0xFF);
-            gd[3] = (uint8_t)((newCount >> 24) & 0xFF);
-            for (uint32_t n = gtCount; n < newCount; ++n) {
-                gd.push_back((uint8_t)(n & 0xFF));
-                gd.push_back((uint8_t)((n >> 8) & 0xFF));
-                gd.push_back((uint8_t)((n >> 16) & 0xFF));
-                gd.push_back((uint8_t)((n >> 24) & 0xFF));
-                gd.push_back(0xFF); gd.push_back(0xFF); gd.push_back(0xFF); gd.push_back(0xFF);
-            }
-        }
-    }
-    (void)origTexCount;
+    // 7b. VNAM/GTT preserved byte-for-byte from source: auxiliary index/tag tables the
+    // editor cannot safely regenerate, and the game reads model->texture mapping from INST.
 
     // 8. Append to INST only if this is a new model.
     if (!modelAlreadyPresent) {

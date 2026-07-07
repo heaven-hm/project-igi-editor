@@ -223,6 +223,12 @@ public:
 	const char*				GetScripts() const { return pristine_scripts_ ? pristine_scripts_ : scripts_; }
 	const char*				GetParsedScripts() const { return scripts_; }
 
+	// True when the parser hit one of its fixed-size pool limits (too many root
+	// functions, nested calls, or arguments). When set, the parse was aborted and
+	// the QSC contents are incomplete — callers must fail level load with a clear
+	// error instead of trusting the partial/corrupt parse result.
+	bool			HadOverflow() const { return parse_overflow_; }
+
 	// debug
 	void					Print() const;
 
@@ -235,6 +241,7 @@ private:
 	char*					pristine_scripts_;
 	char*					pc_;
 	int						line_;
+	bool			parse_overflow_;
 
 	func_s*					root_funcs_[MAX_QSC_FUNCS];
 

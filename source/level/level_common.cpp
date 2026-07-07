@@ -470,6 +470,7 @@ QSC::QSC() :
 	root_func_count_(0),
 	allocated_funcs_(0),
 	allocated_args_(0),
+	parse_overflow_(false),
 	parse_func_stack_size_(0)
 {
 	//
@@ -503,6 +504,7 @@ void QSC::Load(const char* filename) {
 	root_func_count_ = 0;
 	allocated_funcs_ = 0;
 	allocated_args_ = 0;
+	parse_overflow_ = false;
 
 	// start parse
 	Parse();
@@ -523,6 +525,7 @@ void QSC::Unload() {
 	root_func_count_ = 0;
 	allocated_funcs_ = 0;
 	allocated_args_ = 0;
+	parse_overflow_ = false;
 	parse_func_stack_size_ = 0;
 }
 
@@ -654,6 +657,7 @@ QSC::func_s* QSC::AllocFunc() {
 		return new_func;
 	}
 	else {
+		parse_overflow_ = true;
 		Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "QSC::AllocFunc buf overflow\n");
 	}
 
@@ -672,6 +676,7 @@ QSC::arg_s* QSC::AllocArg() {
 		return new_arg;
 	}
 	else {
+		parse_overflow_ = true;
 		Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "QSC::AllocArg buf overflow\n");
 	}
 
@@ -686,6 +691,9 @@ void QSC::Parse() {
 		}
 
 		AddFunc(func);
+		if (parse_overflow_) {
+			break;
+		}
 
 		if (!Parser_SkipWhiteChar()) {
 			break;
@@ -826,7 +834,15 @@ QSC::func_s* QSC::ParseFunc() {
 	new_func->end_offset_ = new_func->start_offset_;
 	new_func->args_ = nullptr;
 
-	parse_func_stack_[parse_func_stack_size_++] = new_func;
+	if (parse_func_stack_size_ < 1024) {
+		parse_func_stack_[parse_func_stack_size_++] = new_func;
+	}
+	else {
+		parse_overflow_ = true;
+		Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "QSC::ParseFunc nesting overflow\n");
+		allocated_funcs_--;
+		return nullptr;
+	}
 
 	if (!ParseArgs(new_func)) {
 		allocated_funcs_--;
@@ -1045,7 +1061,13 @@ bool QSC::ParseArgs(func_s* func) {
 }
 
 void QSC::AddFunc(func_s* func) {
-	root_funcs_[root_func_count_++] = func;
+	if (root_func_count_ < MAX_QSC_FUNCS) {
+		root_funcs_[root_func_count_++] = func;
+	}
+	else {
+		parse_overflow_ = true;
+		Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "QSC::AddFunc root_funcs overflow\n");
+	}
 }
 
 void QSC::AddArgToFunc(func_s* func, arg_s* arg) {

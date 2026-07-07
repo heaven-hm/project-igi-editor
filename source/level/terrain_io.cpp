@@ -4,6 +4,7 @@
  *          Split from terrain.cpp; shares terrain_internal.h.
  *****************************************************************************/
 #include "terrain_internal.h"
+#include <memory>
 
 bool Terrain::Load(load_params_s & params) {
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] ==========================================");
@@ -44,19 +45,17 @@ bool Terrain::Load(load_params_s & params) {
 	}
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] terrain.qsc exists, loading...");
 
-	QSC* qsc_terrain = new QSC();
-	if (!qsc_terrain) {
-		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: Failed to allocate QSC for terrain");
+	auto qsc_terrain = std::make_unique<QSC>();
+	qsc_terrain->Load(filename);
+	if (qsc_terrain->HadOverflow()) {
+		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: terrain.qsc parser overflow (too many functions/args)");
 		return false;
 	}
-
-	qsc_terrain->Load(filename);
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] terrain.qsc loaded successfully");
 
-	LoadMaterialInfo(qsc_terrain);
-	LoadTileMapInfo(qsc_terrain);
-
-	delete qsc_terrain;
+	LoadMaterialInfo(qsc_terrain.get());
+	LoadTileMapInfo(qsc_terrain.get());
+	// qsc_terrain freed automatically when it goes out of scope (RAII).
 
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading CMD file...");
 	if (!LoadCMDFile(params)) {

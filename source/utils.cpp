@@ -287,6 +287,7 @@ std::string ToString(const T& value) {
 template std::optional<int> TryParse<int>(const std::string&);
 template std::optional<float> TryParse<float>(const std::string&);
 template std::optional<double> TryParse<double>(const std::string&);
+template std::optional<long long> TryParse<long long>(const std::string&);
 template std::string ToString<int>(const int&);
 template std::string ToString<float>(const float&);
 template std::string ToString<double>(const double&);

@@ -183,6 +183,21 @@ void Config::Init() {
     Load();
 }
 
+static int SafeStoi(const std::string& v, int def) {
+    auto r = Utils::TryParse<int>(v);
+    if (!r) { Logger::Get().Log(LogLevel::WARNING, "[Config] Invalid integer value '" + v + "' - using default"); return def; }
+    return *r;
+}
+static float SafeStof(const std::string& v, float def) {
+    auto r = Utils::TryParse<float>(v);
+    if (!r) { Logger::Get().Log(LogLevel::WARNING, "[Config] Invalid float value '" + v + "' - using default"); return def; }
+    return *r;
+}
+static long long SafeStoll(const std::string& v, long long def) {
+    auto r = Utils::TryParse<long long>(v);
+    if (!r) { Logger::Get().Log(LogLevel::WARNING, "[Config] Invalid integer value '" + v + "' - using default"); return def; }
+    return *r;
+}
 void Config::Load() {
     std::string qedDir = Utils::GetExeDirectory() + "\\editor\\qed";
     if (!std::filesystem::exists(qedDir)) return;
@@ -204,13 +219,13 @@ void Config::Load() {
             if (key.find("QED") == 0) key = key.substr(3);
             if (args.size() >= 1) {
                 std::string val = args[0];
-                if (key == "Level") data_.level = std::stoi(val);
-                else if (key == "FontSize") data_.fontSize = std::stof(val);
-                else if (key == "FontColorR") data_.fontColorR = std::stoi(val);
-                else if (key == "FontColorG") data_.fontColorG = std::stoi(val);
-                else if (key == "FontColorB") data_.fontColorB = std::stoi(val);
+                if (key == "Level") data_.level = SafeStoi(val, data_.level);
+                else if (key == "FontSize") data_.fontSize = SafeStof(val, data_.fontSize);
+                else if (key == "FontColorR") data_.fontColorR = SafeStoi(val, data_.fontColorR);
+                else if (key == "FontColorG") data_.fontColorG = SafeStoi(val, data_.fontColorG);
+                else if (key == "FontColorB") data_.fontColorB = SafeStoi(val, data_.fontColorB);
                 else if (key == "RenderZNear") {
-                    data_.renderZNear = std::stof(val);
+                    data_.renderZNear = SafeStof(val, data_.renderZNear);
                     RENDER_Z_NEAR = data_.renderZNear;
                     WORLD_Z_NEAR = RENDER_Z_NEAR / 0.001f;
                 }
@@ -220,8 +235,8 @@ void Config::Load() {
                 else if (key == "Lightmaps") data_.enableLightmaps = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "Fog") data_.enableFog = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "Music") data_.musicEnabled = (val == "TRUE" || val == "true" || val == "1");
-                else if (key == "ConsoleAutoActivate") data_.consoleAutoActivate = std::stoi(val);
-                else if (key == "SearchType") data_.searchType = std::stoll(val);
+                else if (key == "ConsoleAutoActivate") data_.consoleAutoActivate = SafeStoi(val, data_.consoleAutoActivate);
+                else if (key == "SearchType") data_.searchType = SafeStoll(val, data_.searchType);
                 else if (key == "InvertMouse") data_.invertMouse = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "DisplayTaskNote") data_.displayTaskNote = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "AllowDynamicSwitching") data_.allowDynamicSwitching = (val == "TRUE" || val == "true" || val == "1");
@@ -229,36 +244,36 @@ void Config::Load() {
                 else if (key == "CameraLock") data_.cameraLock = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "Backup") data_.enableBackup = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "UseEditorFont") data_.useEditorFont = (val == "TRUE" || val == "true" || val == "1");
-                else if (key == "SystemFontSize") { int s = std::stoi(val); data_.systemFontSize = std::max(8, std::min(32, s)); }
+                else if (key == "SystemFontSize") { int s = SafeStoi(val, data_.systemFontSize); data_.systemFontSize = std::max(8, std::min(32, s)); }
                 else if (key == "AutoSaveEnabled") data_.auto_save_enabled = (val == "TRUE" || val == "true" || val == "1");
-                else if (key == "AutoSaveInterval") data_.auto_save_interval_seconds = std::stoi(val);
+                else if (key == "AutoSaveInterval") data_.auto_save_interval_seconds = SafeStoi(val, data_.auto_save_interval_seconds);
                 else if (key == "FindTaskName") data_.findTaskName = val;
                 else if (key == "FindTaskNote") data_.findTaskNote = val;
                 else if (key == "FindTaskID") data_.findTaskID = val;
                 else if (key == "FindTaskText") data_.findTaskText = val;
                 else if (key == "TaskFileName") data_.taskFileName = val;
-                else if (key == "Interpolation") data_.interpolation = std::stoi(val);
+                else if (key == "Interpolation") data_.interpolation = SafeStoi(val, data_.interpolation);
                 else if (key == "SetObjectFile") data_.objectFilePath = val;
-                else if (key == "QGraphNodeSize") data_.graphNodeSize = std::max(1, std::stoi(val));
+                else if (key == "QGraphNodeSize") data_.graphNodeSize = std::max(1, SafeStoi(val, data_.graphNodeSize));
             }
             if (key == "LevelMusic" && args.size() >= 2) {
                 try { data_.levelMusicFiles[std::stoi(args[0])] = args[1]; } catch (...) {}
             }
             if (key == "SetCameraOrientation" && args.size() >= 3) {
-                data_.cameraOriX = std::stof(args[0]);
-                data_.cameraOriY = std::stof(args[1]);
-                data_.cameraOriZ = std::stof(args[2]);
+                data_.cameraOriX = SafeStof(args[0], 0.0f);
+                data_.cameraOriY = SafeStof(args[1], 0.0f);
+                data_.cameraOriZ = SafeStof(args[2], 0.0f);
             } else if (key == "SetCameraRadius" && args.size() >= 2) {
-                data_.cameraRadiusX = std::stof(args[0]);
-                data_.cameraRadiusY = std::stof(args[1]);
+                data_.cameraRadiusX = SafeStof(args[0], 0.0f);
+                data_.cameraRadiusY = SafeStof(args[1], 0.0f);
             } else if (key == "SetCameraPosition" && args.size() >= 3) {
-                data_.cameraPosX = std::stof(args[0]);
-                data_.cameraPosY = std::stof(args[1]);
-                data_.cameraPosZ = std::stof(args[2]);
+                data_.cameraPosX = SafeStof(args[0], 0.0f);
+                data_.cameraPosY = SafeStof(args[1], 0.0f);
+                data_.cameraPosZ = SafeStof(args[2], 0.0f);
             } else if (key == "SetCameraMatrix" && args.size() >= 3) {
-                data_.cameraMatX = std::stof(args[0]);
-                data_.cameraMatY = std::stof(args[1]);
-                data_.cameraMatZ = std::stof(args[2]);
+                data_.cameraMatX = SafeStof(args[0], 0.0f);
+                data_.cameraMatY = SafeStof(args[1], 0.0f);
+                data_.cameraMatZ = SafeStof(args[2], 0.0f);
             }
             if ((key == "SetEventBinding" || key == "QEDSetEventBinding") && args.size() >= 2) {
                 std::string eventName = args[0];
@@ -307,20 +322,20 @@ void Config::Load() {
             if (!val.empty() && val.back() == ';') val.pop_back();
             if (!val.empty() && val.front() == '"' && val.back() == '"') val = val.substr(1, val.size() - 2);
             if (key.find("QED") == 0) key = key.substr(3);
-            if (key == "Level") data_.level = std::stoi(val);
-            else if (key == "FontSize") data_.fontSize = std::stof(val);
-            else if (key == "FontColorR") data_.fontColorR = std::stoi(val);
-            else if (key == "FontColorG") data_.fontColorG = std::stoi(val);
-            else if (key == "FontColorB") data_.fontColorB = std::stoi(val);
+            if (key == "Level") data_.level = SafeStoi(val, data_.level);
+            else if (key == "FontSize") data_.fontSize = SafeStof(val, data_.fontSize);
+            else if (key == "FontColorR") data_.fontColorR = SafeStoi(val, data_.fontColorR);
+            else if (key == "FontColorG") data_.fontColorG = SafeStoi(val, data_.fontColorG);
+            else if (key == "FontColorB") data_.fontColorB = SafeStoi(val, data_.fontColorB);
             else if (key == "RenderZNear") {
-                data_.renderZNear = std::stof(val);
+                data_.renderZNear = SafeStof(val, data_.renderZNear);
                 RENDER_Z_NEAR = data_.renderZNear;
                 WORLD_Z_NEAR = RENDER_Z_NEAR / 0.001f;
             }
             else if (key == "Logs" || key == "Enable" || key == "SaveConfigOnExit") data_.enableLogging = (val == "TRUE" || val == "true" || val == "1");
             else if (key == "Debug") data_.debugLogging = (val == "TRUE" || val == "true" || val == "1");
-            else if (key == "ConsoleAutoActivate") data_.consoleAutoActivate = std::stoi(val);
-            else if (key == "SearchType") data_.searchType = std::stoll(val);
+            else if (key == "ConsoleAutoActivate") data_.consoleAutoActivate = SafeStoi(val, data_.consoleAutoActivate);
+            else if (key == "SearchType") data_.searchType = SafeStoll(val, data_.searchType);
             else if (key == "InvertMouse") data_.invertMouse = (val == "TRUE" || val == "true" || val == "1");
             else if (key == "DisplayTaskNote") data_.displayTaskNote = (val == "TRUE" || val == "true" || val == "1");
             else if (key == "AllowDynamicSwitching") data_.allowDynamicSwitching = (val == "TRUE" || val == "true" || val == "1");
@@ -332,7 +347,7 @@ void Config::Load() {
             else if (key == "FindTaskID") data_.findTaskID = val;
             else if (key == "FindTaskText") data_.findTaskText = val;
             else if (key == "TaskFileName") data_.taskFileName = val;
-            else if (key == "Interpolation") data_.interpolation = std::stoi(val);
+            else if (key == "Interpolation") data_.interpolation = SafeStoi(val, data_.interpolation);
         }
     };
 

@@ -213,74 +213,120 @@ bool GRAPH_Write(const std::string& srcPath, const std::string& outPath,
     // Preserve the header verbatim; regenerate the adjacency table below.
     std::vector<uint8_t> out(src.begin(), src.begin() + HEADER_SIZE);
 
-    // --- Regenerate the adjacency / all-pairs shortest-path routing table. ---
+    // --- Adjacency / all-pairs shortest-path routing table. ---
     // The game stores, per node-id pair (a,b): the PREDECESSOR of b on the
     // shortest path a->b (ref) and the total path distance (dist); (-1,-1) for
     // self / unreachable. Edge weight = 3D euclidean distance between node
     // positions. Computed with Floyd-Warshall over the present node ids so that
     // adding/removing nodes or moving them keeps the routing table consistent
     // (a stale table with dangling refs crashes the game).
+    //
+    // Byte-fidelity: when the caller passes back an UNCHANGED graph (the common
+    // case - GRAPH_Write is the full serializer, but most saves don't actually
+    // edit anything), regenerating Floyd-Warshall from scratch can produce a
+    // different-but-equivalent predecessor/distance layout than the game's
+    // original file. That breaks byte-identity round-trips and risks touching
+    // data the game expects verbatim. So: re-parse the source to detect "no
+    // change", and in that case copy the original adjacency bytes verbatim.
+    // Only when the graph genuinely changed do we regenerate.
     {
-        std::vector<uint8_t> adj(adjBytes);
-        const int32_t kNeg = -1; const float kNegF = -1.0f;
-        for (size_t k = 0; k < adjBytes / 8; ++k) {
-            std::memcpy(&adj[k * 8],     &kNeg,  4);
-            std::memcpy(&adj[k * 8 + 4], &kNegF, 4);
+        GraphFile orig = GRAPH_Parse(srcPath);
+        bool unchanged = orig.valid;
+        if (unchanged) {
+            if (orig.nodes.size() != graph.nodes.size() ||
+                orig.edges.size() != graph.edges.size()) {
+                unchanged = false;
+            }
         }
-
-        std::vector<int> ids;
-        std::vector<const GraphNode*> np;
-        for (const GraphNode& n : graph.nodes)
-            if (n.id > 0 && n.id < maxNodes) { ids.push_back(n.id); np.push_back(&n); }
-        const int n = static_cast<int>(ids.size());
-        std::unordered_map<int, int> idx;
-        for (int i = 0; i < n; ++i) idx[ids[i]] = i;
-
-        const double INF = 1e30;
-        std::vector<double> dist(static_cast<size_t>(n) * n, INF);
-        std::vector<int>    pred(static_cast<size_t>(n) * n, -1);
-        for (int i = 0; i < n; ++i) dist[static_cast<size_t>(i) * n + i] = 0.0;
-
-        for (const GraphEdge& e : graph.edges) {
-            auto a = idx.find(e.node1), b = idx.find(e.node2);
-            if (a == idx.end() || b == idx.end() || a->second == b->second) continue;
-            const int ia = a->second, ib = b->second;
-            const double dx = np[ia]->x - np[ib]->x, dy = np[ia]->y - np[ib]->y,
-                         dz = np[ia]->z - np[ib]->z;
-            const double w = std::sqrt(dx * dx + dy * dy + dz * dz);
-            if (w < dist[static_cast<size_t>(ia) * n + ib]) {
-                dist[static_cast<size_t>(ia) * n + ib] = w; pred[static_cast<size_t>(ia) * n + ib] = ids[ia];
-                dist[static_cast<size_t>(ib) * n + ia] = w; pred[static_cast<size_t>(ib) * n + ia] = ids[ib];
+        if (unchanged) {
+            for (size_t i = 0; i < graph.nodes.size() && unchanged; ++i) {
+                const GraphNode& a = orig.nodes[i];
+                const GraphNode& b = graph.nodes[i];
+                if (a.id != b.id || a.x != b.x || a.y != b.y || a.z != b.z ||
+                    a.gamma != b.gamma || a.radius != b.radius ||
+                    a.material != b.material || a.criteria != b.criteria) {
+                    unchanged = false;
+                }
+            }
+        }
+        if (unchanged) {
+            for (size_t i = 0; i < graph.edges.size() && unchanged; ++i) {
+                const GraphEdge& a = orig.edges[i];
+                const GraphEdge& b = graph.edges[i];
+                if (a.node1 != b.node1 || a.node2 != b.node2 ||
+                    a.link_type != b.link_type) {
+                    unchanged = false;
+                }
             }
         }
 
-        for (int k = 0; k < n; ++k)
-            for (int i = 0; i < n; ++i) {
-                const double dik = dist[static_cast<size_t>(i) * n + k];
-                if (dik >= INF) continue;
-                for (int j = 0; j < n; ++j) {
-                    const double nd = dik + dist[static_cast<size_t>(k) * n + j];
-                    if (nd < dist[static_cast<size_t>(i) * n + j]) {
-                        dist[static_cast<size_t>(i) * n + j] = nd;
-                        pred[static_cast<size_t>(i) * n + j] = pred[static_cast<size_t>(k) * n + j];
-                    }
+        if (unchanged) {
+            // Preserve the original adjacency table byte-for-byte.
+            out.insert(out.end(), src.begin() + HEADER_SIZE,
+                       src.begin() + nodeDataStart);
+        } else {
+            std::vector<uint8_t> adj(adjBytes);
+            const int32_t kNeg = -1; const float kNegF = -1.0f;
+            for (size_t k = 0; k < adjBytes / 8; ++k) {
+                std::memcpy(&adj[k * 8],     &kNeg,  4);
+                std::memcpy(&adj[k * 8 + 4], &kNegF, 4);
+            }
+
+            std::vector<int> ids;
+            std::vector<const GraphNode*> np;
+            for (const GraphNode& n : graph.nodes)
+                if (n.id > 0 && n.id < maxNodes) { ids.push_back(n.id); np.push_back(&n); }
+            const int n = static_cast<int>(ids.size());
+            std::unordered_map<int, int> idx;
+            for (int i = 0; i < n; ++i) idx[ids[i]] = i;
+
+            const double INF = 1e30;
+            std::vector<double> dist(static_cast<size_t>(n) * n, INF);
+            std::vector<int>    pred(static_cast<size_t>(n) * n, -1);
+            for (int i = 0; i < n; ++i) dist[static_cast<size_t>(i) * n + i] = 0.0;
+
+            for (const GraphEdge& e : graph.edges) {
+                auto a = idx.find(e.node1), b = idx.find(e.node2);
+                if (a == idx.end() || b == idx.end() || a->second == b->second) continue;
+                const int ia = a->second, ib = b->second;
+                const double dx = np[ia]->x - np[ib]->x, dy = np[ia]->y - np[ib]->y,
+                             dz = np[ia]->z - np[ib]->z;
+                const double w = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (w < dist[static_cast<size_t>(ia) * n + ib]) {
+                    dist[static_cast<size_t>(ia) * n + ib] = w; pred[static_cast<size_t>(ia) * n + ib] = ids[ia];
+                    dist[static_cast<size_t>(ib) * n + ia] = w; pred[static_cast<size_t>(ib) * n + ia] = ids[ib];
                 }
             }
 
-        for (int i = 0; i < n; ++i)
-            for (int j = 0; j < n; ++j) {
-                if (i == j) continue;
-                const double dd = dist[static_cast<size_t>(i) * n + j];
-                if (dd >= INF) continue;
-                const size_t off = (static_cast<size_t>(ids[i]) * maxNodes + ids[j]) * 8;
-                const int32_t ref = pred[static_cast<size_t>(i) * n + j];
-                const float   fdd = static_cast<float>(dd);
-                std::memcpy(&adj[off],     &ref, 4);
-                std::memcpy(&adj[off + 4], &fdd, 4);
-            }
+            for (int k = 0; k < n; ++k)
+                for (int i = 0; i < n; ++i) {
+                    const double dik = dist[static_cast<size_t>(i) * n + k];
+                    if (dik >= INF) continue;
+                    for (int j = 0; j < n; ++j) {
+                        const double nd = dik + dist[static_cast<size_t>(k) * n + j];
+                        if (nd < dist[static_cast<size_t>(i) * n + j]) {
+                            dist[static_cast<size_t>(i) * n + j] = nd;
+                            pred[static_cast<size_t>(i) * n + j] = pred[static_cast<size_t>(k) * n + j];
+                        }
+                    }
+                }
 
-        out.insert(out.end(), adj.begin(), adj.end());
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) {
+                    if (i == j) continue;
+                    const double dd = dist[static_cast<size_t>(i) * n + j];
+                    if (dd >= INF) continue;
+                    const size_t off = (static_cast<size_t>(ids[i]) * maxNodes + ids[j]) * 8;
+                    const int32_t ref = pred[static_cast<size_t>(i) * n + j];
+                    const float   fdd = static_cast<float>(dd);
+                    std::memcpy(&adj[off],     &ref, 4);
+                    std::memcpy(&adj[off + 4], &fdd, 4);
+                }
+
+            out.insert(out.end(), adj.begin(), adj.end());
+        }
     }
+
 
     for (const GraphNode& n : graph.nodes) {
         PutU32Rec(out, CODE_NODE_ID, n.id);

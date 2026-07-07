@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <vector>
 #include <algorithm>
+#include <memory>
 #include <unordered_map>
 #include "logger.h"
 #include "utils.h"
@@ -128,39 +129,29 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 		return false;
 	}
 
-	QSC* qsc_objects = new QSC();
-	if (!qsc_objects) {
+	auto qsc_objects = std::make_unique<QSC>();
+	qsc_objects->Load(filename);
+	if (qsc_objects->HadOverflow()) {
+		Logger::Get().Log(LogLevel::ERR, "[Level] FATAL: objects.qsc parser overflow (too many functions/args) - aborting level load");
 		return false;
 	}
 
-	qsc_objects->Load(filename);
-
-	try {
-		LoadStartPosInfo(qsc_objects, start_pos, start_yaw);
-		LoadFogInfo(qsc_objects, params.render_res_loader_);
-		LoadSkydomeInfo(qsc_objects, params.render_res_loader_);
-		LoadFlatSkyLayersInfo(qsc_objects, params.render_res_loader_);
+		LoadStartPosInfo(qsc_objects.get(), start_pos, start_yaw);
+		LoadFogInfo(qsc_objects.get(), params.render_res_loader_);
+		LoadSkydomeInfo(qsc_objects.get(), params.render_res_loader_);
+		LoadFlatSkyLayersInfo(qsc_objects.get(), params.render_res_loader_);
 
 		Terrain::load_params_s terrain_load_params = {
 			.level_no_ = params.level_no_,
 			.level_dyn_cube_ = this,
 			.render_res_loader_ = params.render_res_loader_,
-			.qsc_objects_ = qsc_objects
+			.qsc_objects_ = qsc_objects.get()
 		};
 
 
 		terrain_.Load(terrain_load_params);
 
-		level_objects_.Load(this, qsc_objects);
-
-
-	}
-	catch (const std::exception&) {
-		delete qsc_objects;
-		throw;	// re throw 
-	}
-
-	delete qsc_objects;
+		level_objects_.Load(this, qsc_objects.get());
 
 	loaded_ = true;
 
@@ -353,35 +344,37 @@ void Level::SaveAndReloadObjects() {
 	level_objects_.SaveToQSC(localQsc);
 
 	// 3. Reload objects from the saved file to ensure live synchronization
-	QSC* qsc = new QSC();
-	if (qsc) {
-		qsc->Load(localQsc.c_str());
-		level_objects_.Load(this, qsc);
-		delete qsc; // LevelObjects::Load copies everything, so we can free the temp QSC
+	auto qsc = std::make_unique<QSC>();
+	qsc->Load(localQsc.c_str());
+	if (qsc->HadOverflow()) {
+		Logger::Get().Log(LogLevel::ERR, "[Level] FATAL: QSC parser overflow reloading objects: " + localQsc);
+		return;
+	}
+	level_objects_.Load(this, qsc.get()); // LevelObjects::Load copies everything, so the temp QSC is freed when qsc goes out of scope
 
-		// 4. Restore expanded states to the newly loaded objects
-		auto& newObjs = level_objects_.GetObjects();
-		for (int i = 0; i < (int)newObjs.size(); ++i) {
-			if (newObjs[i].isContainer) {
-				std::string path = GetObjectTreePath(newObjs, i);
-				if (expandedStates.find(path) != expandedStates.end()) {
-					newObjs[i].expanded = true;
-				}
+	// 4. Restore expanded states to the newly loaded objects
+	auto& newObjs = level_objects_.GetObjects();
+	for (int i = 0; i < (int)newObjs.size(); ++i) {
+		if (newObjs[i].isContainer) {
+			std::string path = GetObjectTreePath(newObjs, i);
+			if (expandedStates.find(path) != expandedStates.end()) {
+				newObjs[i].expanded = true;
 			}
 		}
-
-		Logger::Get().Log(LogLevel::INFO, "[Level] SaveAndReloadObjects: Synchronized and expansion states preserved for: " + localQsc);
 	}
+
+	Logger::Get().Log(LogLevel::INFO, "[Level] SaveAndReloadObjects: Synchronized and expansion states preserved for: " + localQsc);
 }
 
 void Level::ReloadObjectsFromFile(const std::string& qscPath) {
-	QSC* qsc = new QSC();
-	if (qsc) {
-		qsc->Load(qscPath.c_str());
-		level_objects_.Load(this, qsc);
-		delete qsc;
-		Logger::Get().Log(LogLevel::INFO, "[Level] ReloadObjectsFromFile: " + qscPath);
+	auto qsc = std::make_unique<QSC>();
+	qsc->Load(qscPath.c_str());
+	if (qsc->HadOverflow()) {
+		Logger::Get().Log(LogLevel::ERR, "[Level] FATAL: QSC parser overflow reloading objects: " + qscPath);
+		return;
 	}
+	level_objects_.Load(this, qsc.get());
+	Logger::Get().Log(LogLevel::INFO, "[Level] ReloadObjectsFromFile: " + qscPath);
 }
 
 bool Level::GetTerrainZ(double x, double y, float& z, bool ignore_discard) {
