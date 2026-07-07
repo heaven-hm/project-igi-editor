@@ -517,6 +517,8 @@ public:
 		int    auto_save_interval_seconds_ = 300;
 		bool   music_on_                 = false; // Escape-menu Music checkbox state
 		bool   lightmaps_on_             = false; // Escape-menu Lightmaps checkbox state
+		bool   fog_on_                   = true;  // Escape-menu Fog checkbox state
+		int    fog_intensity_            = 10;    // Fog intensity 0-200% (default 10%)
 
 		// Animation state
 		std::string anim_status_;           // summary text of animations playing
@@ -549,6 +551,7 @@ public:
 	void					SetupClearColor(const glm::vec4& color) override;
 	void					SetupFog(const glm::vec4& color, float fog_far) override;
 	void					SetFogEnabled(bool enabled) { objects_.SetFogEnabled(enabled); }
+	void					SetFogIntensity(int pct);
 	void					SetupSkydome(const skydome_define_s& d) override;
 
 	void					LoadFlatSkyLayerTex(int layer_no, const pic_s* pic) override;
@@ -748,9 +751,13 @@ private:
 		glm::mat4			mvp_objects_;
 	};
 
-	struct ubo_fog_s {
+struct ubo_fog_s {
 		glm::vec4			color_;
 		float				far_;
+		float				pad0_;
+		float				pad1_;
+		float				pad2_;
+		float				intensity_;  // 0-200% (default 10 = 10%)
 	};
 
 	GLuint					ubo_mats_;
