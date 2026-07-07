@@ -84,6 +84,7 @@ struct ConfigData {
     bool enableLOD; // Portal/attachment distance culling for buildings
     bool enableLightmaps; // Apply calculated "Calculate Lightmap" textures during render (Escape menu checkbox)
     bool enableFog; // Terrain/object atmospheric fog — toggle in Terrain Settings panel
+    int  fogIntensity; // Fog intensity 0-200% (default 10 = 10%)
     bool musicEnabled; // Escape-menu Music checkbox preference — persists across level loads/game launches
 
     // NEW: Advanced QED Settings

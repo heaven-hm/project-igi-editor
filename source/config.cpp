@@ -123,6 +123,7 @@ void Config::CreateDefault() {
     data_.enableLOD = true;
     data_.enableLightmaps = false;
     data_.enableFog = true;
+    data_.fogIntensity = 10; // Default 10%
     data_.musicEnabled = true;
     data_.consoleAutoActivate = 2;
     data_.searchType = 133577004;
@@ -234,6 +235,7 @@ void Config::Load() {
                 else if (key == "Lod") data_.enableLOD = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "Lightmaps") data_.enableLightmaps = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "Fog") data_.enableFog = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "FogIntensity") data_.fogIntensity = SafeStoi(val, data_.fogIntensity);
                 else if (key == "Music") data_.musicEnabled = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "ConsoleAutoActivate") data_.consoleAutoActivate = SafeStoi(val, data_.consoleAutoActivate);
                 else if (key == "SearchType") data_.searchType = SafeStoll(val, data_.searchType);
@@ -405,6 +407,7 @@ void Config::Save() {
         file << "QEDBackup(" << (data_.enableBackup ? "TRUE" : "FALSE") << ");\n";
         file << "QEDLightmaps(" << (data_.enableLightmaps ? "TRUE" : "FALSE") << ");\n";
         file << "QEDFog(" << (data_.enableFog ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDFogIntensity(" << data_.fogIntensity << ");\n";
         file << "QEDMusic(" << (data_.musicEnabled ? "TRUE" : "FALSE") << ");\n";
         file << "QEDUseEditorFont(" << (data_.useEditorFont ? "TRUE" : "FALSE") << ");\n";
         file << "QEDSystemFontSize(" << data_.systemFontSize << ");\n";
