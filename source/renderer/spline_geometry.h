@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 
 #include <optional>
+#include <string_view>
 
 namespace spline_geometry {
 
@@ -19,6 +20,18 @@ struct SplineSegment {
     glm::dvec3 tangent1;
     bool linear = false;
 };
+
+// A SplineObjWaypoint names the model for the span that ends at that waypoint.
+std::string_view ResolveSegmentModel(
+    std::string_view startWaypointModel,
+    std::string_view endWaypointModel,
+    std::string_view fallbackModel) noexcept;
+
+// Converts a waypoint's Z-X-Y Euler orientation into its local-X spline
+// tangent, scaled to the span chord length.
+glm::dvec3 MakeWaypointTangent(
+    const glm::dvec3& euler,
+    double chordLength) noexcept;
 
 glm::dvec3 SampleSegment(const SplineSegment& segment, double t);
 

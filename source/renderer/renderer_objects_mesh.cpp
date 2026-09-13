@@ -4,6 +4,7 @@
  *          Split from renderer_objects.cpp; shares renderer_objects_internal.h.
  *****************************************************************************/
 #include "renderer_objects_internal.h"
+#include "../runtime/weather_visibility.h"
 
 float Renderer_Objects::GetMeshZOffset(const std::string& modelId, bool isBuilding) {
     std::string cacheKey = std::to_string(current_level_) + ":" + (isBuilding ? "building:" : "object:") + modelId;
@@ -463,9 +464,10 @@ bool Renderer_Objects::IsCameraInsideBuildingBounds(const std::vector<LevelObjec
         glm::vec3 minBound = mesh.center - mesh.halfExtents;
         glm::vec3 maxBound = mesh.center + mesh.halfExtents;
 
-        if (localPos.x >= minBound.x && localPos.x <= maxBound.x &&
-            localPos.y >= minBound.y && localPos.y <= maxBound.y &&
-            localPos.z >= minBound.z && localPos.z <= maxBound.z) {
+        if (igi::IsWithinWeatherShelterFootprint(
+                localPos.x, localPos.y,
+                minBound.x, maxBound.x,
+                minBound.y, maxBound.y)) {
             return true;
         }
     }

@@ -11,6 +11,34 @@ bool IsFinite(const glm::dvec3& value) {
 
 } // namespace
 
+std::string_view ResolveSegmentModel(
+    std::string_view startWaypointModel,
+    std::string_view endWaypointModel,
+    std::string_view fallbackModel) noexcept {
+    (void)startWaypointModel;
+    return endWaypointModel.empty() ? fallbackModel : endWaypointModel;
+}
+
+glm::dvec3 MakeWaypointTangent(
+    const glm::dvec3& euler,
+    double chordLength) noexcept {
+    if (!IsFinite(euler) || !std::isfinite(chordLength) || chordLength <= 0.0) {
+        return glm::dvec3(0.0);
+    }
+
+    const double sinX = std::sin(euler.x);
+    const double cosX = std::cos(euler.x);
+    const double sinY = std::sin(euler.y);
+    const double cosY = std::cos(euler.y);
+    const double sinZ = std::sin(euler.z);
+    const double cosZ = std::cos(euler.z);
+    const glm::dvec3 localX(
+        cosZ * cosY - sinZ * sinX * sinY,
+        sinZ * cosY + cosZ * sinX * sinY,
+        -cosX * sinY);
+    return localX * chordLength;
+}
+
 glm::dvec3 SampleSegment(const SplineSegment& segment, double t) {
     if (segment.linear) return segment.p0 + t * (segment.p1 - segment.p0);
 

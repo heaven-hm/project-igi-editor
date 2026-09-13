@@ -158,8 +158,8 @@ public:
     glm::vec3 GetMeshExtents(const std::string& modelId, bool isBuilding);
     float GetMeshRadius(const std::string& modelId, bool isBuilding);
     glm::vec3 GetMeshCenter(const std::string& modelId, bool isBuilding);
-    // Tests the camera against each top-level Building's transformed visual
-    // mesh bound. This is deliberately independent of editor draw filters.
+    // Tests the camera against each top-level Building's transformed horizontal
+    // footprint. This is deliberately independent of editor draw filters.
     bool IsCameraInsideBuildingBounds(const std::vector<LevelObject>& objects,
                                       const glm::vec3& cameraPos);
     float GetMeshZOffset(const std::string& modelId, bool isBuilding);

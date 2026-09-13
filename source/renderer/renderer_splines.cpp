@@ -65,12 +65,9 @@ void Renderer_Splines::Draw(
         for (size_t i = 0; i + 1 < children.size(); ++i) {
             int si = children[i];
             int ei = children[i + 1];
-            const int pi = (i > 0) ? children[i - 1] : si;
-            const int ni = (i + 2 < children.size()) ? children[i + 2] : ei;
 
             DrawSplineSegment(
                 objects[si], objects[ei],
-                objects[pi], objects[ni],
                 obj, ubo_mats, shader_program,
                 routeIndex, static_cast<int>(i), traceTiles,
                 fallbackSegmentModelId);
@@ -89,8 +86,6 @@ void Renderer_Splines::Draw(
 void Renderer_Splines::DrawSplineSegment(
     const LevelObject& start,
     const LevelObject& end,
-    const LevelObject& prev,
-    const LevelObject& nextNext,
     const LevelObject& parent,
     GLuint ubo_mats,
     GLuint shader_program,
@@ -99,7 +94,8 @@ void Renderer_Splines::DrawSplineSegment(
     std::vector<TraceTile>& traceTiles,
     const std::string& fallbackSegmentModelId)
 {
-    const std::string& segModelId = start.segmentModelId.empty() ? fallbackSegmentModelId : start.segmentModelId;
+    const std::string segModelId(spline_geometry::ResolveSegmentModel(
+        start.segmentModelId, end.segmentModelId, fallbackSegmentModelId));
     if (segModelId.empty()) return;
     if (Renderer_Objects::IsSkippedModelId(segModelId)) return;
 
@@ -119,18 +115,10 @@ void Renderer_Splines::DrawSplineSegment(
 
     const glm::dvec3 p0 = start.pos;
     const glm::dvec3 p1 = end.pos;
-    const glm::dvec3 pPrev = prev.pos;
-    const glm::dvec3 pNext = nextNext.pos;
-
-    glm::dvec3 tan0 = (p1 - pPrev) * 0.5;
-    glm::dvec3 tan1 = (pNext - p0) * 0.5;
-
-    // Clamp tangent magnitude to interval length to prevent overshoot at transitions.
     const double intervalLen = glm::length(p1 - p0);
-    const double t0len = glm::length(tan0);
-    const double t1len = glm::length(tan1);
-    if (t0len > intervalLen && t0len > 0.0) tan0 *= intervalLen / t0len;
-    if (t1len > intervalLen && t1len > 0.0) tan1 *= intervalLen / t1len;
+    if (!std::isfinite(intervalLen) || intervalLen <= 1e-9) return;
+    const glm::dvec3 tan0 = spline_geometry::MakeWaypointTangent(start.rot, intervalLen);
+    const glm::dvec3 tan1 = spline_geometry::MakeWaypointTangent(end.rot, intervalLen);
 
     // The segment model's longest measured local extent is its longitudinal axis.
     // Segment families may use either X or Y for that axis; do not assume the

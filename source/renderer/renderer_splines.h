@@ -51,8 +51,6 @@ private:
     void DrawSplineSegment(
         const LevelObject& start,
         const LevelObject& end,
-        const LevelObject& prev,
-        const LevelObject& nextNext,
         const LevelObject& parent,
         GLuint ubo_mats,
         GLuint shader_program,

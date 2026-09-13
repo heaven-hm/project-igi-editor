@@ -255,6 +255,17 @@ TEST(LevelWeatherTest, ActiveAuthoredWeatherRemainsVisibleOutsideBuildingBounds)
         false /* camera is outdoors */));
 }
 
+TEST(LevelWeatherTest, BuildingShelterFootprintCoversUpperFloors) {
+    EXPECT_TRUE(igi::IsWithinWeatherShelterFootprint(
+        12.0f, -4.0f,
+        -20.0f, 20.0f,
+        -10.0f, 10.0f));
+    EXPECT_FALSE(igi::IsWithinWeatherShelterFootprint(
+        25.0f, -4.0f,
+        -20.0f, 20.0f,
+        -10.0f, 10.0f));
+}
+
 TEST(LevelWeatherTest, ActiveAuthoredWeatherDoesNotDependOnObjectRenderFlags) {
     for (const auto& level : std::vector<std::vector<igi::WeatherEffectObject>>{
              {RainEffect("TRUE", "TRUE", "0.13")},

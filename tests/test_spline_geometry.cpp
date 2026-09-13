@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <limits>
+#include <string_view>
 
 using spline_geometry::MakeXAlignedTile;
 using spline_geometry::SampleSegment;
@@ -82,4 +83,21 @@ TEST(SplineGeometry, HandlesVerticalAndShortTilesWithoutInvalidFrame) {
         EXPECT_TRUE(std::isfinite(axis.y));
         EXPECT_TRUE(std::isfinite(axis.z));
     }
+}
+
+TEST(SplineGeometry, UsesEndWaypointModelForEachSplineSpan) {
+    EXPECT_EQ(spline_geometry::ResolveSegmentModel("road_start", "rail_next", "fallback"),
+              "rail_next");
+    EXPECT_EQ(spline_geometry::ResolveSegmentModel("road_start", "", "fallback"),
+              "fallback");
+}
+
+TEST(SplineGeometry, UsesWaypointLocalXAxisForSplineTangent) {
+    const glm::dvec3 chordAligned = spline_geometry::MakeWaypointTangent(
+        {0.0, 0.0, 0.0}, 100.0);
+    EXPECT_LT(glm::length(chordAligned - glm::dvec3(100.0, 0.0, 0.0)), 1e-9);
+
+    const glm::dvec3 yawed = spline_geometry::MakeWaypointTangent(
+        {0.0, 0.0, glm::half_pi<double>()}, 100.0);
+    EXPECT_LT(glm::length(yawed - glm::dvec3(0.0, 100.0, 0.0)), 1e-9);
 }

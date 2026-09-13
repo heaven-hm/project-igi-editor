@@ -437,7 +437,7 @@ void Renderer::Draw(const draw_params_s &params,
   }
 
   // RainEffect remains independent of editor draw filters, but precipitation
-  // is suppressed when the camera is within a Building's transformed bounds.
+  // is suppressed when the camera is within a Building's transformed footprint.
   const bool cameraIsSheltered = params.level_objects_ &&
       objects_.IsCameraInsideBuildingBounds(params.level_objects_->GetObjects(),
                                              params.view_define_->pos_);
