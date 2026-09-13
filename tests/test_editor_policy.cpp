@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "../source/runtime/auto_save_policy.h"
+#include "../source/runtime/editor_hover_policy.h"
 #include "../source/runtime/editor_history.h"
 
 #include <vector>
@@ -33,6 +34,20 @@ TEST(AutoSavePolicyTest, GracefulExitRequiresEnabledEditorAndValidLevel) {
     EXPECT_FALSE(igi::ShouldSaveBeforeEditorExit(false, true, 1));
     EXPECT_FALSE(igi::ShouldSaveBeforeEditorExit(true, true, 0));
     EXPECT_FALSE(igi::ShouldSaveBeforeEditorExit(true, true, -1));
+}
+
+TEST(EditorHoverPolicyTest, SkipsExpensiveScenePickingWhileObjectDragIsActive) {
+    EXPECT_FALSE(igi::ShouldPickSceneHover(
+        /*pointer_changed=*/true,
+        /*left_button_down=*/true));
+
+    EXPECT_TRUE(igi::ShouldPickSceneHover(
+        /*pointer_changed=*/true,
+        /*left_button_down=*/false));
+
+    EXPECT_FALSE(igi::ShouldPickSceneHover(
+        /*pointer_changed=*/false,
+        /*left_button_down=*/false));
 }
 
 TEST(EditorHistoryTest, PushUndoInvalidatesRedoAndKeepsLatestEntries) {

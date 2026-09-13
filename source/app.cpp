@@ -6,6 +6,7 @@
 #include "runtime/log_policy.h"
 #include "runtime/map_computer_camera.h"
 #include "runtime/auto_save_policy.h"
+#include "runtime/editor_hover_policy.h"
 #include "runtime/progress_overlay_policy.h"
 #include "runtime/window_style_policy.h"
 #include "mission_flow_loader.h"
@@ -719,7 +720,9 @@ void App::Frame(float delta_seconds) {
 		if (render_gameplay) UpdateGameplayViewDefine();
 		else UpdateViewDefine();
 		if (render_gameplay) CaptureGameplayRenderSnapshot();
-		if (mouse_state_.prior_x_ != last_pick_x_ || mouse_state_.prior_y_ != last_pick_y_) {
+		if (igi::ShouldPickSceneHover(
+			mouse_state_.prior_x_ != last_pick_x_ || mouse_state_.prior_y_ != last_pick_y_,
+			mouse_state_.left_button_down_)) {
 			hover_object_index_ = PickObjectAtScreenPos(mouse_state_.prior_x_, mouse_state_.prior_y_);
 			if (hover_object_index_ >= Renderer::kAttaPickBase) hover_object_index_ = -1; // ATTA hovered (clickable; promote on click)
 			last_pick_x_ = mouse_state_.prior_x_;
@@ -962,20 +965,23 @@ void App::Frame(float delta_seconds) {
 	if (render_gameplay) UpdateGameplayViewDefine();
 	else UpdateViewDefine();
 	if (render_gameplay) CaptureGameplayRenderSnapshot();
-	if (IsEditorInputActive() &&
-		(mouse_state_.prior_x_ != last_pick_x_ ||
-		 mouse_state_.prior_y_ != last_pick_y_)) {
-		bool camMode    = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
-		bool overPanel  = prop_editor_open_ &&
-		                  mouse_state_.prior_x_ < (PropPanel::kLeft + PropPanel::kWidth);
+	const bool pointer_changed = mouse_state_.prior_x_ != last_pick_x_ ||
+		mouse_state_.prior_y_ != last_pick_y_;
+	const bool camMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
+	const bool overPanel = prop_editor_open_ &&
+		mouse_state_.prior_x_ < (PropPanel::kLeft + PropPanel::kWidth);
+	if (IsEditorInputActive() && pointer_changed) {
 		if (camMode || overPanel) {
 			hover_object_index_ = -1;
-		} else {
+			last_pick_x_ = mouse_state_.prior_x_;
+			last_pick_y_ = mouse_state_.prior_y_;
+		} else if (igi::ShouldPickSceneHover(pointer_changed,
+			mouse_state_.left_button_down_)) {
 			hover_object_index_ = PickObjectAtScreenPos(mouse_state_.prior_x_, mouse_state_.prior_y_);
 			if (hover_object_index_ >= Renderer::kAttaPickBase) hover_object_index_ = -1; // ATTA hovered (clickable; promote on click)
+			last_pick_x_ = mouse_state_.prior_x_;
+			last_pick_y_ = mouse_state_.prior_y_;
 		}
-		last_pick_x_ = mouse_state_.prior_x_;
-		last_pick_y_ = mouse_state_.prior_y_;
 	}
 
 	vert_flat_sky_layer_s * fsl_vb = renderer_.MapFlatSkyLayersVB();
