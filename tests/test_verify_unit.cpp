@@ -1,10 +1,12 @@
 #include <gtest/gtest.h>
+#include <algorithm>
 #include "cli/cli_handler.h"
 #include "cli/verify_level_core.h"
 #include "config.h"
 #include "level/qsc_lexer.h"
 #include "level/qsc_parser.h"
 #include "level/qvm_compiler.h"
+#include "level/task_schema.h"
 #include "utils.h"
 #include <chrono>
 #include <filesystem>
@@ -351,6 +353,17 @@ TEST(ParseQscObjectsTest, ParsesSplineObjWaypointFromFixture) {
     for (const auto& o : objs)
         if (o.modelId == "322_01_1") { found = true; break; }
     EXPECT_TRUE(found) << "322_01_1 not found in parsed objects";
+}
+
+TEST(TaskSchemaTest, SplineWaypointExposesEndingSegmentModel) {
+    const auto* schema = TaskSchemaNS::GetBuiltinSchema("SplineObjWaypoint");
+    ASSERT_NE(schema, nullptr);
+    auto field = std::find_if(schema->begin(), schema->end(), [](const auto& def) {
+        return def.name == "Segment Model";
+    });
+    ASSERT_NE(field, schema->end());
+    EXPECT_EQ(field->argOffset, 10);
+    EXPECT_EQ(field->typeName, "String16");
 }
 
 TEST(ParseQscObjectsTest, ReturnsEmptyForMissingFile) {

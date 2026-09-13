@@ -73,11 +73,13 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
           add(sc, "Position",    "ObjectPos", 3);
           add(sc, "Orientation", "Real32x9",  6);
           add(sc, "Model",       "String16",  10); }
-        // SplineObjWaypoint: ori first@3, pos@6, model@9
+        // SplineObjWaypoint: ori first@3, pos@6, waypoint marker@9,
+        // segment model for the span ending here@10.
         { auto& sc = s["SplineObjWaypoint"];
           add(sc, "Orientation", "Real32x9",  3);
           add(sc, "Position",    "ObjectPos", 6);
-          add(sc, "Model",       "String16",  9); }
+          add(sc, "Model",       "String16",  9);
+          add(sc, "Segment Model", "String16", 10); }
         // AmbientArea
         { auto& sc = s["AmbientArea"];
           add(sc, "Position",    "ObjectPos", 3);
