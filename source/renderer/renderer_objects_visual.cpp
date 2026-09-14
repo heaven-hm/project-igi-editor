@@ -271,6 +271,9 @@ void Renderer_Objects::DrawModelPreview(const std::string& modelId, GLuint ubo_m
     }
 
     glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    for (int i = 0; i < 4; ++i) glDisableVertexAttribArray(static_cast<GLuint>(i));
     glDisable(GL_SCISSOR_TEST);
     // Caller restores full viewport and 2D HUD state.
 }

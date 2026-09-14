@@ -4,6 +4,7 @@
  *          Split from app.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include "runtime/editor_camera_start.h"
 #include <unordered_set>
 
 void App::ProcessInput(float delta_seconds) {
@@ -22,15 +23,19 @@ void App::ProcessInput(float delta_seconds) {
 
 	if (!edit_mode_ || enableCameraMode) {
 		if (orbit_active_) {
-			// Horizontal orbit (yaw only) around selected object
-			viewer_.yaw_ += -input_.mouse_delta_x_ * MOUSE_SENSITIVE;
-
-			glm::vec3 new_forward;
-			glm::vec3 dummy_right, dummy_up;
-			AngleToVectors(viewer_.yaw_, viewer_.pitch_, viewer_.roll_, new_forward, dummy_right, dummy_up);
-
-			// Recalculate position based on distance and new forward vector
-			viewer_.pos_ = orbit_target_pos_ - new_forward * orbit_distance_;
+			igi::ObjectOrbitCamera orbit;
+			orbit.target = orbit_target_pos_;
+			orbit.distance = orbit_distance_;
+			orbit.yaw_degrees = viewer_.yaw_;
+			orbit.pitch_degrees = viewer_.pitch_;
+			orbit = igi::StepObjectOrbit(
+				orbit,
+				-input_.mouse_delta_x_ * MOUSE_SENSITIVE,
+				-input_.mouse_delta_y_ * MOUSE_SENSITIVE);
+			viewer_.yaw_ = orbit.yaw_degrees;
+			viewer_.pitch_ = orbit.pitch_degrees;
+			orbit_distance_ = orbit.distance;
+			viewer_.pos_ = igi::ObjectOrbitCameraPosition(orbit);
 		} else {
 			// Standard free-look camera movement in-place
 			viewer_.yaw_ += -input_.mouse_delta_x_ * MOUSE_SENSITIVE;

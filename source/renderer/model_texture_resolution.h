@@ -93,6 +93,10 @@ const ModelTextureSource* FindExactTextureSource(
 // identity and must remain untouched.
 std::string StripTextureFormatSuffix(const std::string& textureId);
 
+// True for the shared location0 texture archive. Live preview and import both
+// prefer this file over same-named copies inside a level archive.
+bool IsSharedCommonTextureArchive(const std::string& resPath);
+
 // Every material slot emitted by a MEF must address the selected ordered
 // mapping. Slot numbers are indices, not texture IDs, so accepting an
 // out-of-range slot would make the importer silently bind the wrong material.

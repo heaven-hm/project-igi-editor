@@ -429,22 +429,28 @@ void Renderer_Objects::LoadResCache(int levelNo, const std::string& igi_path) {
 
 // Try to find texture bytes in the in-memory .res index.
 std::vector<uint8_t> Renderer_Objects::FindTextureData(const std::string& textureId) const {
-    // Try exact name + .tex, then common format-suffix variant
-    auto tryId = [&](const std::string& id) -> std::vector<uint8_t> {
+    // Shared character materials (001_02_1 and friends) keep authoritative
+    // pixels in common/textures/location0.res. Level archives reuse those
+    // names with unrelated bytes, which made the model-picker preview bind
+    // the wrong sheet on every foreign level. Search common archives first.
+    auto tryId = [&](const std::string& id, bool commonPass) -> std::vector<uint8_t> {
         const std::string fname = id + ".tex";
         for (const auto& ri : res_tex_indexes_) {
+            if (IsSharedCommonTextureArchive(ri.res_path) != commonPass) continue;
             auto it = ri.index.find(fname);
             if (it != ri.index.end())
                 return RES_ReadEntry(ri.res_path, it->second);
         }
         return {};
     };
-    auto bytes = tryId(textureId);
+    auto bytes = tryId(textureId, true);
+    if (bytes.empty()) bytes = tryId(textureId, false);
     if (!bytes.empty()) return bytes;
-    // Try only recognized pixel-format tags. Numeric suffixes such as _1 are
-    // part of the texture identity and must not be collapsed.
     const std::string strippedId = StripTextureFormatSuffix(textureId);
-    if (strippedId != textureId) bytes = tryId(strippedId);
+    if (strippedId != textureId) {
+        bytes = tryId(strippedId, true);
+        if (bytes.empty()) bytes = tryId(strippedId, false);
+    }
     return bytes;
 }
 
@@ -732,7 +738,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
     const bool skipSkinned = skip_static_draw_indices && !skip_static_draw_indices->empty();
     const auto lightmapMode = igi::ObjectLightmapManager::Get().GetRenderMode();
-    const int passCount = fast_preview ? 1 : 2;
+    const int passCount = 2;
     for (int pass = 0; pass < passCount; ++pass) {
         bool isTransparentPass = (pass == 1);
         if (isTransparentPass) {
@@ -1118,8 +1124,8 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
         // Only buildings with portal/ATTA sub-models need distance-based culling.
         // Non-buildings (AI, static props, containers) never have ATTA records.
-        bool isCloseEnough = !fast_preview;
-        if (isCloseEnough && obj.isBuilding && Config::Get().enableLOD) {
+        bool isCloseEnough = true;
+        if (obj.isBuilding && Config::Get().enableLOD) {
             float distToCamera = std::sqrt(distSq);
             float portalDistance = 100.0f;
             auto pit = portal_distances_.find(obj.modelId);
@@ -1133,7 +1139,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             isCloseEnough = distSq < maxAtta * maxAtta;
         }
 
-        if (!fast_preview && isCloseEnough && !isWeapon) {
+        if (isCloseEnough && !isWeapon) {
             FillLevelModelKey(level_model_key_scratch_, current_level_, obj.isBuilding, obj.modelId);
             if (attachment_cache_.find(level_model_key_scratch_) != attachment_cache_.end()) {
                 glEnable(GL_POLYGON_OFFSET_FILL);

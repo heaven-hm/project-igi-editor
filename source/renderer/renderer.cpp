@@ -373,19 +373,15 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
     // the live-skinned mesh looks identical when not moving instead of a flat
     // debug color. Cheap: GetOrLoadMesh hits the cache (the model is already
     // loaded for the rigid draw elsewhere).
+    GLint prevProg;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
     const Mesh& mesh = objects_.GetOrLoadMesh(modelId, isBuilding);
     std::unordered_map<int, GLuint> slotToTexture;
     for (const auto& sub : mesh.subMeshes) slotToTexture[sub.materialSlot] = sub.textureID;
     const GLuint fallbackTexture = mesh.textureID;
-
-    GLint prevProg;
-    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
-    glUseProgram(0);
-
-    glBindVertexArray(0);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-    for (int i = 0; i < 4; ++i) glDisableVertexAttribArray(i);
+    // Mesh upload binds VAOs. AMD atioglxx.dll crashes at 0x444 if glBegin
+    // runs with ARRAY_BUFFER still bound.
+    GL_UnbindForImmediateMode();
 
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();

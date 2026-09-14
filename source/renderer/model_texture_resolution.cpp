@@ -152,6 +152,15 @@ std::string StripTextureFormatSuffix(const std::string& textureId) {
     return textureId;
 }
 
+bool IsSharedCommonTextureArchive(const std::string& resPath) {
+    std::string path = resPath;
+    for (char& c : path) {
+        if (c == '\\') c = '/';
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return path.find("/common/textures/location0.res") != std::string::npos;
+}
+
 bool IsTextureMappingCompatible(const std::vector<int>& materialSlots,
                                 std::size_t orderedMappingSize) {
     if (orderedMappingSize == 0 || materialSlots.empty()) return false;

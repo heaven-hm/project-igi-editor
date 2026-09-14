@@ -217,4 +217,41 @@ TEST(EditorCameraStartTest, TerrainBrushSwitchingGivesDistinctIcons) {
     EXPECT_NE(soften, flatten);
 }
 
+TEST(EditorCameraStartTest, OrbitPrefersClickedObjectOverStaleSelection) {
+    EXPECT_EQ(igi::ResolveOrbitObjectIndex(4, 2, 0, 10), 4);
+    EXPECT_EQ(igi::ResolveOrbitObjectIndex(-1, 2, 0, 10), 2);
+    EXPECT_EQ(igi::ResolveOrbitObjectIndex(-1, -1, 0, 10), 0);
+    EXPECT_EQ(igi::ResolveOrbitObjectIndex(99, 2, 0, 10), 2);
+    EXPECT_EQ(igi::ResolveOrbitObjectIndex(-1, -1, -1, 10), -1);
+}
+
+TEST(EditorCameraStartTest, AltMouseOrbitKeepsTargetFixedThroughFullYawTurn) {
+    const glm::vec3 target(1000.0f, 2000.0f, 3000.0f);
+    const glm::vec3 start = target + glm::vec3(0.0f, -4000.0f, 500.0f);
+    igi::ObjectOrbitCamera orbit = igi::BeginObjectOrbit(start, target);
+    const float start_distance = orbit.distance;
+
+    for (int step = 0; step < 36; ++step) {
+        orbit = igi::StepObjectOrbit(orbit, 10.0f, 0.0f);
+        const glm::vec3 pos = igi::ObjectOrbitCameraPosition(orbit);
+        EXPECT_NEAR(glm::distance(pos, target), start_distance, 0.5f);
+        const glm::vec3 forward =
+            igi::ObjectOrbitForward(orbit.yaw_degrees, orbit.pitch_degrees);
+        const glm::vec3 to_target = glm::normalize(target - pos);
+        EXPECT_NEAR(glm::dot(forward, to_target), 1.0f, 0.002f);
+    }
+}
+
+TEST(EditorCameraStartTest, AltMouseOrbitPitchLooksOverAndUnderWithoutFlipping) {
+    const glm::vec3 target(0.0f, 0.0f, 0.0f);
+    igi::ObjectOrbitCamera orbit =
+        igi::BeginObjectOrbit(glm::vec3(0.0f, -1000.0f, 0.0f), target);
+    orbit = igi::StepObjectOrbit(orbit, 0.0f, 200.0f);
+    EXPECT_LE(orbit.pitch_degrees, 89.0f);
+    orbit = igi::StepObjectOrbit(orbit, 0.0f, -400.0f);
+    EXPECT_GE(orbit.pitch_degrees, -89.0f);
+    const glm::vec3 pos = igi::ObjectOrbitCameraPosition(orbit);
+    EXPECT_GT(glm::distance(pos, target), 0.1f);
+}
+
 } // namespace

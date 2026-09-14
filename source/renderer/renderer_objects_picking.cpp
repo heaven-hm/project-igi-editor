@@ -263,6 +263,9 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
 
     glBindVertexArray(0);
     glUseProgram(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    for (int i = 0; i < 4; ++i) glDisableVertexAttribArray(static_cast<GLuint>(i));
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     // Restore state
@@ -545,6 +548,9 @@ Renderer_Objects::VisualEvidence Renderer_Objects::CaptureObjectVisualEvidence(
     draw_attachments(modelId, glm::scale(model, glm::vec3(1.0f / (40.96f * obj.scale))), ancestry);
     glDisable(GL_POLYGON_OFFSET_FILL);
     glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    for (int i = 0; i < 4; ++i) glDisableVertexAttribArray(static_cast<GLuint>(i));
     glUseProgram(0);
 
     std::vector<uint8_t> color(pixels * 3);

@@ -20,6 +20,11 @@ extern gl_info_s g_gl_info;
 bool	GL_Init();
 void	GL_TryEnableVSync();
 
+// AMD atioglxx.dll dereferences NULL+0x444 if glBegin runs with a VBO/VAO still
+// bound. Call this immediately before any fixed-function immediate-mode draw,
+// and after any mesh upload that may have rebound ARRAY_BUFFER.
+void	GL_UnbindForImmediateMode();
+
 // buf
 GLuint	GL_CreateBuffer(GLenum target, GLsizeiptr size, const void * data, GLenum usage);
 void	GL_BufferData(GLuint obj, GLenum target, GLsizeiptr size, const void* data, GLenum usage);

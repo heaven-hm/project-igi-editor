@@ -57,6 +57,14 @@ bool GL_Init() {
 	return true;
 }
 
+void GL_UnbindForImmediateMode() {
+	glUseProgram(0);
+	glBindVertexArray(0);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+	for (int i = 0; i < 4; ++i) glDisableVertexAttribArray(static_cast<GLuint>(i));
+}
+
 void GL_TryEnableVSync() {
 #if defined(_WIN32)
 	if (wglSwapIntervalEXT) {

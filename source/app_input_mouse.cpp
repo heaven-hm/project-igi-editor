@@ -5,6 +5,7 @@
  *****************************************************************************/
 #include "app_internal.h"
 #include "renderer/object_lightmap.h"
+#include "runtime/editor_camera_start.h"
 #include "runtime/pause_menu_layout.h"
 #include "runtime/pause_menu_font.h"
 #include "runtime/log_policy.h"
@@ -216,21 +217,34 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 			}
 
 			if (enableCameraMode) {
-				int cx = window_state_.viewport_width_ >> 1;
-				int cy = window_state_.viewport_height_ >> 1;
-				int targetIdx = selected_object_index_;
-				if (targetIdx < 0) targetIdx = hover_object_index_;
-				if (targetIdx < 0) targetIdx = PickObjectAtScreenPos(cx, cy);
-				if (targetIdx >= Renderer::kAttaPickBase) targetIdx = -1; // ATTA: no orbit target
+				const auto& objects = level_.GetLevelObjects().GetObjects();
+				int clicked = PickObjectAtScreenPos(x, y);
+				if (clicked >= Renderer::kAttaPickBase) clicked = -1;
+				int hover = hover_object_index_;
+				if (hover >= Renderer::kAttaPickBase) hover = -1;
+				int selected = selected_object_index_;
+				if (selected >= Renderer::kAttaPickBase) selected = -1;
+				const int targetIdx = igi::ResolveOrbitObjectIndex(
+					clicked, hover, selected, (int)objects.size());
 
 				if (targetIdx >= 0) {
-					const auto& obj = level_.GetLevelObjects().GetObjects()[targetIdx];
+					const auto& obj = objects[targetIdx];
+					glm::vec3 target = glm::vec3(obj.pos);
+					if (!obj.modelId.empty()) {
+						const glm::vec3 meshCenter =
+							renderer_.GetMeshCenter(obj.modelId, obj.isBuilding);
+						const float scale = 40.96f * std::max(obj.scale, 0.001f);
+						target += glm::vec3(0.0f, 0.0f, meshCenter.z * scale);
+					}
+					const igi::ObjectOrbitCamera orbit =
+						igi::BeginObjectOrbit(viewer_.pos_, target);
 					orbit_active_ = true;
-					orbit_target_pos_ = glm::vec3(obj.pos);
-					orbit_distance_ = glm::distance(viewer_.pos_, orbit_target_pos_);
-					if (orbit_distance_ < 0.1f) orbit_distance_ = 1.0f;
+					orbit_target_pos_ = orbit.target;
+					orbit_distance_ = orbit.distance;
+					viewer_.yaw_ = orbit.yaw_degrees;
+					viewer_.pitch_ = orbit.pitch_degrees;
+					UpdateViewerVectors();
 					Logger::Get().Log(LogLevel::INFO, "[App] Orbit mode activated around object: " + obj.type);
-					Logger::Get().Log(LogLevel::WARNING, "[App] Orbit target pos: " + std::to_string(orbit_target_pos_.x) + ", " + std::to_string(orbit_target_pos_.y) + ", " + std::to_string(orbit_target_pos_.z) + " | Dist: " + std::to_string(orbit_distance_));
 				} else {
 					orbit_active_ = false;
 				}

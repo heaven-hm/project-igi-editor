@@ -217,6 +217,17 @@ TEST(ModelTextureResolution, LevelMissingFallsBackToCommonArchive) {
     EXPECT_TRUE(FindModelSourceEntry(bundle, "missing_tex", true, ReadFromDisk).empty());
 }
 
+TEST(ModelTextureResolution, IdentifiesSharedCommonTextureArchivePaths) {
+    EXPECT_TRUE(IsSharedCommonTextureArchive(
+        "D:\\IGI1\\missions\\location0\\common\\textures\\location0.res"));
+    EXPECT_TRUE(IsSharedCommonTextureArchive(
+        "d:/igi1/missions/location0/COMMON/textures/location0.res"));
+    EXPECT_FALSE(IsSharedCommonTextureArchive(
+        "D:\\IGI1\\missions\\location0\\level7\\textures\\level7.res"));
+    EXPECT_FALSE(IsSharedCommonTextureArchive(
+        "D:\\IGI1\\missions\\location0\\common\\models\\location0.res"));
+}
+
 TEST(ModelTextureResolution, CommonTextureArchiveWinsOverPollutedLevelArchive) {
     test_support::TempDirectory temp;
     const std::string levelRes = (temp.path() / "level.res").string();
