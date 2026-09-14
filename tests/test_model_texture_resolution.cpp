@@ -217,6 +217,25 @@ TEST(ModelTextureResolution, LevelMissingFallsBackToCommonArchive) {
     EXPECT_TRUE(FindModelSourceEntry(bundle, "missing_tex", true, ReadFromDisk).empty());
 }
 
+TEST(ModelTextureResolution, CommonTextureArchiveWinsOverPollutedLevelArchive) {
+    test_support::TempDirectory temp;
+    const std::string levelRes = (temp.path() / "level.res").string();
+    const std::string commonRes = (temp.path() / "common.res").string();
+
+    // Shared character textures (001_02_1 materials) keep their real bytes in
+    // common. Level archives often carry the same names with unrelated pixels.
+    const std::vector<uint8_t> polluted = {9, 9, 9};
+    const std::vector<uint8_t> commonBytes = {1, 2, 3, 4};
+    std::string error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:textures/001_01_1.tex", polluted}}, levelRes, error)) << error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:textures/001_01_1.tex", commonBytes}}, commonRes, error)) << error;
+
+    const auto bundle = IndexSyntheticBundle(levelRes, commonRes);
+    EXPECT_EQ(FindModelSourceEntry(bundle, "001_01_1", true, ReadFromDisk), commonBytes);
+}
+
 TEST(ModelTextureResolution, LevelArchiveWinsOverCommonArchive) {
     test_support::TempDirectory temp;
     const std::string levelRes = (temp.path() / "level.res").string();

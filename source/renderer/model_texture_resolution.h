@@ -113,11 +113,12 @@ struct ModelSourceArchiveIndex {
     std::unordered_map<std::string, ResEntryInfo> entries;
 };
 
-// Resolve one entry from a source bundle: the level archive first, then the
-// shared common archive. Textures are stored as "<id>.tex", meshes as
-// "<id>.mef"; callers pass the bare id with its suffix kind. Format-suffixed
-// texture ids fall back to the stripped name in the same archive before the
-// search continues to the next archive.
+// Resolve one entry from a source bundle. Callers pass bundle[0] = selected
+// level archive and bundle[1] = shared common archive. Texture ids search the
+// common archive first so polluted same-name level copies cannot override
+// shared bytes (001_02_1 materials). Mesh ids keep the level archive first.
+// Format-suffixed texture ids fall back to the stripped name in the same
+// archive before the search continues to the next archive.
 std::vector<uint8_t> FindModelSourceEntry(
     const std::array<ModelSourceArchiveIndex, 2>& bundle,
     const std::string& entryId,

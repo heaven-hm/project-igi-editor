@@ -470,7 +470,8 @@ std::vector<uint8_t> Renderer_Objects::FindTextureDataFromLevel(
         }
         return true;
     };
-    // Level-specific comes first so it wins over common on name collisions.
+    // bundle[0] is the selected level archive, bundle[1] is common. Texture
+    // lookups search common first so polluted same-name level copies lose.
     std::array<ModelSourceArchiveIndex, 2> bundle;
     for (size_t slot = 0; slot < 2; ++slot) {
         bundle[slot].resPath = bundleRes[slot];

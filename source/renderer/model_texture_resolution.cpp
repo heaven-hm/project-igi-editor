@@ -199,15 +199,16 @@ std::vector<uint8_t> FindModelSourceEntry(
         }
         return {};
     };
-    for (const auto& archive : bundle) {
-        auto bytes = lookup(archive, entryId);
+    for (size_t i = 0; i < 2; ++i) {
+        const size_t slot = (isTexture ? 1 - i : i);
+        auto bytes = lookup(bundle[slot], entryId);
         if (!bytes.empty()) return bytes;
         // Format-suffixed texture ids fall back to the stripped name in the
-        // same archive before the search continues to the common archive.
+        // same archive before the search continues to the next archive.
         if (isTexture) {
             const std::string stripped = StripTextureFormatSuffix(entryId);
             if (stripped != entryId) {
-                bytes = lookup(archive, stripped);
+                bytes = lookup(bundle[slot], stripped);
                 if (!bytes.empty()) return bytes;
             }
         }
