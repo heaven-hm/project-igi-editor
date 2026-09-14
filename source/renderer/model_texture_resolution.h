@@ -116,9 +116,8 @@ struct ModelSourceArchiveIndex {
     std::unordered_map<std::string, ResEntryInfo> entries;
 };
 
-// Resolve a scene-preview texture. Shared common textures are authoritative
-// over same-named level entries; explicit source imports use
-// FindModelSourceEntry instead.
+// Resolve a scene-preview texture. Level entries are authoritative over
+// same-named common entries; explicit source imports use FindModelSourceEntry.
 std::vector<uint8_t> FindPreviewTextureEntry(
     const std::vector<ModelSourceArchiveIndex>& archives,
     const std::string& textureId,

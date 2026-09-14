@@ -168,7 +168,7 @@ std::vector<uint8_t> FindPreviewTextureEntry(
                                               const ResEntryInfo& info)>& readEntry) {
     auto tryId = [&](const std::string& id) -> std::vector<uint8_t> {
         const std::string entryName = id + ".tex";
-        for (const bool common : {true, false}) {
+        for (const bool common : {false, true}) {
             for (const auto& archive : archives) {
                 if (IsSharedCommonTextureArchive(archive.resPath) != common) continue;
                 const auto found = archive.entries.find(entryName);

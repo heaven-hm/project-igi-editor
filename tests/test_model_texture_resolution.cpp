@@ -228,7 +228,7 @@ TEST(ModelTextureResolution, IdentifiesSharedCommonTextureArchivePaths) {
         "D:\\IGI1\\missions\\location0\\common\\models\\location0.res"));
 }
 
-TEST(ModelTextureResolution, PreviewTextureUsesCommonBeforePollutedLevelCopy) {
+TEST(ModelTextureResolution, PreviewTextureKeepsLevelSpecificOverride) {
     test_support::TempDirectory temp;
     const auto levelDir = temp.path() / "level12" / "textures";
     const auto commonDir = temp.path() / "common" / "textures";
@@ -246,7 +246,7 @@ TEST(ModelTextureResolution, PreviewTextureUsesCommonBeforePollutedLevelCopy) {
 
     const auto bundle = IndexSyntheticBundle(levelRes, commonRes);
     const std::vector<ModelSourceArchiveIndex> archives(bundle.begin(), bundle.end());
-    EXPECT_EQ(FindPreviewTextureEntry(archives, "001_02_1", ReadFromDisk), commonBytes);
+    EXPECT_EQ(FindPreviewTextureEntry(archives, "001_02_1", ReadFromDisk), pollutedLevelBytes);
 }
 
 TEST(ModelTextureResolution, SelectedLevelTextureOverridesSharedCommonTexture) {
