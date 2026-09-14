@@ -161,6 +161,30 @@ bool IsSharedCommonTextureArchive(const std::string& resPath) {
     return path.find("/common/textures/location0.res") != std::string::npos;
 }
 
+std::vector<uint8_t> FindPreviewTextureEntry(
+    const std::vector<ModelSourceArchiveIndex>& archives,
+    const std::string& textureId,
+    const std::function<std::vector<uint8_t>(const std::string& resPath,
+                                              const ResEntryInfo& info)>& readEntry) {
+    auto tryId = [&](const std::string& id) -> std::vector<uint8_t> {
+        const std::string entryName = id + ".tex";
+        for (const bool common : {true, false}) {
+            for (const auto& archive : archives) {
+                if (IsSharedCommonTextureArchive(archive.resPath) != common) continue;
+                const auto found = archive.entries.find(entryName);
+                if (found != archive.entries.end())
+                    return readEntry(archive.resPath, found->second);
+            }
+        }
+        return {};
+    };
+
+    auto bytes = tryId(textureId);
+    if (!bytes.empty()) return bytes;
+    const std::string strippedId = StripTextureFormatSuffix(textureId);
+    return strippedId == textureId ? std::vector<uint8_t>{} : tryId(strippedId);
+}
+
 bool IsTextureMappingCompatible(const std::vector<int>& materialSlots,
                                 std::size_t orderedMappingSize) {
     if (orderedMappingSize == 0 || materialSlots.empty()) return false;

@@ -429,30 +429,15 @@ void Renderer_Objects::LoadResCache(int levelNo, const std::string& igi_path) {
 
 // Try to find texture bytes in the in-memory .res index.
 std::vector<uint8_t> Renderer_Objects::FindTextureData(const std::string& textureId) const {
-    // Match OpenIGI's live Pack_Bind behavior: common is registered first and
-    // the active level replaces duplicate names. Import provenance is handled
-    // separately by FindTextureDataFromLevel and remains common-aware.
-    auto tryId = [&](const std::string& id) -> std::vector<uint8_t> {
-        const std::string fname = id + ".tex";
-        for (const auto& ri : res_tex_indexes_) {
-            if (IsSharedCommonTextureArchive(ri.res_path)) continue;
-            auto it = ri.index.find(fname);
-            if (it != ri.index.end()) return RES_ReadEntry(ri.res_path, it->second);
-        }
-        for (const auto& ri : res_tex_indexes_) {
-            if (!IsSharedCommonTextureArchive(ri.res_path)) continue;
-            auto it = ri.index.find(fname);
-            if (it != ri.index.end()) return RES_ReadEntry(ri.res_path, it->second);
-        }
-        return {};
-    };
-    auto bytes = tryId(textureId);
-    if (!bytes.empty()) return bytes;
-    const std::string strippedId = StripTextureFormatSuffix(textureId);
-    if (strippedId != textureId) {
-        bytes = tryId(strippedId);
+    std::vector<ModelSourceArchiveIndex> archives;
+    archives.reserve(res_tex_indexes_.size());
+    for (const auto& index : res_tex_indexes_) {
+        archives.push_back({index.res_path, index.index});
     }
-    return bytes;
+    return FindPreviewTextureEntry(archives, textureId,
+        [](const std::string& resPath, const ResEntryInfo& info) {
+            return RES_ReadEntry(resPath, info);
+        });
 }
 
 std::vector<uint8_t> Renderer_Objects::FindTextureDataFromLevel(

@@ -93,8 +93,7 @@ const ModelTextureSource* FindExactTextureSource(
 // identity and must remain untouched.
 std::string StripTextureFormatSuffix(const std::string& textureId);
 
-// True for the shared location0 texture archive. Live preview and import both
-// prefer this file over same-named copies inside a level archive.
+// True for the shared location0 texture archive.
 bool IsSharedCommonTextureArchive(const std::string& resPath);
 
 // Every material slot emitted by a MEF must address the selected ordered
@@ -116,6 +115,15 @@ struct ModelSourceArchiveIndex {
     std::string resPath;
     std::unordered_map<std::string, ResEntryInfo> entries;
 };
+
+// Resolve a scene-preview texture. Shared common textures are authoritative
+// over same-named level entries; explicit source imports use
+// FindModelSourceEntry instead.
+std::vector<uint8_t> FindPreviewTextureEntry(
+    const std::vector<ModelSourceArchiveIndex>& archives,
+    const std::string& textureId,
+    const std::function<std::vector<uint8_t>(const std::string& resPath,
+                                              const ResEntryInfo& info)>& readEntry);
 
 // Resolve one entry from a source bundle. Callers pass bundle[0] = selected
 // level archive and bundle[1] = shared common archive. The level archive is
