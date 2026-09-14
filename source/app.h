@@ -190,6 +190,7 @@ private:
   int hover_object_index_; // Object under mouse cursor
   int last_pick_x_ = -9999;
   int last_pick_y_ = -9999;
+  int64_t last_hover_pick_ms_ = -1;
   bool show_hud_;
   // Alt+H: gameplay HUD overlay (crosshair/health/weapon readout). Hidden by
   // default until the vanilla presentation is finished.

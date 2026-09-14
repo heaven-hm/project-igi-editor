@@ -155,11 +155,13 @@ void Renderer_Splines::DrawSplineSegment(
         // cutting/under a hill). Snapping to terrain wrongly exposed those buried runs.
         const glm::dvec3 a = spline_geometry::SampleSegment(segment, ta);
         const glm::dvec3 b = spline_geometry::SampleSegment(segment, tb);
-        const auto tile = spline_geometry::MakeAxisAlignedTile(
-            a, b, longitudinalAxis, localMin, localLen, LENGTH_SCALE);
+        const double span = glm::length(b - a);
+        const glm::dvec3 tileForward = spline_geometry::SampleSegmentTangent(segment, ta);
+        const auto tile = spline_geometry::MakeAxisAlignedTileWithForward(
+            a, tileForward, longitudinalAxis, localMin, localLen, LENGTH_SCALE, span);
         if (!tile.has_value()) continue;
 
-        const double sx = glm::length(b - a) / localLen;
+        const double sx = span / localLen;
         glm::dmat4 unscaledDouble = tile->model;
         for (int axis = 0; axis < 3; ++axis) {
             unscaledDouble[axis] /= axis == longitudinalAxis ? sx : LENGTH_SCALE;

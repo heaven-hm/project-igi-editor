@@ -50,6 +50,13 @@ TEST(EditorHoverPolicyTest, SkipsExpensiveScenePickingWhileObjectDragIsActive) {
         /*left_button_down=*/false));
 }
 
+TEST(EditorHoverPolicyTest, ThrottlesRepeatedScenePickingDuringMouseMotion) {
+    EXPECT_FALSE(igi::ShouldPickSceneHover(true, false, 100, 80, 33));
+    EXPECT_TRUE(igi::ShouldPickSceneHover(true, false, 113, 80, 33));
+    EXPECT_FALSE(igi::ShouldPickSceneHover(true, false, 112, 80, 33));
+    EXPECT_TRUE(igi::ShouldPickSceneHover(true, false, 0, -1, 33));
+}
+
 TEST(EditorHistoryTest, PushUndoInvalidatesRedoAndKeepsLatestEntries) {
     std::vector<int> undo{1, 2};
     std::vector<int> redo{9};

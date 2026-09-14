@@ -101,3 +101,36 @@ TEST(SplineGeometry, UsesWaypointLocalXAxisForSplineTangent) {
         {0.0, 0.0, glm::half_pi<double>()}, 100.0);
     EXPECT_LT(glm::length(yawed - glm::dvec3(0.0, 100.0, 0.0)), 1e-9);
 }
+
+TEST(SplineGeometry, MultiAxisTangentMatchesOpenIgiColumnOne) {
+    // open-igi composes the engine orientation as Rz(gamma) · Ry(beta) · Rx(alpha)
+    // (Matrix3f.FromEngineEulerAngles, reverse-engineered from 0x4B38E0) and reads
+    // Column1 = (cos gamma * cos beta, sin gamma * cos beta, -sin beta) as the waypoint's
+    // local-X tangent (WorldScene.cs Tangent and RailroadPath.cs, both commenting "elements
+    // [0,3,6]": the local-X column of the waypoint frame).
+    //
+    // This authoring has non-zero pitch, roll AND yaw, so a Z-X-Y build (Rz · Rx · Ry)
+    // would diverge here — the shipped yaw-only splines are order-invariant, which is
+    // why the yaw-only test above cannot catch the divergence.
+    const double alpha = glm::pi<double>() / 6.0; // pitch about X
+    const double beta  = glm::pi<double>() / 4.0; // roll about Y
+    const double gamma = glm::pi<double>() / 3.0; // yaw about Z
+    const double chord = 2.0;
+
+    const glm::dvec3 got = spline_geometry::MakeWaypointTangent(
+        {alpha, beta, gamma}, chord);
+
+    const glm::dvec3 expected(
+        std::cos(gamma) * std::cos(beta),
+        std::sin(gamma) * std::cos(beta),
+        -std::sin(beta));
+    EXPECT_LT(glm::length(got - expected * chord), 1e-12);
+
+    // Guard against regression back to the Z-X-Y order: that build's Column1 differs for
+    // this input, so assert they are actually distinct.
+    const glm::dvec3 zxyColumn1(
+        std::cos(gamma) * std::cos(beta) - std::sin(gamma) * std::sin(alpha) * std::sin(beta),
+        std::sin(gamma) * std::cos(beta) + std::cos(gamma) * std::sin(alpha) * std::sin(beta),
+        -std::cos(alpha) * std::sin(beta));
+    EXPECT_GT(glm::length((got / chord) - zxyColumn1), 1e-3);
+}

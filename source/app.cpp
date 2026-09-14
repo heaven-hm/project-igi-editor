@@ -722,7 +722,7 @@ void App::Frame(float delta_seconds) {
 		if (render_gameplay) CaptureGameplayRenderSnapshot();
 		if (igi::ShouldPickSceneHover(
 			mouse_state_.prior_x_ != last_pick_x_ || mouse_state_.prior_y_ != last_pick_y_,
-			mouse_state_.left_button_down_)) {
+			mouse_state_.left_button_down_, Sys_Milliseconds(), last_hover_pick_ms_)) {
 			hover_object_index_ = PickObjectAtScreenPos(mouse_state_.prior_x_, mouse_state_.prior_y_);
 			if (hover_object_index_ >= Renderer::kAttaPickBase) hover_object_index_ = -1; // ATTA hovered (clickable; promote on click)
 			last_pick_x_ = mouse_state_.prior_x_;
@@ -975,12 +975,14 @@ void App::Frame(float delta_seconds) {
 			hover_object_index_ = -1;
 			last_pick_x_ = mouse_state_.prior_x_;
 			last_pick_y_ = mouse_state_.prior_y_;
+			last_hover_pick_ms_ = Sys_Milliseconds();
 		} else if (igi::ShouldPickSceneHover(pointer_changed,
-			mouse_state_.left_button_down_)) {
+			mouse_state_.left_button_down_, Sys_Milliseconds(), last_hover_pick_ms_)) {
 			hover_object_index_ = PickObjectAtScreenPos(mouse_state_.prior_x_, mouse_state_.prior_y_);
 			if (hover_object_index_ >= Renderer::kAttaPickBase) hover_object_index_ = -1; // ATTA hovered (clickable; promote on click)
 			last_pick_x_ = mouse_state_.prior_x_;
 			last_pick_y_ = mouse_state_.prior_y_;
+			last_hover_pick_ms_ = Sys_Milliseconds();
 		}
 	}
 

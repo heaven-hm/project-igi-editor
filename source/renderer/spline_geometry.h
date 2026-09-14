@@ -27,8 +27,9 @@ std::string_view ResolveSegmentModel(
     std::string_view endWaypointModel,
     std::string_view fallbackModel) noexcept;
 
-// Converts a waypoint's Z-X-Y Euler orientation into its local-X spline
-// tangent, scaled to the span chord length.
+// Converts a waypoint's Z-Y-X Euler orientation (Rz(gamma) · Ry(beta) · Rx(alpha), the engine
+// convention reverse-engineered as 0x4B38E0 and matching open-igi's FromEngineEulerAngles)
+// into its local-X spline tangent — the first column of that matrix — scaled to the span chord.
 glm::dvec3 MakeWaypointTangent(
     const glm::dvec3& euler,
     double chordLength) noexcept;
@@ -51,5 +52,16 @@ std::optional<SplineTile> MakeAxisAlignedTile(
     double localMin,
     double localLength,
     double crossScale);
+
+std::optional<SplineTile> MakeAxisAlignedTileWithForward(
+    glm::dvec3 begin,
+    const glm::dvec3& forward,
+    int longitudinalAxis,
+    double localMin,
+    double localLength,
+    double crossScale,
+    double span);
+
+glm::dvec3 SampleSegmentTangent(const SplineSegment& segment, double t);
 
 } // namespace spline_geometry
