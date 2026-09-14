@@ -26,19 +26,18 @@ function LevelFile([string]$Root, [int]$Level, [string]$Relative) {
 function CommonFile([string]$Root, [string]$Relative) {
     return Join-Path $Root ("missions/location0/common/{0}" -f $Relative)
 }
-# Extract a source-bundle entry: the level archive first, then the shared
-# common archive (source textures/models shared across levels live there and
-# are absent from individual level archives on a pristine corpus).
-function ExtractSourceEntry([string]$LevelResPath, [string]$CommonResPath, [string]$EntryName, [string]$OutDir, [string]$Converter) {
+# Extract a source-bundle entry with the same precedence as the source scene:
+# the selected level overrides common, which supplies only missing entries.
+function ExtractSourceEntry([string[]]$ResPaths, [string]$EntryName, [string]$OutDir, [string]$Converter) {
     New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
-    foreach ($resPath in @($LevelResPath, $CommonResPath)) {
+    foreach ($resPath in $ResPaths) {
         if ([string]::IsNullOrWhiteSpace($resPath)) { continue }
         if (-not (Test-Path -LiteralPath $resPath -PathType Leaf)) { continue }
         & $Converter res extract $resPath --file $EntryName -o $OutDir 2>&1 | Out-Null
         $file = Get-ChildItem -LiteralPath $OutDir -File | Select-Object -First 1
         if ($null -ne $file) { return $file.FullName }
     }
-    throw "Source bundle entry '$EntryName' was not found in '$LevelResPath' or '$CommonResPath'."
+    throw "Source bundle entry '$EntryName' was not found in the selected source archives."
 }
 function IsUnder([string]$Child, [string]$Parent) {
     $c = (FullPath $Child).TrimEnd('\') + '\'
@@ -87,11 +86,11 @@ function Snapshot([string]$Root, [int]$Source, [int]$Destination, [string]$Model
     $destinationTexDir = Join-Path $OutputRoot "destination-textures"
     $sourceCommonModelsRes = CommonFile $Root "models/location0.res"
     $sourceCommonTexturesRes = CommonFile $Root "textures/location0.res"
-    $sourceModelFile = ExtractSourceEntry $files["models-level${Source}.res"].path $sourceCommonModelsRes ("LOCAL:models/{0}.mef" -f $Model) (Join-Path $OutputRoot 'source-model') $Converter
+    $sourceModelFile = ExtractSourceEntry @($files["models-level${Source}.res"].path, $sourceCommonModelsRes) ("LOCAL:models/{0}.mef" -f $Model) (Join-Path $OutputRoot 'source-model') $Converter
     $destinationModelFile = ExtractEntry $files["models-level${Destination}.res"].path ("LOCAL:models/{0}.mef" -f $Model) (Join-Path $OutputRoot 'destination-model') $Converter -AllowMissing
     $textureRows = @()
     foreach ($texture in @($sourceModel.textures)) {
-        $sourceTextureFile = ExtractSourceEntry $files["textures-level${Source}.res"].path $sourceCommonTexturesRes ("LOCAL:textures/{0}.tex" -f $texture) (Join-Path $sourceTexDir ([string]$texture)) $Converter
+        $sourceTextureFile = ExtractSourceEntry @($files["textures-level${Source}.res"].path, $sourceCommonTexturesRes) ("LOCAL:textures/{0}.tex" -f $texture) (Join-Path $sourceTexDir ([string]$texture)) $Converter
         $destinationTextureFile = ExtractEntry $files["textures-level${Destination}.res"].path ("LOCAL:textures/{0}.tex" -f $texture) (Join-Path $destinationTexDir ([string]$texture)) $Converter -AllowMissing
         $textureRows += [pscustomobject]@{
             id = [string]$texture
