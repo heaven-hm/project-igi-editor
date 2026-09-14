@@ -2,6 +2,7 @@
 
 #include "../source/runtime/level_weather.h"
 #include "../source/runtime/weather_visibility.h"
+#include "../source/runtime/weather_particle_style.h"
 #include "../source/level/level_common.h"
 #include "../source/level/level_objects.h"
 #include "../source/level/qsc_lexer.h"
@@ -264,6 +265,11 @@ TEST(LevelWeatherTest, BuildingShelterFootprintCoversUpperFloors) {
         25.0f, -4.0f,
         -20.0f, 20.0f,
         -10.0f, 10.0f));
+}
+
+TEST(LevelWeatherTest, SnowUsesGroundVisibleParticleLength) {
+    EXPECT_GT(igi::WeatherParticleLengthMeters(true),
+              igi::WeatherParticleLengthMeters(false));
 }
 
 TEST(LevelWeatherTest, ActiveAuthoredWeatherDoesNotDependOnObjectRenderFlags) {

@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "renderer_rain.h"
 #include "../runtime/weather_visibility.h"
+#include "../runtime/weather_particle_style.h"
 #include "../logger.h"
 #include <freeglut.h>
 #include <vector>
@@ -153,7 +154,7 @@ void Renderer_Rain::Draw(GLuint ubo_mats, const glm::vec3& cameraPos,
     glUniform1f(glGetUniformLocation(shader_program_, "u_boxSize"), 50.0f * WORLD_UNITS_PER_METER);
     glUniform1f(glGetUniformLocation(shader_program_, "u_heightStart"), heightStart);
     glUniform1f(glGetUniformLocation(shader_program_, "u_heightEnd"), heightEnd);
-    float streakLen = is_snow_ ? (0.08f * WORLD_UNITS_PER_METER) : (0.35f * WORLD_UNITS_PER_METER);
+    float streakLen = igi::WeatherParticleLengthMeters(is_snow_) * WORLD_UNITS_PER_METER;
     glUniform1f(glGetUniformLocation(shader_program_, "u_streakLen"), streakLen);
     glUniform1f(glGetUniformLocation(shader_program_, "u_alpha"), alpha_);
     glUniform1f(glGetUniformLocation(shader_program_, "u_isSnow"), is_snow_ ? 1.0f : 0.0f);
