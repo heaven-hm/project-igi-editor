@@ -426,6 +426,7 @@ public:
 		// All AI with active playback are skinned-replaced simultaneously, so this can
 		// hold many indices at once, not just the selected object.
 		const std::unordered_set<int>* skip_static_draw_indices_ = nullptr;
+		bool fast_scene_preview_ = false;
 
 		// Returns the terrain CTR node id at a world (x,y), or -1. Set by App so the
 		// renderer can show the terrain id under the cursor without depending on Level. (issue 3)

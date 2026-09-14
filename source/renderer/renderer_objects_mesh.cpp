@@ -7,46 +7,28 @@
 #include "../runtime/weather_visibility.h"
 
 float Renderer_Objects::GetMeshZOffset(const std::string& modelId, bool isBuilding) {
-    std::string cacheKey = std::to_string(current_level_) + ":" + (isBuilding ? "building:" : "object:") + modelId;
-    auto it = mesh_cache_.find(cacheKey);
-    Mesh mesh;
-    if (it != mesh_cache_.end()) {
-        mesh = it->second;
-    } else {
-        mesh = GetOrLoadMesh(modelId, isBuilding);
-    }
-
-    return mesh.mainZOffset;
+    return GetOrLoadMesh(modelId, isBuilding).mainZOffset;
 }
 
 glm::vec3 Renderer_Objects::GetMeshExtents(const std::string& modelId, bool isBuilding) {
-    Mesh mesh = GetOrLoadMesh(modelId, isBuilding);
-    return mesh.halfExtents;
+    return GetOrLoadMesh(modelId, isBuilding).halfExtents;
 }
 
 float Renderer_Objects::GetMeshRadius(const std::string& modelId, bool isBuilding) {
-    glm::vec3 extents = GetMeshExtents(modelId, isBuilding);
-    return glm::length(extents);
+    return glm::length(GetMeshExtents(modelId, isBuilding));
 }
 
 glm::vec3 Renderer_Objects::GetMeshCenter(const std::string& modelId, bool isBuilding) {
-    Mesh mesh = GetOrLoadMesh(modelId, isBuilding);
-    return mesh.center;
+    return GetOrLoadMesh(modelId, isBuilding).center;
 }
 
-Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding) {
-    std::string cacheKey = std::to_string(current_level_) + ":" + (isBuilding ? "building:" : "object:") + modelId;
-    Logger::Get().Log(LogLevel::DEBUG,
-        "[Renderer_Objects] GetOrLoadMesh request cacheKey=" + cacheKey + " modelId=" + modelId);
-
-    // Return cached mesh if already loaded
-    auto it = mesh_cache_.find(cacheKey);
+const Mesh& Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding) {
+    FillLevelModelKey(level_model_key_scratch_, current_level_, isBuilding, modelId);
+    auto it = mesh_cache_.find(level_model_key_scratch_);
     if (it != mesh_cache_.end()) {
-        Logger::Get().Log(LogLevel::DEBUG,
-            "[Renderer_Objects] Cache hit for " + cacheKey +
-            " vertexCount=" + std::to_string(it->second.vertexCount));
         return it->second;
     }
+    const std::string cacheKey = level_model_key_scratch_;
 
     // ── 1. Try in-memory .res index first (no disk extraction needed) ────────────
     {
@@ -391,6 +373,44 @@ std::string Renderer_Objects::GetOrExtractMefTemp(const std::string& modelId, bo
     return tmpPath;
 }
 
+const ParsedGeometry* Renderer_Objects::GetOrLoadParsedGeometry(const std::string& modelId, bool isBuilding) {
+    FillLevelModelKey(level_model_key_scratch_, current_level_, isBuilding, modelId);
+    auto it = parsed_geometry_cache_.find(level_model_key_scratch_);
+    if (it != parsed_geometry_cache_.end()) return &it->second;
+    const std::string cacheKey = level_model_key_scratch_;
+
+    ParsedGeometry geo;
+    std::vector<uint8_t> meshBytes = FindMeshData(modelId);
+    if (meshBytes.empty()) {
+        EnsureGlobalTextureMapLoaded();
+        int targetLvl = -1;
+        auto mit = model_level_map_.find(modelId);
+        if (mit != model_level_map_.end() && mit->second != current_level_) {
+            targetLvl = mit->second;
+            LoadResCache(targetLvl, Utils::GetIGIRootPath());
+            meshBytes = FindMeshData(modelId);
+        }
+        if (meshBytes.empty()) {
+            for (int lvl = 1; lvl <= 14 && meshBytes.empty(); ++lvl) {
+                if (lvl == current_level_ || lvl == targetLvl) continue;
+                LoadResCache(lvl, Utils::GetIGIRootPath());
+                meshBytes = FindMeshData(modelId);
+            }
+        }
+    }
+    if (!meshBytes.empty()) {
+        try { geo = ParseMefFileFromMemory(meshBytes, modelId); } catch (...) {}
+    }
+    if (geo.vertices.empty()) {
+        const std::string filepath = FindModelFile(modelId, isBuilding);
+        if (!filepath.empty()) {
+            try { geo = ParseMefFile(filepath); } catch (...) {}
+        }
+    }
+    if (geo.vertices.empty()) return nullptr;
+    return &(parsed_geometry_cache_[cacheKey] = std::move(geo));
+}
+
 const ParsedGeometry* Renderer_Objects::GetOrLoadSkinGeometry(const std::string& modelId, bool isBuilding) {
     auto it = skin_geometry_cache_.find(modelId);
     if (it != skin_geometry_cache_.end()) return &it->second;
@@ -444,7 +464,7 @@ bool Renderer_Objects::IsCameraInsideBuildingBounds(const std::vector<LevelObjec
                                                   const glm::vec3& cameraPos) {
     for (const auto& obj : objects) {
         if (obj.deleted || !obj.isBuilding || obj.modelId.empty()) continue;
-        Mesh mesh = GetOrLoadMesh(obj.modelId, true);
+        const Mesh& mesh = GetOrLoadMesh(obj.modelId, true);
         if (mesh.vertexCount == 0) continue;
 
         // Transform camera position into building local space

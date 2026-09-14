@@ -1,12 +1,33 @@
 #include "spline_geometry.h"
 
 #include <cmath>
+#include <limits>
 
 namespace spline_geometry {
 namespace {
 
 bool IsFinite(const glm::dvec3& value) {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+// open-igi/sub_4E4530 zero-roll frame: tangent along X, level side in XY, up completes
+// the basis. Matches RailroadPath.Evaluate and WorldScene.BendSegment.
+bool BuildZeroRollBasis(const glm::dvec3& forward,
+                        glm::dvec3& outForward,
+                        glm::dvec3& outSide,
+                        glm::dvec3& outUp) {
+    const double forwardLen = glm::length(forward);
+    if (forwardLen <= 1e-12) return false;
+    outForward = forward / forwardLen;
+    outSide = glm::dvec3(-outForward.y, outForward.x, 0.0);
+    const double sideLen = glm::length(outSide);
+    if (sideLen < 1e-9) {
+        outSide = glm::dvec3(0.0, 1.0, 0.0);
+    } else {
+        outSide /= sideLen;
+    }
+    outUp = glm::cross(outForward, outSide);
+    return true;
 }
 
 } // namespace
@@ -55,15 +76,131 @@ glm::dvec3 SampleSegment(const SplineSegment& segment, double t) {
 glm::dvec3 SampleSegmentTangent(const SplineSegment& segment, double t) {
     if (segment.linear) return segment.p1 - segment.p0;
 
+    const glm::dvec3 chord = segment.p1 - segment.p0;
+    const double t2 = t * t;
+    const double d10 = 3.0 * t2 - 4.0 * t + 1.0;
+    const double d01 = 6.0 * t - 6.0 * t2;
+    const double d11 = 3.0 * t2 - 2.0 * t;
+    return d10 * segment.tangent0 + d01 * chord + d11 * segment.tangent1;
+}
+
+namespace {
+
+glm::dvec3 SampleSegmentRelative(const SplineSegment& segment, double t) {
+    if (segment.linear) return t * (segment.p1 - segment.p0);
+
+    const glm::dvec3 chord = segment.p1 - segment.p0;
     const double t2 = t * t;
     const double t3 = t2 * t;
     const double h10 = t3 - 2.0 * t2 + t;
     const double h01 = -2.0 * t3 + 3.0 * t2;
     const double h11 = t3 - t2;
-    const double d10 = 3.0 * t2 - 4.0 * t + 1.0;
-    const double d01 = 6.0 * t - 6.0 * t2;
-    const double d11 = 3.0 * t2 - 2.0 * t;
-    return h10 * segment.tangent0 + h01 * (segment.p1 - segment.p0) + h11 * segment.tangent1;
+    return h10 * segment.tangent0 + h01 * chord + h11 * segment.tangent1;
+}
+
+void AppendBentVertex(std::vector<float>& out,
+                      const glm::dvec3& worldOffset,
+                      const glm::dvec3& normal,
+                      const glm::vec2& uv,
+                      const glm::vec2& uv2) {
+    const double invScale = 1.0 / 40.96;
+    out.push_back(static_cast<float>(worldOffset.x * invScale));
+    out.push_back(static_cast<float>(worldOffset.y * invScale));
+    out.push_back(static_cast<float>(worldOffset.z * invScale));
+    out.push_back(static_cast<float>(normal.x));
+    out.push_back(static_cast<float>(normal.y));
+    out.push_back(static_cast<float>(normal.z));
+    out.push_back(uv.x);
+    out.push_back(1.0f - uv.y);
+    out.push_back(uv2.x);
+    out.push_back(uv2.y);
+}
+
+} // namespace
+
+std::optional<BentSegmentMesh> BendSegmentMesh(
+    const ParsedGeometry& geometry,
+    const SplineSegment& segment) {
+    if (geometry.vertices.empty() || geometry.triangles.empty()) {
+        return std::nullopt;
+    }
+
+    const glm::dvec3 chord = segment.p1 - segment.p0;
+    const double chordLen = glm::length(chord);
+    if (!std::isfinite(chordLen) || chordLen < 1e-3) return std::nullopt;
+
+    float minX = std::numeric_limits<float>::max();
+    float maxX = std::numeric_limits<float>::lowest();
+    for (const RenderVertex& vertex : geometry.vertices) {
+        minX = std::min(minX, vertex.rawPos.x);
+        maxX = std::max(maxX, vertex.rawPos.x);
+    }
+    const float length = maxX - minX;
+    if (length <= 0.0f) return std::nullopt;
+
+    std::vector<glm::dvec3> bentPositions(geometry.vertices.size());
+    std::vector<glm::dvec3> bentNormals(geometry.vertices.size());
+    for (size_t i = 0; i < geometry.vertices.size(); ++i) {
+        const RenderVertex& vertex = geometry.vertices[i];
+        const double t = std::clamp(
+            static_cast<double>((vertex.rawPos.x - minX) / length), 0.0, 1.0);
+
+        const glm::dvec3 curvePos = SampleSegmentRelative(segment, t);
+        glm::dvec3 derivative = SampleSegmentTangent(segment, t);
+        if (glm::length(derivative) <= 1e-9) {
+            derivative = chord / chordLen;
+        }
+
+        glm::dvec3 forward;
+        glm::dvec3 side;
+        glm::dvec3 up;
+        if (!BuildZeroRollBasis(derivative, forward, side, up)) {
+            return std::nullopt;
+        }
+
+        const glm::dvec3 worldOffset = curvePos
+            + side * static_cast<double>(vertex.rawPos.y)
+            + up * static_cast<double>(vertex.rawPos.z);
+        bentPositions[i] = worldOffset;
+        bentNormals[i] = glm::normalize(
+            forward * static_cast<double>(vertex.normal.x)
+            + side * static_cast<double>(vertex.normal.y)
+            + up * static_cast<double>(vertex.normal.z));
+    }
+
+    BentSegmentMesh result;
+    const auto buildRange = [&](size_t triangleStart, size_t triangleCount) {
+        std::vector<float> verts;
+        verts.reserve(triangleCount * 30);
+        for (size_t triIndex = triangleStart;
+             triIndex < triangleStart + triangleCount; ++triIndex) {
+            if (triIndex >= geometry.triangles.size()) break;
+            const auto& tri = geometry.triangles[triIndex];
+            if (tri[0] >= geometry.vertices.size() ||
+                tri[1] >= geometry.vertices.size() ||
+                tri[2] >= geometry.vertices.size()) {
+                continue;
+            }
+            for (uint32_t index : tri) {
+                const RenderVertex& src = geometry.vertices[index];
+                AppendBentVertex(verts, bentPositions[index], bentNormals[index], src.uv, src.uv2);
+            }
+        }
+        if (verts.empty()) return;
+        result.submeshVertexCounts.push_back(static_cast<int>(verts.size() / 10));
+        result.interleaved.insert(result.interleaved.end(), verts.begin(), verts.end());
+    };
+
+    if (!geometry.renderBlocks.empty()) {
+        for (const auto& block : geometry.renderBlocks) {
+            buildRange(block.triangleStart, block.triangleCount);
+        }
+    } else {
+        buildRange(0, geometry.triangles.size());
+    }
+
+    if (result.interleaved.empty()) return std::nullopt;
+    return result;
 }
 
 std::optional<SplineTile> MakeAxisAlignedTileWithForward(
@@ -82,15 +219,10 @@ std::optional<SplineTile> MakeAxisAlignedTileWithForward(
         return std::nullopt;
     }
 
-    const double forwardLen = glm::length(forward);
-    if (forwardLen <= 1e-12) return std::nullopt;
-    const glm::dvec3 fwd = forward / forwardLen;
-
-    const glm::dvec3 reference = std::abs(fwd.z) < 0.99
-        ? glm::dvec3(0.0, 0.0, 1.0)
-        : glm::dvec3(0.0, 1.0, 0.0);
-    const glm::dvec3 right = glm::normalize(glm::cross(reference, fwd));
-    const glm::dvec3 up = glm::cross(fwd, right);
+    glm::dvec3 fwd;
+    glm::dvec3 right;
+    glm::dvec3 up;
+    if (!BuildZeroRollBasis(forward, fwd, right, up)) return std::nullopt;
     const double sx = span / localLength;
 
     glm::dmat4 model(1.0);
@@ -133,12 +265,10 @@ std::optional<SplineTile> MakeAxisAlignedTile(
     const double span = glm::length(delta);
     if (!std::isfinite(span) || span <= 1e-9) return std::nullopt;
 
-    const glm::dvec3 forward = delta / span;
-    const glm::dvec3 reference = std::abs(forward.z) < 0.99
-        ? glm::dvec3(0.0, 0.0, 1.0)
-        : glm::dvec3(0.0, 1.0, 0.0);
-    const glm::dvec3 right = glm::normalize(glm::cross(reference, forward));
-    const glm::dvec3 up = glm::cross(forward, right);
+    glm::dvec3 forward;
+    glm::dvec3 right;
+    glm::dvec3 up;
+    if (!BuildZeroRollBasis(delta, forward, right, up)) return std::nullopt;
     const double sx = span / localLength;
 
     glm::dmat4 model(1.0);

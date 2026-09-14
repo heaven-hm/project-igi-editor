@@ -154,10 +154,11 @@ void Renderer_Objects::DrawModelPreview(const std::string& modelId, GLuint ubo_m
     if (!shader_program_ || modelId.empty() || vpW <= 0 || vpH <= 0) return;
 
     // Picker model IDs are almost all props; fall back to the building variant.
-    Mesh mesh = GetOrLoadMesh(modelId, false);
-    if (mesh.subMeshes.empty() && mesh.vertexCount == 0)
-        mesh = GetOrLoadMesh(modelId, true);
-    if (mesh.subMeshes.empty() && (mesh.VAO == 0 || mesh.vertexCount == 0)) return;
+    const Mesh* loaded = &GetOrLoadMesh(modelId, false);
+    if (loaded->subMeshes.empty() && loaded->vertexCount == 0)
+        loaded = &GetOrLoadMesh(modelId, true);
+    if (loaded->subMeshes.empty() && (loaded->VAO == 0 || loaded->vertexCount == 0)) return;
+    const Mesh& mesh = *loaded;
 
     // Fit the model into a unit-ish sphere so any model frames the same.
     float maxExt = std::max(std::max(mesh.halfExtents.x, mesh.halfExtents.y),
@@ -283,10 +284,11 @@ void Renderer_Objects::DrawModelPreview(const std::string& modelId, GLuint ubo_m
 void Renderer_Objects::DrawAttachedMesh(const std::string& modelId, bool isBuilding, const glm::mat4& worldMat, GLuint ubo_mats) {
     if (!shader_program_ || modelId.empty()) return;
 
-    Mesh mesh = GetOrLoadMesh(modelId, isBuilding);
-    if (mesh.subMeshes.empty() && (mesh.VAO == 0 || mesh.vertexCount == 0))
-        mesh = GetOrLoadMesh(modelId, !isBuilding);
-    if (mesh.subMeshes.empty() && (mesh.VAO == 0 || mesh.vertexCount == 0)) return;
+    const Mesh* loaded = &GetOrLoadMesh(modelId, isBuilding);
+    if (loaded->subMeshes.empty() && (loaded->VAO == 0 || loaded->vertexCount == 0))
+        loaded = &GetOrLoadMesh(modelId, !isBuilding);
+    if (loaded->subMeshes.empty() && (loaded->VAO == 0 || loaded->vertexCount == 0)) return;
+    const Mesh& mesh = *loaded;
 
     glUseProgram(shader_program_);
     // Bind the shared Matrices UBO so the vertex shader's u_mvp (Proj*View*GlobalScale)

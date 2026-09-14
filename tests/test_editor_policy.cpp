@@ -57,6 +57,12 @@ TEST(EditorHoverPolicyTest, ThrottlesRepeatedScenePickingDuringMouseMotion) {
     EXPECT_TRUE(igi::ShouldPickSceneHover(true, false, 0, -1, 33));
 }
 
+TEST(EditorHoverPolicyTest, SkipsScenePickingWhileCameraIsNavigating) {
+    EXPECT_FALSE(igi::ShouldPickSceneHover(true, false, true));
+    EXPECT_TRUE(igi::ShouldPickSceneHover(true, false, false));
+    EXPECT_FALSE(igi::ShouldPickSceneHover(true, false, 200, 0, 33, true));
+}
+
 TEST(EditorHistoryTest, PushUndoInvalidatesRedoAndKeepsLatestEntries) {
     std::vector<int> undo{1, 2};
     std::vector<int> redo{9};

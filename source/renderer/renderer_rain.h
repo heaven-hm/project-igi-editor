@@ -18,6 +18,7 @@ public:
     void SetParams(bool active, bool is_snow, float startMeters, float endMeters, float alpha);
 
     void Draw(GLuint ubo_mats, const glm::vec3& cameraPos, bool cameraIsSheltered);
+    bool IsActive() const { return active_; }
 
 private:
     GLuint shader_program_ = 0;

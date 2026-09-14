@@ -210,7 +210,7 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
         // interior object underneath. This is geometrically exact and order-
         // independent, so AABB-based interior occlusion is unnecessary.
 
-        Mesh mesh = GetOrLoadMesh(obj.modelId, obj.isBuilding);
+        const Mesh& mesh = GetOrLoadMesh(obj.modelId, obj.isBuilding);
         if (mesh.vertexCount == 0) continue;
         // Allow collision-only meshes (fromRenderMesh==false) as fallback pick hitboxes
         // so vehicles, cargo, and any model without render vertices are still clickable.
@@ -368,7 +368,7 @@ Renderer_Objects::VisualEvidence Renderer_Objects::CaptureObjectVisualEvidence(
 
     const LevelObject& obj = objects[target_object_index];
     const std::string modelId = obj.modelId.empty() ? obj.segmentModelId : obj.modelId;
-    Mesh mesh = GetOrLoadMesh(modelId, obj.isBuilding);
+    const Mesh& mesh = GetOrLoadMesh(modelId, obj.isBuilding);
     if (mesh.vertexCount == 0 || !mesh.fromRenderMesh) return evidence;
 
     evidence.width = viewport_width;

@@ -80,10 +80,10 @@ out vec3 v_fragPos;
 void main() {
     vec4 worldPos   = u_model * vec4(a_pos, 1.0);
     v_fragPos       = worldPos.xyz;
-    v_normal        = mat3(transpose(inverse(u_model))) * a_normal;
+    v_normal        = mat3(u_model) * a_normal;
     v_uv            = a_uv;
     v_uv2           = a_uv2;
-    gl_Position     = u_mvp * u_model * vec4(a_pos, 1.0);
+    gl_Position     = u_mvp * worldPos;
 }
 
 )";
@@ -328,6 +328,7 @@ void Renderer_Objects::ClearCaches() {
     }
     mesh_cache_.clear();
     attachment_cache_.clear();
+    occupancy_sig_ = 0;
 
     for (auto& pair : texture_cache_) {
         if (pair.second) {
@@ -348,6 +349,7 @@ void Renderer_Objects::ClearCaches() {
     persistent_dat_path_.clear();
     logged_draw_buildings_.clear();
     skin_geometry_cache_.clear();
+    parsed_geometry_cache_.clear();
 
     // Lightmaps are keyed by taskId, which is only unique WITHIN a level — task
     // 1104 in level1 and task 1104 in level6 are unrelated. Without clearing
@@ -550,6 +552,7 @@ void Renderer_Objects::Shutdown() {
         destroyModel(pair.second);
     mesh_cache_.clear();
     attachment_cache_.clear();
+    occupancy_sig_ = 0;
 
     for (auto& pair : texture_cache_) {
         if (pair.second) {
@@ -562,6 +565,7 @@ void Renderer_Objects::Shutdown() {
     persistent_dat_ = DATFile{};
     persistent_dat_path_.clear();
     skin_geometry_cache_.clear();
+    parsed_geometry_cache_.clear();
 
     if (shader_program_) {
         glDeleteProgram(shader_program_);
@@ -611,7 +615,8 @@ void Renderer_Objects::Shutdown() {
 // ─── InitPickingFBO ───────────────────────────────────────────────────────────
 void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                             const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts,
-                            const glm::vec3& camera_pos, bool show_magic_obj_spheres, const std::unordered_set<int>* skip_static_draw_indices)
+                            const glm::vec3& camera_pos, bool show_magic_obj_spheres, const std::unordered_set<int>* skip_static_draw_indices,
+                            const glm::vec3& camera_forward, bool fast_preview)
 {
     // Define the flags (must match renderer.h)
     const int DRAW_OBJECTS = 4;
@@ -634,13 +639,26 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     // Rebuild EditRigidObj occupancy so any ATTA that has been promoted to (or is
     // duplicated by) a real EditRigidObj is suppressed in the attachment render —
     // otherwise the promoted object would draw on top of its original ATTA.
-    editrigid_occupancy_.clear();
-    suppressed_atta_keys_.clear();
-    for (const auto& o : objects) {
-        if (o.deleted || o.type != "EditRigidObj" || o.modelId.empty()) continue;
-        editrigid_occupancy_.insert(AttaOccupancyKey(o.modelId, glm::vec3(o.pos)));
-        if (o.name.rfind("ATTA:", 0) == 0) {
-            suppressed_atta_keys_.insert(o.name.substr(5));
+    if (!fast_preview) {
+        uint64_t occSig = objects.size();
+        for (const auto& o : objects) {
+            occSig = occSig * 1099511628211ull + static_cast<uint64_t>(o.deleted);
+            if (o.deleted || o.type != "EditRigidObj" || o.modelId.empty()) continue;
+            union { double d; uint64_t u; } x{o.pos.x}, y{o.pos.y}, z{o.pos.z};
+            occSig ^= x.u + y.u * 3ull + z.u * 7ull;
+            occSig ^= static_cast<uint64_t>(reinterpret_cast<uintptr_t>(o.modelId.data()));
+        }
+        if (occSig != occupancy_sig_) {
+            occupancy_sig_ = occSig;
+            editrigid_occupancy_.clear();
+            suppressed_atta_keys_.clear();
+            for (const auto& o : objects) {
+                if (o.deleted || o.type != "EditRigidObj" || o.modelId.empty()) continue;
+                editrigid_occupancy_.insert(AttaOccupancyKey(o.modelId, glm::vec3(o.pos)));
+                if (o.name.rfind("ATTA:", 0) == 0) {
+                    suppressed_atta_keys_.insert(o.name.substr(5));
+                }
+            }
         }
     }
 
@@ -707,7 +725,14 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
     EnsurePortalDistancesLoaded();
 
-    for (int pass = 0; pass < 2; ++pass) {
+    glm::vec3 cameraFwd(0.0f);
+    const float cameraFwdLen = glm::length(camera_forward);
+    if (cameraFwdLen > 0.01f) cameraFwd = camera_forward / cameraFwdLen;
+
+    const bool skipSkinned = skip_static_draw_indices && !skip_static_draw_indices->empty();
+    const auto lightmapMode = igi::ObjectLightmapManager::Get().GetRenderMode();
+    const int passCount = fast_preview ? 1 : 2;
+    for (int pass = 0; pass < passCount; ++pass) {
         bool isTransparentPass = (pass == 1);
         if (isTransparentPass) {
             glDepthMask(GL_FALSE);
@@ -725,10 +750,11 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         for (const auto& obj : objects) {
             if (obj.deleted) continue;
 
+            const int objIndex = static_cast<int>(&obj - &objects[0]);
             // This object's rigid mesh is being replaced by a live skinned/animated
             // draw elsewhere this frame (see Renderer::DrawSkinnedMesh) — skip it
             // here so the two don't render on top of each other.
-            if (skip_static_draw_indices && skip_static_draw_indices->count((int)(&obj - &objects[0]))) continue;
+            if (skipSkinned && skip_static_draw_indices->count(objIndex)) continue;
 
             // Reset tint to white at the start of EVERY iteration so a magenta tint
             // set for a previous object can never leak into this one, regardless of
@@ -758,8 +784,18 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             continue;
         }
 
-        Mesh mesh = GetOrLoadMesh(obj.modelId, obj.isBuilding);
+        const Mesh& mesh = GetOrLoadMesh(obj.modelId, obj.isBuilding);
         if (mesh.vertexCount == 0) continue;
+
+        const glm::vec3 toObject = glm::vec3(obj.pos) - camera_pos;
+        const float boundRadius = glm::length(mesh.halfExtents) * 40.96f * std::max(obj.scale, 0.001f);
+        const bool keepVisible = objIndex == selected_object_index || objIndex == hover_object_index;
+        const float distSq = glm::dot(toObject, toObject);
+        if (cameraFwdLen > 0.01f && !keepVisible) {
+            const float facing = glm::dot(toObject, cameraFwd);
+            if (facing < -boundRadius) continue;
+            if (distSq > boundRadius * boundRadius && facing < std::sqrt(distSq) * 0.5f - boundRadius) continue;
+        }
 
         // Flag objects whose model is absent from the level .res: tint magenta so the
         // user sees it will be invisible in-game (issue 2). Reset to white at the top
@@ -823,25 +859,12 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
         // ── Lighting and Color ────────────────────────────────────────────────
         // Compute a hash-based fallback color for models/submeshes without textures.
-        float r = 0.5f, g = 0.5f, b = 0.5f;
-        if (!obj.modelId.empty()) {
-            size_t hash = std::hash<std::string>{}(obj.modelId);
-            r = 0.4f + (float)(hash & 0xFF) / 255.0f * 0.4f;
-            g = 0.4f + (float)((hash >> 8) & 0xFF) / 255.0f * 0.4f;
-            b = 0.4f + (float)((hash >> 16) & 0xFF) / 255.0f * 0.4f;
-        }
+        float r = 0.6f, g = 0.6f, b = 0.6f;
 
         // Hull buildings that have no textures of their own but carry ATTA sub-models are
         // underground container shells — skip rendering them entirely. The ATTA sub-models
         // supply all visible geometry; rendering a hash-colored hull on top obscures them.
         bool skipHullRender = false;
-        bool hasAnyTexture = (mesh.textureID > 0);
-        if (!hasAnyTexture) {
-            for (const auto& sub : mesh.subMeshes) {
-                if (sub.textureID > 0) { hasAnyTexture = true; break; }
-            }
-        }
-        
         // Skip any model built from collision fallback geometry (XTVC/ECFC — no XTRV/DNER
         // render vertices). These produce misshapen meshes with fabricated UVs and render
         // as flat-colored or wrongly-tiled boxes. Covers vehicle hulls, train cargo objects,
@@ -907,19 +930,6 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
             // Draw each submesh with its own texture and lighting
             if (!mesh.subMeshes.empty()) {
-                // For mixed textured/untextured meshes, skip large untextured
-                // submeshes that are likely foundations (they should be underground).
-                int maxTexturedVerts = 0;
-                bool hasTextured = false, hasUntextured = false;
-                for (const auto& sub : mesh.subMeshes) {
-                    if (sub.textureID > 0) {
-                        hasTextured = true;
-                        maxTexturedVerts = std::max(maxTexturedVerts, sub.vertexCount);
-                    } else {
-                        hasUntextured = true;
-                    }
-                }
-                bool mixedMesh = hasTextured && hasUntextured;
                 // taskId="-1" marks a nested/non-addressable task (DirlightKeyframe,
                 // LightmapInfo, ATTA proxies, etc. all use this literal string) — it is
                 // NOT unique, so looking it up here would apply whichever unrelated
@@ -982,7 +992,6 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 for (size_t si = 0; si < mesh.subMeshes.size(); ++si) {
                     const auto& sub = mesh.subMeshes[si];
                     if (sub.VAO == 0 || sub.vertexCount == 0) continue;
-                    (void)mixedMesh; // render all submeshes — floors/stories must not be skipped
 
                     // For mixed models: ARGB sub-meshes only in transparent pass,
                     // opaque sub-meshes only in opaque pass (unless the whole model
@@ -1017,7 +1026,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                         // Windows/glass keep their transparency (alpha 0.4 above) but render
                         // with the SAME normal lighting as everything else, so glass stays
                         // clear and see-through.
-                        auto mode = igi::ObjectLightmapManager::Get().GetRenderMode();
+                        const auto mode = lightmapMode;
                         float dirI = (mode == igi::LightmapRenderMode::Baked) ? 0.15f : (mode == igi::LightmapRenderMode::Hybrid ? 0.6f : 0.8f);
                         float ambI = (mode == igi::LightmapRenderMode::Baked) ? 0.85f : (mode == igi::LightmapRenderMode::Hybrid ? 0.4f : 0.3f);
                         if (mode == igi::LightmapRenderMode::Off) { dirI = 0.6f; ambI = 0.6f; }
@@ -1035,7 +1044,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                         if (color.r >= 0.99f && color.g >= 0.99f && color.b >= 0.99f) {
                             color = glm::vec3(0.6f, 0.6f, 0.6f);
                         }
-                        auto mode = igi::ObjectLightmapManager::Get().GetRenderMode();
+                        const auto mode = lightmapMode;
                         float dirMult = (mode == igi::LightmapRenderMode::Baked) ? 0.15f : (mode == igi::LightmapRenderMode::Hybrid ? 0.6f : 0.8f);
                         float ambMult = (mode == igi::LightmapRenderMode::Baked) ? 0.85f : (mode == igi::LightmapRenderMode::Hybrid ? 0.4f : 0.3f);
                         if (mode == igi::LightmapRenderMode::Off) { dirMult = 0.6f; ambMult = 0.6f; }
@@ -1046,7 +1055,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                     }
 
                     // Lightmap: bind unit 1 if this submesh has a baked lightmap and mode is not Off.
-                    auto curMode = igi::ObjectLightmapManager::Get().GetRenderMode();
+                    const auto curMode = lightmapMode;
                     if (curMode != igi::LightmapRenderMode::Off && hasWorkingLightmap && si < lightmaps->size() && (*lightmaps)[si] != 0) {
                         // Baked mode reproduces the original engine exactly: the bake is
                         // used verbatim, with no live sun re-light modulation.
@@ -1075,7 +1084,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
             } else {
                 // Legacy single-texture path (e.g. old OBJ models)
-                auto mode = igi::ObjectLightmapManager::Get().GetRenderMode();
+                const auto mode = lightmapMode;
                 float dirI = (mode == igi::LightmapRenderMode::Baked) ? 0.15f : (mode == igi::LightmapRenderMode::Hybrid ? 0.6f : 0.8f);
                 float ambI = (mode == igi::LightmapRenderMode::Baked) ? 0.85f : (mode == igi::LightmapRenderMode::Hybrid ? 0.4f : 0.3f);
 
@@ -1108,26 +1117,24 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
         // Only buildings with portal/ATTA sub-models need distance-based culling.
         // Non-buildings (AI, static props, containers) never have ATTA records.
-        bool isCloseEnough = true;
-        if (obj.isBuilding && Config::Get().enableLOD) {
-            float distToCamera = glm::distance(camera_pos, glm::vec3(obj.pos));
+        bool isCloseEnough = !fast_preview;
+        if (isCloseEnough && obj.isBuilding && Config::Get().enableLOD) {
+            float distToCamera = std::sqrt(distSq);
             float portalDistance = 100.0f;
-            if (portal_distances_.count(obj.modelId)) {
-                portalDistance = portal_distances_[obj.modelId];
+            auto pit = portal_distances_.find(obj.modelId);
+            if (pit != portal_distances_.end()) {
+                portalDistance = pit->second;
             }
-            float boundRadius = GetMeshRadius(obj.modelId, obj.isBuilding) * 40.96f * obj.scale;
             isCloseEnough = igi::ShouldDrawBuildingAttachments(
                 distToCamera, boundRadius, portalDistance * WORLD_UNITS_PER_METER, Config::Get().enableLOD);
+        } else if (isCloseEnough) {
+            const float maxAtta = (80.0f * WORLD_UNITS_PER_METER) + boundRadius;
+            isCloseEnough = distSq < maxAtta * maxAtta;
         }
 
-        // ── Render ATTA sub-models (recursively) ─────────────────────────────
-        // Any object type (Buildings, Vehicles, Magic Models, Doors, Weapons, etc.) can have ATTA sub-models.
-        std::string prefix = obj.isBuilding ? "building:" : "object:";
-        std::string attCacheKey = std::to_string(current_level_) + ":" + prefix + obj.modelId;
-        bool hasAttachments = attachment_cache_.find(attCacheKey) != attachment_cache_.end();
-        
-        if (hasAttachments && isCloseEnough && !isWeapon) {
-            if (attachment_cache_.find(attCacheKey) != attachment_cache_.end()) {
+        if (!fast_preview && isCloseEnough && !isWeapon) {
+            FillLevelModelKey(level_model_key_scratch_, current_level_, obj.isBuilding, obj.modelId);
+            if (attachment_cache_.find(level_model_key_scratch_) != attachment_cache_.end()) {
                 glEnable(GL_POLYGON_OFFSET_FILL);
                 glPolygonOffset(-2.0f, -2.0f); // Prevent z-fighting with hull walls
 

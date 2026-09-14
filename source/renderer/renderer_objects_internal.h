@@ -28,6 +28,17 @@
 #include "res_compiler.h"
 #include "../level/mtp_writer.h"
 #include <sstream>
+#include <cstdio>
+
+inline void FillLevelModelKey(std::string& out, int level, bool isBuilding, const std::string& modelId) {
+    out.clear();
+    out.reserve(modelId.size() + 24);
+    char prefix[24];
+    const int n = std::snprintf(prefix, sizeof(prefix), "%d:%s",
+                                level, isBuilding ? "building:" : "object:");
+    if (n > 0) out.append(prefix, static_cast<size_t>(n));
+    out.append(modelId);
+}
 
 // Used across draw/picking/atta/visual modules.
 inline bool IsWeaponModel(const std::string& modelId) {

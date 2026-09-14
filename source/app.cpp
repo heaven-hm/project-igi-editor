@@ -722,7 +722,8 @@ void App::Frame(float delta_seconds) {
 		if (render_gameplay) CaptureGameplayRenderSnapshot();
 		if (igi::ShouldPickSceneHover(
 			mouse_state_.prior_x_ != last_pick_x_ || mouse_state_.prior_y_ != last_pick_y_,
-			mouse_state_.left_button_down_, Sys_Milliseconds(), last_hover_pick_ms_)) {
+			mouse_state_.left_button_down_, Sys_Milliseconds(), last_hover_pick_ms_, 33,
+			Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera))) {
 			hover_object_index_ = PickObjectAtScreenPos(mouse_state_.prior_x_, mouse_state_.prior_y_);
 			if (hover_object_index_ >= Renderer::kAttaPickBase) hover_object_index_ = -1; // ATTA hovered (clickable; promote on click)
 			last_pick_x_ = mouse_state_.prior_x_;
@@ -826,7 +827,7 @@ void App::Frame(float delta_seconds) {
 			.log_level_threshold_ = Config::Get().logLevelThreshold,
 			.music_on_ = music_playing_,
 			.lightmaps_on_ = Config::Get().enableLightmaps,
-			.anim_status_  = BuildAnimStatusString(),
+			.anim_status_  = draw_params_.fast_scene_preview_ ? std::string() : BuildAnimStatusString(),
 			.anim_playing_ = !animPlaybacks_.empty(),
 			.anim_debug_visible_ = show_anim_debug_,
 			.prop_anim_bone_hierarchy_ = propAnimBoneHierarchy,
@@ -941,8 +942,16 @@ void App::Frame(float delta_seconds) {
 	}
 	UpdateGameplayFieldOfView();
 
+	const bool cameraNavigating =
+		Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera) ||
+		mouse_state_.right_button_down_ ||
+		(input_.keys_ & (MK_FORWARD | MK_BACKWARD | MK_LEFT | MK_RIGHT | MK_STRAIGHT_UP | MK_STRAIGHT_DOWN)) != 0 ||
+		Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraForward) ||
+		Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraBackward) ||
+		camera_mode_moved_;
+
 	// Update animation playback (auto-play for AI NPCs)
-	if (!rendering_editor_window_ || IsEditorInputActive()) {
+	if (!cameraNavigating && (!rendering_editor_window_ || IsEditorInputActive())) {
 		if (!render_gameplay) {
 			UpdateAnimations(delta_seconds);
 		}
@@ -971,7 +980,7 @@ void App::Frame(float delta_seconds) {
 	const bool overPanel = prop_editor_open_ &&
 		mouse_state_.prior_x_ < (PropPanel::kLeft + PropPanel::kWidth);
 	if (IsEditorInputActive() && pointer_changed) {
-		if (camMode || overPanel) {
+		if (camMode || cameraNavigating || overPanel) {
 			hover_object_index_ = -1;
 			last_pick_x_ = mouse_state_.prior_x_;
 			last_pick_y_ = mouse_state_.prior_y_;
@@ -1020,7 +1029,7 @@ void App::Frame(float delta_seconds) {
 	draw_params_.num_terrain_render_chunk_ = update_params.num_terrain_render_chunk_;
 	draw_params_.level_objects_ = &GetActiveRenderLevelObjects();
 	draw_params_.selected_object_index_ = render_gameplay ? -1 : selected_object_index_;
-	draw_params_.show_magic_obj_spheres_ = render_gameplay ? false : show_magic_obj_spheres_;
+	draw_params_.show_magic_obj_spheres_ = !cameraNavigating && !render_gameplay && show_magic_obj_spheres_;
 	// All AI with an active, playing clip are skinned-replaced simultaneously
 	// (skinnedReplacementIndices must outlive renderer_.Draw() below, so it's a
 	// local in this Frame() call, not a temporary).
@@ -1028,8 +1037,34 @@ void App::Frame(float delta_seconds) {
 	// gate left the editor's animation clocks advancing while the static meshes
 	// continued to render, which made the log claim animations were playing even
 	// though no animated pose was ever submitted in editor mode.
-	std::unordered_set<int> skinnedReplacementIndices =
-		GetSkinnedReplacementObjectIndices(render_gameplay);
+	std::unordered_set<int> skinnedReplacementIndices;
+	draw_params_.fast_scene_preview_ = cameraNavigating && !render_gameplay;
+	if (!draw_params_.fast_scene_preview_) {
+		skinnedReplacementIndices = GetSkinnedReplacementObjectIndices(render_gameplay);
+		if (!render_gameplay) {
+			std::unordered_set<int> editorSkinned;
+			if (selected_object_index_ >= 0 &&
+				skinnedReplacementIndices.count(selected_object_index_)) {
+				editorSkinned.insert(selected_object_index_);
+			}
+			skinnedReplacementIndices.swap(editorSkinned);
+		} else {
+			const glm::vec3 cam = gameplay_viewer_.pos_;
+			const float maxSkin = 80.0f * WORLD_UNITS_PER_METER;
+			const float maxSkinSq = maxSkin * maxSkin;
+			const auto& objs = GetActiveRenderLevelObjects().GetObjects();
+			for (auto it = skinnedReplacementIndices.begin(); it != skinnedReplacementIndices.end(); ) {
+				if (*it == selected_object_index_ || *it < 0 || *it >= (int)objs.size()) {
+					++it;
+					continue;
+				}
+				const glm::vec3 delta = glm::vec3(objs[*it].pos) - cam;
+				if (glm::dot(delta, delta) > maxSkinSq) it = skinnedReplacementIndices.erase(it);
+				else ++it;
+			}
+		}
+	}
+	camera_mode_moved_ = false;
 	draw_params_.skip_static_draw_indices_ = &skinnedReplacementIndices;
 	draw_params_.terrain_id_at_world_xy_ =
 		[this](double x, double y) { return level_.GetTerrainNodeId(x, y); };
@@ -1139,7 +1174,7 @@ void App::Frame(float delta_seconds) {
 		.logging_enabled_ = Config::Get().enableLogging,
 		.log_level_threshold_ = Config::Get().logLevelThreshold,
 		.music_on_ = music_playing_,
-		.anim_status_  = BuildAnimStatusString(),
+		.anim_status_  = draw_params_.fast_scene_preview_ ? std::string() : BuildAnimStatusString(),
 		.anim_playing_ = !animPlaybacks_.empty(),
 		.anim_debug_visible_ = show_anim_debug_,
 		.prop_anim_bone_hierarchy_ = propAnimBoneHierarchy,
@@ -1271,19 +1306,31 @@ void App::Frame(float delta_seconds) {
     // Static/paused AI (not currently in skinnedReplacementIndices) still hold
     // their weapon, positioned at the hand bone's REST pose instead of an
     // animated transform.
-    {
+    if (!draw_params_.fast_scene_preview_) {
         auto& objs = GetActiveRenderLevelObjects().GetObjects();
+        const glm::vec3 cam = render_gameplay ? gameplay_viewer_.pos_ : viewer_.pos_;
+        const float maxWeaponSq = (80.0f * WORLD_UNITS_PER_METER) * (80.0f * WORLD_UNITS_PER_METER);
         for (int idx = 0; idx < (int)objs.size(); ++idx) {
             const auto& obj = objs[idx];
             if (obj.weaponModelId.empty() || obj.deleted) continue;
             if (skinnedReplacementIndices.count(idx)) continue; // already drawn above (animated)
+            const glm::vec3 delta = glm::vec3(obj.pos) - cam;
+            if (glm::dot(delta, delta) > maxWeaponSq) continue;
 
             const ParsedGeometry* geo = renderer_.GetOrLoadSkinGeometry(obj.modelId, obj.isBuilding);
             int handIdx = findHandBoneIndex(obj.modelId, geo);
             if (handIdx < 0 || !geo || (size_t)handIdx >= geo->bones.size()) continue;
 
-            std::vector<glm::vec3> restPositions = ComputeBoneWorldPositionsPublic(geo->bones);
-            if ((size_t)handIdx >= restPositions.size()) continue;
+            glm::vec3 restHandPos;
+            auto restIt = weaponRestHandPosCache_.find(obj.modelId);
+            if (restIt != weaponRestHandPosCache_.end()) {
+                restHandPos = restIt->second;
+            } else {
+                std::vector<glm::vec3> restPositions = ComputeBoneWorldPositionsPublic(geo->bones);
+                if ((size_t)handIdx >= restPositions.size()) continue;
+                restHandPos = restPositions[handIdx];
+                weaponRestHandPosCache_[obj.modelId] = restHandPos;
+            }
 
             glm::mat4 objMat(1.0f);
             objMat = glm::translate(objMat, glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z));
@@ -1292,7 +1339,7 @@ void App::Frame(float delta_seconds) {
             objMat = glm::rotate(objMat, (float)obj.rot.y, glm::vec3(0, 1, 0));
             objMat = glm::scale(objMat, glm::vec3(40.96f * obj.scale));
 
-            glm::mat4 handLocalMat = glm::translate(glm::mat4(1.0f), restPositions[handIdx] * kMefNativeScale);
+            glm::mat4 handLocalMat = glm::translate(glm::mat4(1.0f), restHandPos * kMefNativeScale);
             renderer_.DrawAttachedMesh(obj.weaponModelId, false, objMat * handLocalMat * kWeaponHandCorrection);
         }
     }

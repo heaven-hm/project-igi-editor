@@ -106,6 +106,7 @@ void Renderer::BeginLoadLevel() {
   flat_sky_layers_.UnloadAllTexs();
   terrain_.UnloadAllTexs();
   objects_.ClearCaches();
+  splines_.ClearBentCache();
   // Disable rain until the new level's QSC is parsed — prevents rain from a
   // prior level bleeding into a level that has no RainEffect task.
   rain_.SetParams(false, false, 0.0f, 0.0f, 0.0f);
@@ -372,7 +373,7 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
     // the live-skinned mesh looks identical when not moving instead of a flat
     // debug color. Cheap: GetOrLoadMesh hits the cache (the model is already
     // loaded for the rigid draw elsewhere).
-    Mesh mesh = objects_.GetOrLoadMesh(modelId, isBuilding);
+    const Mesh& mesh = objects_.GetOrLoadMesh(modelId, isBuilding);
     std::unordered_map<int, GLuint> slotToTexture;
     for (const auto& sub : mesh.subMeshes) slotToTexture[sub.materialSlot] = sub.textureID;
     const GLuint fallbackTexture = mesh.textureID;

@@ -102,6 +102,31 @@ TEST(SplineGeometry, UsesWaypointLocalXAxisForSplineTangent) {
     EXPECT_LT(glm::length(yawed - glm::dvec3(0.0, 100.0, 0.0)), 1e-9);
 }
 
+TEST(SplineGeometry, SegmentTangentUsesHermiteDerivative) {
+    const SplineSegment segment{
+        {0, 0, 0}, {10, 0, 0},
+        {0, 20, 0}, {0, 30, 0}, false};
+
+    const glm::dvec3 atStart = SampleSegmentTangent(segment, 0.0);
+    EXPECT_GT(glm::length(atStart), 1e-6);
+    EXPECT_GT(atStart.y, 0.0);
+}
+
+TEST(SplineGeometry, ZeroRollFrameKeepsSideInLevelPlane) {
+    const glm::dvec3 begin(0.0, 0.0, 10.0);
+    const glm::dvec3 forward(1.0, 0.0, 1.0);
+    const auto tile = spline_geometry::MakeAxisAlignedTileWithForward(
+        begin, forward, 0, 0.0, 2.0, 40.96, glm::length(forward));
+
+    ASSERT_TRUE(tile.has_value());
+    const glm::dvec3 side(tile->model[1]);
+    EXPECT_NEAR(side.z, 0.0, 1e-9);
+    EXPECT_GT(glm::length(side), 0.5);
+    const glm::dvec3 up(tile->model[2]);
+    const glm::dvec3 fwd = glm::normalize(forward);
+    EXPECT_LT(glm::length(glm::cross(fwd, side) - up), 1e-6);
+}
+
 TEST(SplineGeometry, MultiAxisTangentMatchesOpenIgiColumnOne) {
     // open-igi composes the engine orientation as Rz(gamma) · Ry(beta) · Rx(alpha)
     // (Matrix3f.FromEngineEulerAngles, reverse-engineered from 0x4B38E0) and reads

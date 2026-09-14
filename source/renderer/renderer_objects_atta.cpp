@@ -1142,20 +1142,19 @@ void Renderer_Objects::DrawAttachmentsRecursive(
 {
     // Skip rendering attachments for any weapon model
     if (IsWeaponModel(parentModelId)) return;
-    std::string prefix = isBuilding ? "building:" : "object:";
-    std::string attCacheKey = std::to_string(current_level_) + ":" + prefix + parentModelId;
-    auto ait = attachment_cache_.find(attCacheKey);
+    FillLevelModelKey(level_model_key_scratch_, current_level_, isBuilding, parentModelId);
+    auto ait = attachment_cache_.find(level_model_key_scratch_);
     if (ait == attachment_cache_.end()) return;
 
     const auto& attsR = ait->second;
     for (size_t rri = 0; rri < attsR.size(); ++rri) {
         const auto &att = attsR[rri];
         // Find the mesh
-        std::string subKey = std::to_string(current_level_) + ":" + prefix + att.modelId;
-        auto sit = mesh_cache_.find(subKey);
+        FillLevelModelKey(level_model_key_scratch_, current_level_, isBuilding, att.modelId);
+        auto sit = mesh_cache_.find(level_model_key_scratch_);
         if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) {
-            subKey = std::to_string(current_level_) + ":object:" + att.modelId;
-            sit = mesh_cache_.find(subKey);
+            FillLevelModelKey(level_model_key_scratch_, current_level_, false, att.modelId);
+            sit = mesh_cache_.find(level_model_key_scratch_);
         }
         if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) continue;
         const Mesh &subMesh = sit->second;
@@ -1427,24 +1426,41 @@ void Renderer_Objects::DrawAttachmentsRecursive(
     }
 }
 
+Renderer_Objects::SplineAttachmentLocs Renderer_Objects::ResolveSplineAttachmentLocs() const {
+    SplineAttachmentLocs locs;
+    locs.model    = glGetUniformLocation(shader_program_, "u_model");
+    locs.dirlight = glGetUniformLocation(shader_program_, "u_dirlight");
+    locs.ambient  = glGetUniformLocation(shader_program_, "u_ambient");
+    locs.useTex   = glGetUniformLocation(shader_program_, "u_useTexture");
+    locs.tex      = glGetUniformLocation(shader_program_, "u_texture");
+    locs.alpha    = glGetUniformLocation(shader_program_, "u_alpha");
+    return locs;
+}
+
 void Renderer_Objects::DrawAttachmentsForSpline(
     const std::string& modelId, bool isBuilding,
     const glm::mat4& unscaledWorldMat, GLuint ubo_mats,
     glm::vec3 leafScale)
 {
+    const SplineAttachmentLocs locs = ResolveSplineAttachmentLocs();
+    DrawAttachmentsForSpline(modelId, isBuilding, unscaledWorldMat, ubo_mats, locs, leafScale, false);
+}
+
+void Renderer_Objects::DrawAttachmentsForSpline(
+    const std::string& modelId, bool isBuilding,
+    const glm::mat4& unscaledWorldMat, GLuint ubo_mats,
+    const SplineAttachmentLocs& locs,
+    glm::vec3 leafScale,
+    bool retainProgram)
+{
     EnsureWindowModelIdsLoaded();
 
-    glUseProgram(shader_program_);
-    glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
+    if (!retainProgram) {
+        glUseProgram(shader_program_);
+        glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
+    }
 
-    GLint loc_model    = glGetUniformLocation(shader_program_, "u_model");
-    GLint loc_dirlight = glGetUniformLocation(shader_program_, "u_dirlight");
-    GLint loc_ambient  = glGetUniformLocation(shader_program_, "u_ambient");
-    GLint loc_useTex   = glGetUniformLocation(shader_program_, "u_useTexture");
-    GLint loc_tex      = glGetUniformLocation(shader_program_, "u_texture");
-    GLint loc_alpha    = glGetUniformLocation(shader_program_, "u_alpha");
-
-    glUniform1f(loc_alpha, 1.0f);
+    glUniform1f(locs.alpha, 1.0f);
 
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(-2.0f, -2.0f);
@@ -1453,22 +1469,26 @@ void Renderer_Objects::DrawAttachmentsForSpline(
     {
         std::unordered_set<std::string> drawn;
         DrawAttachmentsRecursive(modelId, modelId, isBuilding, unscaledWorldMat, /*isTransparentPass=*/false,
-                                 loc_model, loc_dirlight, loc_ambient, loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
+                                 locs.model, locs.dirlight, locs.ambient,
+                                 locs.useTex, locs.tex, locs.alpha, drawn, leafScale);
     }
 
     // Transparent pass (windows / glass)
     {
         std::unordered_set<std::string> drawn;
         DrawAttachmentsRecursive(modelId, modelId, isBuilding, unscaledWorldMat, /*isTransparentPass=*/true,
-                                 loc_model, loc_dirlight, loc_ambient, loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
+                                 locs.model, locs.dirlight, locs.ambient,
+                                 locs.useTex, locs.tex, locs.alpha, drawn, leafScale);
     }
 
     // Restore blend/depth state — transparent pass may leave them dirty.
     glDisable(GL_BLEND);
     glDepthMask(GL_TRUE);
-    glUniform1f(loc_alpha, 1.0f);
+    glUniform1f(locs.alpha, 1.0f);
     glDisable(GL_POLYGON_OFFSET_FILL);
-    glUseProgram(0);
+    if (!retainProgram) {
+        glUseProgram(0);
+    }
 }
 
 

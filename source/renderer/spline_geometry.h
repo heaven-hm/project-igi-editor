@@ -1,9 +1,13 @@
 #pragma once
 
+#include "mef_native.h"
+
+#include <array>
 #include <glm/glm.hpp>
 
 #include <optional>
 #include <string_view>
+#include <vector>
 
 namespace spline_geometry {
 
@@ -63,5 +67,17 @@ std::optional<SplineTile> MakeAxisAlignedTileWithForward(
     double span);
 
 glm::dvec3 SampleSegmentTangent(const SplineSegment& segment, double t);
+
+// open-igi WorldScene.BendSegment: deform every vertex along local X through the
+// span's Hermite curve using the zero-roll frame. Output interleaved vertices use
+// the same 10-float layout as model.cpp (pos, normal, uv, uv2).
+struct BentSegmentMesh {
+    std::vector<float> interleaved;
+    std::vector<int> submeshVertexCounts;
+};
+
+std::optional<BentSegmentMesh> BendSegmentMesh(
+    const ParsedGeometry& geometry,
+    const SplineSegment& segment);
 
 } // namespace spline_geometry

@@ -16,6 +16,8 @@
 #include <unordered_map>
 #include <limits>
 #include <cctype>
+#include <chrono>
+#include <cstdlib>
 
 struct HudSprite {
   std::vector<GLuint> tex_ids;   // one texture per sprite frame (frame 0 for single-frame sprites)
@@ -397,6 +399,19 @@ void Renderer::Draw(const draw_params_s &params,
             " level_objects=" + (params.level_objects_ ? "VALID" : "NULL"));
     logged_params = true;
   }
+  const bool profileRenderer = []() {
+    static const bool enabled = std::getenv("IGI_PROFILE") != nullptr;
+    return enabled;
+  }();
+  using ProfileClock = std::chrono::steady_clock;
+  const auto renderStart = profileRenderer ? ProfileClock::now() : ProfileClock::time_point{};
+  auto terrainStart = renderStart;
+  auto terrainEnd = renderStart;
+  auto objectsStart = renderStart;
+  auto objectsEnd = renderStart;
+  auto splinesStart = renderStart;
+  auto splinesEnd = renderStart;
+
   SetupUBOMats(*params.view_define_);
 
   // start draw
@@ -415,9 +430,11 @@ void Renderer::Draw(const draw_params_s &params,
   }
 
   if (params.draw_parts_ & DRAW_TERRAIN) {
+    if (profileRenderer) terrainStart = ProfileClock::now();
     terrain_.Draw(ubo_mats_, ubo_fog_, params.overlay_wireframe_,
                   params.draw_terrain_options_,
                   params.num_terrain_render_chunk_);
+    if (profileRenderer) terrainEnd = ProfileClock::now();
   }
 
   if ((params.draw_parts_ & (DRAW_OBJECTS | DRAW_BUILDINGS | DRAW_PROPS)) &&
@@ -426,25 +443,54 @@ void Renderer::Draw(const draw_params_s &params,
     glLoadMatrixf(glm::value_ptr(mat_proj_));
     glMatrixMode(GL_MODELVIEW);
     glLoadMatrixf(glm::value_ptr(mat_view_));
+    if (profileRenderer) objectsStart = ProfileClock::now();
     objects_.Draw(ubo_mats_, params.overlay_wireframe_,
                   params.level_objects_->GetObjects(),
                   params.selected_object_index_, task_tree_view.hover_object_index_,
                   params.draw_parts_, params.view_define_->pos_,
-                  params.show_magic_obj_spheres_, params.skip_static_draw_indices_);
+                  params.show_magic_obj_spheres_, params.skip_static_draw_indices_,
+                  params.view_define_->forward_, params.fast_scene_preview_);
+    if (profileRenderer) objectsEnd = ProfileClock::now();
+    if (profileRenderer) splinesStart = ProfileClock::now();
     splines_.Draw(params.level_objects_->GetObjects(), ubo_mats_,
                   objects_.GetShaderProgram());
+    if (profileRenderer) splinesEnd = ProfileClock::now();
 
   }
 
   // RainEffect remains independent of editor draw filters, but precipitation
   // is suppressed when the camera is within a Building's transformed footprint.
-  const bool cameraIsSheltered = params.level_objects_ &&
+  const bool cameraIsSheltered = !params.fast_scene_preview_ && rain_.IsActive() &&
+      params.level_objects_ &&
       objects_.IsCameraInsideBuildingBounds(params.level_objects_->GetObjects(),
                                              params.view_define_->pos_);
-  rain_.Draw(ubo_mats_, params.view_define_->pos_, cameraIsSheltered);
+  if (!params.fast_scene_preview_)
+    rain_.Draw(ubo_mats_, params.view_define_->pos_, cameraIsSheltered);
+
+  if (profileRenderer) {
+    static int frames = 0;
+    static int64_t terrainUs = 0, objectsUs = 0, splinesUs = 0, totalUs = 0;
+    const auto now = ProfileClock::now();
+    const auto micros = [](ProfileClock::time_point begin, ProfileClock::time_point end) {
+      return std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
+    };
+    terrainUs += micros(terrainStart, terrainEnd);
+    objectsUs += micros(objectsStart, objectsEnd);
+    splinesUs += micros(splinesStart, splinesEnd);
+    totalUs += micros(renderStart, now);
+    if (++frames == 30) {
+      Logger::Get().Log(LogLevel::INFO,
+          "[RenderProfile] 30 frames: terrain=" + std::to_string(terrainUs / 30000) +
+          "ms objects=" + std::to_string(objectsUs / 30000) +
+          "ms splines=" + std::to_string(splinesUs / 30000) +
+          "ms total=" + std::to_string(totalUs / 30000) + "ms/frame");
+      frames = 0;
+      terrainUs = objectsUs = splinesUs = totalUs = 0;
+    }
+  }
 
   // 3D navigation-graph pass: solid boxes + edges, depth-tested, before the HUD.
-  if (graph_overlay_visible_)
+  if (graph_overlay_visible_ && !params.fast_scene_preview_)
     DrawGraphNodes3D(params);
 
   // 2D HUD overlay — always active so tooltip/pause/debug show even when TreeView is hidden
@@ -701,7 +747,8 @@ void Renderer::Draw(const draw_params_s &params,
     int line_y = 30;
 
     // --- TreeView HUD Implementation (only when TaskTree is visible and not in game mode) ---
-    if (task_tree_view.show_hud_ && !task_tree_view.in_game_mode_) {
+    if (task_tree_view.show_hud_ && !task_tree_view.in_game_mode_ &&
+        !params.fast_scene_preview_) {
     if (task_tree_view.level_objects_ && !task_tree_view.prop_editor_open_ && !task_tree_view.task_picker_open_) {
       const auto &objects = task_tree_view.level_objects_->GetObjects();
       int tree_x = 20;

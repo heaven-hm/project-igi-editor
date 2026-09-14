@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <set>
+#include <cstdint>
 
 struct AttachInfo {
     std::string modelId;
@@ -106,7 +107,7 @@ public:
     size_t GetMeshCacheCount() const { return mesh_cache_.size(); }
     size_t GetTextureCacheCount() const { return texture_cache_.size(); }
 
-    void Draw(GLuint ubo_mats, bool overlay_wireframe, const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts, const glm::vec3& camera_pos, bool show_magic_obj_spheres = false, const std::unordered_set<int>* skip_static_draw_indices = nullptr);
+    void Draw(GLuint ubo_mats, bool overlay_wireframe, const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts, const glm::vec3& camera_pos, bool show_magic_obj_spheres = false, const std::unordered_set<int>* skip_static_draw_indices = nullptr, const glm::vec3& camera_forward = glm::vec3(0.0f), bool fast_preview = false);
     int PickObjectAtScreen(int x, int y, int w, int h,
                            GLuint ubo_mats,
                            const std::vector<LevelObject>& objects,
@@ -163,7 +164,7 @@ public:
     bool IsCameraInsideBuildingBounds(const std::vector<LevelObject>& objects,
                                       const glm::vec3& cameraPos);
     float GetMeshZOffset(const std::string& modelId, bool isBuilding);
-    Mesh GetOrLoadMesh(const std::string& modelId, bool isBuilding);
+    const Mesh& GetOrLoadMesh(const std::string& modelId, bool isBuilding);
     std::vector<AttachInfo> GetModelAttachments(const std::string& modelId, bool isBuilding);
     std::vector<glm::vec3> GetModelMagicVertices(const std::string& modelId, bool isBuilding);
     bool IsLadderMagicObject(const std::string& modelId);
@@ -183,11 +184,26 @@ public:
     void DrawAttachmentsForSpline(const std::string& modelId, bool isBuilding,
                                   const glm::mat4& unscaledWorldMat, GLuint ubo_mats,
                                   glm::vec3 leafScale = glm::vec3(40.96f));
+    struct SplineAttachmentLocs {
+        GLint model = -1;
+        GLint dirlight = -1;
+        GLint ambient = -1;
+        GLint useTex = -1;
+        GLint tex = -1;
+        GLint alpha = -1;
+    };
+    SplineAttachmentLocs ResolveSplineAttachmentLocs() const;
+    void DrawAttachmentsForSpline(const std::string& modelId, bool isBuilding,
+                                  const glm::mat4& unscaledWorldMat, GLuint ubo_mats,
+                                  const SplineAttachmentLocs& locs,
+                                  glm::vec3 leafScale,
+                                  bool retainProgram);
     // Skeletal-skin vertex/bone data for live animation playback (CPU skinning).
     // Looks up and parses the model's .mef once, then caches it (rest-pose
     // RenderVertex array + per-bone rest pivots, same data the static mesh
     // cache was built from). Returns nullptr if the model can't be found.
     const ParsedGeometry* GetOrLoadSkinGeometry(const std::string& modelId, bool isBuilding);
+    const ParsedGeometry* GetOrLoadParsedGeometry(const std::string& modelId, bool isBuilding);
 
     // Lightmap textures for the "Calculate Light Mapping" button, keyed by
     // the EXACT placement's taskId (not modelId) — mesh_cache_ is shared per
@@ -298,7 +314,9 @@ private:
         glm::vec3  sun_dir; // sun direction at bake time — stale if sun moved significantly
     };
     std::map<std::string, BakePose> lightmap_bake_pose_by_task_;
-    std::map<std::string, Mesh> mesh_cache_;
+    std::string level_model_key_scratch_;
+    uint64_t occupancy_sig_ = 0;
+    std::unordered_map<std::string, Mesh> mesh_cache_;
     std::map<std::string, GLuint> texture_cache_;
     std::map<std::string, std::vector<std::string>> model_texture_map_cache_;
     mutable std::map<std::string, std::vector<std::string>> global_texture_map_;
@@ -306,8 +324,9 @@ private:
     mutable std::vector<ModelTextureSource> texture_sources_;
     mutable std::map<std::string, int> model_level_map_;
     mutable std::map<std::string, int> texture_level_map_;
-    std::map<std::string, std::vector<AttachInfo>> attachment_cache_;
+    std::unordered_map<std::string, std::vector<AttachInfo>> attachment_cache_;
     std::map<std::string, ParsedGeometry> skin_geometry_cache_;
+    std::unordered_map<std::string, ParsedGeometry> parsed_geometry_cache_;
     std::map<std::string, std::vector<GLuint>> lightmap_textures_by_task_;
     // Per-pick-pass capture of pickable ATTA sub-models (see AttaPickEntry).
     std::vector<AttaPickEntry> atta_pick_entries_;

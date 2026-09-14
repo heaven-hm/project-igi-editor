@@ -265,6 +265,7 @@ private:
 	// list, cached so per-frame weapon attachment doesn't re-scan bone names. -1 =
 	// looked up once already and not found (don't repeat the failed search either).
 	std::unordered_map<std::string, int> handBoneIndexCache_;
+	std::unordered_map<std::string, glm::vec3> weaponRestHandPosCache_;
 
 	// Level background music (game_music.wav, converted from ILSF -> PCM, looped via MCI)
 	bool music_playing_ = false;
