@@ -63,6 +63,13 @@ TEST(EditorHoverPolicyTest, SkipsScenePickingWhileCameraIsNavigating) {
     EXPECT_FALSE(igi::ShouldPickSceneHover(true, false, 200, 0, 33, true));
 }
 
+TEST(EditorHoverPolicyTest, ResolvesMissingSceneModelsOnlyOnDemand) {
+    EXPECT_TRUE(igi::ShouldResolveMissingSceneModel(false, false, false));
+    EXPECT_TRUE(igi::ShouldResolveMissingSceneModel(true, true, false));
+    EXPECT_TRUE(igi::ShouldResolveMissingSceneModel(true, false, true));
+    EXPECT_FALSE(igi::ShouldResolveMissingSceneModel(true, false, false));
+}
+
 TEST(EditorHistoryTest, PushUndoInvalidatesRedoAndKeepsLatestEntries) {
     std::vector<int> undo{1, 2};
     std::vector<int> redo{9};

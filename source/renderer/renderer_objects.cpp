@@ -429,27 +429,28 @@ void Renderer_Objects::LoadResCache(int levelNo, const std::string& igi_path) {
 
 // Try to find texture bytes in the in-memory .res index.
 std::vector<uint8_t> Renderer_Objects::FindTextureData(const std::string& textureId) const {
-    // Shared character materials (001_02_1 and friends) keep authoritative
-    // pixels in common/textures/location0.res. Level archives reuse those
-    // names with unrelated bytes, which made the model-picker preview bind
-    // the wrong sheet on every foreign level. Search common archives first.
-    auto tryId = [&](const std::string& id, bool commonPass) -> std::vector<uint8_t> {
+    // Match OpenIGI's live Pack_Bind behavior: common is registered first and
+    // the active level replaces duplicate names. Import provenance is handled
+    // separately by FindTextureDataFromLevel and remains common-aware.
+    auto tryId = [&](const std::string& id) -> std::vector<uint8_t> {
         const std::string fname = id + ".tex";
         for (const auto& ri : res_tex_indexes_) {
-            if (IsSharedCommonTextureArchive(ri.res_path) != commonPass) continue;
+            if (IsSharedCommonTextureArchive(ri.res_path)) continue;
             auto it = ri.index.find(fname);
-            if (it != ri.index.end())
-                return RES_ReadEntry(ri.res_path, it->second);
+            if (it != ri.index.end()) return RES_ReadEntry(ri.res_path, it->second);
+        }
+        for (const auto& ri : res_tex_indexes_) {
+            if (!IsSharedCommonTextureArchive(ri.res_path)) continue;
+            auto it = ri.index.find(fname);
+            if (it != ri.index.end()) return RES_ReadEntry(ri.res_path, it->second);
         }
         return {};
     };
-    auto bytes = tryId(textureId, true);
-    if (bytes.empty()) bytes = tryId(textureId, false);
+    auto bytes = tryId(textureId);
     if (!bytes.empty()) return bytes;
     const std::string strippedId = StripTextureFormatSuffix(textureId);
     if (strippedId != textureId) {
-        bytes = tryId(strippedId, true);
-        if (bytes.empty()) bytes = tryId(strippedId, false);
+        bytes = tryId(strippedId);
     }
     return bytes;
 }
@@ -791,12 +792,19 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             continue;
         }
 
+        const bool keepVisible = objIndex == selected_object_index || objIndex == hover_object_index;
+        if (!igi::ShouldResolveMissingSceneModel(
+                obj.modelMissingInRes,
+                objIndex == selected_object_index,
+                objIndex == hover_object_index)) {
+            continue;
+        }
+
         const Mesh& mesh = GetOrLoadMesh(obj.modelId, obj.isBuilding);
         if (mesh.vertexCount == 0) continue;
 
         const glm::vec3 toObject = glm::vec3(obj.pos) - camera_pos;
         const float boundRadius = glm::length(mesh.halfExtents) * 40.96f * std::max(obj.scale, 0.001f);
-        const bool keepVisible = objIndex == selected_object_index || objIndex == hover_object_index;
         const float distSq = glm::dot(toObject, toObject);
         if (cameraFwdLen > 0.01f && !keepVisible) {
             const float facing = glm::dot(toObject, cameraFwd);

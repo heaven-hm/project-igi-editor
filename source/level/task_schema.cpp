@@ -28,7 +28,7 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
         // Confirmed against real objects.qsc data: arg9 is a small index that always
         // matches an existing common/ANIMS/<NNN>.IFF file (Bone Hierarchy); arg10 is an
         // arbitrary animation_id within that file (Stand Animation), or -1 for none.
-        for (const char* t : {"HumanSoldier","HumanSoldierFemale","HumanPlayer"}) {
+        for (const char* t : {"HumanSoldier","HumanSoldierFemale"}) {
             add(s[t], "Position",        "ObjectPos", 3);
             add(s[t], "Gamma",           "Real32",    6);
             add(s[t], "Model",           "String16",  7);
@@ -36,6 +36,13 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
             add(s[t], "Bone Heirachy",   "Int32",     9);
             add(s[t], "Stand Animation", "Int32",     10);
         }
+        // HumanPlayer's retail declaration stops after Team. OpenIGI binds it to
+        // animation set 000 and uses stand clip 2 when no stand is authored.
+        { auto& sc = s["HumanPlayer"];
+          add(sc, "Position", "ObjectPos", 3);
+          add(sc, "Gamma", "Real32", 6);
+          add(sc, "Model", "String16", 7);
+          add(sc, "Team", "Int32", 8); }
         // Door: pos@3, (3 unknown physics args @6), ori@9, model@12
         { auto& sc = s["Door"];
           add(sc, "Position",    "ObjectPos", 3);

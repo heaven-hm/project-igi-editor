@@ -118,9 +118,9 @@ struct ModelSourceArchiveIndex {
 };
 
 // Resolve one entry from a source bundle. Callers pass bundle[0] = selected
-// level archive and bundle[1] = shared common archive. Texture ids search the
-// common archive first so polluted same-name level copies cannot override
-// shared bytes (001_02_1 materials). Mesh ids keep the level archive first.
+// level archive and bundle[1] = shared common archive. The level archive is
+// registered after common by the game and replaces same-name entries; common
+// supplies only missing entries. Mesh ids use the same precedence.
 // Format-suffixed texture ids fall back to the stripped name in the same
 // archive before the search continues to the next archive.
 std::vector<uint8_t> FindModelSourceEntry(

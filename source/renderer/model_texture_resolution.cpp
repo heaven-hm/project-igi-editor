@@ -209,7 +209,7 @@ std::vector<uint8_t> FindModelSourceEntry(
         return {};
     };
     for (size_t i = 0; i < 2; ++i) {
-        const size_t slot = (isTexture ? 1 - i : i);
+        const size_t slot = i;
         auto bytes = lookup(bundle[slot], entryId);
         if (!bytes.empty()) return bytes;
         // Format-suffixed texture ids fall back to the stripped name in the

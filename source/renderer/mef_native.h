@@ -120,6 +120,10 @@ struct ParsedGeometry {
     std::string renderLayout;
     std::vector<BoneInfo> bones;          // populated from REIH+MANB
     std::vector<Attachment> attachments;  // populated from ATTA
+    // Type-1 XTRV is two runs (OpenIGI MefSkinner / 0x49B700): base vertices
+    // that DNER draws, then extra weighted influences that accumulate into them.
+    uint32_t baseVertexCount = 0;
+    uint32_t extraInfluenceCount = 0;
 
     // ---- Collision/material data for ASCII export ----
     std::vector<XtvcVertex>  xtvcVerts;    // XTVC type1 (set 0)
@@ -188,3 +192,12 @@ ParsedGeometry ParseMefFileFromMemory(const std::vector<uint8_t>& bytes,
 // Cumulative parent-chain sum of each bone's (parent-relative) rest pivot,
 // giving each bone's absolute rest-pose position (raw, unscaled units).
 std::vector<glm::vec3> ComputeBoneWorldPositionsPublic(const std::vector<BoneInfo>& bones);
+
+// Pose type-1 vertices the way OpenIGI does: one bone per base vertex, then extra
+// influences accumulate into TargetVertex. boneWorldTransforms null means rest
+// pose (identity rotation, hardcoded-rig world translations).
+void SkinSkinnedVertices(
+    const ParsedGeometry& geometry,
+    const std::vector<glm::mat4>* boneWorldTransforms,
+    std::vector<glm::vec3>& outPos,
+    std::vector<glm::vec3>& outNormal);

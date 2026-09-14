@@ -2,6 +2,7 @@
 
 #include "animation.h"
 #include "renderer/mef_native.h"
+#include "level/level_objects.h"
 #include "runtime/graph_camera_target.h"
 #include "utils.h"
 
@@ -117,6 +118,42 @@ TEST(AnimationRenderGateTest, AcceptsCompleteSkinnedGeometry) {
 
     EXPECT_EQ(CountRenderableSkinnedTriangles(geometry), 1u);
     EXPECT_TRUE(HasRenderableSkinnedGeometry(geometry));
+}
+
+TEST(LevelObjectAnimationDefaultsTest, HumanPlayerUsesOpenIgiDefaultSkeletonAndStand) {
+    const auto defaults = ResolveSoldierAnimationDefaults("HumanPlayer", -1, -1);
+    EXPECT_EQ(defaults.first, 0);
+    EXPECT_EQ(defaults.second, 2);
+}
+
+TEST(LevelObjectAnimationDefaultsTest, AuthoredSoldierAnimationFieldsRemainAuthoritative) {
+    const auto defaults = ResolveSoldierAnimationDefaults("HumanSoldier", 3, 17);
+    EXPECT_EQ(defaults.first, 3);
+    EXPECT_EQ(defaults.second, 17);
+}
+
+TEST(AnimationSkinningTest, AccumulatesExtraInfluencesIntoTheirBaseVertex) {
+    ParsedGeometry geometry;
+    geometry.baseVertexCount = 2;
+    geometry.extraInfluenceCount = 1;
+    geometry.bones.resize(1);
+    geometry.vertices.resize(3);
+    for (auto& vertex : geometry.vertices) {
+        vertex.rawPos = glm::vec3(40.96f, 0.0f, 0.0f);
+        vertex.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+        vertex.boneIndex = 0;
+        vertex.weight = 0.5f;
+    }
+    geometry.vertices[2].localVertexId = 0;
+
+    std::vector<glm::vec3> positions;
+    std::vector<glm::vec3> normals;
+    SkinSkinnedVertices(geometry, nullptr, positions, normals);
+
+    ASSERT_EQ(positions.size(), 2u);
+    EXPECT_NEAR(positions[0].x, 1.0f, 1e-5f);
+    EXPECT_NEAR(positions[1].x, 0.5f, 1e-5f);
+    EXPECT_EQ(normals[0], glm::vec3(0.0f, 0.0f, 1.0f));
 }
 
 TEST(AnimationEvaluationTest, RotationTrackChangesWorldPose) {

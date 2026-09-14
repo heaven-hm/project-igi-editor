@@ -5,6 +5,10 @@
 #include <string>
 #include <map>
 
+std::pair<int, int> ResolveSoldierAnimationDefaults(const std::string& type,
+                                                     int declaredHierarchy,
+                                                     int declaredStandAnimation);
+
 struct LevelObject {
     std::string name;
     std::string modelId;
@@ -20,8 +24,8 @@ struct LevelObject {
     std::string secondaryWeapon; // Secondary weapon name from JSON
     std::string secondaryAmmo;    // Secondary ammo from JSON
     int team = 0; // 0 = Friendly, 1 = Enemy — read from argTokens at load; tooltip uses argTokens directly
-    int boneHierarchy = -1;  // HumanSoldier-family arg@9: index into common/ANIMS/<NNN>.IFF (-1 = none)
-    int standAnimation = -1; // HumanSoldier-family arg@10: animation_id of the default clip to play (-1 = none)
+    int boneHierarchy = -1;  // HumanSoldier-family arg@9; HumanPlayer uses OpenIGI set 000
+    int standAnimation = -1; // HumanSoldier-family arg@10; HumanPlayer falls back to clip 2
     int graphNodeCount = -1; // AIGraph: Graphdata node_count (arg@7), -1 = not an AIGraph / not parsed
     int aiGraphTaskId = -1;  // HumanAI: arg@4, the AIGraph task this AI patrols (-1 = none)
     std::string weaponEnumId;  // Weapon-child task (type starts with "Gun"): its WEAPON_ID_* arg@3

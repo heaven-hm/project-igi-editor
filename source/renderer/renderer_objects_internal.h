@@ -27,6 +27,7 @@
 #include "dat_writer.h"
 #include "res_compiler.h"
 #include "../level/mtp_writer.h"
+#include "../runtime/editor_hover_policy.h"
 #include <sstream>
 #include <cstdio>
 

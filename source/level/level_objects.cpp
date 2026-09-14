@@ -1,5 +1,12 @@
 #include "level_objects_internal.h"
 
+std::pair<int, int> ResolveSoldierAnimationDefaults(const std::string& type,
+                                                     int declaredHierarchy,
+                                                     int declaredStandAnimation) {
+    if (type == "HumanPlayer") return {0, 2};
+    return {declaredHierarchy, declaredStandAnimation};
+}
+
 void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
     objects_.clear();
     qtasks_.clear();
@@ -163,6 +170,9 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
     obj.parentIndex = parentIdx;
     obj.expanded = false; // Closed by default
     obj.qscLine = rawLine;
+    const auto animationDefaults = ResolveSoldierAnimationDefaults(typeStr, -1, -1);
+    obj.boneHierarchy = animationDefaults.first;
+    obj.standAnimation = animationDefaults.second;
 
     int arg_idx = 0;
     const QSC::arg_s* cur_a = a;

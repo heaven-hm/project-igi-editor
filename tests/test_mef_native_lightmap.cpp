@@ -8,6 +8,7 @@
 //     --qsc D:\IGI1\missions\location0\level1\objects.qsc --task-id 1104
 // which resolves successfully against this exact level/model pair.
 static const char* kWaterTowerMef = "D:\\IGI1\\editor\\models\\level1\\435_01_1.mef";
+static const char* kSniperMef = "D:\\IGI1\\content\\models\\level2\\001_02_1.mef";
 
 TEST(MefNativeLightmapTest, ModelType3PopulatesDistinctUv2Channel) {
     if (!std::filesystem::exists(kWaterTowerMef)) {
@@ -29,4 +30,24 @@ TEST(MefNativeLightmapTest, ModelType3PopulatesDistinctUv2Channel) {
     EXPECT_TRUE(anyVertexHasDistinctUv2)
         << "Expected at least one vertex whose uv2 (lightmap atlas UV) "
            "differs from uv (diffuse UV) on a type-3 model";
+}
+
+TEST(MefNativeRenderLayoutTest, SkinnedModelsUsePackedDrawRecords) {
+    if (!std::filesystem::exists(kSniperMef)) {
+        GTEST_SKIP() << "Real IGI1 corpus not present at: " << kSniperMef;
+    }
+
+    const ParsedGeometry geo = ParseMefFile(kSniperMef);
+    ASSERT_EQ(geo.modelType, 1u);
+    EXPECT_EQ(geo.renderLayout, "type1 packed DNER");
+    EXPECT_FALSE(geo.renderBlocks.empty());
+    EXPECT_FALSE(geo.triangles.empty());
+    EXPECT_GT(geo.baseVertexCount, 0u);
+    EXPECT_GT(geo.extraInfluenceCount, 0u);
+    EXPECT_EQ(geo.baseVertexCount + geo.extraInfluenceCount, geo.vertices.size());
+
+    // Packed DNER material slots are the ordered instance-material indices.
+    for (size_t i = 0; i < geo.renderBlocks.size(); ++i) {
+        EXPECT_EQ(geo.renderBlocks[i].materialSlot, static_cast<int>(i));
+    }
 }

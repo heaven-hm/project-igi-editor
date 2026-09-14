@@ -292,18 +292,22 @@ std::vector<std::array<uint32_t, 3>> ParsePackedRenderTriangles(
     const ChunkInfo& chunk,
     uint32_t modelType,
     std::vector<ParsedGeometry::RenderBlock>& outBlocks,
-    size_t& outBlockCount)
+    size_t& outBlockCount,
+    size_t expectedRecords = 0)
 {
     const size_t headerSize = (modelType == 3) ? 32 : 28;
     std::vector<std::array<uint32_t, 3>> triangles;
     size_t cursor    = 0;
     size_t blockCount = 0;
+    const bool bounded = expectedRecords > 0;
 
     while (cursor + headerSize <= chunk.size) {
+        if (bounded && blockCount >= expectedRecords) break;
         const size_t base          = chunk.data + cursor;
         const uint16_t indexCount   = ReadValue<uint16_t>(bytes, base + 12);
         const int16_t  nextoffs    = ReadValue<int16_t> (bytes, base + 14);
-        const int16_t  materialSlot = ReadValue<int16_t>(bytes, base + 16);
+        const uint16_t rawSlot     = ReadValue<uint16_t>(bytes, base + 16);
+        const int materialSlot = (rawSlot == 0xFFFFu) ? -1 : static_cast<int>(rawSlot);
         const uint16_t vertsOffset = (modelType == 3)
             ? ReadValue<uint16_t>(bytes, base + 20)
             : ReadValue<uint16_t>(bytes, base + 18);
@@ -345,10 +349,9 @@ std::vector<std::array<uint32_t, 3>> ParsePackedRenderTriangles(
 
         ++blockCount;
         cursor += headerSize + indexBytes;
-        // modelType 3 (buildings): base+14 is NOT a linked-list nextoffs field —
-        // the ASCII-export path never reads it. Rely solely on the while-loop
-        // boundary to stop. For other model types keep the -1 sentinel.
-        if (modelType != 3 && nextoffs == -1) {
+        // OpenIGI walks the render-header sub-mesh count. The compact +14 field
+        // is not a record terminator when that count is known.
+        if (!bounded && modelType != 3 && nextoffs == -1) {
             break;
         }
     }
@@ -628,7 +631,6 @@ ParsedGeometry ParseMefGeometry(const std::vector<uint8_t>& bytes, const std::ve
 
     const ChunkInfo* xtrv = FindChunk(chunks, "XTRV");
     const ChunkInfo* dner = FindChunk(chunks, "DNER");
-    const ChunkInfo* ecaf = FindChunk(chunks, "ECAF");
 
     if (xtrv && dner) {
         geometry.vertices = ParseRenderVertices(bytes, *xtrv, modelType);
@@ -648,30 +650,32 @@ ParsedGeometry ParseMefGeometry(const std::vector<uint8_t>& bytes, const std::ve
             }
             geometry.bones = GetIgi1HardcodedBones(modelName, maxBoneIdx);
             geometry.attachments = ParseAttachments(bytes, chunks);
-
-            // Bake world-space bone offsets into vertex positions
-            const std::vector<glm::vec3> boneWorldPos = ComputeBoneWorldPositions(geometry.bones);
-            if (!boneWorldPos.empty()) {
-                for (auto& v : geometry.vertices) {
-                    if (v.boneIndex < static_cast<uint16_t>(boneWorldPos.size())) {
-                        v.pos += boneWorldPos[v.boneIndex] * kMefNativeScale;
-                    }
-                }
+            if (d3drInfo.valid) {
+                geometry.extraInfluenceCount = d3drInfo.verts0;
+                geometry.baseVertexCount = d3drInfo.verts1;
+            }
+            if (geometry.baseVertexCount == 0 ||
+                geometry.baseVertexCount + geometry.extraInfluenceCount !=
+                    static_cast<uint32_t>(geometry.vertices.size())) {
+                geometry.baseVertexCount = static_cast<uint32_t>(geometry.vertices.size());
+                geometry.extraInfluenceCount = 0;
+            }
+            std::vector<glm::vec3> restPos;
+            std::vector<glm::vec3> restN;
+            SkinSkinnedVertices(geometry, nullptr, restPos, restN);
+            const size_t applyCount = std::min(restPos.size(), geometry.vertices.size());
+            for (size_t i = 0; i < applyCount; ++i) {
+                geometry.vertices[i].pos = restPos[i];
+                geometry.vertices[i].normal = restN[i];
             }
         }
 
-        if (modelType == 1 && ecaf && d3drInfo.valid && d3drInfo.numMeshes > 0) {
-            geometry.triangles = ParseSplitBoneTriangles(bytes, *dner, *ecaf, d3drInfo, geometry.renderBlocks, geometry.renderBlockCount);
-            geometry.renderLayout = "type1 split ECAF/DNER";
-            if (geometry.triangles.empty()) {
-                // Split path failed, fall back to packed DNER parsing
-                geometry.triangles = ParsePackedRenderTriangles(bytes, *dner, modelType, geometry.renderBlocks, geometry.renderBlockCount);
-                geometry.renderLayout = "type1 packed DNER (split fallback)";
-            }
-        } else {
-            geometry.triangles = ParsePackedRenderTriangles(bytes, *dner, modelType, geometry.renderBlocks, geometry.renderBlockCount);
-            geometry.renderLayout = (modelType == 1) ? "type1 packed DNER" : "packed DNER";
-        }
+        // OpenIGI reads format-1 visuals from the packed DNER draw records.
+        // XTVC/ECFC are collision data, not an alternate render partition.
+        geometry.triangles = ParsePackedRenderTriangles(
+            bytes, *dner, modelType, geometry.renderBlocks, geometry.renderBlockCount,
+            d3drInfo.valid ? d3drInfo.numMeshes : 0);
+        geometry.renderLayout = (modelType == 1) ? "type1 packed DNER" : "packed DNER";
 
         geometry.fromRenderMesh = !geometry.vertices.empty() && !geometry.triangles.empty();
     }
@@ -893,5 +897,45 @@ ParsedGeometry ParseMefFileFromMemory(const std::vector<uint8_t>& bytes,
 
 std::vector<glm::vec3> ComputeBoneWorldPositionsPublic(const std::vector<BoneInfo>& bones) {
     return ComputeBoneWorldPositions(bones);
+}
+
+void SkinSkinnedVertices(
+    const ParsedGeometry& geometry,
+    const std::vector<glm::mat4>* boneWorldTransforms,
+    std::vector<glm::vec3>& outPos,
+    std::vector<glm::vec3>& outNormal) {
+    const size_t baseCount = std::min<size_t>(geometry.baseVertexCount, geometry.vertices.size());
+    outPos.assign(baseCount, glm::vec3(0.0f));
+    outNormal.assign(baseCount, glm::vec3(0.0f, 0.0f, 1.0f));
+    if (baseCount == 0) return;
+
+    const std::vector<glm::vec3> restPositions =
+        boneWorldTransforms == nullptr ? ComputeBoneWorldPositions(geometry.bones)
+                                       : std::vector<glm::vec3>{};
+    const auto poseVertex = [&](const RenderVertex& vertex) -> glm::vec3 {
+        if (boneWorldTransforms != nullptr && vertex.boneIndex < boneWorldTransforms->size()) {
+            return glm::vec3((*boneWorldTransforms)[vertex.boneIndex] *
+                             glm::vec4(vertex.rawPos * kMefNativeScale, 1.0f));
+        }
+        glm::vec3 position = vertex.rawPos;
+        if (vertex.boneIndex < restPositions.size()) position += restPositions[vertex.boneIndex];
+        return position * kMefNativeScale;
+    };
+
+    for (size_t i = 0; i < baseCount; ++i) {
+        const RenderVertex& vertex = geometry.vertices[i];
+        outPos[i] = poseVertex(vertex) * vertex.weight;
+        outNormal[i] = (boneWorldTransforms != nullptr && vertex.boneIndex < boneWorldTransforms->size())
+            ? glm::mat3((*boneWorldTransforms)[vertex.boneIndex]) * vertex.normal
+            : vertex.normal;
+    }
+
+    const size_t influenceEnd = std::min<size_t>(
+        geometry.vertices.size(), static_cast<size_t>(geometry.baseVertexCount) + geometry.extraInfluenceCount);
+    for (size_t i = baseCount; i < influenceEnd; ++i) {
+        const RenderVertex& influence = geometry.vertices[i];
+        const size_t target = influence.localVertexId;
+        if (target < baseCount) outPos[target] += poseVertex(influence) * influence.weight;
+    }
 }
 

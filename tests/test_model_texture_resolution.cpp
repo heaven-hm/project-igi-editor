@@ -228,23 +228,38 @@ TEST(ModelTextureResolution, IdentifiesSharedCommonTextureArchivePaths) {
         "D:\\IGI1\\missions\\location0\\common\\models\\location0.res"));
 }
 
-TEST(ModelTextureResolution, CommonTextureArchiveWinsOverPollutedLevelArchive) {
+TEST(ModelTextureResolution, SelectedLevelTextureOverridesSharedCommonTexture) {
     test_support::TempDirectory temp;
     const std::string levelRes = (temp.path() / "level.res").string();
     const std::string commonRes = (temp.path() / "common.res").string();
 
-    // Shared character textures (001_02_1 materials) keep their real bytes in
-    // common. Level archives often carry the same names with unrelated pixels.
-    const std::vector<uint8_t> polluted = {9, 9, 9};
+    // An import must preserve the texture visible in the selected source
+    // scene, including level-specific overrides of a shared texture name.
+    const std::vector<uint8_t> levelBytes = {9, 9, 9};
     const std::vector<uint8_t> commonBytes = {1, 2, 3, 4};
     std::string error;
     ASSERT_TRUE(RES_WriteEntries(
-        {RESEntry{"LOCAL:textures/001_01_1.tex", polluted}}, levelRes, error)) << error;
+        {RESEntry{"LOCAL:textures/face.tex", levelBytes}}, levelRes, error)) << error;
     ASSERT_TRUE(RES_WriteEntries(
-        {RESEntry{"LOCAL:textures/001_01_1.tex", commonBytes}}, commonRes, error)) << error;
+        {RESEntry{"LOCAL:textures/face.tex", commonBytes}}, commonRes, error)) << error;
 
     const auto bundle = IndexSyntheticBundle(levelRes, commonRes);
-    EXPECT_EQ(FindModelSourceEntry(bundle, "001_01_1", true, ReadFromDisk), commonBytes);
+    EXPECT_EQ(FindModelSourceEntry(bundle, "face", true, ReadFromDisk), levelBytes);
+}
+
+TEST(ModelTextureResolution, SelectedLevelFormatFallbackPrecedesCommonExactName) {
+    test_support::TempDirectory temp;
+    const std::string levelRes = (temp.path() / "level.res").string();
+    const std::string commonRes = (temp.path() / "common.res").string();
+    const std::vector<uint8_t> levelBytes = {7, 8, 9};
+    std::string error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:textures/face.tex", levelBytes}}, levelRes, error)) << error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:textures/face_argb8888.tex", {1, 2, 3}}}, commonRes, error)) << error;
+
+    const auto bundle = IndexSyntheticBundle(levelRes, commonRes);
+    EXPECT_EQ(FindModelSourceEntry(bundle, "face_argb8888", true, ReadFromDisk), levelBytes);
 }
 
 TEST(ModelTextureResolution, LevelArchiveWinsOverCommonArchive) {

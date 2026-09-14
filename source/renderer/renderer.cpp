@@ -340,34 +340,12 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
         }
     }
 
-    // Rest-pose bone world positions (raw units) — same convention the static
-    // mesh cache used to bake geo->vertices[i].pos in the first place. The
-    // caller aligns BEF transforms to this bind pose before entering here.
-    static std::map<std::string, std::vector<glm::vec3>> s_restPosCache;
-    auto rpIt = s_restPosCache.find(modelId);
-    if (rpIt == s_restPosCache.end()) {
-        rpIt = s_restPosCache.emplace(modelId, ComputeBoneWorldPositionsPublic(geo->bones)).first;
-    }
-    const std::vector<glm::vec3>& boneRestPos = rpIt->second;
-    if (boneRestPos.empty()) return;
-
-    // boneWorldTransforms (from the BEF clip) have been aligned to the MEF bind
-    // root by App before this call. At rest, the root and all child pivots are
-    // therefore in the same scaled space as the baked vertex positions.
-    std::vector<glm::vec3> deformedPos(geo->vertices.size());
-    std::vector<glm::vec3> deformedNormal(geo->vertices.size());
-    for (size_t i = 0; i < geo->vertices.size(); ++i) {
-        const RenderVertex& rv = geo->vertices[i];
-        uint16_t b = rv.boneIndex;
-        if (b >= boneRestPos.size() || b >= boneWorldTransforms.size()) {
-            deformedPos[i] = rv.pos;
-            deformedNormal[i] = rv.normal;
-            continue;
-        }
-        glm::vec3 localOffset = rv.pos - boneRestPos[b] * kMefNativeScale;
-        deformedPos[i] = glm::vec3(boneWorldTransforms[b] * glm::vec4(localOffset, 1.0f));
-        deformedNormal[i] = glm::mat3(boneWorldTransforms[b]) * rv.normal;
-    }
+    // Format-1 stores base vertices followed by extra weighted influences.
+    // Use the same accumulation rule as OpenIGI rather than treating every
+    // record as an independent rigid vertex.
+    std::vector<glm::vec3> deformedPos;
+    std::vector<glm::vec3> deformedNormal;
+    SkinSkinnedVertices(*geo, &boneWorldTransforms, deformedPos, deformedNormal);
 
     // Resolve the same per-material textures the static (rigid) draw uses, so
     // the live-skinned mesh looks identical when not moving instead of a flat

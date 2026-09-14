@@ -359,7 +359,7 @@ Mesh loadObjModel(const std::string& filepath, const std::string& /*unused*/) {
 }
 
 Mesh loadObjModelFromMemory(const std::vector<uint8_t>& bytes, const std::string& modelId) {
-    const ParsedGeometry geometry = ParseMefFileFromMemory(bytes);
+    const ParsedGeometry geometry = ParseMefFileFromMemory(bytes, modelId);
     return BuildMeshFromGeometry(geometry, modelId);
 }
 

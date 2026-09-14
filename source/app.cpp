@@ -1254,24 +1254,9 @@ void App::Frame(float delta_seconds) {
             if (worldTransforms.empty()) continue;
 
             const auto& obj = objs[idx];
-            // The BEF exporter stores the skeleton relative to its animation
-            // root, while the MEF vertex stream is baked against the model's
-            // native root pivot. Align the evaluated pose to that MEF bind root
-            // before CPU skinning; otherwise the AI body is rendered at the
-            // wrong local height and appears frozen/missing in the scene.
-            const ParsedGeometry* skinGeo =
-                renderer_.GetOrLoadSkinGeometry(obj.modelId, obj.isBuilding);
-            if (skinGeo != nullptr && !skinGeo->bones.empty()) {
-                std::vector<glm::vec3> mefBindWorld =
-                    ComputeBoneWorldPositionsPublic(skinGeo->bones);
-                for (glm::vec3& position : mefBindWorld) {
-                    position *= kMefNativeScale;
-                }
-                std::vector<glm::mat4> animationBindWorld;
-                animRegistry_.EvaluateWorld(pb.clip, 0.0f, animationBindWorld);
-                AlignAnimationWorldToMefBind(
-                    animationBindWorld, mefBindWorld, worldTransforms);
-            }
+            // OpenIGI feeds the evaluated skeleton world pose directly to the
+            // MEF skinner. A second bind-pose alignment remaps already-valid
+            // bones and can move held geometry onto an unrelated body bone.
             glm::mat4 objMat(1.0f);
             objMat = glm::translate(objMat, glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z));
             objMat = glm::rotate(objMat, (float)obj.rot.z, glm::vec3(0, 0, 1));
