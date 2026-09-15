@@ -6,6 +6,7 @@
 #include "app_internal.h"
 #include "runtime/graph_camera_target.h"
 #include "runtime/pause_menu_state.h"
+#include "renderer/renderer_objects_internal.h"
 
 void App::Input_OnSpecial(int key, int x, int y) {
 	// The pause menu owns keyboard input while it is visible.  In particular,
@@ -448,9 +449,9 @@ void App::Input_OnSpecial(int key, int x, int y) {
 					renderer_.GraphSelected())) {
 			const auto& obj = objects[selected_object_index_];
 			const float boundRadius = renderer_.GetMeshRadius(obj.modelId, obj.isBuilding) * 40.96f * obj.scale;
-			const glm::dvec3 meshCenter = glm::dvec3(
-				renderer_.GetMeshCenter(obj.modelId, obj.isBuilding)) *
-				(40.96 * static_cast<double>(obj.scale));
+			const glm::dvec3 meshCenter = F11MeshCenterWorldOffset(
+				renderer_.GetMeshCenter(obj.modelId, obj.isBuilding), obj.rot,
+				obj.scale, IsZyxEulerModel(obj.modelId));
 			const glm::dvec3 cameraTarget = obj.pos + meshCenter;
 
 			// Shift+F11: wider radius framing (CameraSnapToObjectWithRadius)

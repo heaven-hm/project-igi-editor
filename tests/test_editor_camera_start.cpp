@@ -94,6 +94,15 @@ TEST(EditorCameraStartTest, CameraKeyDoesNotSuppressEditorSceneOverlays) {
     EXPECT_FALSE(igi::ShouldUseFastScenePreview(true, true, false));
 }
 
+TEST(EditorCameraStartTest, F11MeshCenterFollowsEditRigidRotation) {
+    const glm::dvec3 offset = F11MeshCenterWorldOffset(
+        glm::vec3(1.0f, 0.0f, 0.0f),
+        glm::dvec3(0.0, 0.0, glm::half_pi<double>()), 1.0, false);
+    EXPECT_NEAR(offset.x, 0.0, 0.001);
+    EXPECT_NEAR(offset.y, 40.96, 0.001);
+    EXPECT_NEAR(offset.z, 0.0, 0.001);
+}
+
 TEST(EditorCameraStartTest, IdentifiesZyxEulerModelsCorrectly) {
     // 506_ slide up doors use ZYX Euler rotation order
     EXPECT_TRUE(IsZyxEulerModel("506_01_1"));
