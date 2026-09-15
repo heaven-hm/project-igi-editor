@@ -33,6 +33,10 @@ inline bool ShouldF11SnapSelectedObjectDirectly(
     return has_selected_object && (!overlay_visible || selected_node_id < 0);
 }
 
+inline bool ShouldProcessF11WhilePaused(int key, int f11_key, bool paused) {
+    return !paused || key == f11_key;
+}
+
 // Put the graph target in front of the camera instead of placing the camera
 // inside the node/graph origin while retaining the previous view direction.
 // The latter made F11 appear to do nothing when the target was not already in

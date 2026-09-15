@@ -10,7 +10,7 @@
 void App::Input_OnSpecial(int key, int x, int y) {
 	// The pause menu owns keyboard input while it is visible.  In particular,
 	// editor shortcuts such as F8 must not alter the mode behind the overlay.
-	if (pause_mode_) return;
+	if (!ShouldProcessF11WhilePaused(key, GLUT_KEY_F11, pause_mode_)) return;
 
 	// F8 toggles Editor <-> Game Play from anywhere; it must run before every
 	// mode-specific branch so it works in both directions.

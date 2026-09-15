@@ -333,6 +333,12 @@ TEST(GraphCameraTargetTest, F11UsesSelectedObjectWhenOverlayHasNoNodeSelection) 
     EXPECT_FALSE(ShouldF11SnapSelectedObjectDirectly(false, true, -1));
 }
 
+TEST(GraphCameraTargetTest, F11IsNotBlockedByPauseGate) {
+    EXPECT_TRUE(ShouldProcessF11WhilePaused(123, 123, true));
+    EXPECT_FALSE(ShouldProcessF11WhilePaused(122, 123, true));
+    EXPECT_TRUE(ShouldProcessF11WhilePaused(122, 123, false));
+}
+
 TEST(GraphCameraTargetTest, SelectedNestedChildWalksBackToSoldierGraph) {
     std::vector<LevelObject> objects(4);
     objects[0].type = "HumanSoldier";
