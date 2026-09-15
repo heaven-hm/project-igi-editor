@@ -445,16 +445,20 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		if (ShouldF11SnapSelectedObjectDirectly(
 				hasSelectedObject, selectedObjectHasModel,
 				renderer_.IsGraphOverlayVisible(),
-				renderer_.GraphSelected())) {
+					renderer_.GraphSelected())) {
 			const auto& obj = objects[selected_object_index_];
 			const float boundRadius = renderer_.GetMeshRadius(obj.modelId, obj.isBuilding) * 40.96f * obj.scale;
+			const glm::dvec3 meshCenter = glm::dvec3(
+				renderer_.GetMeshCenter(obj.modelId, obj.isBuilding)) *
+				(40.96 * static_cast<double>(obj.scale));
+			const glm::dvec3 cameraTarget = obj.pos + meshCenter;
 
 			// Shift+F11: wider radius framing (CameraSnapToObjectWithRadius)
 			const bool shiftHeld = (glutGetModifiers() & GLUT_ACTIVE_SHIFT) != 0 ||
 			                       (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
 
 			const GraphCameraPose pose = MakeF11ObjectCameraPose(
-				obj.pos, boundRadius, glm::dvec3(viewer_.forward_), shiftHeld);
+				cameraTarget, boundRadius, glm::dvec3(viewer_.forward_), shiftHeld);
 
 			orbit_active_ = false;
 			input_.mouse_delta_x_ = 0;
@@ -466,10 +470,13 @@ void App::Input_OnSpecial(int key, int x, int y) {
 			UpdateViewerVectors();
 
 			Logger::Get().Log(LogLevel::INFO,
-				"[Camera] F11 CameraSnapToObject model=" + obj.modelId +
+				"[Camera] F11 CameraSnapToObject index=" + std::to_string(selected_object_index_) +
+				" model=" + obj.modelId +
 				" type=" + obj.type + " task=" + obj.taskId +
 				" radius=" + std::to_string(boundRadius) +
-				" distance=" + std::to_string(glm::distance(pose.position, obj.pos)) +
+				" target=(" + std::to_string(cameraTarget.x) + "," +
+				std::to_string(cameraTarget.y) + "," + std::to_string(cameraTarget.z) + ")" +
+				" distance=" + std::to_string(glm::distance(pose.position, cameraTarget)) +
 				" camera=(" + std::to_string(viewer_.pos_.x) + "," +
 				std::to_string(viewer_.pos_.y) + "," +
 				std::to_string(viewer_.pos_.z) + ")");
