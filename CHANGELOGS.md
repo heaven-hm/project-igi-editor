@@ -1,5 +1,39 @@
 # Changelogs
 
+## 3.6.11-pre — Weather Controls, Rail Tracks/Spline Accuracy, and Viewport Fixes
+
+### Weather controls and indoor sheltering
+
+- Added in-game pause menu weather mode cycle toggle (`Weather: [Default / Rain / Snow / OFF]`), enabling real-time toggling of precipitation.
+- Fixed indoor weather shelter: rain and snow precipitation is suppressed when the camera is sheltered within building bounds / footprints, while remaining visible outdoors.
+- Restored authentic OpenIGI rain and snow particle parity: snow rendered as 900 quad particles with 0.09m physical diameter, diagonal Z depth ordering, and sinusoidal drift; rain rendered with 1200 drops, 0.08m streak length, 0.012m width, and calibrated speed bands.
+- Weather shaders unified via single source of truth with OpenGL depth mask and blending restoration.
+
+### Rail tracks and spline geometry
+
+- Fixed spline span segment model resolution: spans now accurately resolve models from the end waypoint (`ResolveSegmentModel`).
+- Mapped waypoint Z-X-Y Euler orientation into local-X spline tangents scaled to span chord length (`MakeWaypointTangent`), eliminating tangent overshoot and misaligned transitions.
+- Exposed spline segment model schema in editor task tree and properties.
+
+### F11 camera framing and navigation
+
+- Fixed F11 camera snap to center accurately on rendered mesh bounds, including rigid object Euler rotation.
+- Prevented NaN camera snap on graph selections or zero-extent items.
+- Prioritized authored objects for F11 snap; preserved editor overlays in camera mode.
+- Enabled F11 snap through the pause gate.
+
+### Foreign model textures and common archives
+
+- Resolved Sniper 001_02_1 and foreign model texture imports via common-archive source bundles (`location0.res` fallback with level-first precedence).
+- Replaced duplicate or polluted level copies with shared clean common textures.
+- Instant texture cache and map invalidation upon publish.
+- Always import on explicit model field commit.
+
+### Performance and viewport responsiveness
+
+- Smoothed hover picking and frame tracking; skipped costly picking during camera drags to keep camera movement fluid.
+- Restored ATTA sub-models during movement, orbit around clicked objects, and immediate mode unbinds before `glBegin`.
+
 ## 3.6.10-pre — Fonts, Menu, Sniper/AI, and Foreign Model Fixes
 
 ### Game fonts and menu
