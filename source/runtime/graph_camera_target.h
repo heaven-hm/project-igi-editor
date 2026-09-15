@@ -26,6 +26,13 @@ struct GraphCameraPose {
     float pitch_degrees = 0.0f;
 };
 
+// A selected authored object remains the F11 destination while the graph
+// overlay is open unless the user has explicitly selected a graph node.
+inline bool ShouldF11SnapSelectedObjectDirectly(
+    bool has_selected_object, bool overlay_visible, int selected_node_id) {
+    return has_selected_object && (!overlay_visible || selected_node_id < 0);
+}
+
 // Put the graph target in front of the camera instead of placing the camera
 // inside the node/graph origin while retaining the previous view direction.
 // The latter made F11 appear to do nothing when the target was not already in

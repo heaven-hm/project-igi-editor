@@ -326,6 +326,13 @@ TEST(GraphCameraTargetTest, F11GraphPosePlacesCameraBackAndFacesTarget) {
     EXPECT_NEAR(pose.pitch_degrees, 0.0f, 0.001f);
 }
 
+TEST(GraphCameraTargetTest, F11UsesSelectedObjectWhenOverlayHasNoNodeSelection) {
+    EXPECT_TRUE(ShouldF11SnapSelectedObjectDirectly(true, false, -1));
+    EXPECT_TRUE(ShouldF11SnapSelectedObjectDirectly(true, true, -1));
+    EXPECT_FALSE(ShouldF11SnapSelectedObjectDirectly(true, true, 7));
+    EXPECT_FALSE(ShouldF11SnapSelectedObjectDirectly(false, true, -1));
+}
+
 TEST(GraphCameraTargetTest, SelectedNestedChildWalksBackToSoldierGraph) {
     std::vector<LevelObject> objects(4);
     objects[0].type = "HumanSoldier";

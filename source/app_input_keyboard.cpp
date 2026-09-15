@@ -440,7 +440,9 @@ void App::Input_OnSpecial(int key, int x, int y) {
 			renderer_.GraphSelected() >= 0;
 		if (!hasSelectedObject && !hasGraphTarget) return;
 
-		if (hasSelectedObject && !renderer_.IsGraphOverlayVisible()) {
+		if (ShouldF11SnapSelectedObjectDirectly(
+				hasSelectedObject, renderer_.IsGraphOverlayVisible(),
+				renderer_.GraphSelected())) {
 			const auto& obj = objects[selected_object_index_];
 			const float boundRadius = renderer_.GetMeshRadius(obj.modelId, obj.isBuilding) * 40.96f * obj.scale;
 
