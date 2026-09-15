@@ -9,6 +9,7 @@ constexpr int kRainDrops = 1200;
 constexpr int kSnowFlakes = 900;
 constexpr float kBoxMeters = 50.0f;
 constexpr float kRainStreakMeters = 0.08f;
+constexpr float kRainStreakWidthMeters = 0.012f;
 constexpr float kSnowFlakeMeters = 0.045f;
 constexpr float kRainMinSpeedMul = 0.08f;
 constexpr float kRainMaxSpeedMul = 0.18f;

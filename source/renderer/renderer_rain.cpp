@@ -12,7 +12,7 @@
 static const char* RAIN_VERT_SRC = R"(
 #version 330 core
 layout(location = 0) in vec3 a_seed;   // per-drop random seed, x/y/z in [0,1)
-layout(location = 1) in float a_isTop; // 0 = bottom vertex of the streak, 1 = top
+layout(location = 1) in vec2 a_corner; // x = width side, y = bottom/top
 
 layout(std140) uniform Matrices {
     mat4 u_unused1;
@@ -26,6 +26,7 @@ uniform float u_boxSize;     // footprint around the camera that drops are scatt
 uniform float u_heightStart; // world units, where drops spawn
 uniform float u_heightEnd;   // world units, where drops disappear
 uniform float u_streakLen;   // world units
+uniform float u_halfWidth;   // world units
 
 void main() {
     float fallRange = max(u_heightStart - u_heightEnd, 1.0);
@@ -33,7 +34,8 @@ void main() {
     float z = u_heightStart - mod(u_time * speed + a_seed.y * fallRange + u_cameraPos.z, fallRange);
     vec2 cell = mod(a_seed.xy * u_boxSize - u_cameraPos.xy, u_boxSize) - u_boxSize * 0.5;
     vec3 worldPos = vec3(u_cameraPos.x + cell.x, u_cameraPos.y + cell.y,
-                         z + a_isTop * u_streakLen);
+                         z + a_corner.y * u_streakLen);
+    worldPos.xy += vec2(a_corner.x * u_halfWidth);
     gl_Position = u_mvp * vec4(worldPos, 1.0);
 }
 )";
@@ -143,13 +145,19 @@ bool Renderer_Rain::Init() {
     // Rain drop buffer: 1200 drops, seed 12345 (matches OpenIGI RainRenderer)
     num_rain_drops_ = igi::weather::kRainDrops;
     std::vector<float> rain_verts;
-    rain_verts.reserve(num_rain_drops_ * 2 * 4);
+    rain_verts.reserve(num_rain_drops_ * 6 * 5);
     std::mt19937 rng_rain(12345);
     std::uniform_real_distribution<float> dist(0.0f, 1.0f);
     for (int i = 0; i < num_rain_drops_; ++i) {
         float sx = dist(rng_rain), sy = dist(rng_rain), sz = dist(rng_rain);
-        rain_verts.insert(rain_verts.end(), { sx, sy, sz, 0.0f }); // bottom
-        rain_verts.insert(rain_verts.end(), { sx, sy, sz, 1.0f }); // top
+        // Two triangles matching OpenIGI's 0.012m-wide streak quad.
+        const float corners[][2] = {
+            {-1.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f},
+            {-1.0f, 0.0f}, {1.0f, 1.0f}, {-1.0f, 1.0f},
+        };
+        for (const auto& corner : corners) {
+            rain_verts.insert(rain_verts.end(), {sx, sy, sz, corner[0], corner[1]});
+        }
     }
 
     glGenVertexArrays(1, &vao_rain_);
@@ -157,9 +165,9 @@ bool Renderer_Rain::Init() {
     glBindVertexArray(vao_rain_);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_rain_);
     glBufferData(GL_ARRAY_BUFFER, rain_verts.size() * sizeof(float), rain_verts.data(), GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(3 * sizeof(float)));
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
@@ -206,6 +214,17 @@ void Renderer_Rain::SetParams(bool active, bool is_snow, float startMeters, floa
     start_meters_ = startMeters;
     end_meters_ = endMeters;
     alpha_ = alpha;
+    if (active_) {
+        if (is_snow_) {
+            Logger::Get().Log(LogLevel::INFO,
+                "[Renderer_Rain] SNOW parity: flakes=900 diameter=0.090m speed=0.025..0.065-band/s "
+                "alpha=clamp(authored*1.75,0.10,0.42) drift=0.350m");
+        } else {
+            Logger::Get().Log(LogLevel::INFO,
+                "[Renderer_Rain] RAIN parity: drops=1200 length=0.080m width=0.012m speed=0.08..0.18-band/s "
+                "alpha=clamp(authored*1.25,0.00,0.28)");
+        }
+    }
 }
 
 void Renderer_Rain::Draw(GLuint ubo_mats, const glm::vec3& cameraPos, bool cameraIsSheltered) {
@@ -236,6 +255,8 @@ void Renderer_Rain::Draw(GLuint ubo_mats, const glm::vec3& cameraPos, bool camer
     glUniform1f(glGetUniformLocation(shader_program_, "u_heightEnd"), heightEnd);
     glUniform1f(glGetUniformLocation(shader_program_, "u_streakLen"),
                 igi::weather::kRainStreakMeters * WORLD_UNITS_PER_METER);
+    glUniform1f(glGetUniformLocation(shader_program_, "u_halfWidth"),
+                igi::weather::kRainStreakWidthMeters * 0.5f * WORLD_UNITS_PER_METER);
     glUniform1f(glGetUniformLocation(shader_program_, "u_alpha"), alpha_);
 
     GLboolean depthMaskWas;
@@ -245,11 +266,9 @@ void Renderer_Rain::Draw(GLuint ubo_mats, const glm::vec3& cameraPos, bool camer
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_DEPTH_TEST);
 
-    glLineWidth(1.5f);
     glBindVertexArray(vao_rain_);
-    glDrawArrays(GL_LINES, 0, num_rain_drops_ * 2);
+    glDrawArrays(GL_TRIANGLES, 0, num_rain_drops_ * 6);
     glBindVertexArray(0);
-    glLineWidth(1.0f);
 
     glDepthMask(depthMaskWas);
     // Weather is the final 3D scene pass before graph/HUD overlays. Restore the
@@ -273,7 +292,7 @@ void Renderer_Rain::DrawSnow(GLuint ubo_mats, const glm::vec3& cameraPos, float 
     glUniform1f(glGetUniformLocation(snow_program_, "u_heightStart"), height_start);
     glUniform1f(glGetUniformLocation(snow_program_, "u_heightEnd"), height_end);
     glUniform1f(glGetUniformLocation(snow_program_, "u_flakeSize"),
-                igi::weather::kSnowFlakeMeters * WORLD_UNITS_PER_METER);
+                igi::WeatherParticleLengthMeters(true) * WORLD_UNITS_PER_METER);
     glUniform1f(glGetUniformLocation(snow_program_, "u_viewportH"),
                 static_cast<float>(glutGet(GLUT_WINDOW_HEIGHT)));
     glUniform1f(glGetUniformLocation(snow_program_, "u_driftUnits"),

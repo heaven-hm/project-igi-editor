@@ -3,10 +3,10 @@
 namespace igi {
 
 // Particle visual scales matching OpenIGI (meters):
-// Rain streak vertical length = 0.08m (StreakLengthMeters in RainRenderer.cs)
-// Snow flake scale = 0.045m (FlakeSizeMeters in SnowRenderer.cs)
+// RainRenderer uses 0.08m vertical streaks. SnowRenderer's 0.045m
+// FlakeSizeMeters is its half-extent, so its visible quad is 0.09m across.
 constexpr float WeatherParticleLengthMeters(bool isSnow) noexcept {
-    return isSnow ? 0.045f : 0.08f;
+    return isSnow ? 0.09f : 0.08f;
 }
 
 } // namespace igi

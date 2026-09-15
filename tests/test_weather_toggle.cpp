@@ -159,11 +159,16 @@ TEST(WeatherVisibility, AuthoredWeatherIsNotSuppressedByEditorBuildingBounds) {
 TEST(WeatherParticle, RainStreakIs0_08m) {
     EXPECT_FLOAT_EQ(igi::WeatherParticleLengthMeters(false), 0.08f);
 }
-TEST(WeatherParticle, SnowFlakeIs0_045m) {
-    EXPECT_FLOAT_EQ(igi::WeatherParticleLengthMeters(true), 0.045f);
+TEST(WeatherParticle, RainStreakHasRetail0_012mWorldWidth) {
+    EXPECT_FLOAT_EQ(igi::weather::kRainStreakWidthMeters, 0.012f);
 }
-TEST(WeatherParticle, SnowSmallerThanRain) {
-    EXPECT_LT(igi::WeatherParticleLengthMeters(true),
+TEST(WeatherParticle, SnowFlakeHasRetail0_09mDiameter) {
+    // OpenIGI's 0.045m FlakeSizeMeters is the half-extent of its quad, so
+    // the visible flake footprint is 0.09m across.
+    EXPECT_FLOAT_EQ(igi::WeatherParticleLengthMeters(true), 0.09f);
+}
+TEST(WeatherParticle, SnowFootprintUsesItsRetailFullDiameter) {
+    EXPECT_GT(igi::WeatherParticleLengthMeters(true),
               igi::WeatherParticleLengthMeters(false));
 }
 
