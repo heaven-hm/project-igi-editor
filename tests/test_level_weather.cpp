@@ -232,28 +232,43 @@ TEST(LevelWeatherTest, EscapedVarStringNewlineEnablesWeather) {
     EXPECT_FLOAT_EQ(weather.alpha, 0.15f);
 }
 
-TEST(LevelWeatherTest, ActiveQuotedLevelNineRainIsNotOverriddenByVisualBuildingBounds) {
+TEST(LevelWeatherTest, ActiveQuotedLevelNineRainIsHiddenByVisualBuildingBounds) {
     const igi::LevelWeatherSettings weather = igi::ResolveLevelWeather(
         {RainEffect("TRUE", "\"TRUE\\n\"", "0.15")});
 
     ASSERT_TRUE(weather.active);
-    EXPECT_TRUE(igi::ShouldRenderAuthoredWeather(weather.active));
-    EXPECT_TRUE(igi::ShouldDrawWeatherForFrame(
-        weather.active, true /* rain renderer initialized */));
+    EXPECT_FALSE(igi::ShouldRenderAuthoredWeather(
+        weather.active, true /* visual building AABB overlaps the camera */));
+    EXPECT_FALSE(igi::ShouldDrawWeatherForFrame(
+        weather.active, true /* rain renderer initialized */,
+        true /* camera is sheltered */));
 }
 
-TEST(LevelWeatherTest, ActiveAuthoredWeatherRendersWhenRendererIsReady) {
+TEST(LevelWeatherTest, ActiveAuthoredWeatherRemainsVisibleOutsideBuildingBounds) {
     const igi::LevelWeatherSettings weather = igi::ResolveLevelWeather(
         {RainEffect("FALSE", "TRUE", "0.06")});
 
     ASSERT_TRUE(weather.active);
-    EXPECT_TRUE(igi::ShouldRenderAuthoredWeather(weather.active));
+    EXPECT_TRUE(igi::ShouldRenderAuthoredWeather(
+        weather.active, false /* camera is outdoors */));
     EXPECT_TRUE(igi::ShouldDrawWeatherForFrame(
-        weather.active, true /* rain renderer initialized */));
+        weather.active, true /* rain renderer initialized */,
+        false /* camera is outdoors */));
 }
 
-TEST(LevelWeatherTest, SnowUsesSmallFlakeScaleRatherThanRainStreakLength) {
-    EXPECT_LT(igi::WeatherParticleLengthMeters(true),
+TEST(LevelWeatherTest, BuildingShelterFootprintCoversUpperFloors) {
+    EXPECT_TRUE(igi::IsWithinWeatherShelterFootprint(
+        12.0f, -4.0f,
+        -20.0f, 20.0f,
+        -10.0f, 10.0f));
+    EXPECT_FALSE(igi::IsWithinWeatherShelterFootprint(
+        25.0f, -4.0f,
+        -20.0f, 20.0f,
+        -10.0f, 10.0f));
+}
+
+TEST(LevelWeatherTest, SnowUsesGroundVisibleParticleLength) {
+    EXPECT_GT(igi::WeatherParticleLengthMeters(true),
               igi::WeatherParticleLengthMeters(false));
 }
 

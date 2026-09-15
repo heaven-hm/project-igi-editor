@@ -144,10 +144,10 @@ TEST(WeatherToggle, OffDisablesTheGlobalRendererGate) {
     EXPECT_FALSE(igi::ResolveWeatherMode(authored, igi::WeatherMode::Default, false).enabled);
 }
 
-TEST(WeatherVisibility, AuthoredWeatherIsNotSuppressedByEditorBuildingBounds) {
+TEST(WeatherVisibility, AuthoredWeatherIsSuppressedByEditorBuildingBounds) {
     EXPECT_TRUE(igi::IsWithinWeatherShelterFootprint(5.0f, 2.0f, 0.0f, 10.0f, 0.0f, 4.0f));
     EXPECT_FALSE(igi::IsWithinWeatherShelterFootprint(10.1f, 2.0f, 0.0f, 10.0f, 0.0f, 4.0f));
-    EXPECT_TRUE(igi::ShouldDrawWeatherForFrame(true, true, true));
+    EXPECT_FALSE(igi::ShouldDrawWeatherForFrame(true, true, true));
     EXPECT_TRUE(igi::ShouldDrawWeatherForFrame(true, true, false));
     EXPECT_FALSE(igi::ShouldDrawWeatherForFrame(true, false, true));
 }
