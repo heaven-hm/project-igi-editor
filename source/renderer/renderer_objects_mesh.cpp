@@ -461,38 +461,30 @@ const ParsedGeometry* Renderer_Objects::GetOrLoadSkinGeometry(const std::string&
 }
 
 bool Renderer_Objects::IsCameraInsideBuildingBounds(const std::vector<LevelObject>& objects,
-                                                  const glm::vec3& cameraPos) {
+                                                     const glm::vec3& cameraPos) {
     for (const auto& obj : objects) {
         if (obj.deleted || !obj.isBuilding || obj.modelId.empty()) continue;
         const Mesh& mesh = GetOrLoadMesh(obj.modelId, true);
         if (mesh.vertexCount == 0) continue;
 
-        // Transform camera position into building local space
-        glm::vec3 delta = cameraPos - glm::vec3(obj.pos);
-        float cosZ = std::cos(-static_cast<float>(obj.rot.z));
-        float sinZ = std::sin(-static_cast<float>(obj.rot.z));
-        glm::vec3 localPos(
-            delta.x * cosZ - delta.y * sinZ,
-            delta.x * sinZ + delta.y * cosZ,
-            delta.z
-        );
+        const glm::vec3 delta = cameraPos - glm::vec3(obj.pos);
+        const float cosZ = std::cos(-static_cast<float>(obj.rot.z));
+        const float sinZ = std::sin(-static_cast<float>(obj.rot.z));
+        glm::vec3 localPos(delta.x * cosZ - delta.y * sinZ,
+                           delta.x * sinZ + delta.y * cosZ, delta.z);
+        float totalScale = 40.96f * obj.scale;
+        if (totalScale <= 0.0f) totalScale = 40.96f;
+        localPos /= totalScale;
 
-        float total_scale = 40.96f * obj.scale;
-        if (total_scale <= 0.0f) total_scale = 40.96f;
-        localPos /= total_scale;
-
-        glm::vec3 minBound = mesh.center - mesh.halfExtents;
-        glm::vec3 maxBound = mesh.center + mesh.halfExtents;
-
-        if (igi::IsWithinWeatherShelterFootprint(
-                localPos.x, localPos.y,
-                minBound.x, maxBound.x,
-                minBound.y, maxBound.y)) {
+        const glm::vec3 minBound = mesh.center - mesh.halfExtents;
+        const glm::vec3 maxBound = mesh.center + mesh.halfExtents;
+        if (igi::IsWithinWeatherShelterFootprint(localPos.x, localPos.y,
+                                                  minBound.x, maxBound.x,
+                                                  minBound.y, maxBound.y)) {
             return true;
         }
     }
     return false;
 }
-
 
 // ─── InitSelectionBox ────────────────────────────────────────────────────────

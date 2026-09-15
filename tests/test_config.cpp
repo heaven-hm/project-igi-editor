@@ -244,6 +244,38 @@ TEST(ConfigQvmTest, SavesAndReloadsPauseMenuLogEnableAndSeverity) {
     Config::Init();
 }
 
+TEST(ConfigQvmTest, SavesAndReloadsWeatherEnablement) {
+    namespace fs = std::filesystem;
+    const fs::path gameRoot = fs::temp_directory_path() /
+        ("igi1ed-weather-config-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const fs::path qedDir = gameRoot / "editor" / "qed";
+    std::error_code ec;
+    fs::create_directories(qedDir, ec);
+    ASSERT_FALSE(ec);
+    {
+        std::ofstream qsc(qedDir / "qedconfig.qsc");
+        ASSERT_TRUE(qsc.is_open());
+        qsc << "QEDLogs(FALSE);\nQEDWeatherEnabled(FALSE);\n";
+    }
+
+    {
+        ScopedEnvironmentVariable gamePath("IGI_GAME_PATH", gameRoot.string());
+        Config::Init();
+        EXPECT_FALSE(Config::Get().weatherEnabled);
+
+        Config::Get().weatherEnabled = true;
+        Config::Save();
+        Config::Init();
+        EXPECT_TRUE(Config::Get().weatherEnabled);
+    }
+
+    const std::string qscSource = ReadTextFile(qedDir / "qedconfig.qsc");
+    EXPECT_TRUE(QscBooleanSetting(qscSource, "QEDWeatherEnabled"));
+    fs::remove_all(gameRoot, ec);
+    Config::Init();
+}
+
 TEST(ConfigQvmTest, AcceptsUtf8BomInAuthoritativeGameQsc) {
     namespace fs = std::filesystem;
     const fs::path gameRoot = fs::temp_directory_path() /

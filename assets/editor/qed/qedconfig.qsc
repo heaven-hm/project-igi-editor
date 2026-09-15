@@ -22,6 +22,8 @@ QEDLightmaps(FALSE);
 QEDFog(TRUE);
 QEDFogIntensity(800);
 QEDMusic(TRUE);
+QEDWeatherEnabled(TRUE);
+QEDWeatherMode("Default");
 QEDUseEditorFont(TRUE);
 QEDSystemFontSize(14);
 QEDFindTaskName("");

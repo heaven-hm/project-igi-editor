@@ -292,6 +292,7 @@ add_executable(igi_tests
     tests/test_mission_expression.cpp
     tests/test_mission_state.cpp
     tests/test_level_weather.cpp
+    tests/test_weather_toggle.cpp
     tests/test_model_texture_resolution.cpp
     tests/test_spline_geometry.cpp
 )
@@ -415,6 +416,7 @@ target_sources(igi_tests PRIVATE
     source/runtime/map_computer_camera.cpp
     source/runtime/map_computer_projection.cpp
     source/runtime/level_weather.cpp
+    source/runtime/weather_mode.cpp
 )
 
 set_source_files_properties(

@@ -17,6 +17,7 @@
 #include "runtime/map_computer_camera.h"
 #include "runtime/render_target.h"
 #include "runtime/editor_cursor_mode.h"
+#include "runtime/level_weather.h"
 #include <atomic>
 #include <cstdint>
 #include <optional>
@@ -274,6 +275,9 @@ private:
 	void CheckMusicLoop(); // call every frame: manually restarts playback since MCI "repeat" is unreliable for waveaudio
 	void ToggleMusic();    // Escape-menu Music checkbox: stop if playing, else (re)start current level's music
 	void ToggleLightmaps(); // Escape-menu Lightmaps checkbox: enable/disable applying calculated lightmaps during render
+	void ApplyWeatherMode(); // Apply authored or forced weather (matching OpenIGI MissionWeather)
+	void CycleWeatherMode(); // Cycle: Default -> Rain -> Snow -> Off -> Default
+	igi::LevelWeatherSettings authored_weather_;
 	void UpdateAnimations(float dtSec);
 	void SetupRuntimePlayerAnimation();
 	void ApplyRuntimeAiAnimationRequests();

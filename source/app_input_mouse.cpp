@@ -36,7 +36,7 @@ void App::Input_OnMouseWheel(int wheel, int direction, int x, int y) {
 		const int loggingRow = row++;
 		const int logLevelRow = row++;
 		(void)loggingRow; // The checkbox is click-only; the wheel adjusts severity only.
-		row += 4; // music, lightmaps, calculate-lightmaps, terrain header
+		row += 5; // music, weather, lightmaps, calculate-lightmaps, terrain header
 		const int terrainHeaderRow = row - 1;
 		if (pause_terrain_expanded_) {
 			row += 5;
@@ -462,6 +462,7 @@ int RESUME_ROW = btn_idx++;
 					int LOGGING_ROW = btn_idx++;
 					int LOG_LEVEL_ROW = btn_idx++;
 					int MUSIC_ROW = btn_idx++;
+					int WEATHER_ROW = btn_idx++;
 					int LIGHTMAPS_ROW = btn_idx++;
 					int LIGHTMAPS_CALC_ROW = btn_idx++;
 					int TERRAIN_HEADER_ROW = btn_idx++;
@@ -554,6 +555,7 @@ else if (btn_hit2(MODE_ROW))   { ToggleGamePlayMode(); TogglePauseMenu(); }
 						status_message_ = std::string("Log level: ") + igi::LogLevelLabel(level);
 					}
 					else if (btn_hit2(MUSIC_ROW)) { ToggleMusic(); }
+					else if (btn_hit2(WEATHER_ROW)) { CycleWeatherMode(); }
 					else if (btn_hit2(LIGHTMAPS_ROW)) { igi::ObjectLightmapManager::Get().CycleRenderMode(); }
 					else if (btn_hit2(LIGHTMAPS_CALC_ROW)) {
 						CalculateLightmapsForAllObjects();

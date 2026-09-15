@@ -87,6 +87,8 @@ struct ConfigData {
     bool enableFog; // Terrain/object atmospheric fog — toggle in Terrain Settings panel
     int fogIntensity; // 0-200 (%), step 10; 100 = level default, higher = thicker fog
     bool musicEnabled; // Escape-menu Music checkbox preference — persists across level loads/game launches
+    bool weatherEnabled; // Authored rain/snow visibility — toggle in the pause menu
+    int  weatherMode;    // 0 = Default (Authored), 1 = Rain (Forced), 2 = Snow (Forced), 3 = Off
 
     // NEW: Advanced QED Settings
     int consoleAutoActivate;

@@ -5,7 +5,7 @@
 namespace igi {
 
 constexpr int kPauseMenuWidth = 460;
-constexpr int kPauseMenuMaxHeight = 714;
+constexpr int kPauseMenuMaxHeight = 1040;
 constexpr int kPauseMenuScreenMargin = 12;
 constexpr int kPauseMenuFirstRowOffset = 90;
 constexpr int kPauseMenuBottomPadding = 24;
@@ -25,8 +25,8 @@ struct PauseMenuLayout {
 
 constexpr int PauseMenuRowCount(bool terrainOptionsExpanded) noexcept {
     // Resume, mode, collision, font, level, autosave, logging, log level,
-    // music, lightmaps, calculate-lightmaps, terrain header, reset, save, quit.
-    return terrainOptionsExpanded ? 20 : 15;
+    // music, weather, lightmaps, calculate-lightmaps, terrain header, reset, save, quit.
+    return terrainOptionsExpanded ? 21 : 16;
 }
 
 constexpr int PauseMenuPreferredRowHeight(bool terrainOptionsExpanded) noexcept {

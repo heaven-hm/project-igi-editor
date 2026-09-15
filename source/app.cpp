@@ -152,6 +152,7 @@ bool App::Init(int argc, char** argv) {
 	renderer_.SetLightmapsEnabled(cfg.enableLightmaps);
 	renderer_.SetFogEnabled(cfg.enableFog);
 	renderer_.SetFogIntensity(cfg.fogIntensity);
+	renderer_.SetWeatherEnabled(cfg.weatherEnabled);
 
 	auto_save_enabled_ = cfg.auto_save_enabled;
 	auto_save_interval_seconds_ = cfg.auto_save_interval_seconds;

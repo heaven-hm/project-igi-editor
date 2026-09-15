@@ -785,6 +785,7 @@ public:
 	void SetRainEffect(bool active, bool is_snow, float startMeters, float endMeters, float alpha) {
 		rain_.SetParams(active, is_snow, startMeters, endMeters, alpha);
 	}
+	void SetWeatherEnabled(bool enabled) { rain_.SetWeatherEnabled(enabled); }
 	void ClearSuppressedAttas() { objects_.ClearSuppressedAttas(); }
 	bool SuppressAttachmentInMef(const std::string& parentModelId, const std::string& attModelId, const glm::vec3& localPos) {
 		return objects_.SuppressAttachmentInMef(parentModelId, attModelId, localPos);

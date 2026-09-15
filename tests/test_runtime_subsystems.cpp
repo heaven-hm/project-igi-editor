@@ -298,14 +298,14 @@ TEST(PauseMenuLayoutTest, ExpandedTerrainOptionsKeepQuitRowOnScreen) {
     EXPECT_GE(layout.menu_left, 0);
     EXPECT_LE(layout.menu_top + layout.menu_height, 480);
     EXPECT_LE(layout.menu_left + layout.menu_width, 640);
-    EXPECT_EQ(layout.row_count, 20);
+    EXPECT_EQ(layout.row_count, 21);
     const int quitY = PauseMenuRowCenter(layout, layout.row_count - 1);
     EXPECT_TRUE(IsPauseMenuRowHit(layout, layout.row_count - 1, quitY));
 }
 
 TEST(PauseMenuLayoutTest, IncludesLoggingToggleAndSeverityRows) {
-    EXPECT_EQ(PauseMenuRowCount(false), 15);
-    EXPECT_EQ(PauseMenuRowCount(true), 20);
+    EXPECT_EQ(PauseMenuRowCount(false), 16);
+    EXPECT_EQ(PauseMenuRowCount(true), 21);
 }
 
 TEST(RuntimeRenderTargetTest, PauseMenuUsesOnlyTheNativeMouseCursor) {

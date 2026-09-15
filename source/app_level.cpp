@@ -9,6 +9,7 @@
 #include "renderer/object_lightmap.h"
 #include "runtime/audio_system.h"
 #include "runtime/level_weather.h"
+#include "runtime/weather_mode.h"
 #include "runtime/pause_menu_state.h"
 #include "runtime/editor_camera_start.h"
 #include <mmsystem.h>
@@ -128,6 +129,41 @@ void App::ToggleLightmaps() {
         renderer_.ClearAllLightmaps();
         Logger::Get().Log(LogLevel::INFO, "[Lightmap] Cleared all baked lightmaps (checkbox OFF)");
     }
+}
+
+void App::ApplyWeatherMode() {
+    auto& cfg = Config::Get();
+    const auto mode = static_cast<igi::WeatherMode>(cfg.weatherMode);
+    const auto weather = igi::ResolveWeatherMode(authored_weather_, mode, cfg.weatherEnabled);
+    renderer_.SetWeatherEnabled(weather.enabled);
+    renderer_.SetRainEffect(weather.active, weather.is_snow, weather.start_meters,
+                            weather.end_meters, weather.alpha);
+
+    if (!weather.active) {
+        Logger::Get().Log(LogLevel::INFO, "[Weather] Weather disabled (OFF)");
+    } else if (mode == igi::WeatherMode::Default) {
+        Logger::Get().Log(LogLevel::INFO, "[Weather] Authored " +
+            std::string(weather.is_snow ? "SNOW" : "RAIN") +
+            " active: start=" + std::to_string(weather.start_meters) +
+            "m end=" + std::to_string(weather.end_meters) + "m alpha=" + std::to_string(weather.alpha));
+    } else {
+        Logger::Get().Log(LogLevel::INFO, "[Weather] Forced " +
+            std::string(weather.is_snow ? "SNOW" : "RAIN") +
+            " active: start=" + std::to_string(weather.start_meters) +
+            "m end=" + std::to_string(weather.end_meters) + "m alpha=" + std::to_string(weather.alpha));
+    }
+}
+
+void App::CycleWeatherMode() {
+    auto& cfg = Config::Get();
+    Logger::Get().Log(LogLevel::INFO, "[Weather] CycleWeatherMode called: mode " +
+        std::to_string(cfg.weatherMode) + " -> " + std::to_string(static_cast<int>(igi::NextWeatherMode(static_cast<igi::WeatherMode>(cfg.weatherMode)))));
+    cfg.weatherMode = static_cast<int>(igi::NextWeatherMode(static_cast<igi::WeatherMode>(cfg.weatherMode)));
+    cfg.weatherEnabled = (cfg.weatherMode != 3);
+    ApplyWeatherMode();
+    Config::Save();
+
+    status_message_ = std::string("Weather: ") + igi::WeatherModeLabel(static_cast<igi::WeatherMode>(cfg.weatherMode));
 }
 
 void App::LoadLevel(int level_no) {
@@ -450,20 +486,8 @@ void App::LoadLevel(int level_no) {
 				if (object.type == "RainEffect")
 					weatherObjects.push_back({object.type, object.argTokens});
 			}
-			const igi::LevelWeatherSettings weather =
-				igi::ResolveLevelWeather(weatherObjects);
-			if (!weather.active) {
-				Logger::Get().Log(LogLevel::INFO,
-					"[App] No active RainEffect in level — weather disabled");
-			} else {
-				Logger::Get().Log(LogLevel::INFO, "[App] WeatherEffect resolved: active=1" +
-					std::string(weather.is_snow ? " (SNOW)" : " (RAIN)") +
-					" start=" + std::to_string(weather.start_meters) +
-					"m end=" + std::to_string(weather.end_meters) +
-					"m alpha=" + std::to_string(weather.alpha));
-			}
-			renderer_.SetRainEffect(weather.active, weather.is_snow,
-				weather.start_meters, weather.end_meters, weather.alpha);
+			authored_weather_ = igi::ResolveLevelWeather(weatherObjects);
+			ApplyWeatherMode();
 		}
 
 		// Log all loaded objects for verification script

@@ -458,14 +458,8 @@ void Renderer::Draw(const draw_params_s &params,
 
   }
 
-  // RainEffect remains independent of editor draw filters, but precipitation
-  // is suppressed when the camera is within a Building's transformed footprint.
-  const bool cameraIsSheltered = !params.fast_scene_preview_ && rain_.IsActive() &&
-      params.level_objects_ &&
-      objects_.IsCameraInsideBuildingBounds(params.level_objects_->GetObjects(),
-                                             params.view_define_->pos_);
   if (!params.fast_scene_preview_)
-    rain_.Draw(ubo_mats_, params.view_define_->pos_, cameraIsSheltered);
+    rain_.Draw(ubo_mats_, params.view_define_->pos_, false);
 
   if (profileRenderer) {
     static int frames = 0;
@@ -1789,6 +1783,12 @@ void Renderer::Draw(const draw_params_s &params,
       char lightmap_btn_label[64];
       snprintf(lightmap_btn_label, sizeof(lightmap_btn_label), "Lightmap: [%s]",
                igi::ObjectLightmapManager::Get().GetRenderModeName());
+      char weather_btn_label[64];
+      const char* wmode_str = "Default";
+      if (Config::Get().weatherMode == 1) wmode_str = "Rain";
+      else if (Config::Get().weatherMode == 2) wmode_str = "Snow";
+      else if (Config::Get().weatherMode == 3) wmode_str = "OFF";
+      snprintf(weather_btn_label, sizeof(weather_btn_label), "Weather: [%s]", wmode_str);
 
       int mods = task_tree_view.terrain_mod_options_;
       bool tex = (mods & TERRAIN_TEXTURE_MOD) != 0;
@@ -1822,6 +1822,8 @@ void Renderer::Draw(const draw_params_s &params,
       btn_labels.push_back("Log Level");
       const int MUSIC_ROW = btn_labels.size();
       btn_labels.push_back("Music");
+      const int WEATHER_ROW = btn_labels.size();
+      btn_labels.push_back(weather_btn_label);
       const int LIGHTMAPS_ROW = btn_labels.size();
       btn_labels.push_back(lightmap_btn_label);
       const int LIGHTMAPS_CALC_ROW = btn_labels.size();
@@ -1990,6 +1992,20 @@ void Renderer::Draw(const draw_params_s &params,
           snprintf(musicbuf, sizeof(musicbuf), "[%c] Music", task_tree_view.music_on_ ? 'X' : ' ');
           int tw = pause_text_width(musicbuf);
           draw_pause_text(menu_x + (menu_w - tw) / 2, screen_btn_y, musicbuf,
+                        hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
+
+        } else if (i == WEATHER_ROW) {
+          if (hovered) {
+            glEnable(GL_BLEND);
+            glColor4f(0.0f, 0.8f, 0.0f, 0.35f);
+            glBegin(GL_QUADS);
+            glVertex2i(menu_x, gl_btn_y - 15); glVertex2i(menu_x + menu_w, gl_btn_y - 15);
+            glVertex2i(menu_x + menu_w, gl_btn_y + 15); glVertex2i(menu_x, gl_btn_y + 15);
+            glEnd();
+            glDisable(GL_BLEND);
+          }
+          int wtw = pause_text_width(weather_btn_label);
+          draw_pause_text(menu_x + (menu_w - wtw) / 2, screen_btn_y, weather_btn_label,
                         hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
 
         } else if (i == LIGHTMAPS_ROW) {

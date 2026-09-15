@@ -176,6 +176,8 @@ void Config::CreateDefault() {
     data_.enableFog = true;
     data_.fogIntensity = 200;
     data_.musicEnabled = true;
+    data_.weatherEnabled = true;
+    data_.weatherMode = 0;
     data_.consoleAutoActivate = 2;
     data_.searchType = 133577004;
     data_.invertMouse = false;
@@ -282,6 +284,16 @@ void Config::Load(bool configQvmReady) {
                 else if (key == "Fog") data_.enableFog = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "FogIntensity") { int v = std::stoi(val); data_.fogIntensity = std::max(0, std::min(1000, v)); }
                 else if (key == "Music") data_.musicEnabled = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "WeatherEnabled") {
+                    data_.weatherEnabled = (val == "TRUE" || val == "true" || val == "1");
+                    if (!data_.weatherEnabled) data_.weatherMode = 3;
+                }
+                else if (key == "WeatherMode") {
+                    if (val == "Default" || val == "0") { data_.weatherMode = 0; data_.weatherEnabled = true; }
+                    else if (val == "Rain" || val == "1") { data_.weatherMode = 1; data_.weatherEnabled = true; }
+                    else if (val == "Snow" || val == "2") { data_.weatherMode = 2; data_.weatherEnabled = true; }
+                    else if (val == "Off" || val == "OFF" || val == "3") { data_.weatherMode = 3; data_.weatherEnabled = false; }
+                }
                 else if (key == "ConsoleAutoActivate") data_.consoleAutoActivate = std::stoi(val);
                 else if (key == "SearchType") data_.searchType = std::stoll(val);
                 else if (key == "InvertMouse") data_.invertMouse = (val == "TRUE" || val == "true" || val == "1");
@@ -470,6 +482,15 @@ void Config::Save() {
         file << "QEDFog(" << (data_.enableFog ? "TRUE" : "FALSE") << ");\n";
         file << "QEDFogIntensity(" << data_.fogIntensity << ");\n";
         file << "QEDMusic(" << (data_.musicEnabled ? "TRUE" : "FALSE") << ");\n";
+        if (!data_.weatherEnabled && data_.weatherMode != 3) data_.weatherMode = 3;
+        else if (data_.weatherEnabled && data_.weatherMode == 3) data_.weatherMode = 0;
+        data_.weatherEnabled = (data_.weatherMode != 3);
+        file << "QEDWeatherEnabled(" << (data_.weatherEnabled ? "TRUE" : "FALSE") << ");\n";
+        const char* wmodeName = "Default";
+        if (data_.weatherMode == 1) wmodeName = "Rain";
+        else if (data_.weatherMode == 2) wmodeName = "Snow";
+        else if (data_.weatherMode == 3) wmodeName = "Off";
+        file << "QEDWeatherMode(\"" << wmodeName << "\");\n";
         file << "QEDUseEditorFont(" << (data_.useEditorFont ? "TRUE" : "FALSE") << ");\n";
         file << "QEDSystemFontSize(" << data_.systemFontSize << ");\n";
         file << "QEDFindTaskName(\"" << data_.findTaskName << "\");\n";
