@@ -6,6 +6,7 @@
 #include "../source/runtime/weather_mode.h"
 #include "../source/runtime/weather_visibility.h"
 #include "../source/runtime/weather_particle_style.h"
+#include "../source/renderer/weather_math.h"
 
 namespace {
 
@@ -164,6 +165,20 @@ TEST(WeatherParticle, SnowFlakeIs0_045m) {
 TEST(WeatherParticle, SnowSmallerThanRain) {
     EXPECT_LT(igi::WeatherParticleLengthMeters(true),
               igi::WeatherParticleLengthMeters(false));
+}
+
+TEST(WeatherParticle, RestoresRetailParticleCountsAndOpacity) {
+    EXPECT_EQ(igi::weather::kRainDrops, 1200);
+    EXPECT_EQ(igi::weather::kSnowFlakes, 900);
+    EXPECT_FLOAT_EQ(igi::weather::RainStreakAlpha(0.50f), 0.28f);
+    EXPECT_FLOAT_EQ(igi::weather::SnowFlakeAlpha(0.25f), 0.42f);
+}
+
+TEST(WeatherParticle, SnowPointSizeUsesProjectionAndDistance) {
+    // The known-good snow path scales a 0.045m flake in screen space.  This
+    // must not regress to the former constant 4.5 pixel point size.
+    EXPECT_FLOAT_EQ(igi::weather::SnowPointSizePixels(1080.0f, 1.0f, 0.045f, 10.0f),
+                    2.43f);
 }
 
 } // namespace

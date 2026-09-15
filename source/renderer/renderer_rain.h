@@ -19,7 +19,10 @@ public:
     bool IsWeatherEnabled() const { return weather_enabled_; }
 
 private:
+    void DrawSnow(GLuint ubo_mats, const glm::vec3& cameraPos, float time_sec);
+
     GLuint shader_program_ = 0;
+    GLuint snow_program_ = 0;
     GLuint ubo_binding_point_ = 0;
     GLuint vao_rain_ = 0;
     GLuint vbo_rain_ = 0;
