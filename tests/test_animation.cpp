@@ -327,10 +327,11 @@ TEST(GraphCameraTargetTest, F11GraphPosePlacesCameraBackAndFacesTarget) {
 }
 
 TEST(GraphCameraTargetTest, F11UsesSelectedObjectWhenOverlayHasNoNodeSelection) {
-    EXPECT_TRUE(ShouldF11SnapSelectedObjectDirectly(true, false, -1));
-    EXPECT_TRUE(ShouldF11SnapSelectedObjectDirectly(true, true, -1));
-    EXPECT_TRUE(ShouldF11SnapSelectedObjectDirectly(true, true, 7));
-    EXPECT_FALSE(ShouldF11SnapSelectedObjectDirectly(false, true, -1));
+    EXPECT_TRUE(ShouldF11SnapSelectedObjectDirectly(true, true, false, -1));
+    EXPECT_TRUE(ShouldF11SnapSelectedObjectDirectly(true, true, true, -1));
+    EXPECT_TRUE(ShouldF11SnapSelectedObjectDirectly(true, true, true, 7));
+    EXPECT_FALSE(ShouldF11SnapSelectedObjectDirectly(true, false, false, -1));
+    EXPECT_FALSE(ShouldF11SnapSelectedObjectDirectly(false, true, true, -1));
 }
 
 TEST(GraphCameraTargetTest, F11IsNotBlockedByPauseGate) {

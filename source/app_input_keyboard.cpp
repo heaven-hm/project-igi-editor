@@ -436,12 +436,15 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		auto& objects = level_.GetLevelObjects().GetObjects();
 		const bool hasSelectedObject = selected_object_index_ >= 0 &&
 			selected_object_index_ < (int)objects.size();
+		const bool selectedObjectHasModel = hasSelectedObject &&
+			!objects[selected_object_index_].modelId.empty();
 		const bool hasGraphTarget = renderer_.IsGraphOverlayVisible() ||
 			renderer_.GraphSelected() >= 0;
 		if (!hasSelectedObject && !hasGraphTarget) return;
 
 		if (ShouldF11SnapSelectedObjectDirectly(
-				hasSelectedObject, renderer_.IsGraphOverlayVisible(),
+				hasSelectedObject, selectedObjectHasModel,
+				renderer_.IsGraphOverlayVisible(),
 				renderer_.GraphSelected())) {
 			const auto& obj = objects[selected_object_index_];
 			const float boundRadius = renderer_.GetMeshRadius(obj.modelId, obj.isBuilding) * 40.96f * obj.scale;
@@ -509,7 +512,7 @@ void App::Input_OnSpecial(int key, int x, int y) {
 			viewer_.pitch_ = pose.pitch_degrees;
 		} else {
 			float boundRadius = 2000.0f;
-			if (hasSelectedObject) {
+			if (hasSelectedObject && selectedObjectHasModel) {
 				const auto& obj = objects[selected_object_index_];
 				boundRadius = renderer_.GetMeshRadius(obj.modelId, obj.isBuilding) * 40.96f * obj.scale;
 				if (boundRadius < 500.0f) boundRadius = 2000.0f;
