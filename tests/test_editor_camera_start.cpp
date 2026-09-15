@@ -4,6 +4,7 @@
 #include "../source/runtime/graph_camera_target.h"
 #include "../source/capture_camera.h"
 #include "../source/renderer/renderer_objects_internal.h"
+#include "../source/runtime/camera_preview_policy.h"
 
 namespace {
 
@@ -84,6 +85,13 @@ TEST(EditorCameraStartTest, F11CameraSnapToObjectFramesOutsideModelBounds) {
     const double distShift = glm::distance(poseShift.position, objPos);
     EXPECT_GE(distShift, static_cast<double>(boundRadius * 3.0f));
     EXPECT_GT(distShift, distNormal);
+}
+
+TEST(EditorCameraStartTest, CameraKeyDoesNotSuppressEditorSceneOverlays) {
+    EXPECT_FALSE(igi::ShouldUseFastScenePreview(true, false, true));
+    EXPECT_FALSE(igi::ShouldUseFastScenePreview(false, false, true));
+    EXPECT_TRUE(igi::ShouldUseFastScenePreview(true, false, false));
+    EXPECT_FALSE(igi::ShouldUseFastScenePreview(true, true, false));
 }
 
 TEST(EditorCameraStartTest, IdentifiesZyxEulerModelsCorrectly) {

@@ -1,4 +1,5 @@
 #include "app_internal.h"
+#include "runtime/camera_preview_policy.h"
 #include "runtime/config_qvm.h"
 #include "runtime/human_player_config.h"
 #include "runtime/audio_system.h"
@@ -1039,7 +1040,9 @@ void App::Frame(float delta_seconds) {
 	// continued to render, which made the log claim animations were playing even
 	// though no animated pose was ever submitted in editor mode.
 	std::unordered_set<int> skinnedReplacementIndices;
-	draw_params_.fast_scene_preview_ = cameraNavigating && !render_gameplay;
+	draw_params_.fast_scene_preview_ = igi::ShouldUseFastScenePreview(
+		cameraNavigating, render_gameplay,
+		Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera));
 	if (!draw_params_.fast_scene_preview_) {
 		skinnedReplacementIndices = GetSkinnedReplacementObjectIndices(render_gameplay);
 		if (!render_gameplay) {
