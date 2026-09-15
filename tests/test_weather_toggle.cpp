@@ -179,11 +179,10 @@ TEST(WeatherParticle, RestoresRetailParticleCountsAndOpacity) {
     EXPECT_FLOAT_EQ(igi::weather::SnowFlakeAlpha(0.25f), 0.42f);
 }
 
-TEST(WeatherParticle, SnowPointSizeUsesProjectionAndDistance) {
-    // The known-good snow path scales a 0.045m flake in screen space.  This
-    // must not regress to the former constant 4.5 pixel point size.
-    EXPECT_FLOAT_EQ(igi::weather::SnowPointSizePixels(1080.0f, 1.0f, 0.045f, 10.0f),
-                    2.43f);
+TEST(WeatherParticle, SnowQuadUsesRetailHalfExtent) {
+    EXPECT_FLOAT_EQ(igi::weather::kSnowFlakeMeters, 0.045f);
+    EXPECT_FLOAT_EQ(igi::WeatherParticleLengthMeters(true),
+                    igi::weather::kSnowFlakeMeters * 2.0f);
 }
 
 } // namespace

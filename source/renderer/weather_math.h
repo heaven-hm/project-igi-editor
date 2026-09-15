@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <cmath>
 
 namespace igi::weather {
 
@@ -28,15 +27,6 @@ inline float RainStreakAlpha(float authoredAlpha) noexcept {
 
 inline float SnowFlakeAlpha(float authoredAlpha) noexcept {
     return std::clamp(authoredAlpha * kSnowAlphaBoost, kSnowMinAlpha, kSnowMaxAlpha);
-}
-
-// Matches the dedicated snow vertex shader: point size is derived from the
-// viewport, projection Y scale, physical flake size, and camera distance.
-inline float SnowPointSizePixels(float viewportHeight, float projectionY,
-                                 float flakeMeters, float distanceMeters) noexcept {
-    return std::clamp(viewportHeight * 0.5f * std::abs(projectionY) * flakeMeters /
-                          std::max(distanceMeters, 0.0001f),
-                      1.0f, 64.0f);
 }
 
 } // namespace igi::weather

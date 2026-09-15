@@ -53,14 +53,14 @@ void main() {
 static const char* SNOW_VERT_SRC = R"(
 #version 330 core
 layout(location = 0) in vec3 a_seed;
+layout(location = 1) in vec2 a_corner;
 layout(std140) uniform Matrices { mat4 u_unused1; mat4 u_unused2; mat4 u_mvp; };
 uniform vec3 u_cameraPos;
 uniform float u_time;
 uniform float u_boxSize;
 uniform float u_heightStart;
 uniform float u_heightEnd;
-uniform float u_flakeSize;
-uniform float u_viewportH;
+uniform float u_halfExtent;
 uniform float u_driftUnits;
 void main() {
     float fallRange = max(u_heightStart - u_heightEnd, 1.0);
@@ -71,9 +71,13 @@ void main() {
                   sin(u_time * 0.45 + a_seed.x * 17.0) * u_driftUnits;
     float cellY = mod(a_seed.y * u_boxSize - u_cameraPos.y, u_boxSize) - halfBox +
                   cos(u_time * 0.35 + a_seed.y * 19.0) * u_driftUnits;
-    gl_Position = u_mvp * vec4(u_cameraPos.x + cellX, u_cameraPos.y + cellY, z, 1.0);
-    gl_PointSize = clamp(u_viewportH * 0.5 * abs(u_mvp[1][1]) * u_flakeSize /
-                         max(gl_Position.w, 0.0001), 1.0, 64.0);
+    // OpenIGI builds a square flake quad from a 0.045m half-extent. Its
+    // diagonal Z ordering is retained so the physical 0.09m footprint and
+    // depth relationship match the reference renderer.
+    vec3 worldPos = vec3(u_cameraPos.x + cellX + a_corner.x * u_halfExtent,
+                         u_cameraPos.y + cellY + a_corner.y * u_halfExtent,
+                         z + a_corner.x * u_halfExtent);
+    gl_Position = u_mvp * vec4(worldPos, 1.0);
 }
 )";
 
@@ -82,8 +86,6 @@ static const char* SNOW_FRAG_SRC = R"(
 uniform float u_alpha;
 out vec4 fragColor;
 void main() {
-    vec2 d = gl_PointCoord - vec2(0.5);
-    if (dot(d, d) > 0.25) discard;
     fragColor = vec4(0.92, 0.97, 1.0, clamp(u_alpha * 1.75, 0.10, 0.42));
 }
 )";
@@ -174,11 +176,17 @@ bool Renderer_Rain::Init() {
     // Snow flake buffer: 900 flakes, seed 271828 (matches OpenIGI SnowRenderer)
     num_snow_flakes_ = igi::weather::kSnowFlakes;
     std::vector<float> snow_verts;
-    snow_verts.reserve(num_snow_flakes_ * 3);
+    snow_verts.reserve(num_snow_flakes_ * 6 * 5);
     std::mt19937 rng_snow(271828);
     for (int i = 0; i < num_snow_flakes_; ++i) {
         float sx = dist(rng_snow), sy = dist(rng_snow), sz = dist(rng_snow);
-        snow_verts.insert(snow_verts.end(), { sx, sy, sz });
+        const float corners[][2] = {
+            {-1.0f, -1.0f}, {1.0f, -1.0f}, {1.0f, 1.0f},
+            {-1.0f, -1.0f}, {1.0f, 1.0f}, {-1.0f, 1.0f},
+        };
+        for (const auto& corner : corners) {
+            snow_verts.insert(snow_verts.end(), {sx, sy, sz, corner[0], corner[1]});
+        }
     }
 
     glGenVertexArrays(1, &vao_snow_);
@@ -186,8 +194,10 @@ bool Renderer_Rain::Init() {
     glBindVertexArray(vao_snow_);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_snow_);
     glBufferData(GL_ARRAY_BUFFER, snow_verts.size() * sizeof(float), snow_verts.data(), GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
     // The editor draws fixed-function overlays after the scene. Leaving either
@@ -291,10 +301,8 @@ void Renderer_Rain::DrawSnow(GLuint ubo_mats, const glm::vec3& cameraPos, float 
     glUniform1f(glGetUniformLocation(snow_program_, "u_boxSize"), igi::weather::kBoxMeters * WORLD_UNITS_PER_METER);
     glUniform1f(glGetUniformLocation(snow_program_, "u_heightStart"), height_start);
     glUniform1f(glGetUniformLocation(snow_program_, "u_heightEnd"), height_end);
-    glUniform1f(glGetUniformLocation(snow_program_, "u_flakeSize"),
-                igi::WeatherParticleLengthMeters(true) * WORLD_UNITS_PER_METER);
-    glUniform1f(glGetUniformLocation(snow_program_, "u_viewportH"),
-                static_cast<float>(glutGet(GLUT_WINDOW_HEIGHT)));
+    glUniform1f(glGetUniformLocation(snow_program_, "u_halfExtent"),
+                igi::weather::kSnowFlakeMeters * WORLD_UNITS_PER_METER);
     glUniform1f(glGetUniformLocation(snow_program_, "u_driftUnits"),
                 igi::weather::kSnowDriftMeters * WORLD_UNITS_PER_METER);
     glUniform1f(glGetUniformLocation(snow_program_, "u_alpha"), alpha_);
@@ -305,11 +313,9 @@ void Renderer_Rain::DrawSnow(GLuint ubo_mats, const glm::vec3& cameraPos, float 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_DEPTH_TEST);
-    glEnable(GL_PROGRAM_POINT_SIZE);
     glBindVertexArray(vao_snow_);
-    glDrawArrays(GL_POINTS, 0, num_snow_flakes_);
+    glDrawArrays(GL_TRIANGLES, 0, num_snow_flakes_ * 6);
     glBindVertexArray(0);
-    glDisable(GL_PROGRAM_POINT_SIZE);
     glDepthMask(depth_mask_was);
     glDisable(GL_BLEND);
     glUseProgram(0);
