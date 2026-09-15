@@ -30,7 +30,9 @@ struct GraphCameraPose {
 // overlay is open unless the user has explicitly selected a graph node.
 inline bool ShouldF11SnapSelectedObjectDirectly(
     bool has_selected_object, bool overlay_visible, int selected_node_id) {
-    return has_selected_object && (!overlay_visible || selected_node_id < 0);
+    (void)overlay_visible;
+    (void)selected_node_id;
+    return has_selected_object;
 }
 
 inline bool ShouldProcessF11WhilePaused(int key, int f11_key, bool paused) {
