@@ -117,11 +117,15 @@ struct ConfigData {
 class Config {
 public:
     static void Init();
+    // Initialize from an explicit qed directory. The editor uses its deployed
+    // editor/qed directory; the explicit form also makes config loading
+    // deterministic for unit tests and tools.
+    static bool InitFromDirectory(const std::string& qedDirectory);
     static ConfigData& Get();
     static void Save();
     
 private:
-    static void Load();
+    static void Load(const std::string& qedDirectory, const std::string& configQvmPath);
     static void CreateDefault();
     static std::string GetConfigPath();
     static std::string GetKeybindingsPath();

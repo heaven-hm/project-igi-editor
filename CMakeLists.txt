@@ -133,8 +133,25 @@ if (WIN32)
   # Dynamically select GL library path based on target architecture
   if (CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(GL_LIB_DIR "${PROJECT_SOURCE_DIR}/third_party/GL/lib/x64")
+    set(GL_DLL_DIR "${PROJECT_SOURCE_DIR}/assets/dlls/x64")
+    set(GL_VCPKG_TRIPLET "x64-windows")
   else()
     set(GL_LIB_DIR "${PROJECT_SOURCE_DIR}/third_party/GL/lib/x86")
+    set(GL_DLL_DIR "${PROJECT_SOURCE_DIR}/assets/dlls/x86")
+    set(GL_VCPKG_TRIPLET "x86-windows")
+  endif()
+
+  # The repository carries the x64 OpenGL runtime. On x86, use an installed
+  # vcpkg triplet when the equivalent bundled import libraries are absent.
+  if (NOT EXISTS "${GL_LIB_DIR}/freeglut.lib" OR NOT EXISTS "${GL_LIB_DIR}/glew32.lib")
+    if (DEFINED ENV{VCPKG_ROOT} AND
+        EXISTS "$ENV{VCPKG_ROOT}/installed/${GL_VCPKG_TRIPLET}/lib/freeglut.lib" AND
+        EXISTS "$ENV{VCPKG_ROOT}/installed/${GL_VCPKG_TRIPLET}/lib/glew32.lib")
+      set(GL_LIB_DIR "$ENV{VCPKG_ROOT}/installed/${GL_VCPKG_TRIPLET}/lib")
+      set(GL_DLL_DIR "$ENV{VCPKG_ROOT}/installed/${GL_VCPKG_TRIPLET}/bin")
+    else()
+      message(FATAL_ERROR "Missing freeglut/glew for ${GL_VCPKG_TRIPLET}. Install freeglut:${GL_VCPKG_TRIPLET} and glew:${GL_VCPKG_TRIPLET}, or provide third_party/GL libraries.")
+    endif()
   endif()
   message("Selected GL library path: ${GL_LIB_DIR}")
 
@@ -177,12 +194,6 @@ if (WIN32)
   )
 
   # Copy required runtime files (DLLs, config, version, shaders) next to the exe
-  if (CMAKE_SIZEOF_VOID_P EQUAL 8)
-    set(DLL_SRC_DIR "${PROJECT_SOURCE_DIR}/assets/dlls/x64")
-  else()
-    set(DLL_SRC_DIR "${PROJECT_SOURCE_DIR}/assets/dlls/x86")
-  endif()
-
   add_custom_command(TARGET igi-editor POST_BUILD
     # Copy assets/editor structure directly
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -191,8 +202,8 @@ if (WIN32)
 
     # Copy files to root (DLLs and version)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${DLL_SRC_DIR}/freeglut.dll"
-      "${DLL_SRC_DIR}/glew32.dll"
+      "${GL_DLL_DIR}/freeglut.dll"
+      "${GL_DLL_DIR}/glew32.dll"
       "${PROJECT_SOURCE_DIR}/version"
       "$<TARGET_FILE_DIR:igi-editor>"
 
@@ -230,6 +241,7 @@ add_executable(igi_tests
     tests/test_qsc_parser.cpp
     tests/test_qvm_roundtrip.cpp
     tests/test_config.cpp
+    tests/test_logger.cpp
     tests/test_utils.cpp
     tests/test_verify_unit.cpp
     tests/test_verify_level.cpp
@@ -260,6 +272,9 @@ target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/g
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/GL/include)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/tinygltf)
+target_compile_definitions(igi_tests PRIVATE
+    IGI_EDITOR_QED_ASSETS_DIR="${PROJECT_SOURCE_DIR}/assets/editor/qed"
+)
 target_link_libraries(igi_tests PRIVATE gtest_main)
 target_sources(igi_tests PRIVATE
     source/parsers/qsc_lexer.cpp
