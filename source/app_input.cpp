@@ -4,6 +4,36 @@
  *          Split from app_input.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include <fstream>
+
+// Look up the human-readable Area name for an AIGraph from
+// <exe>\editor\tools\QGraphs\graph_level<N>.json (array of {Graph, Area}).
+// Parsed manually to match the project's other JSON readers. "" if not found.
+static std::string LookupGraphArea(int level, const std::string& graphId) {
+    if (graphId.empty()) return "";
+    const int want = atoi(graphId.c_str());
+    const std::string path = Utils::GetExeDirectory() +
+        "\\editor\\tools\\QGraphs\\graph_level" + std::to_string(level) + ".json";
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return "";
+    const std::string d((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    size_t pos = 0;
+    while ((pos = d.find("\"Graph\"", pos)) != std::string::npos) {
+        const size_t colon = d.find(':', pos + 7);
+        if (colon == std::string::npos) break;
+        const int g = atoi(d.c_str() + colon + 1);
+        const size_t ap = d.find("\"Area\"", colon);
+        if (ap == std::string::npos) break;
+        const size_t ac = d.find(':', ap + 6);
+        const size_t q1 = (ac == std::string::npos) ? std::string::npos : d.find('"', ac + 1);
+        const size_t q2 = (q1 == std::string::npos) ? std::string::npos : d.find('"', q1 + 1);
+        const std::string area = (q1 != std::string::npos && q2 != std::string::npos)
+                                 ? d.substr(q1 + 1, q2 - q1 - 1) : "";
+        if (g == want) return area;
+        pos = (q2 != std::string::npos) ? q2 : (ap + 6);
+    }
+    return "";
+}
 
 void App::DispatchEventBindings() {
 	// Guard: skip dispatch while any text-input modal is open
@@ -194,6 +224,13 @@ void App::DispatchEventBindings() {
 		return;
 	}
 	if (Check("TaskFindAgain")) {
+		if (find_query_.empty()) {
+			// No previous query — open the search bar so the user can type one.
+			find_open_ = true;
+			find_mode_ = FindMode::TaskNameTypeId;
+			find_result_idx_ = -1;
+			return;
+		}
 		if (!find_query_.empty()) {
 			const auto& objects = level_.GetLevelObjects().GetObjects();
 			std::string q = find_query_;
@@ -214,7 +251,13 @@ void App::DispatchEventBindings() {
 					label = objects[idx].type + " " + objects[idx].name + " " + objects[idx].taskId;
 				}
 				std::transform(label.begin(), label.end(), label.begin(), [](unsigned char c){ return std::tolower(c); });
-				if (label.find(q) != std::string::npos) {
+				// ById requires exact match — task IDs are pixel-perfect, so
+				// typing "7" must not also match "73", "700", etc. All other
+				// find modes keep substring matching.
+				const bool is_match = (find_mode_ == FindMode::ById)
+					? (label == q)
+					: (label.find(q) != std::string::npos);
+				if (is_match) {
 					find_result_idx_ = idx;
 					found = true;
 					// Expand ancestors and scroll to result
@@ -349,11 +392,49 @@ void App::DispatchEventBindings() {
 	if (Check("ManipulateOrientationReset")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateOrientationReset not implemented"); }
 
 	// ---- GraphNode ----
-	if (Check("ScaleGraphNode")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ScaleGraphNode not implemented"); }
-	if (Check("ScaleGraphNodeHalfe")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ScaleGraphNodeHalfe not implemented"); }
-	if (Check("ScaleGraphNodeDouble")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ScaleGraphNodeDouble not implemented"); }
-	if (Check("CreateGraphNode")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CreateGraphNode not implemented"); }
-	if (Check("DeleteGraphNode")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] DeleteGraphNode not implemented"); }
+	// Graph node edit controls (only while the overlay is shown).
+	if (renderer_.IsGraphOverlayVisible()) {
+		if (Check("ScaleGraphNode"))       { PushUndoState(); renderer_.ScaleSelectedGraphNode(0.0f); return; }  // reset radius
+		if (Check("ScaleGraphNodeHalfe"))  { PushUndoState(); renderer_.ScaleSelectedGraphNode(0.5f); return; }
+		if (Check("ScaleGraphNodeDouble")) { PushUndoState(); renderer_.ScaleSelectedGraphNode(2.0f); return; }
+		if (Check("CreateGraphNode"))      { PushUndoState(); renderer_.CreateGraphNode();           return; }
+		if (Check("DeleteGraphNode"))      { PushUndoState(); renderer_.DeleteSelectedGraphNode();    return; }
+		if (Check("AddGraphLink"))         { PushUndoState(); status_message_ = renderer_.AddGraphLinkStep();        return; }
+		if (Check("RemoveGraphLink"))      { PushUndoState(); status_message_ = renderer_.RemoveGraphLinkStep();     return; }
+		if (Check("ToggleGraphNodeLabels")) {
+			renderer_.ToggleGraphLabels();
+			status_message_ = renderer_.GraphLabelsVisible() ? "Graph labels: ON" : "Graph labels: OFF";
+			return;
+		}
+	}
+	if (Check("ShowGraphNodes")) {
+		// Show/hide the navigation graph of the selected AIGraph task. The graph
+		// file is graph<taskId>.dat in the current level's graphs/ folder.
+		const auto& objs = level_.GetLevelObjects().GetObjects();
+		if (selected_object_index_ >= 0 && selected_object_index_ < (int)objs.size() &&
+		    objs[selected_object_index_].type == "AIGraph") {
+			if (renderer_.IsGraphOverlayVisible()) {
+				renderer_.ToggleGraphOverlay();  // hide
+			} else {
+				const LevelObject& g = objs[selected_object_index_];
+				const std::string path = Utils::GetIGIRootPath() +
+					"\\missions\\location0\\level" + std::to_string(last_loaded_level_) +
+					"\\graphs\\graph" + g.taskId + ".dat";
+				// Node coords are local to the AIGraph task's graph origin (its world pos).
+				const std::string area = LookupGraphArea(last_loaded_level_, g.taskId);
+				Logger::Get().Log(LogLevel::INFO, "[App] Graph task " + g.taskId +
+					" (" + area + ") world offset=(" + std::to_string(g.pos.x) + ", " +
+					std::to_string(g.pos.y) + ", " + std::to_string(g.pos.z) + ")");
+				if (renderer_.LoadGraphOverlayFile(path, g.pos)) {
+					renderer_.SetGraphOverlayMeta(g.taskId, area);
+					renderer_.ToggleGraphOverlay();  // show
+				}
+			}
+		} else {
+			Logger::Get().Log(LogLevel::INFO, "[App] ShowGraphNodes: select an AIGraph task first");
+		}
+		return;
+	}
 
 	// ---- Other ----
 	if (Check("ToggleDisplay")) { noclip_mode_ = !noclip_mode_; }
@@ -367,20 +448,29 @@ void App::DispatchEventBindings() {
 		Config::Get().saveConfigOnExit = !Config::Get().saveConfigOnExit;
 		status_message_ = Config::Get().saveConfigOnExit ? "Save on exit: ON" : "Save on exit: OFF";
 	}
+	if (Check("ToggleAutoSave")) { ToggleAutoSave(); return; }
+	if (Check("AutoSaveIntervalUp")) { AdjustAutoSaveInterval(10); return; }
+	if (Check("AutoSaveIntervalDown")) { AdjustAutoSaveInterval(-10); return; }
 	if (Check("SaveState")) {
 		SaveCurrentLevel();
 		int lvl = level_.GetLevelNo();
-		status_message_ = "Save level: LOCAL:missions/location" + std::to_string(lvl) +
-		                  "/level" + std::to_string(lvl) + "/objects.qsc";
+		status_message_ = "Save level: LOCAL:missions/location0/level" +
+		                  std::to_string(lvl) + "/objects.qsc";
 		return;
 	}
 	if (Check("SaveObjectFile")) {
+		// While editing an AIGraph overlay, Ctrl+S writes the edited node
+		// positions straight back to graph<taskId>.dat in the game.
+		if (renderer_.IsGraphOverlayVisible() && renderer_.GraphOverlayDirty()) {
+			status_message_ = renderer_.SaveGraphOverlay() ? "Graph saved." : "Graph save FAILED.";
+			return;
+		}
 		// Ctrl+S → open a path textbox and write the live objects QSC to that path.
 		// (Whole-level save/compile lives in the pause menu.)
 		int lvl = level_.GetLevelNo();
 		file_dialog_mode_  = FileDialogMode::SaveObjectFile;
-		file_dialog_path_  = "missions/location" + std::to_string(lvl) +
-		                     "/level" + std::to_string(lvl) + "/objects.qsc";
+		file_dialog_path_  = "missions/location0/level" +
+		                     std::to_string(lvl) + "/objects.qsc";
 		file_dialog_caret_ = (int)file_dialog_path_.size();
 		return;
 	}
@@ -539,15 +629,17 @@ void App::DispatchEventBindings() {
 		camera_strafe_free_ = !camera_strafe_free_;
 		status_message_ = camera_strafe_free_ ? "Strafe lock: ON" : "Strafe lock: OFF";
 	}
-	if (Check("TerrainBrushCycle")) {
-		edit_brush_ = (edit_brush_ + 1) % 4;
-		static const char* kNames[] = {"Raise","Lower","Soften","Flatten"};
-		status_message_ = std::string("Terrain brush: ") + kNames[edit_brush_];
+	if (terrain_edit_enabled_) {
+		if (Check("TerrainBrushCycle")) {
+			edit_brush_ = (edit_brush_ + 1) % 4;
+			static const char* kNames[] = {"Raise","Lower","Soften","Flatten"};
+			status_message_ = std::string("Terrain brush: ") + kNames[edit_brush_];
+		}
+		if (Check("TerrainBrushRadiusDec"))   AdjustBrushRadius(0.8);
+		if (Check("TerrainBrushRadiusInc"))   AdjustBrushRadius(1.25);
+		if (Check("TerrainBrushStrengthDec")) AdjustBrushStrength(-1.0);
+		if (Check("TerrainBrushStrengthInc")) AdjustBrushStrength(1.0);
 	}
-	if (Check("TerrainBrushRadiusDec"))   AdjustBrushRadius(0.8);
-	if (Check("TerrainBrushRadiusInc"))   AdjustBrushRadius(1.25);
-	if (Check("TerrainBrushStrengthDec")) AdjustBrushStrength(-1.0);
-	if (Check("TerrainBrushStrengthInc")) AdjustBrushStrength(1.0);
 }
 
 
@@ -557,6 +649,11 @@ void App::DispatchEventBindings() {
 #endif
 
 void App::ResetLevel() {
+	if (in_game_mode_) {
+		status_message_ = "Close gameplay before resetting the level";
+		return;
+	}
+
 	int levelNo = level_.GetLevelNo();
 
 	Logger::Get().Log(LogLevel::INFO, "[App] Resetting Level " + std::to_string(levelNo));
@@ -585,15 +682,32 @@ void App::ResetLevel() {
 	}
 #endif
 
-	if (Config::Get().enableBackup) {
+	// Always restore from backup — backup is created on every level load so it
+	// captures the pristine state of the full level folder (objects, ai, graphs,
+	// models, textures, terrain). A full folder replacement (remove + copy)
+	// ensures deleted graph nodes, removed AI scripts, etc. are all reverted.
+	{
 		std::string gameLevelDir = Utils::GetIGIRootPath() + "\\missions\\location0\\level" + std::to_string(levelNo);
 		std::string backupLevelDir = Utils::GetExeDirectory() + "\\editor\\backup\\level" + std::to_string(levelNo);
-		
+
 		Logger::Get().Log(LogLevel::INFO, "[App] Restoring level from backup: " + backupLevelDir + " to " + gameLevelDir);
-		
+
 		if (std::filesystem::exists(backupLevelDir)) {
 			try {
-				std::filesystem::copy(backupLevelDir, gameLevelDir, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing);
+				// Full replacement: remove the entire game level folder, then
+				// copy the pristine backup over it. This guarantees graphs/,
+				// ai/, models/, textures/ — every subfolder — is reset, not
+				// just overwritten in-place (which leaves stale files behind).
+				std::error_code ec;
+				std::filesystem::remove_all(gameLevelDir, ec);
+				if (ec) {
+					Logger::Get().Log(LogLevel::WARNING, "[App] remove_all failed (" + ec.message() + "), trying copy overwrite");
+					std::filesystem::copy(backupLevelDir, gameLevelDir,
+						std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing);
+				} else {
+					std::filesystem::copy(backupLevelDir, gameLevelDir,
+						std::filesystem::copy_options::recursive);
+				}
 				Logger::Get().Log(LogLevel::INFO, "[App] Level reset successfully from backup.");
 			} catch (const std::exception& e) {
 				Logger::Get().Log(LogLevel::ERR, "[App] Failed to restore from backup: " + std::string(e.what()));
@@ -601,8 +715,6 @@ void App::ResetLevel() {
 		} else {
 			Logger::Get().Log(LogLevel::ERR, "[App] Cannot reset level: No backup found at " + backupLevelDir);
 		}
-	} else {
-		Logger::Get().Log(LogLevel::INFO, "[App] Reset level skipped because QEDBackup is not enabled in config.");
 	}
 
 	// Remove local objects.qsc so it recompiles fresh from QVM
@@ -671,6 +783,5 @@ void App::ResetScript() {
 	// Reload the level to apply changes
 	LoadLevel(levelNo);
 }
-
 
 

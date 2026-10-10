@@ -6,7 +6,38 @@
 #include "app_internal.h"
 
 void App::Input_OnSpecial(int key, int x, int y) {
+	// F8 toggles Editor <-> Game Play from anywhere; it must run before every
+	// mode-specific branch so it works in both directions.
+	if (key == GLUT_KEY_F8) {
+		ToggleGamePlayMode();
+		return;
+	}
+	if (in_game_mode_ && key == GLUT_KEY_F6) {
+		FocusEditorWindow();
+		return;
+	}
+	if (in_game_mode_ && key == GLUT_KEY_F7) {
+		FocusGameplayWindow();
+		return;
+	}
+	if (in_game_mode_ && key == GLUT_KEY_F5) {
+		if (!IsGameplayInputFocused()) CaptureEditorSnapshotForGameplayApply();
+		ApplyAndRestartGameplay();
+		return;
+	}
+	if (in_game_mode_ && IsGameplayInputFocused() &&
+		!gameplay_host_.IsGameplayWindowCurrent()) return;
+	if (in_game_mode_ && IsGameplayInputFocused() && pause_mode_) return;
+	if (in_game_mode_ && IsGameplayInputFocused() && !pause_mode_) {
+		return;
+	}
+
 	auto& config = Config::Get();
+	// Shift detection mirrors Input_OnKeyboard: GLUT modifiers are sometimes
+	// not reported, so fall back to GetAsyncKeyState for Shift+arrow
+	// selection in the AI Script editor.
+	const bool shiftDown = (glutGetModifiers() & GLUT_ACTIVE_SHIFT) != 0 ||
+	                       (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
 
 	// Autocomplete task picker navigation
 	if (ac_task_picker_open_) {
@@ -73,14 +104,29 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		bool isScript = (prop_text_edit_field_ == PropPanel::kAIScriptTextField);
 		const int mc = AiScriptMaxChars();
 
+		// Shift+arrow extends the selection in the AI Script editor
+		// (Notepad/Home/End as well). The anchor is set on first Shift+arrow
+		// (or the first time the selection becomes non-empty); subsequent
+		// Shift+arrows only move the focus.
+		if (isScript && shiftDown && prop_text_sel_anchor_ < 0 &&
+		    (key == GLUT_KEY_LEFT || key == GLUT_KEY_RIGHT ||
+		     key == GLUT_KEY_UP   || key == GLUT_KEY_DOWN  ||
+		     key == GLUT_KEY_HOME || key == GLUT_KEY_END)) {
+			prop_text_sel_anchor_ = prop_text_caret_;
+		}
+
 		if (key == GLUT_KEY_LEFT) {
 			if (prop_text_caret_ > 0) --prop_text_caret_;
 			if (isScript) UpdateAIScriptScroll(); else UpdateAIScriptPathHScroll();
+			if (isScript && shiftDown) prop_text_sel_focus_ = prop_text_caret_;
+			else if (isScript) ClearPropTextSelection();
 			return;
 		}
 		if (key == GLUT_KEY_RIGHT) {
 			if (prop_text_caret_ < (int)prop_text_buf_.size()) ++prop_text_caret_;
 			if (isScript) UpdateAIScriptScroll(); else UpdateAIScriptPathHScroll();
+			if (isScript && shiftDown) prop_text_sel_focus_ = prop_text_caret_;
+			else if (isScript) ClearPropTextSelection();
 			return;
 		}
 		if (isScript) {
@@ -97,6 +143,39 @@ void App::Input_OnSpecial(int key, int x, int y) {
 				    prop_text_buf_[starts[nl] + line_len - 1] == '\n') --line_len;
 				prop_text_caret_ = starts[nl] + std::min(col, line_len);
 				UpdateAIScriptScroll();
+				if (shiftDown) prop_text_sel_focus_ = prop_text_caret_;
+				else           ClearPropTextSelection();
+				return;
+			}
+			if (key == GLUT_KEY_HOME) {
+				// Home: start of current visual line; Ctrl+Home: start of buffer
+				if (isScript && (glutGetModifiers() & GLUT_ACTIVE_CTRL)) {
+					prop_text_caret_ = 0;
+				} else {
+					auto starts = AiTextLineStarts(prop_text_buf_, mc);
+					int cl = (int)(std::upper_bound(starts.begin(), starts.end(), prop_text_caret_) - starts.begin()) - 1;
+					cl = std::max(0, std::min(cl, (int)starts.size() - 1));
+					prop_text_caret_ = starts[cl];
+				}
+				UpdateAIScriptScroll();
+				if (shiftDown) prop_text_sel_focus_ = prop_text_caret_;
+				else           ClearPropTextSelection();
+				return;
+			}
+			if (key == GLUT_KEY_END) {
+				if (isScript && (glutGetModifiers() & GLUT_ACTIVE_CTRL)) {
+					prop_text_caret_ = (int)prop_text_buf_.size();
+				} else {
+					auto starts = AiTextLineStarts(prop_text_buf_, mc);
+					int cl = (int)(std::upper_bound(starts.begin(), starts.end(), prop_text_caret_) - starts.begin()) - 1;
+					cl = std::max(0, std::min(cl, (int)starts.size() - 1));
+					int next_end = (cl + 1 < (int)starts.size()) ? starts[cl + 1] : (int)prop_text_buf_.size();
+					if (next_end > starts[cl] && prop_text_buf_[next_end - 1] == '\n') --next_end;
+					prop_text_caret_ = next_end;
+				}
+				UpdateAIScriptScroll();
+				if (shiftDown) prop_text_sel_focus_ = prop_text_caret_;
+				else           ClearPropTextSelection();
 				return;
 			}
 			if (key == GLUT_KEY_PAGE_UP) {
@@ -305,6 +384,22 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		return;
 	}
 
+	// F10 always toggles the Animation Debug overlay (skeleton wireframe + status
+	// panel) — independent of F2/TaskTree, and also toggles Developer Mode for Debug Commands.
+	if (key == GLUT_KEY_F10) {
+		show_anim_debug_ = !show_anim_debug_;
+		developer_mode_ = !developer_mode_;
+		if (developer_mode_) {
+			debug_cmd_mgr_.Start();
+			Logger::Get().Log(LogLevel::INFO, "[App] Developer Mode ON - Command Watcher Started");
+		} else {
+			debug_cmd_mgr_.Stop();
+			Logger::Get().Log(LogLevel::INFO, "[App] Developer Mode OFF - Command Watcher Stopped");
+		}
+		Logger::Get().Log(LogLevel::INFO, std::string("[App] Animation Debug Info ") + (show_anim_debug_ ? "shown" : "hidden"));
+		return;
+	}
+
 	// All other F-key/special-key bindings go through DispatchEventBindings (qedkeybindings.qsc only)
 
 	// Camera movement keys only fire when SHIFT+ALT is held; plain arrow keys must not move camera.
@@ -353,6 +448,13 @@ void App::Input_OnSpecial(int key, int x, int y) {
 }
 
 void App::Input_OnSpecialUp(int key, int x, int y) {
+	if (in_game_mode_ && IsGameplayInputFocused() &&
+		!gameplay_host_.IsGameplayWindowCurrent()) return;
+	if (in_game_mode_ && IsGameplayInputFocused() && pause_mode_) return;
+	if (in_game_mode_ && IsGameplayInputFocused() && !pause_mode_) {
+		return;
+	}
+
 	auto& config = Config::Get();
 
 	if (key == config.keyMoveForward)  { input_.keys_ &= ~MK_FORWARD;  return; }
@@ -443,17 +545,40 @@ bool App::InlineAutocomplete() {
 void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	auto& config = Config::Get();
 
+	if (in_game_mode_ && IsGameplayInputFocused() &&
+		!gameplay_host_.IsGameplayWindowCurrent()) return;
+	if (in_game_mode_ && IsGameplayInputFocused() && !pause_mode_) {
+		if (key == 27) { // ESC
+			TogglePauseMenu();
+			return;
+		}
+		gameplay_host_.GetInputRouter().OnKeyboardKey(key, true);
+		return;
+	}
+
 	bool ctrlDown = (glutGetModifiers() & GLUT_ACTIVE_CTRL) != 0 ||
 	                (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
 	bool shiftDown = (glutGetModifiers() & GLUT_ACTIVE_SHIFT) != 0 ||
 	                 (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+	bool altDown = (glutGetModifiers() & GLUT_ACTIVE_ALT) != 0 ||
+	               (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+
+	// Alt+H: toggle the gameplay HUD overlay (crosshair, health bar, weapon
+	// readout). Hidden by default until the vanilla presentation is finished.
+	if (altDown && (key == 'h' || key == 'H')) {
+		hud_overlay_visible_ = !hud_overlay_visible_;
+		status_message_ = hud_overlay_visible_
+			? "HUD overlay shown (Alt+H to hide)"
+			: "HUD overlay hidden (Alt+H to show)";
+		return;
+	}
 
 	if (ctrlDown && (key == 8 || key == 'h' || key == 'H')) { // CTRL+H
 		ToggleOverlayWireframe();
 		return;
 	}
 
-	if (pause_mode_) {
+	if (pause_mode_ && IsGameplayInputFocused()) {
 		if (key == 13) { // Enter
 			if (pause_active_input_ == 1) {
 				// Submit model search
@@ -473,6 +598,11 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 				if (!pause_level_input_.empty()) {
 					int lvl = std::atoi(pause_level_input_.c_str());
 					if (lvl >= 1 && lvl <= 14) {
+						if (in_game_mode_) {
+							// Switching levels is allowed mid-run: close the
+							// gameplay session cleanly first, then load.
+							ToggleGamePlayMode();
+						}
 						LoadLevel(lvl);
 						TogglePauseMenu();
 					} else {
@@ -499,6 +629,29 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	// Detect Ctrl via GLUT *and* GetAsyncKeyState: GLUT modifiers are occasionally not
 	// reported for Ctrl+Space (key 0/space), which silently dropped inline autocomplete.
 	if (ctrlDown) {
+		// AI Script editor notepad-style shortcuts — ONLY when the AI Script text
+		// field is focused. Other property text fields ignore these so the
+		// editor-level Ctrl+F / Ctrl+N / Ctrl+W bindings still work as before.
+		//
+		// GLUT sends the ASCII control-character code for Ctrl+letter
+		// (1=SOH/A, 3=ETX/C, 0x18=CAN/X, 0x16=SYN/V, 0x19=EM/Y, 0x1A=SUB/Z)
+		// — NOT the letter itself. We also accept the letter codes so this
+		// keeps working if a host swallows the control code.
+		if (prop_text_edit_field_ == PropPanel::kAIScriptTextField) {
+			const bool is_a = (key == 1  || key == 'a' || key == 'A');
+			const bool is_c = (key == 3  || key == 'c' || key == 'C');
+			const bool is_x = (key == 24 || key == 'x' || key == 'X');
+			const bool is_v = (key == 22 || key == 'v' || key == 'V');
+			const bool is_y = (key == 25 || key == 'y' || key == 'Y');
+			const bool is_z = (key == 26 || key == 'z' || key == 'Z');
+			if (is_a) { AiScriptSelectAll(); return; }
+			if (is_c) { AiScriptCopy();     return; }
+			if (is_x) { AiScriptCut();      return; }
+			if (is_v) { AiScriptPaste();    return; }
+			// Ctrl+Z = undo, Ctrl+Y / Ctrl+Shift+Z = redo
+			if (is_z) { if (shiftDown) AiScriptRedo(); else AiScriptUndo(); return; }
+			if (is_y) { AiScriptRedo(); return; }
+		}
 		if (key == 14 && !shiftDown) { // Ctrl+N only (not Ctrl+Shift+N — that's TaskFindByTaskNote)
 			// Only open when a property text box is focused, so Enter knows which
 			// field to insert the chosen item into.
@@ -546,47 +699,118 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		if (caret < 0) caret = 0;
 		if (caret > (int)prop_text_buf_.size()) caret = (int)prop_text_buf_.size();
 		bool multiline = IsPropFieldMultiline(prop_text_edit_field_);
-		if (key == 27) { // ESC — cancel (revert)
-			prop_text_edit_field_ = -1;
-			return;
-		}
-		if (key == 13) { // Enter
-			if (multiline) {              // VarString/String256: insert newline
-				prop_text_buf_.insert(prop_text_buf_.begin() + caret, '\n');
-				caret++;
-				UpdateAIScriptScroll();
-			} else {                      // single-line: commit
+
+		// Before the text editor swallows the key, check if it matches a save
+		// hotkey from qedkeybindings.qsc (e.g. Ctrl+W = SaveState, Ctrl+S =
+		// SaveObjectFile). If so, commit the in-flight edit first so the AI
+		// script text is saved, then let the binding fire.
+		{
+			auto& bindings = Config::Get().eventBindings_;
+			auto matchBinding = [&](const std::string& name) -> bool {
+				auto it = bindings.find(name);
+				return it != bindings.end() && Utils::IsKeyBindingPressedExact(it->second);
+			};
+			if (matchBinding("SaveState") || matchBinding("SaveObjectFile") ||
+			    matchBinding("SaveSubTaskObjectFile") || matchBinding("SaveSubTaskObjectFileParent")) {
 				CommitPropTextEdit();
+				// Fall through to DispatchEventBindings below.
 			}
-			return;
+			else if (matchBinding("ToggleSaveStateOnExit") || matchBinding("ToggleAutoSave") ||
+			         matchBinding("AutoSaveIntervalUp") || matchBinding("AutoSaveIntervalDown")) {
+				CommitPropTextEdit();
+				// Fall through to DispatchEventBindings below.
+			}
 		}
-		if (key == 8) { // Backspace — delete before caret
-			if (caret > 0) {
-				prop_text_buf_.erase(prop_text_buf_.begin() + (caret - 1));
-				caret--;
+
+		// If the edit was just committed by a save hotkey, prop_text_edit_field_
+		// is now -1 and this block is skipped — the key reaches DispatchEventBindings.
+		if (prop_text_edit_field_ == -1) {
+			// fall through to DispatchEventBindings
+		}
+		else {
+			if (key == 27) { // ESC — cancel (revert)
+				prop_text_edit_field_ = -1;
+				ClearPropTextSelection();
+				return;
+			}
+			if (key == 13) { // Enter
+				if (multiline) {              // VarString/String256: insert newline
+					// AI Script editor: respect active selection (replace with newline)
+					if (isPropTextSel()) {
+						PushAiTextUndo();
+						int a, b; GetPropTextSelection(a, b);
+						prop_text_buf_.erase(a, b - a);
+						caret = a;
+						ClearPropTextSelection();
+					} else {
+						PushAiTextUndo();
+					}
+					prop_text_buf_.insert(prop_text_buf_.begin() + caret, '\n');
+					caret++;
+					SyncAIScriptBuffer();
+					UpdateAIScriptScroll();
+				} else {                      // single-line: commit
+					CommitPropTextEdit();
+				}
+				return;
+			}
+			if (key == 8) { // Backspace — delete before caret (or delete selection)
+				if (isPropTextSel()) {
+					PushAiTextUndo();
+					int a, b; GetPropTextSelection(a, b);
+					prop_text_buf_.erase(a, b - a);
+					caret = a;
+					ClearPropTextSelection();
+					SyncAIScriptBuffer();
+				} else if (caret > 0) {
+					PushAiTextUndo();
+					prop_text_buf_.erase(prop_text_buf_.begin() + (caret - 1));
+					caret--;
+					SyncAIScriptBuffer();
+				}
 				UpdateAIScriptScroll();
 				UpdateAIScriptPathHScroll();
+				return;
+			}
+			if (key == 127) { // Delete — delete at caret (or delete selection)
+				if (isPropTextSel()) {
+					PushAiTextUndo();
+					int a, b; GetPropTextSelection(a, b);
+					prop_text_buf_.erase(a, b - a);
+					caret = a;
+					ClearPropTextSelection();
+					SyncAIScriptBuffer();
+				} else if (caret < (int)prop_text_buf_.size()) {
+					PushAiTextUndo();
+					prop_text_buf_.erase(prop_text_buf_.begin() + caret);
+					SyncAIScriptBuffer();
+				}
+				UpdateAIScriptScroll();
+				return;
+			}
+			if (key == '\t') { // Tab → inline autocomplete (reliable trigger; GLUT may eat Ctrl+Space)
+				InlineAutocomplete();
+				return;
+			}
+			if (key >= 32 && key <= 126) { // printable: insert at caret (replace selection)
+				if (isPropTextSel()) {
+					PushAiTextUndo();
+					int a, b; GetPropTextSelection(a, b);
+					prop_text_buf_.erase(a, b - a);
+					caret = a;
+					ClearPropTextSelection();
+				} else {
+					PushAiTextUndo();
+				}
+				prop_text_buf_.insert(prop_text_buf_.begin() + caret, (char)key);
+				caret++;
+				SyncAIScriptBuffer();
+				UpdateAIScriptScroll();
+				UpdateAIScriptPathHScroll();
+				return;
 			}
 			return;
 		}
-		if (key == 127) { // Delete — delete at caret
-			if (caret < (int)prop_text_buf_.size())
-				prop_text_buf_.erase(prop_text_buf_.begin() + caret);
-			UpdateAIScriptScroll();
-			return;
-		}
-		if (key == '\t') { // Tab → inline autocomplete (reliable trigger; GLUT may eat Ctrl+Space)
-			InlineAutocomplete();
-			return;
-		}
-		if (key >= 32 && key <= 126) { // printable: insert at caret
-			prop_text_buf_.insert(prop_text_buf_.begin() + caret, (char)key);
-			caret++;
-			UpdateAIScriptScroll();
-			UpdateAIScriptPathHScroll();
-			return;
-		}
-		return;
 	}
 
 	// File dialog input (SaveSubTask / LoadSubTask)
@@ -762,8 +986,8 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 				}
 			}
 			find_open_ = false;
-			find_query_.clear();
-			find_result_idx_ = -1;
+			// Keep find_query_ + find_result_idx_ so TaskFindAgain (Ctrl+Shift+F)
+			// can cycle through matches without reopening the search bar.
 			return;
 		}
 		if (key == 8) { // Backspace
@@ -792,7 +1016,13 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 					label = objects[i].type + " " + objects[i].name + " " + objects[i].taskId;
 				}
 				std::transform(label.begin(), label.end(), label.begin(), [](unsigned char c){ return std::tolower(c); });
-				if (label.find(q_lower) != std::string::npos) {
+				// ById requires exact match — task IDs are pixel-perfect, so
+				// typing "7" must not also match "73", "700", etc. All other
+				// find modes keep substring matching.
+				const bool is_match = (find_mode_ == FindMode::ById)
+					? (label == q_lower)
+					: (label.find(q_lower) != std::string::npos);
+				if (is_match) {
 					find_result_idx_ = i;
 					break;
 				}
@@ -1132,10 +1362,10 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 
 	if (key == 27) { // ESC
 		if (show_help_) { show_help_ = false; return; }
-		if (prop_editor_open_) { // close the property panel first
+		if (prop_editor_open_) { // close the property panel — commit any edit first
+			CommitPropTextEdit();
 			prop_editor_open_ = false;
 			prop_field_index_ = -1;
-			prop_text_edit_field_ = -1;
 			return;
 		}
 		TogglePauseMenu();
@@ -1146,7 +1376,16 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	// DEL key: delete selected task (hardcoded for standard keyboard ergonomics)
 	if (key == 127) { DeleteSelectedTask(); return; }
 
-	if (pause_mode_) {
+	// B: toggle the animation skeleton (bone) wireframe overlay. Independent of
+	// F10's status panel — bones are hidden by default and only ever drawn when
+	// this is on, even while an animation is actively playing.
+	if (key == 'b' || key == 'B') {
+		show_anim_skeleton_ = !show_anim_skeleton_;
+		Logger::Get().Log(LogLevel::INFO, std::string("[App] Animation skeleton overlay ") + (show_anim_skeleton_ ? "shown" : "hidden"));
+		return;
+	}
+
+	if (pause_mode_ && IsGameplayInputFocused()) {
 		return;
 
 	}
@@ -1255,6 +1494,14 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 void App::Input_OnKeyboardUp(unsigned char key, int x, int y) {
 	auto& config = Config::Get();
 
+	if (in_game_mode_ && IsGameplayInputFocused() &&
+		!gameplay_host_.IsGameplayWindowCurrent()) return;
+	if (in_game_mode_ && IsGameplayInputFocused() && !pause_mode_) {
+		gameplay_host_.GetInputRouter().OnKeyboardKey(key, false);
+		return;
+	}
+	if (in_game_mode_ && IsGameplayInputFocused() && pause_mode_) return;
+
 	// Check for modifier keys - if pressed, skip movement key checks
 	int modifiers = glutGetModifiers();
 	bool has_modifiers = (modifiers & (GLUT_ACTIVE_CTRL | GLUT_ACTIVE_SHIFT | GLUT_ACTIVE_ALT));
@@ -1299,4 +1546,3 @@ void App::Input_OnKeyboardUp(unsigned char key, int x, int y) {
 }
 
 // idle
-

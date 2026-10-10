@@ -285,18 +285,11 @@ std::string Renderer_Objects::FindTextureFile(const std::string& textureId) cons
         return result;
     }
 
-    // Lazy On-Demand Extraction for cross-level texture references
+    // Lazy on-demand index for cross-level texture references: extend the in-memory
+    // .res index to include the target level's archives without any disk extraction.
+    // Note: EnsureGlobalTextureMapLoaded/texture_level_map_ lookup is done by the
+    // non-const GetOrLoadTexture caller before calling FindTextureFile for fallback.
     EnsureGlobalTextureMapLoaded();
-    auto tit = texture_level_map_.find(textureId);
-    if (tit != texture_level_map_.end()) {
-        int targetLvl = tit->second;
-        if (targetLvl != current_level_) {
-            Logger::Get().Log(LogLevel::INFO,
-                "[TEX Native] Lazy extracting textures/models on-demand for level " + std::to_string(targetLvl) +
-                " to resolve cross-level texture: " + textureId);
-            AssetExtractor::EnsureLevelAssets(targetLvl, Utils::GetIGIRootPath(), Utils::GetExeDirectory());
-        }
-    }
 
     // 6. Search all other levels' extracted and game texture directories.
     //    Textures like "006_07_1" live in level 6's folder but are referenced by
@@ -318,56 +311,87 @@ std::string Renderer_Objects::FindTextureFile(const std::string& textureId) cons
 }
 
 GLuint Renderer_Objects::GetOrLoadTexture(const std::string& textureId) {
-    if (textureId.empty()) {
-        return 0;
+    if (textureId.empty()) return 0;
+
+    const std::string cacheKey = std::to_string(current_level_) + ":" + textureId;
+    auto it = texture_cache_.find(cacheKey);
+    if (it != texture_cache_.end()) {
+        return it->second;
     }
 
-    // Try the EXACT texture id first. The editor extracts format-suffixed files
-    // verbatim (e.g. "405_01_1_argb8888.tex" is a distinct ARGB8888/alpha file that
-    // sits alongside the opaque RGB565 "405_01_1.tex"). Loading the stripped name
-    // first would grab the opaque sibling and render glass/lattice fully opaque.
-    // Only fall back to the stripped id when no exact-suffixed file exists on disk.
-    std::string texturePath = FindTextureFile(textureId);
+    // ── 1. Try in-memory .res index (preferred: no disk extraction) ───────────
+    {
+        std::vector<uint8_t> bytes = FindTextureData(textureId);
+        if (!bytes.empty()) {
+            pics_s pics{};
+            if (Tex_LoadFromMemory(bytes.data(), bytes.size(), pics) && pics.pics_ && pics.num_pic_ > 0) {
+                const pic_s* pic = pics.pics_;
+                Logger::Get().Log(LogLevel::INFO,
+                    "[TEX] ResCache loaded " + textureId +
+                    " " + std::to_string(pic->width_) + "x" + std::to_string(pic->height_));
+                const GLuint tex = GL_RegisterTexture(pic, GL_REPEAT, GL_LINEAR_MIPMAP_LINEAR, GL_LINEAR, true);
+                texture_cache_[cacheKey] = tex;
+                Pic_FreePics(pics);
+                return tex;
+            }
+            Pic_FreePics(pics);
+        }
+    }
+
+    // ── 1b. Lazy cross-level .res index if texture not found in current level ────
+    {
+        EnsureGlobalTextureMapLoaded();
+        auto tit = texture_level_map_.find(textureId);
+        if (tit == texture_level_map_.end()) {
+            const std::string stripped = StripTextureFormatSuffix(textureId);
+            tit = texture_level_map_.find(stripped);
+        }
+        if (tit != texture_level_map_.end() && tit->second != current_level_) {
+            int targetLvl = tit->second;
+            Logger::Get().Log(LogLevel::INFO, "[TEX] Lazy indexing level " +
+                std::to_string(targetLvl) + " .res for cross-level: " + textureId);
+            LoadResCache(targetLvl, Utils::GetIGIRootPath());
+            std::vector<uint8_t> xBytes = FindTextureData(textureId);
+            if (!xBytes.empty()) {
+                pics_s pics2{};
+                if (Tex_LoadFromMemory(xBytes.data(), xBytes.size(), pics2) && pics2.pics_ && pics2.num_pic_ > 0) {
+                    const GLuint tex = GL_RegisterTexture(pics2.pics_, GL_REPEAT, GL_LINEAR_MIPMAP_LINEAR, GL_LINEAR, true);
+                    texture_cache_[cacheKey] = tex;
+                    Pic_FreePics(pics2);
+                    return tex;
+                }
+                Pic_FreePics(pics2);
+            }
+        }
+    }
+
+    // ── 2. Fall back to on-disk search (game dir loose files) ─────────────────
     const std::string strippedId = StripTextureFormatSuffix(textureId);
+    std::string texturePath = FindTextureFile(textureId);
     if (texturePath.empty() && strippedId != textureId) {
         texturePath = FindTextureFile(strippedId);
     }
     if (texturePath.empty()) {
-        Logger::Get().Log(LogLevel::WARNING, "[TEX Native] Texture search FAILED for ID: " + textureId +
-            (strippedId != textureId ? " (stripped: " + strippedId + ")" : ""));
+        Logger::Get().Log(LogLevel::WARNING, "[TEX] Texture NOT FOUND: " + textureId);
         return 0;
-    }
-
-    const std::string cacheKey = std::to_string(current_level_) + ":" + texturePath;
-    auto it = texture_cache_.find(cacheKey);
-    if (it != texture_cache_.end()) {
-        Logger::Get().Log(LogLevel::DEBUG, "[TEX Native] Cache hit textureId=" + textureId + " path=" + texturePath);
-        return it->second;
     }
 
     pics_s pics{};
     if (!Tex_Load(texturePath.c_str(), pics) || !pics.pics_ || pics.num_pic_ <= 0) {
-        Logger::Get().Log(LogLevel::ERR, "[TEX Native] Failed to decode TEX file: " + texturePath);
+        Logger::Get().Log(LogLevel::ERR, "[TEX] Failed to decode: " + texturePath);
         Pic_FreePics(pics);
         return 0;
     }
 
     const pic_s* pic = pics.pics_;
-    Logger::Get().Log(
-        LogLevel::INFO,
-        "[TEX Native] Loaded textureId=" + textureId +
+    Logger::Get().Log(LogLevel::INFO,
+        "[TEX] Disk loaded " + textureId +
         " " + std::to_string(pic->width_) + "x" + std::to_string(pic->height_) +
-        " frames=" + std::to_string(pics.num_pic_) +
         " path=" + texturePath);
 
     const GLuint texture = GL_RegisterTexture(pic, GL_REPEAT, GL_LINEAR_MIPMAP_LINEAR, GL_LINEAR, true);
     texture_cache_[cacheKey] = texture;
     Pic_FreePics(pics);
-
-    Logger::Get().Log(
-        LogLevel::DEBUG,
-        "[TEX Native] Uploaded textureId=" + textureId +
-        " glId=" + std::to_string(texture));
     return texture;
 }
 

@@ -16,7 +16,7 @@
  global variables & constants
 ================================================================================
 */
-static App g_app;
+App g_app;
 
 // menu ids
 
@@ -137,6 +137,46 @@ static void OnKeyboardUp(unsigned char key, int x, int y) {
 static void OnDisplay() {
   glutSetCursor(GLUT_CURSOR_NONE);  // keep system cursor hidden; SPR cursor draws it
   g_app.OnDisplay();
+}
+
+static void OnGameplayDisplay() {
+  g_app.OnGameplayDisplay();
+}
+
+static void OnGameplayReshape(int width, int height) {
+  g_app.OnGameplayWindowResize(width, height);
+}
+
+static void OnGameplayMouse(int button, int state, int x, int y) {
+  g_app.Input_OnMouse(button, state, x, y);
+}
+
+static void OnGameplayMouseWheel(int wheel, int direction, int x, int y) {
+  g_app.Input_OnMouseWheel(wheel, direction, x, y);
+}
+
+static void OnGameplayMotion(int x, int y) {
+  g_app.Input_OnMotion(x, y);
+}
+
+static void OnGameplaySpecial(int key, int x, int y) {
+  g_app.Input_OnSpecial(key, x, y);
+}
+
+static void OnGameplaySpecialUp(int key, int x, int y) {
+  g_app.Input_OnSpecialUp(key, x, y);
+}
+
+static void OnGameplayKeyboard(unsigned char key, int x, int y) {
+  g_app.Input_OnKeyboard(key, x, y);
+}
+
+static void OnGameplayKeyboardUp(unsigned char key, int x, int y) {
+  g_app.Input_OnKeyboardUp(key, x, y);
+}
+
+static void OnGameplayClose() {
+  g_app.OnGameplayWindowClose();
 }
 
 static void UpdateOverlayWireframeMenuText();
@@ -314,6 +354,13 @@ static void OnMenu(int menu) {
     break;
   case MENU_DRAW_TERRAIN_OPT_FOG:
     g_app.ToggleTerrainDrawOption(Renderer_Terrain::DRAW_TERRAIN_OPT_FOG);
+    // Sync object renderer fog with the terrain fog toggle and persist to config.
+    {
+        int dOpts = g_app.GetTerrainDrawOptions();
+        bool fogOn = (dOpts & Renderer_Terrain::DRAW_TERRAIN_OPT_FOG) != 0;
+        g_app.SetFogEnabled(fogOn);
+        Config::Get().enableFog = fogOn;
+    }
     g_update_menu_flags |= UPDATE_MENU_TERRAIN_OPTS;
     break;
   case MENU_TERRAIN_TEX_MOD:
@@ -534,7 +581,12 @@ int main(int argc, char **argv) {
     g_isCLIMode = true;
     int result = CLIHandler::Process(argc, argv);
 #if defined(_WIN32) && defined(_DEBUG)
-    system("pause");
+    // Do not pause in CLI mode: automated invocations (e.g. the level
+    // verification test) spawn with a new console and would block forever
+    // waiting for a keystroke.
+    if (!g_isCLIMode) {
+      system("pause");
+    }
 #endif
     return result;
   }
@@ -602,8 +654,8 @@ int main(int argc, char **argv) {
 #endif
 
   // read window width & height from command line
-  int wnd_w = Arg_ReadInt(argc, argv, "-w", 800);
-  int wnd_h = Arg_ReadInt(argc, argv, "-h", 600);
+  int wnd_w = Arg_ReadInt(argc, argv, "-w", 1280);
+  int wnd_h = Arg_ReadInt(argc, argv, "-h", 720);
 
   // read level from command line
   int level_no = Arg_ReadInt(argc, argv, "-level", 1);
@@ -630,6 +682,7 @@ int main(int argc, char **argv) {
 
   glutInit(&argc, argv);
   glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA | GLUT_DEPTH | GLUT_STENCIL);
+  glutSetOption(GLUT_ACTION_ON_WINDOW_CLOSE, GLUT_ACTION_GLUTMAINLOOP_RETURNS);
 
   // center display
   int screen_cx = glutGet(GLUT_SCREEN_WIDTH);
@@ -708,8 +761,30 @@ int main(int argc, char **argv) {
 
   printf("%s", HINT);
 
+  // setup glut callbacks that might be needed during Init
+  glutDisplayFunc(OnDisplay);
+
   if (!g_app.Init(argc, argv)) {
     return 2;
+  }
+
+  igi::GameplayWindowCallbacks gameplay_window_callbacks;
+  gameplay_window_callbacks.display = OnGameplayDisplay;
+  gameplay_window_callbacks.reshape = OnGameplayReshape;
+  gameplay_window_callbacks.mouse = OnGameplayMouse;
+  gameplay_window_callbacks.mouse_wheel = OnGameplayMouseWheel;
+  gameplay_window_callbacks.motion = OnGameplayMotion;
+  gameplay_window_callbacks.passive_motion = OnGameplayMotion;
+  gameplay_window_callbacks.special = OnGameplaySpecial;
+  gameplay_window_callbacks.special_up = OnGameplaySpecialUp;
+  gameplay_window_callbacks.keyboard = OnGameplayKeyboard;
+  gameplay_window_callbacks.keyboard_up = OnGameplayKeyboardUp;
+  gameplay_window_callbacks.close = OnGameplayClose;
+  if (!g_app.InitializeGameplayWindow(
+          glutGetWindow(), wnd_w, wnd_h, gameplay_window_callbacks)) {
+    Logger::Get().Log(
+        LogLevel::WARNING,
+        "[Main] Gameplay window unavailable; editor remains usable");
   }
 
   // Apply command line settings
@@ -720,8 +795,12 @@ int main(int argc, char **argv) {
     g_app.SetInitialStickToGround(true);
   }
   if (level_no > 0) {
-    g_app.LoadLevel(level_no);
     g_app.SetGameLevel(level_no);
+  }
+
+  // -play: enter Game Play once the level is loaded (profiling / quick test).
+  if (Arg_OptionIdx(argc, argv, "-play") > -1) {
+    g_app.SetEditMode(false);
   }
 
   // setup glut callbacks
@@ -735,7 +814,6 @@ int main(int argc, char **argv) {
   glutSpecialUpFunc(OnSpecialUp);
   glutKeyboardFunc(OnKeyboard);
   glutKeyboardUpFunc(OnKeyboardUp);
-  glutDisplayFunc(OnDisplay);
   glutIdleFunc(OnIdle);
   glutCloseFunc(OnClose);
 
@@ -800,9 +878,8 @@ int main(int argc, char **argv) {
   UpdateChooseLevelMenuText();
   UpdateScaleMenuText();
 
-  // Start in fullscreen (ALT+ENTER toggles back to the windowed size below).
-  g_app.SetInitialFullscreen(wnd_w, wnd_h);
-  glutFullScreen();
+  // Start in windowed mode (ALT+ENTER toggles fullscreen)
+  g_app.OnWindowResize(wnd_w, wnd_h);
 
   try {
     // enter main loop

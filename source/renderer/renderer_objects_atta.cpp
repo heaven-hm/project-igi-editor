@@ -291,10 +291,75 @@ bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId,
     }
 
     // ALWAYS include the originally-requested model even if the glob missed it.
+    // GetOrExtractMefTemp tries disk first, then falls back to pulling the mesh
+    // bytes straight out of the OWNING level's packed .res (via the cross-level
+    // ResCache) and extracting to a temp file — needed when the foreign model was
+    // never extracted to disk (only lives inside another level's archive).
     if (!familyModels.count(modelId)) {
-        std::string mefPath = FindModelFile(modelId, /*isBuilding=*/false);
-        if (mefPath.empty()) mefPath = FindModelFile(modelId, true);
+        std::string mefPath = GetOrExtractMefTemp(modelId, /*isBuilding=*/false);
+        if (mefPath.empty()) mefPath = GetOrExtractMefTemp(modelId, true);
         if (!mefPath.empty()) familyModels.emplace(modelId, mefPath);
+    }
+
+    // Same fallback for the REST of the family (LODs/sub-parts) when the disk
+    // scan found nothing for them: consult the global model->level map (built
+    // from every level's .dat) for family siblings, load that level's ResCache,
+    // and extract each sibling to a temp file.
+    {
+        EnsureGlobalTextureMapLoaded();
+        for (const auto& gm : global_texture_map_) {
+            const std::string& stem = gm.first;
+            if (familyModels.count(stem)) continue;
+            if (!StemInFamily(stem, prefix)) continue;
+            std::string mefPath = GetOrExtractMefTemp(stem, /*isBuilding=*/false);
+            if (mefPath.empty()) mefPath = GetOrExtractMefTemp(stem, true);
+            if (!mefPath.empty()) familyModels.emplace(stem, mefPath);
+        }
+    }
+
+    // ── Resolve ATTA sub-model dependencies across families ──────────────────
+    // A family model's .mef can ATTA-reference a sub-model in a completely
+    // different numeric prefix (e.g. hull "420_04_1" references "235_01_1").
+    // Without pulling those in too, the dependency is never packed into this
+    // level's .res/.dat/.mtp, so the game reports "VirModel not available"
+    // even though the parent renders fine in the editor (via the cross-level
+    // ResCache fallback used only for in-viewport preview).
+    {
+        std::vector<std::string> worklist;
+        for (const auto& fm : familyModels) worklist.push_back(fm.first);
+        std::unordered_set<std::string> visited(worklist.begin(), worklist.end());
+
+        while (!worklist.empty()) {
+            std::string cur = worklist.back();
+            worklist.pop_back();
+            auto it = familyModels.find(cur);
+            if (it == familyModels.end()) continue;
+
+            std::ifstream mf(it->second, std::ios::binary);
+            std::vector<uint8_t> mefBytes((std::istreambuf_iterator<char>(mf)), std::istreambuf_iterator<char>());
+            if (mefBytes.empty()) continue;
+
+            ParsedGeometry geo;
+            try { geo = ParseMefFileFromMemory(mefBytes, cur); } catch (...) { continue; }
+
+            for (const auto& a : geo.mefAttachments) {
+                std::string aname(a.name, strnlen(a.name, 16));
+                if (aname.empty() || !visited.insert(aname).second) continue;
+                if (familyModels.count(aname)) continue;
+
+                std::string mefPath = GetOrExtractMefTemp(aname, /*isBuilding=*/false);
+                if (mefPath.empty()) mefPath = GetOrExtractMefTemp(aname, true);
+                if (mefPath.empty()) {
+                    Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: ATTA dependency '" +
+                        aname + "' (needed by '" + cur + "') not found anywhere; skipping");
+                    continue;
+                }
+                familyModels.emplace(aname, mefPath);
+                worklist.push_back(aname);
+                Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: pulling in ATTA dependency '" +
+                    aname + "' (needed by '" + cur + "')");
+            }
+        }
     }
 
     if (familyModels.empty()) {
@@ -338,18 +403,31 @@ bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId,
     std::vector<std::pair<std::string, std::vector<uint8_t>>> looseTextures;  // for editor-content copy
     std::vector<RESEntry> texEntries;
     std::set<std::string> seenTex;
+    EnsureGlobalTextureMapLoaded();
     for (const auto& fm : familyModels) {
         for (const std::string& texId : GetTextureIdsForModel(fm.first)) {
             if (!seenTex.insert(texId).second) continue; // dedupe across the family
+            std::vector<uint8_t> texBytes;
             std::string texPath = FindTextureFile(texId);
-            if (texPath.empty()) {
+            if (!texPath.empty()) {
+                std::ifstream tf(texPath, std::ios::binary);
+                texBytes.assign(std::istreambuf_iterator<char>(tf), std::istreambuf_iterator<char>());
+            }
+            // Foreign texture not on disk: pull it straight from the owning
+            // level's packed .res via the cross-level ResCache (same fallback
+            // GetOrLoadTexture already uses for in-editor rendering).
+            if (texBytes.empty()) {
+                auto tit = texture_level_map_.find(texId);
+                if (tit != texture_level_map_.end() && tit->second != current_level_) {
+                    LoadResCache(tit->second, Utils::GetIGIRootPath());
+                    texBytes = FindTextureData(texId);
+                }
+            }
+            if (texBytes.empty()) {
                 Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: texture " + texId +
-                    " not found on disk, skipping");
+                    " not found on disk or in any level's .res, skipping");
                 continue;
             }
-            std::ifstream tf(texPath, std::ios::binary);
-            std::vector<uint8_t> texBytes((std::istreambuf_iterator<char>(tf)), std::istreambuf_iterator<char>());
-            if (texBytes.empty()) continue;
             looseTextures.emplace_back(texId, texBytes);
             texEntries.push_back(RESEntry{ "LOCAL:textures/" + texId + ".tex", std::move(texBytes) });
         }
@@ -594,6 +672,46 @@ bool Renderer_Objects::UpdateAttaLocalPosInMef(
     return true;
 }
 
+void Renderer_Objects::PrePopulateAttaFromParsed(const std::string& modelId, bool isBuilding,
+                                                  const std::vector<MefAttachment>& mefAttachments) {
+    std::string cacheKey = std::to_string(current_level_) + ":" +
+                           (isBuilding ? "building:" : "object:") + modelId;
+    if (attachment_cache_.find(cacheKey) != attachment_cache_.end()) return;
+
+    std::vector<AttachInfo> attaches;
+    for (const auto& a : mefAttachments) {
+        std::string aname(a.name, strnlen(a.name, 16));
+        if (aname.empty()) continue;
+        AttachInfo info;
+        info.modelId = aname;
+        info.px = a.px; info.py = a.py; info.pz = a.pz;
+        info.r[0]=a.r00; info.r[1]=a.r01; info.r[2]=a.r02;
+        info.r[3]=a.r03; info.r[4]=a.r04; info.r[5]=a.r05;
+        info.r[6]=a.r06; info.r[7]=a.r07; info.r[8]=a.r08;
+        attaches.push_back(info);
+    }
+    attachment_cache_[cacheKey] = std::move(attaches);
+}
+
+std::vector<AttachInfo> Renderer_Objects::GetModelAttachments(
+    const std::string& modelId,
+    bool isBuilding) {
+    GetOrLoadMesh(modelId, isBuilding);
+    const std::string cacheKey = std::to_string(current_level_) + ":" +
+        (isBuilding ? "building:" : "object:") + modelId;
+    const auto attachment_iterator = attachment_cache_.find(cacheKey);
+    if (attachment_iterator == attachment_cache_.end()) {
+        return {};
+    }
+    return attachment_iterator->second;
+}
+
+std::vector<glm::vec3> Renderer_Objects::GetModelMagicVertices(
+    const std::string& modelId,
+    bool isBuilding) {
+    return GetOrLoadMesh(modelId, isBuilding).magicVertices;
+}
+
 void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool isBuilding,
                                                  std::unordered_set<std::string>& visited) {
     if (!visited.insert(modelId).second) return; // cycle guard
@@ -601,63 +719,153 @@ void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool
     std::string cacheKey = std::to_string(current_level_) + ":" +
                            (isBuilding ? "building:" : "object:") + modelId;
 
-    if (attachment_cache_.find(cacheKey) != attachment_cache_.end()) return;
-
-    std::string filepath = FindModelFile(modelId, isBuilding);
-    if (filepath.empty()) {
-        attachment_cache_[cacheKey] = {};
+    // If attachment_cache_ already has this entry (from PrePopulateAttaFromParsed or a
+    // previous call), skip re-parsing the MEF but still ensure every sub-model's mesh
+    // is loaded — PrePopulateAttaFromParsed only fills the structural list, not meshes.
+    auto existingIt = attachment_cache_.find(cacheKey);
+    if (existingIt != attachment_cache_.end()) {
+        for (const auto& att : existingIt->second) {
+            std::string subKey = std::to_string(current_level_) + ":" +
+                                 (isBuilding ? "building:" : "object:") + att.modelId;
+            if (mesh_cache_.find(subKey) == mesh_cache_.end()) {
+                bool loaded = false;
+                std::vector<uint8_t> subBytes = FindMeshData(att.modelId);
+                if (!subBytes.empty()) {
+                    try {
+                        Mesh subMesh = loadObjModelFromMemory(subBytes, att.modelId);
+                        ApplyTexturesToMesh(subMesh, att.modelId, modelId);
+                        mesh_cache_[subKey] = subMesh;
+                        loaded = true;
+                    } catch (...) {}
+                }
+                if (!loaded) {
+                    std::string subFile = FindModelFile(att.modelId, isBuilding);
+                    if (!subFile.empty()) {
+                        try {
+                            Mesh subMesh = loadObjModel(subFile, "");
+                            ApplyTexturesToMesh(subMesh, att.modelId, modelId);
+                            mesh_cache_[subKey] = subMesh;
+                            loaded = true;
+                        } catch (...) {}
+                    } else {
+                        // FindModelFile may have lazily indexed a cross-level .res as a
+                        // side effect (its cross-level lookup block) -- retry the ResCache
+                        // now that the owning level's models.res is indexed.
+                        std::vector<uint8_t> lazyBytes = FindMeshData(att.modelId);
+                        if (!lazyBytes.empty()) {
+                            try {
+                                Mesh subMesh = loadObjModelFromMemory(lazyBytes, att.modelId);
+                                ApplyTexturesToMesh(subMesh, att.modelId, modelId);
+                                mesh_cache_[subKey] = subMesh;
+                                loaded = true;
+                            } catch (...) {}
+                        }
+                    }
+                    if (!loaded) {
+                        Mesh empty; mesh_cache_[subKey] = empty;
+                    }
+                }
+            }
+            LoadAttachmentsRecursive(att.modelId, isBuilding, visited);
+        }
         return;
     }
 
+    // Parse the parent MEF to find ATTA records — try res cache first.
+    ParsedGeometry geo;
+    {
+        bool parsedOk = false;
+        std::vector<uint8_t> mefBytes = FindMeshData(modelId);
+        if (!mefBytes.empty()) {
+            try { geo = ParseMefFileFromMemory(mefBytes, modelId); parsedOk = true; } catch (...) {}
+        }
+        if (!parsedOk) {
+            std::string filepath = FindModelFile(modelId, isBuilding);
+            if (filepath.empty()) {
+                attachment_cache_[cacheKey] = {};
+                return;
+            }
+            try { geo = ParseMefFile(filepath); } catch (...) {}
+        }
+    }
+
     std::vector<AttachInfo> attaches;
-    try {
-        ParsedGeometry geo = ParseMefFile(filepath);
-        for (const auto& a : geo.mefAttachments) {
-            std::string aname(a.name, strnlen(a.name, 16));
-            if (aname.empty()) continue;
+    for (const auto& a : geo.mefAttachments) {
+        std::string aname(a.name, strnlen(a.name, 16));
+        if (aname.empty()) continue;
 
-            AttachInfo info;
-            info.modelId = aname;
-            info.px = a.px; info.py = a.py; info.pz = a.pz;
-            info.r[0]=a.r00; info.r[1]=a.r01; info.r[2]=a.r02;
-            info.r[3]=a.r03; info.r[4]=a.r04; info.r[5]=a.r05;
-            info.r[6]=a.r06; info.r[7]=a.r07; info.r[8]=a.r08;
-            attaches.push_back(info);
+        AttachInfo info;
+        info.modelId = aname;
+        info.px = a.px; info.py = a.py; info.pz = a.pz;
+        info.r[0]=a.r00; info.r[1]=a.r01; info.r[2]=a.r02;
+        info.r[3]=a.r03; info.r[4]=a.r04; info.r[5]=a.r05;
+        info.r[6]=a.r06; info.r[7]=a.r07; info.r[8]=a.r08;
+        attaches.push_back(info);
 
-            Logger::Get().Log(LogLevel::INFO,
-                "[Renderer_Objects] Attachment '" + aname + "' of '" + modelId +
-                "' pos=(" + std::to_string(a.px) + "," + std::to_string(a.py) +
-                "," + std::to_string(a.pz) + ")");
-
-            // Pre-warm the sub-model mesh
-            std::string subFile = FindModelFile(aname, isBuilding);
-            if (subFile.empty()) {
-                Logger::Get().Log(LogLevel::WARNING,
-                    "[Renderer_Objects] Attachment sub-model NOT FOUND: " + aname);
-            } else {
-                std::string subKey = std::to_string(current_level_) + ":" +
-                                     (isBuilding ? "building:" : "object:") + aname;
-                if (mesh_cache_.find(subKey) == mesh_cache_.end()) {
+        // Pre-warm the sub-model mesh — try res cache first, disk fallback.
+        std::string subKey = std::to_string(current_level_) + ":" +
+                             (isBuilding ? "building:" : "object:") + aname;
+        if (mesh_cache_.find(subKey) == mesh_cache_.end()) {
+            bool loaded = false;
+            std::vector<uint8_t> subBytes = FindMeshData(aname);
+            if (!subBytes.empty()) {
+                try {
+                    Mesh subMesh = loadObjModelFromMemory(subBytes, aname);
+                    ApplyTexturesToMesh(subMesh, aname, modelId);
+                    mesh_cache_[subKey] = subMesh;
+                    Logger::Get().Log(LogLevel::INFO,
+                        "[Renderer_Objects] ATTA sub-model loaded from ResCache: " + aname +
+                        " (" + std::to_string(subMesh.vertexCount) + " verts)");
+                    loaded = true;
+                } catch (const std::exception& se) {
+                    Logger::Get().Log(LogLevel::WARNING,
+                        "[Renderer_Objects] ATTA ResCache parse failed for " + aname + ": " + se.what());
+                }
+            }
+            if (!loaded) {
+                std::string subFile = FindModelFile(aname, isBuilding);
+                if (subFile.empty()) {
+                    // FindModelFile may have lazily indexed a cross-level .res as a side
+                    // effect (its cross-level lookup block) -- retry the ResCache now that
+                    // the owning level's models.res is indexed, before giving up.
+                    std::vector<uint8_t> lazyBytes = FindMeshData(aname);
+                    if (!lazyBytes.empty()) {
+                        try {
+                            Mesh subMesh = loadObjModelFromMemory(lazyBytes, aname);
+                            ApplyTexturesToMesh(subMesh, aname, modelId);
+                            mesh_cache_[subKey] = subMesh;
+                            Logger::Get().Log(LogLevel::INFO,
+                                "[Renderer_Objects] ATTA sub-model loaded from ResCache (lazy): " + aname +
+                                " (" + std::to_string(subMesh.vertexCount) + " verts)");
+                            loaded = true;
+                        } catch (const std::exception& se) {
+                            Logger::Get().Log(LogLevel::WARNING,
+                                "[Renderer_Objects] ATTA lazy ResCache parse failed for " + aname + ": " + se.what());
+                        }
+                    }
+                    if (!loaded) {
+                        Logger::Get().Log(LogLevel::WARNING,
+                            "[Renderer_Objects] ATTA sub-model NOT FOUND: " + aname);
+                        Mesh empty; mesh_cache_[subKey] = empty;
+                    }
+                } else {
                     try {
                         Mesh subMesh = loadObjModel(subFile, "");
                         ApplyTexturesToMesh(subMesh, aname, modelId);
                         mesh_cache_[subKey] = subMesh;
                         Logger::Get().Log(LogLevel::INFO,
-                            "[Renderer_Objects] Attachment sub-model loaded: " + aname +
+                            "[Renderer_Objects] ATTA sub-model loaded from disk: " + aname +
                             " (" + std::to_string(subMesh.vertexCount) + " verts)");
-                    } catch (const std::exception &se) {
+                    } catch (const std::exception& se) {
                         Logger::Get().Log(LogLevel::ERR,
-                            "[Renderer_Objects] Attachment sub-model load FAILED: " + aname + ": " + se.what());
+                            "[Renderer_Objects] ATTA sub-model load FAILED: " + aname + ": " + se.what());
                         Mesh empty; mesh_cache_[subKey] = empty;
                     }
                 }
-                // Recurse: parse this child's own ATTA section
-                LoadAttachmentsRecursive(aname, isBuilding, visited);
             }
         }
-    } catch (const std::exception &pe) {
-        Logger::Get().Log(LogLevel::WARNING,
-            "[Renderer_Objects] Could not parse ATTA from '" + filepath + "': " + pe.what());
+        // Recurse: parse this child's own ATTA section
+        LoadAttachmentsRecursive(aname, isBuilding, visited);
     }
 
     attachment_cache_[cacheKey] = std::move(attaches);
@@ -725,6 +933,67 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         glm::mat4 childWorldMat(1.0f);
         childWorldMat = glm::translate(childWorldMat, worldPos);
         childWorldMat = childWorldMat * parentRot * attLocalRot;
+
+		// Helicopter rotor spin preview: rotor ATTA children of Heli objects spin
+		// continuously so the viewport reads as alive (the game itself animates
+		// rotors via runtime; we only preview in the editor). The main rotor is
+		// the child at the highest local Z (top of fuselage); the tail rotor is
+		// at the most-negative local Y (far tail). modelType-3 ATTA children are
+		// typically the rotor blades; fall through for any other children.
+		if (current_draw_obj_type_ == "Heli") {
+			float maxZ = att.pz, minY = att.py;
+			for (const auto& sib : attsR) {
+				if (sib.pz > maxZ) maxZ = sib.pz;
+				if (sib.py < minY) minY = sib.py;
+			}
+			const bool isMainRotor = (att.pz >= maxZ - 1.0f);
+			const bool isTailRotor = (!isMainRotor && att.py <= minY + 1.0f);
+
+			// Rebuild the placed transform from static ATTA data every frame.
+			// Hub is locked. Yaw constant, pitch animates for main rotor (2 orientation axes fixed by locking shaft column, 1 moving).
+			// Spin is applied in the placed attachment frame (post-multiply) so blades rotate 360 on their shaft with no orbit/translation.
+			glm::vec3 hub = worldPos;
+			glm::mat3 base;
+			base[0] = glm::vec3(childWorldMat[0]);
+			base[1] = glm::vec3(childWorldMat[1]);
+			base[2] = glm::vec3(childWorldMat[2]);
+
+			if (isMainRotor) {
+				// Spin around placed column 0 (maps to pitch per IGI Yaw(Z)-Pitch(X)-Roll(Y) order).
+				// Post-multiply rotates geometry in attachment local; lock column 0 so disk tilt (yaw/roll of plane) stays fixed.
+				glm::vec3 n = base[0];
+				if (glm::length(n) > 0.0001f) n = glm::normalize(n); else n = glm::vec3(1,0,0);
+
+				float angle = elapsed_time_secs_ * 15.0f;  // positive; flip if blades spin opposite to expected
+				glm::mat4 Rloc = glm::rotate(glm::mat4(1.0f), angle, glm::vec3(1,0,0)); // local X (pitch)
+				glm::mat3 spun = base * glm::mat3(Rloc);
+				spun[0] = n;  // keep shaft axis fixed (yaw constant, disk plane tilt fixed)
+
+				childWorldMat[0] = glm::vec4(spun[0], 0.0f);
+				childWorldMat[1] = glm::vec4(spun[1], 0.0f);
+				childWorldMat[2] = glm::vec4(spun[2], 0.0f);
+				childWorldMat[3] = glm::vec4(hub, 1.0f);
+			} else if (isTailRotor) {
+				// Tail rotor spins around its own placed lateral axis.
+				int best = 0;
+				float bestAbs = glm::abs(base[0].x);
+				for (int c = 1; c < 3; ++c) {
+					if (glm::abs(base[c].x) > bestAbs) { bestAbs = glm::abs(base[c].x); best = c; }
+				}
+				glm::vec3 n = glm::normalize(base[best]);
+
+				float angle = -elapsed_time_secs_ * 25.0f;
+				glm::mat4 R = glm::rotate(glm::mat4(1.0f), angle, n);
+
+				glm::mat3 spun = glm::mat3(R) * base;
+				spun[best] = n;
+
+				childWorldMat[0] = glm::vec4(spun[0], 0.0f);
+				childWorldMat[1] = glm::vec4(spun[1], 0.0f);
+				childWorldMat[2] = glm::vec4(spun[2], 0.0f);
+				childWorldMat[3] = glm::vec4(hub, 1.0f);
+			}
+		}
 
         // If this ATTA has a proxy object editing it, skip rendering it here —
         // the proxy renders it — but still recurse into children.
@@ -858,7 +1127,7 @@ void Renderer_Objects::DrawAttachmentsRecursive(
                     // Same normal lighting for window/glass attachments so they stay
                     // clear and see-through (see top-level path — flat-gray reverted).
                     glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                    glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+                    glUniform3f(loc_ambient,  global_ambient_.r, global_ambient_.g, global_ambient_.b);
                     glUniform1i(loc_useTex, 1);
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, sub.textureID);
@@ -867,11 +1136,11 @@ void Renderer_Objects::DrawAttachmentsRecursive(
                     // Untextured accessory (e.g. sunglasses): hash-color fallback, matching
                     // the untextured submesh path used for top-level objects above.
                     size_t hash = std::hash<std::string>{}(att.modelId);
-                    float hr = 0.4f + (float)(hash & 0xFF) / 255.0f * 0.4f;
-                    float hg = 0.4f + (float)((hash >> 8) & 0xFF) / 255.0f * 0.4f;
-                    float hb = 0.4f + (float)((hash >> 16) & 0xFF) / 255.0f * 0.4f;
+                    float hr = global_ambient_.r + (float)(hash & 0xFF) / 255.0f * global_ambient_.r;
+                    float hg = global_ambient_.g + (float)((hash >> 8) & 0xFF) / 255.0f * global_ambient_.g;
+                    float hb = global_ambient_.b + (float)((hash >> 16) & 0xFF) / 255.0f * global_ambient_.b;
                     glUniform3f(loc_dirlight, hr * 0.6f, hg * 0.6f, hb * 0.6f);
-                    glUniform3f(loc_ambient,  hr * 0.4f, hg * 0.4f, hb * 0.4f);
+                    glUniform3f(loc_ambient,  hr * global_ambient_.r, hg * global_ambient_.g, hb * global_ambient_.b);
                     glUniform1i(loc_useTex, 0);
                 }
                 glBindVertexArray(sub.VAO);
@@ -885,7 +1154,7 @@ void Renderer_Objects::DrawAttachmentsRecursive(
             glBindVertexArray(0);
         } else if (subMesh.textureID > 0) {
             glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-            glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+            glUniform3f(loc_ambient,  global_ambient_.r, global_ambient_.g, global_ambient_.b);
             glUniform1i(loc_useTex, 1);
             GL_BindTexture2D(0, subMesh.textureID);
             glUniform1i(loc_tex, 0);
@@ -950,8 +1219,6 @@ void Renderer_Objects::DrawAttachmentsForSpline(
     glDisable(GL_POLYGON_OFFSET_FILL);
     glUseProgram(0);
 }
-
-
 
 
 

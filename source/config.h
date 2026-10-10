@@ -13,7 +13,7 @@ struct KeyBinding {
 struct ConfigData {
     // [GamePath]
     int level;
-    // [Marker] - IGI 2 Style Manipulation
+    // [Marker] - Editor Manipulation
     char keySnapGround;
     char keySnapObject;
     char keyRotateAlpha;
@@ -82,6 +82,10 @@ struct ConfigData {
 
     // [Renderer]
     bool enableLOD; // Portal/attachment distance culling for buildings
+    bool enableLightmaps; // Apply calculated "Calculate Lightmap" textures during render (Escape menu checkbox)
+    bool enableFog; // Terrain/object atmospheric fog — toggle in Terrain Settings panel
+    int fogIntensity; // 0-200 (%), step 10; 100 = level default, higher = thicker fog
+    bool musicEnabled; // Escape-menu Music checkbox preference — persists across level loads/game launches
 
     // NEW: Advanced QED Settings
     int consoleAutoActivate;
@@ -90,6 +94,8 @@ struct ConfigData {
     bool displayTaskNote;
     bool allowDynamicSwitching;
     bool saveConfigOnExit;
+    bool auto_save_enabled;
+    int auto_save_interval_seconds;
     bool runEvent;
     bool cameraLock;
     bool enableBackup;
@@ -103,6 +109,7 @@ struct ConfigData {
     std::string objectFilePath;
     int interpolation;
     float renderZNear;
+    int graphNodeSize;
 
     // Camera State
     float cameraOriX, cameraOriY, cameraOriZ;
@@ -112,6 +119,11 @@ struct ConfigData {
 
     // Full event bindings map (all ~120 events loaded from config)
     std::unordered_map<std::string, KeyBinding> eventBindings_;
+
+    // Per-level background music override: level number -> filename (just the
+    // name, e.g. "music_wind.wav") to look up under that level's sounds/ dir.
+    // Levels with no entry fall back to "game_music.wav".
+    std::unordered_map<int, std::string> levelMusicFiles;
 };
 
 class Config {

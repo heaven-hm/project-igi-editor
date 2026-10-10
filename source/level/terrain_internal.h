@@ -12,8 +12,8 @@
 #include "terrain_files.h"
 #include <filesystem>
 #include "logger.h"
-#include "parsers/qvm_parser.h"
-#include "parsers/qvm_decompiler.h"
+#include "qvm_parser.h"
+#include "qvm_decompiler.h"
 #include "utils.h"
 
 // ── shared helpers ──────────────────────────────────────────────────────────

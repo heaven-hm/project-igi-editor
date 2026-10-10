@@ -20,12 +20,12 @@
 #include "utils.h"
 #include "../level/level_common.h"
 #include "gl_helper.h"
-#include "../parsers/mef_native.h"
-#include "../parsers/qvm_parser.h"
-#include "../parsers/qvm_decompiler.h"
-#include "../parsers/dat_parser.h"
-#include "../parsers/res_compiler.h"
-#include "../parsers/mtp_parser.h"
+#include "mef_native.h"
+#include "../level/qvm_parser.h"
+#include "../level/qvm_decompiler.h"
+#include "dat_writer.h"
+#include "res_compiler.h"
+#include "../level/mtp_writer.h"
 #include <sstream>
 
 // Used across draw/picking/atta/visual modules.

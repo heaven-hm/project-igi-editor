@@ -211,6 +211,27 @@ void Renderer_Objects::DrawModelPreview(const std::string& modelId, GLuint ubo_m
     if (loc_glass >= 0)     glUniform1f(loc_glass, 0.0f);
     if (loc_baseColor >= 0) glUniform4f(loc_baseColor, 1.0f, 1.0f, 1.0f, 1.0f);
 
+    // Reset uniforms that the scene pass may have left in a non-default state.
+    // Without this, u_useLightmap=1 (set by a building draw) causes the preview
+    // shader to sample texture unit 1 (stale lightmap) instead of the diffuse
+    // texture, producing gray or black output regardless of texture content.
+    {
+        GLint loc_useLightmap = glGetUniformLocation(shader_program_, "u_useLightmap");
+        GLint loc_tint        = glGetUniformLocation(shader_program_, "u_tint");
+        GLint loc_gamma       = glGetUniformLocation(shader_program_, "u_gamma");
+        GLint loc_lightDir    = glGetUniformLocation(shader_program_, "u_lightDir");
+        GLint loc_fogFar      = glGetUniformLocation(shader_program_, "u_fogFar");
+        GLint loc_fogColor    = glGetUniformLocation(shader_program_, "u_fogColor");
+        GLint loc_camPos      = glGetUniformLocation(shader_program_, "u_cameraPos");
+        if (loc_useLightmap >= 0) glUniform1i(loc_useLightmap, 0);
+        if (loc_tint >= 0)        glUniform3f(loc_tint, 1.0f, 1.0f, 1.0f);
+        if (loc_gamma >= 0)       glUniform1f(loc_gamma, 1.0f);
+        if (loc_lightDir >= 0)    glUniform3f(loc_lightDir, 0.5f, 1.0f, 0.8f);
+        if (loc_fogFar >= 0)      glUniform1f(loc_fogFar, 1e9f);
+        if (loc_fogColor >= 0)    glUniform3f(loc_fogColor, 0.0f, 0.0f, 0.0f);
+        if (loc_camPos >= 0)      glUniform3f(loc_camPos, 0.0f, -3.2f, 1.2f);
+    }
+
     // Hash-based fallback color for untextured submeshes (matches the main draw).
     float r = 0.6f, g = 0.6f, b = 0.6f;
     {
@@ -250,6 +271,87 @@ void Renderer_Objects::DrawModelPreview(const std::string& modelId, GLuint ubo_m
     glBindVertexArray(0);
     glDisable(GL_SCISSOR_TEST);
     // Caller restores full viewport and 2D HUD state.
+}
+
+// ─── DrawAttachedMesh ────────────────────────────────────────────────────────
+// Draws one static prop mesh at an arbitrary world matrix, attached to a live
+// bone (e.g. a weapon held in an AI's hand). Modeled on DrawModelPreview's
+// shader-bind/uniform/per-submesh draw loop, but runs inside the NORMAL scene
+// pass — it does not touch the viewport or override the shared MVP (the scene's
+// own camera matrices, already bound this frame, are used as-is).
+void Renderer_Objects::DrawAttachedMesh(const std::string& modelId, bool isBuilding, const glm::mat4& worldMat, GLuint ubo_mats) {
+    if (!shader_program_ || modelId.empty()) return;
+
+    Mesh mesh = GetOrLoadMesh(modelId, isBuilding);
+    if (mesh.subMeshes.empty() && (mesh.VAO == 0 || mesh.vertexCount == 0))
+        mesh = GetOrLoadMesh(modelId, !isBuilding);
+    if (mesh.subMeshes.empty() && (mesh.VAO == 0 || mesh.vertexCount == 0)) return;
+
+    glUseProgram(shader_program_);
+    // Bind the shared Matrices UBO so the vertex shader's u_mvp (Proj*View*GlobalScale)
+    // is the live scene camera. Without this the weapon has no camera transform and
+    // renders off-screen — the bug that made attached weapons invisible. The scene's
+    // matrices are still resident here (DrawSkinnedMesh uses fixed-function and never
+    // touches the UBO), so we bind without re-uploading anything.
+    glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+    GLint loc_model     = glGetUniformLocation(shader_program_, "u_model");
+    GLint loc_dirlight  = glGetUniformLocation(shader_program_, "u_dirlight");
+    GLint loc_ambient   = glGetUniformLocation(shader_program_, "u_ambient");
+    GLint loc_useTex    = glGetUniformLocation(shader_program_, "u_useTexture");
+    GLint loc_tex       = glGetUniformLocation(shader_program_, "u_texture");
+    GLint loc_alpha     = glGetUniformLocation(shader_program_, "u_alpha");
+    GLint loc_glass     = glGetUniformLocation(shader_program_, "u_glassMin");
+    GLint loc_baseColor = glGetUniformLocation(shader_program_, "u_baseColor");
+    GLint loc_tint      = glGetUniformLocation(shader_program_, "u_tint");
+    glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(worldMat));
+    glUniform1f(loc_alpha, 1.0f);
+    if (loc_glass >= 0)     glUniform1f(loc_glass, 0.0f);
+    if (loc_baseColor >= 0) glUniform4f(loc_baseColor, 1.0f, 1.0f, 1.0f, 1.0f);
+    if (loc_tint >= 0)      glUniform3f(loc_tint, 1.0f, 1.0f, 1.0f); // no magenta leak from missing-in-res tinting
+
+    float r = 0.6f, g = 0.6f, b = 0.6f;
+    {
+        size_t h = std::hash<std::string>{}(modelId);
+        r = 0.4f + (float)(h & 0xFF) / 255.0f * 0.4f;
+        g = 0.4f + (float)((h >> 8) & 0xFF) / 255.0f * 0.4f;
+        b = 0.4f + (float)((h >> 16) & 0xFF) / 255.0f * 0.4f;
+    }
+
+    auto drawSub = [&](GLuint vao, int vcount, GLuint texId, const glm::vec4& baseColor) {
+        if (vao == 0 || vcount == 0) return;
+        if (texId > 0) {
+            glUniform3f(loc_dirlight, 0.7f, 0.7f, 0.7f);
+            glUniform3f(loc_ambient,  0.45f, 0.45f, 0.45f);
+            glUniform1i(loc_useTex, 1);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, texId);
+            glUniform1i(loc_tex, 0);
+        } else {
+            glm::vec3 c(baseColor.r, baseColor.g, baseColor.b);
+            if (c.r >= 0.99f && c.g >= 0.99f && c.b >= 0.99f) c = glm::vec3(r, g, b);
+            glUniform3f(loc_dirlight, c.r * 0.7f, c.g * 0.7f, c.b * 0.7f);
+            glUniform3f(loc_ambient,  c.r * 0.45f, c.g * 0.45f, c.b * 0.45f);
+            glUniform1i(loc_useTex, 0);
+        }
+        glBindVertexArray(vao);
+        glDrawArrays(GL_TRIANGLES, 0, vcount);
+    };
+
+    if (!mesh.subMeshes.empty()) {
+        for (const auto& sub : mesh.subMeshes)
+            drawSub(sub.VAO, sub.vertexCount, sub.textureID, sub.baseColorFactor);
+    } else {
+        drawSub(mesh.VAO, mesh.vertexCount, mesh.textureID, glm::vec4(1.0f));
+    }
+
+    glBindVertexArray(0);
 }
 
 // ─── LoadAttachmentsRecursive ────────────────────────────────────────────────

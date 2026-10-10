@@ -3,7 +3,7 @@
 #include <vector>
 #include <algorithm>
 #include <cctype>
-#include "parsers/mef_native.h"
+#include "mef_native.h"
 
 struct HardcodedBoneRef {
     const char* name;

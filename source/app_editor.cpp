@@ -49,6 +49,161 @@ void App::UpdateAIScriptPathHScroll() {
 		ai_script_path_hscroll_ = prop_text_caret_ - mc + 1;
 }
 
+// ── AI Script editor — notepad-style helpers ───────────────────────────────
+// All of these gate on IsAIScriptTextFocused() so the editor-level
+// Ctrl+Z / Ctrl+F / Ctrl+N bindings still fire when other text fields are
+// being edited. Only the AI Script text field gets the full notepad
+// surface (Ctrl+C/V/X/A/Z/Y + mouse drag selection).
+bool App::HasPropTextSelection() const {
+	return prop_text_sel_anchor_ >= 0 && prop_text_sel_focus_ >= 0
+		&& prop_text_sel_anchor_ != prop_text_sel_focus_;
+}
+
+void App::GetPropTextSelection(int& selStart, int& selEnd) const {
+	if (!HasPropTextSelection()) { selStart = selEnd = -1; return; }
+	selStart = std::min(prop_text_sel_anchor_, prop_text_sel_focus_);
+	selEnd   = std::max(prop_text_sel_anchor_, prop_text_sel_focus_);
+}
+
+void App::AiScriptSelectAll() {
+	if (!IsAIScriptTextFocused()) return;
+	prop_text_sel_anchor_ = 0;
+	prop_text_sel_focus_  = (int)prop_text_buf_.size();
+	// Move caret to the end so subsequent typing replaces the selection.
+	prop_text_caret_ = (int)prop_text_buf_.size();
+	UpdateAIScriptScroll();
+}
+
+void App::PushAiTextUndo() {
+	if (!IsAIScriptTextFocused()) return;
+	AiTextEdit e;
+	e.before      = prop_text_buf_;
+	e.caret_before = prop_text_caret_;
+	e.anchor_before = prop_text_sel_anchor_;
+	ai_text_undo_.push_back(std::move(e));
+	if ((int)ai_text_undo_.size() > kAiTextUndoMax)
+		ai_text_undo_.erase(ai_text_undo_.begin());
+	// Any new edit invalidates the redo stack (standard editor semantics).
+	ai_text_redo_.clear();
+}
+
+void App::AiScriptDeleteSelection() {
+	if (!IsAIScriptTextFocused()) return;
+	if (!HasPropTextSelection()) return;
+	PushAiTextUndo();
+	int s, e; GetPropTextSelection(s, e);
+	prop_text_buf_.erase(s, e - s);
+	prop_text_caret_ = s;
+	ClearPropTextSelection();
+	ai_script_text_  = prop_text_buf_;
+	ai_script_dirty_ = true;
+	UpdateAIScriptScroll();
+}
+
+void App::AiScriptInsertText(const std::string& s) {
+	if (!IsAIScriptTextFocused() || s.empty()) return;
+	// Replace any active selection (single undo entry covers the whole op).
+	if (HasPropTextSelection()) {
+		PushAiTextUndo();
+		int a, b; GetPropTextSelection(a, b);
+		prop_text_buf_.erase(a, b - a);
+		prop_text_caret_ = a;
+		ClearPropTextSelection();
+	} else {
+		PushAiTextUndo();
+	}
+	prop_text_buf_.insert(prop_text_caret_, s);
+	prop_text_caret_ += (int)s.size();
+	ai_script_text_  = prop_text_buf_;
+	ai_script_dirty_ = true;
+	UpdateAIScriptScroll();
+}
+
+void App::AiScriptCopy() {
+	if (!IsAIScriptTextFocused()) return;
+	std::string txt;
+	if (HasPropTextSelection()) {
+		int s, e; GetPropTextSelection(s, e);
+		txt = prop_text_buf_.substr(s, e - s);
+	} else {
+		// No selection → copy entire buffer (Notepad/most editors do this).
+		txt = prop_text_buf_;
+	}
+	if (!txt.empty()) {
+		Utils::SetClipboardText(txt);
+		status_message_ = "Copied " + std::to_string(txt.size()) + " chars to clipboard";
+	}
+}
+
+void App::AiScriptCut() {
+	if (!IsAIScriptTextFocused()) return;
+	if (HasPropTextSelection()) {
+		int s, e; GetPropTextSelection(s, e);
+		Utils::SetClipboardText(prop_text_buf_.substr(s, e - s));
+		AiScriptDeleteSelection();
+		status_message_ = "Cut selection to clipboard";
+	} else {
+		// No selection → cut the whole buffer (matches Notepad's Ctrl+X).
+		Utils::SetClipboardText(prop_text_buf_);
+		PushAiTextUndo();
+		prop_text_buf_.clear();
+		prop_text_caret_ = 0;
+		ClearPropTextSelection();
+		ai_script_text_  = prop_text_buf_;
+		ai_script_dirty_ = true;
+		status_message_ = "Cut entire script to clipboard";
+	}
+}
+
+void App::AiScriptPaste() {
+	if (!IsAIScriptTextFocused()) return;
+	const std::string clip = Utils::GetClipboardText();
+	if (clip.empty()) return;
+	AiScriptInsertText(clip);
+	status_message_ = "Pasted " + std::to_string(clip.size()) + " chars from clipboard";
+}
+
+void App::AiScriptUndo() {
+	if (!IsAIScriptTextFocused()) return;
+	if (ai_text_undo_.empty()) { status_message_ = "Nothing to undo"; return; }
+	// Move the current state onto the redo stack so Ctrl+Y can re-apply it.
+	AiTextEdit redo;
+	redo.before       = prop_text_buf_;
+	redo.caret_before = prop_text_caret_;
+	redo.anchor_before = prop_text_sel_anchor_;
+	ai_text_redo_.push_back(std::move(redo));
+	AiTextEdit e = std::move(ai_text_undo_.back());
+	ai_text_undo_.pop_back();
+	prop_text_buf_    = e.before;
+	prop_text_caret_  = e.caret_before;
+	prop_text_sel_anchor_ = e.anchor_before;
+	prop_text_sel_focus_  = -1; // focus was implicit (= caret) before
+	ai_script_text_  = prop_text_buf_;
+	ai_script_dirty_ = true;
+	UpdateAIScriptScroll();
+	status_message_ = "Undo (" + std::to_string(ai_text_undo_.size()) + " left)";
+}
+
+void App::AiScriptRedo() {
+	if (!IsAIScriptTextFocused()) return;
+	if (ai_text_redo_.empty()) { status_message_ = "Nothing to redo"; return; }
+	AiTextEdit undo;
+	undo.before       = prop_text_buf_;
+	undo.caret_before = prop_text_caret_;
+	undo.anchor_before = prop_text_sel_anchor_;
+	ai_text_undo_.push_back(std::move(undo));
+	AiTextEdit e = std::move(ai_text_redo_.back());
+	ai_text_redo_.pop_back();
+	prop_text_buf_    = e.before;
+	prop_text_caret_  = e.caret_before;
+	prop_text_sel_anchor_ = e.anchor_before;
+	prop_text_sel_focus_  = -1;
+	ai_script_text_  = prop_text_buf_;
+	ai_script_dirty_ = true;
+	UpdateAIScriptScroll();
+	status_message_ = "Redo (" + std::to_string(ai_text_redo_.size()) + " left)";
+}
+
 void App::LoadAIScriptForSelected() {
 	if (ai_script_dirty_)
 		status_message_ = "Warning: unsaved AI script edits discarded (save level first)";
@@ -63,27 +218,67 @@ void App::LoadAIScriptForSelected() {
 	if (selected_object_index_ >= (int)objects.size()) return;
 	const auto& obj = objects[selected_object_index_];
 
-	// Only AI model types get the script section.
-	if (ai_model_ids_.find(obj.modelId) == ai_model_ids_.end()) return;
+	// Only AI model types get the script section. Check both the modelId
+	// (against the AITYPE_ set from IGIModels.json) AND the object type —
+	// HumanSoldier/HumanSoldierFemale/HumanPlayer/HumanSoldierRPG are always
+	// AI containers even if their modelId isn't tagged AITYPE_ in the JSON.
+	bool isAiType = (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale" ||
+	                 obj.type == "HumanPlayer" || obj.type == "HumanSoldierRPG" ||
+	                 obj.type == "HumanAI");
+	bool isAiModel = (ai_model_ids_.find(obj.modelId) != ai_model_ids_.end());
+	if (!isAiType && !isAiModel) return;
 
 	// The .qvm belongs to the HumanAI child task (not the HumanSoldier parent).
-	// If this object IS the HumanAI, use its own ID; otherwise find the HumanAI child.
+	// If this object IS the HumanAI, use its own ID; otherwise walk the children
+	// recursively to find a HumanAI — the AI task can be nested several levels
+	// deep (e.g. HumanSoldier → Gun → HumanAI). Limit the search depth so a
+	// malformed tree doesn't hang the editor.
 	const LevelObject* aiTask = nullptr;
 	if (obj.type == "HumanAI") {
 		aiTask = &obj;
 	} else {
-		for (int ci : obj.childrenIndices) {
-			if (ci < 0 || ci >= (int)objects.size()) continue;
-			if (objects[ci].deleted) continue;
-			if (objects[ci].type == "HumanAI") { aiTask = &objects[ci]; break; }
+		const int kMaxAIDepth = 15;
+		std::vector<int> frontier = obj.childrenIndices;
+		int depth = 0;
+		while (!frontier.empty() && depth < kMaxAIDepth) {
+			std::vector<int> next;
+			for (int ci : frontier) {
+				if (ci < 0 || ci >= (int)objects.size()) continue;
+				if (objects[ci].deleted) continue;
+				if (objects[ci].type == "HumanAI") {
+					aiTask = &objects[ci];
+					frontier.clear();
+					break;
+				}
+				for (int gc : objects[ci].childrenIndices) next.push_back(gc);
+			}
+			if (aiTask) break;
+			frontier = std::move(next);
+			++depth;
+		}
+		if (!aiTask) {
+			Logger::Get().Log(LogLevel::WARNING,
+				"[App] HumanAI not found under HumanSoldier '" + obj.name +
+				"' (taskId=" + obj.taskId + ") within " + std::to_string(kMaxAIDepth) +
+				" levels of children — AI script not loaded");
 		}
 	}
-	if (!aiTask || aiTask->taskId.empty()) return;
+	if (!aiTask || aiTask->taskId.empty()) {
+		if (aiTask)
+			Logger::Get().Log(LogLevel::WARNING,
+				"[App] HumanAI found but taskId is empty for '" + obj.name +
+				"' (taskId=" + obj.taskId + ") — AI script not loaded");
+		return;
+	}
 
 	int levelNo = level_.GetLevelNo();
 	std::string aiDir = Utils::GetIGIRootPath() +
 	                    "\\missions\\location0\\level" + std::to_string(levelNo) + "\\ai";
 	ai_script_path_ = aiDir + "\\" + aiTask->taskId + ".qvm";
+	Logger::Get().Log(LogLevel::INFO,
+		"[App] AI script loaded for " + obj.type + " '" + obj.name +
+		"' (taskId=" + obj.taskId + ") -> HumanAI taskId=" + aiTask->taskId +
+		" path=" + ai_script_path_);
 
 	if (!std::filesystem::exists(ai_script_path_)) {
 		ai_script_text_ = "// .qvm not found: " + ai_script_path_;
@@ -97,10 +292,427 @@ void App::LoadAIScriptForSelected() {
 	ai_script_text_ = QVM_DecompileToString(qvm);
 }
 
+// igi1conv's resolver expects lightmaps/lightmaps_unpacked/ to already exist next
+// to objects.qsc; older levels only ship the packed lightmaps.res. Unpack it
+// ourselves first so resolve doesn't fail with "no .olm files on disk".
+bool EnsureLightmapsUnpacked(const std::string& levelDir, std::string& err) {
+	const std::string lightmapsDir = levelDir + "\\lightmaps";
+	const std::string unpackedDir = lightmapsDir + "\\lightmaps_unpacked";
+	const std::string packedRes = lightmapsDir + "\\lightmaps.res";
+	bool unpackedHasFiles = std::filesystem::exists(unpackedDir) &&
+		!std::filesystem::is_empty(unpackedDir);
+	if (unpackedHasFiles || !std::filesystem::exists(packedRes)) return true;
+
+	Logger::Get().Log(LogLevel::INFO, "[Lightmap] " + unpackedDir +
+		" missing/empty — unpacking " + packedRes);
+	std::filesystem::create_directories(unpackedDir);
+	size_t unpackedCount = 0;
+	bool unpackOk = RES_ForEachEntry(packedRes,
+		[&](const std::string& name, const uint8_t* data, size_t size) {
+			if (size == 0) return;
+			// Entry names can include subdirectory components (see
+			// AssetExtractor::ExtractResIfNeeded) — flatten to just the filename so
+			// ofstream doesn't silently fail opening a nonexistent subdirectory path.
+			std::string filename = std::filesystem::path(name).filename().string();
+			if (filename.empty()) return;
+			std::ofstream out(unpackedDir + "\\" + filename, std::ios::binary);
+			if (out) {
+				out.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
+				++unpackedCount;
+			} else {
+				Logger::Get().Log(LogLevel::WARNING, "[Lightmap] Cannot write unpacked file: " + unpackedDir + "\\" + filename);
+			}
+		}, err);
+	if (!unpackOk) return false;
+	Logger::Get().Log(LogLevel::INFO, "[Lightmap] Unpacked " + std::to_string(unpackedCount) +
+		" file(s) into " + unpackedDir);
+	return true;
+}
+
+// Resolves + converts + uploads the lightmap textures for one Building/EditRigidObj,
+// given an already-decompiled objects.qsc sitting next to the real lightmaps/ dir.
+// Returns the number of textures uploaded (0 = no binding / all conversions failed).
+size_t App::ResolveAndApplyLightmap(LevelObject& obj, const std::string& qscPath) {
+	// taskId="-1" (nested/ATTA tasks) can't be disambiguated by task id — resolve
+	// by the object's authored position instead. The stored lightmap is keyed the
+	// same way (LightmapTaskKey) so the renderer finds it.
+	const bool byPos = (obj.taskId.empty() || obj.taskId == "-1");
+	const std::string key = LightmapTaskKey(obj);
+	std::string err;
+	std::vector<std::string> olmPaths = byPos
+		? igi1conv::LightmapResolveByPos(obj.modelId, qscPath, obj.original_pos.x, obj.original_pos.y, obj.original_pos.z, err)
+		: igi1conv::LightmapResolve(obj.modelId, qscPath, obj.taskId, err);
+	if (olmPaths.empty()) {
+		// Benign cases (no baked lightmap for this object, ATTA children, cross-level refs, etc.)
+		// are expected and very common — keep logs quiet.
+		const bool benign =
+		    err.find("no bindings found") != std::string::npos ||
+		    err.find("no placement of") != std::string::npos ||
+		    err.find("--model is required") != std::string::npos ||
+		    err.find("no .olm file paths") != std::string::npos;
+		Logger::Get().Log(benign ? LogLevel::INFO : LogLevel::WARNING,
+		    "[Lightmap] resolve " + std::string(benign ? "(no lightmap) " : "failed ") + "for " + key + ": " + err);
+		return 0;
+	}
+
+	// Decode each .olm straight to a GL texture in-process (no per-file subprocess).
+	std::vector<GLuint> textures;
+	textures.reserve(olmPaths.size());
+	for (const auto& olmPath : olmPaths) {
+		std::string loadErr;
+		GLuint tex = LoadOlmAsTexture(olmPath, loadErr);
+		if (tex == 0) {
+			Logger::Get().Log(LogLevel::ERR, "[Lightmap] .olm load failed for " + olmPath + ": " + loadErr);
+		}
+		textures.push_back(tex);
+	}
+
+	size_t uploaded = std::count_if(textures.begin(), textures.end(), [](GLuint t) { return t != 0; });
+	Logger::Get().Log(LogLevel::INFO, "[Lightmap] Uploaded " + std::to_string(uploaded) + "/" +
+		std::to_string(textures.size()) + " lightmap texture(s) for " + key);
+	// Log first 16 OLM paths so we can verify submesh→OLM assignment order
+	if (key == "1117") {
+		for (size_t i = 0; i < std::min(olmPaths.size(), size_t(16)); ++i) {
+			auto fn = olmPaths[i].substr(olmPaths[i].find_last_of("\\/") + 1);
+			Logger::Get().Log(LogLevel::INFO, "[Lightmap][1117] olm[" + std::to_string(i) + "] = " + fn);
+		}
+	}
+	renderer_.SetLightmapForTask(key, std::move(textures), obj.pos, obj.rot);
+	return uploaded;
+}
+
+void App::CalculateLightmapForSelectedObject() {
+	auto& objects = level_.GetLevelObjects().GetObjects();
+	if (selected_object_index_ < 0 || selected_object_index_ >= (int)objects.size()) {
+		Logger::Get().Log(LogLevel::WARNING, "[Lightmap] No object selected.");
+		return;
+	}
+	LevelObject& obj = objects[selected_object_index_];
+	if (obj.type != "Building" && obj.type != "EditRigidObj" && obj.type != "EditObj") {
+		Logger::Get().Log(LogLevel::WARNING, "[Lightmap] \"" + obj.type + "\" objects don't carry lightmap bindings.");
+		return;
+	}
+	// Note: taskId="-1" (nested/ATTA tasks, real placed objects with no unique
+	// QSC task id) is NOT rejected here — ResolveAndApplyLightmap below resolves
+	// those by authored position instead (LightmapResolveByPos) and keys them by
+	// a stable position-derived id (LightmapTaskKey), so Calculate works for them.
+
+	// igi1conv resolves a binding's .olm directory as a SIBLING of the --qsc
+	// path's own directory (lightmaps/lightmaps_unpacked next to objects.qsc).
+	// The editor's live qsc_path_ is a decompiled WORKING COPY under
+	// editor\qed\temp\, not the real level directory, so passing it directly
+	// makes igi1conv look for (and fail to find/unpack) lightmaps/ in the wrong
+	// place. Decompile a fresh copy straight into the real level directory
+	// instead, so the relative lookup resolves correctly, then delete it.
+	const std::string levelDir = Utils::GetIGIRootPath() + "\\missions\\location0\\level" +
+		std::to_string(level_.GetLevelNo());
+	const std::string qvmPath = levelDir + "\\objects.qvm";
+	const std::string qscPath = levelDir + "\\objects_lightmap_tmp.qsc";
+
+	status_message_ = "Lightmap: calculating...";
+	DrawProgressOverlay("Calculating Lightmap", 10, "resolving binding");
+
+	std::string unpackErr;
+	if (!EnsureLightmapsUnpacked(levelDir, unpackErr)) {
+		status_message_ = "Lightmap: failed to unpack lightmaps.res: " + unpackErr;
+		Logger::Get().Log(LogLevel::WARNING, "[Lightmap] unpack failed: " + unpackErr);
+		return;
+	}
+
+	DrawProgressOverlay("Calculating Lightmap", 30, "decompiling objects.qvm");
+	std::string decompileErr;
+	if (!igi1conv::QvmDecompile(qvmPath, qscPath, decompileErr)) {
+		status_message_ = "Lightmap: " + decompileErr;
+		Logger::Get().Log(LogLevel::WARNING, "[Lightmap] decompile failed: " + decompileErr);
+		return;
+	}
+
+	// Step 1: load the current .olm from disk so bake pose is registered.
+	Logger::Get().Log(LogLevel::INFO, "[Lightmap] Resolving lightmap for model=" + obj.modelId +
+		" taskId=" + obj.taskId + " qsc=" + qscPath);
+	DrawProgressOverlay("Calculating Lightmap", 55, "loading current .olm");
+	size_t uploaded = ResolveAndApplyLightmap(obj, qscPath);
+	const std::vector<int>& children = obj.childrenIndices;
+	for (size_t ci = 0; ci < children.size(); ++ci) {
+		int idx = children[ci];
+		if (idx < 0 || idx >= (int)objects.size()) continue;
+		uploaded += ResolveAndApplyLightmap(objects[idx], qscPath);
+	}
+
+	if (uploaded == 0) {
+		std::error_code qscEc; std::filesystem::remove(qscPath, qscEc);
+		status_message_ = "Lightmap: no lightmap textures resolved for this object";
+		return;
+	}
+
+	// Step 2: recalc the .olm files using the object's CURRENT position/rotation
+	// and the live sun direction/colour. This writes updated .olm files to disk.
+	DrawProgressOverlay("Calculating Lightmap", 70, "recalculating .olm with current sun/position");
+	const std::string lightmapsDir = levelDir + "\\lightmaps";
+	const std::string resPath      = lightmapsDir + "\\lightmaps.res";
+	int baked = 0;
+	if (RecalcLightmapToOlm(obj, qscPath, /*force=*/true)) ++baked;
+	for (int ci : obj.childrenIndices) {
+		if (ci >= 0 && ci < (int)objects.size())
+			if (RecalcLightmapToOlm(objects[ci], qscPath, /*force=*/true)) ++baked;
+	}
+
+	// Step 3: reload the freshly baked .olm into the GPU texture.
+	if (baked > 0) {
+		DrawProgressOverlay("Calculating Lightmap", 80, "reloading into viewport");
+		ResolveAndApplyLightmap(obj, qscPath);
+		for (int ci : obj.childrenIndices) {
+			if (ci >= 0 && ci < (int)objects.size())
+				ResolveAndApplyLightmap(objects[ci], qscPath);
+		}
+	}
+
+	// Step 4: repack lightmaps.res so the game also picks up the new .olm.
+	if (baked > 0 && std::filesystem::exists(resPath)) {
+		DrawProgressOverlay("Calculating Lightmap", 90, "repacking lightmaps.res");
+		const std::string unpackedDir = lightmapsDir + "\\lightmaps_unpacked";
+		const std::string tmpRes      = lightmapsDir + "\\lightmaps_new.res";
+		std::string repackErr;
+		if (igi1conv::ResRepack(resPath, unpackedDir, tmpRes, repackErr)) {
+			std::error_code ec;
+			std::filesystem::rename(tmpRes, resPath, ec);
+			if (ec) {
+				std::filesystem::copy_file(tmpRes, resPath, std::filesystem::copy_options::overwrite_existing, ec);
+				std::error_code ec2; std::filesystem::remove(tmpRes, ec2);
+			}
+			if (!ec) Logger::Get().Log(LogLevel::INFO, "[Lightmap] Repacked lightmaps.res with " +
+				std::to_string(baked) + " new .olm(s)");
+		} else {
+			Logger::Get().Log(LogLevel::WARNING, "[Lightmap] Repack failed: " + repackErr);
+		}
+	}
+
+	std::error_code qscEc; std::filesystem::remove(qscPath, qscEc);
+
+	DrawProgressOverlay("Calculating Lightmap", 100, "done");
+	status_message_ = baked > 0
+		? "Lightmap recalculated + saved: " + std::to_string(uploaded) + " texture(s)"
+		: "Lightmap applied: " + std::to_string(uploaded) + " texture(s) (no pose change to bake)";
+}
+
+// Bake the current orientation's live re-light into this object's .olm files (on
+// disk, in lightmaps_unpacked) so the GAME shows what the editor shows. Returns
+// true if .olm files were rewritten. Used by the Save write-back to update every
+// object that was moved/rotated since its lightmap was applied. Requires a real
+// (non "-1") task id — the converter's recalc disambiguates by task id.
+bool App::RecalcLightmapToOlm(LevelObject& obj, const std::string& qscPath, bool force) {
+	if (obj.taskId.empty() || obj.taskId == "-1") return false; // recalc CLI needs a real task id
+	const std::string key = LightmapTaskKey(obj);
+	glm::dvec3 bakedPos, bakedRot;
+	if (!renderer_.GetLightmapBakePose(key, bakedPos, bakedRot)) {
+		// No bake pose yet — treat current pose as both old and new so the
+		// CLI can still recalculate from the object's current position.
+		if (!force) return false;
+		bakedPos = obj.pos;
+		bakedRot = glm::dvec3(obj.rot);
+	}
+	if (!force && glm::length(obj.rot - bakedRot) < 0.01 && glm::length(obj.pos - bakedPos) < 1.0) return false; // unmoved
+
+	std::string mefPath = renderer_.GetOrExtractMefTemp(obj.modelId, obj.isBuilding);
+	if (mefPath.empty()) {
+		Logger::Get().Log(LogLevel::WARNING, "[Lightmap] Write-back: no .mef for model " + obj.modelId);
+		return false;
+	}
+	std::string recalcErr;
+	bool ok = igi1conv::LightmapRecalc(obj.modelId, qscPath, obj.taskId, mefPath,
+		bakedRot, obj.rot, renderer_.GetSunDir(), renderer_.GetSunFrontColor(), renderer_.GetGlobalAmbient(), recalcErr);
+	if (!ok) {
+		Logger::Get().Log(LogLevel::WARNING, "[Lightmap] Write-back recalc failed for taskId=" + obj.taskId + ": " + recalcErr);
+		return false;
+	}
+	Logger::Get().Log(LogLevel::INFO, "[Lightmap] Write-back recalc baked taskId=" + obj.taskId +
+		" (" + obj.modelId + ") into .olm for the game");
+	return true;
+}
+
+// Called automatically when the user finishes moving/rotating a lightmapped object.
+// Recalculates the object's lightmap (and all its ATTA children), reloads it into
+// the editor viewport, and repacks lightmaps.res so the game sees the change too.
+void App::AutoRecalcLightmapForManipulated(int objIndex) {
+	auto& objects = level_.GetLevelObjects().GetObjects();
+	if (objIndex < 0 || objIndex >= (int)objects.size()) return;
+
+	LevelObject& obj = objects[objIndex];
+	if (obj.type != "Building" && obj.type != "EditRigidObj") return;
+	if (!renderer_.HasLightmapForTask(LightmapTaskKey(obj))) return;
+	// IsLightmapStale returns false when there's no bake pose (never moved from loaded pose).
+	// Still proceed if the object has been modified since load — use obj.modified as fallback.
+	bool stale = renderer_.IsLightmapStale(LightmapTaskKey(obj), obj.pos, obj.rot);
+	if (!stale && !obj.modified) return; // definitely not moved
+
+	const std::string levelDir = Utils::GetIGIRootPath() + "\\missions\\location0\\level" +
+		std::to_string(level_.GetLevelNo());
+	const std::string lightmapsDir  = levelDir + "\\lightmaps";
+	const std::string unpackedDir   = lightmapsDir + "\\lightmaps_unpacked";
+	const std::string resPath       = lightmapsDir + "\\lightmaps.res";
+
+	if (!std::filesystem::exists(resPath)) return; // level has no lightmaps
+
+	status_message_ = "Lightmap: recalculating...";
+	Logger::Get().Log(LogLevel::INFO, "[Lightmap] AutoRecalc: unpacking lightmaps.res for " + obj.modelId);
+
+	std::string unpackErr;
+	if (!EnsureLightmapsUnpacked(levelDir, unpackErr)) {
+		status_message_ = "Lightmap recalc: unpack failed: " + unpackErr;
+		Logger::Get().Log(LogLevel::ERR, "[Lightmap] AutoRecalc: unpack failed: " + unpackErr);
+		return;
+	}
+
+	const std::string qvmPath = levelDir + "\\objects.qvm";
+	const std::string qscPath = levelDir + "\\objects_lightmap_tmp.qsc";
+	std::string decompErr;
+	Logger::Get().Log(LogLevel::INFO, "[Lightmap] AutoRecalc: decompiling objects.qvm");
+	if (!igi1conv::QvmDecompile(qvmPath, qscPath, decompErr)) {
+		status_message_ = "Lightmap recalc: decompile failed: " + decompErr;
+		Logger::Get().Log(LogLevel::ERR, "[Lightmap] AutoRecalc: decompile failed: " + decompErr);
+		return;
+	}
+
+	// Bake new .olm for the manipulated object + all its ATTA children.
+	int baked = 0;
+	Logger::Get().Log(LogLevel::INFO, "[Lightmap] AutoRecalc: baking .olm for taskId=" + obj.taskId);
+	if (RecalcLightmapToOlm(obj, qscPath, /*force=*/true)) ++baked;
+	for (int ci : obj.childrenIndices) {
+		if (ci >= 0 && ci < (int)objects.size())
+			if (RecalcLightmapToOlm(objects[ci], qscPath, /*force=*/true)) ++baked;
+	}
+
+	// Reload the updated .olm into the GPU texture for immediate visual feedback.
+	ResolveAndApplyLightmap(obj, qscPath);
+	for (int ci : obj.childrenIndices) {
+		if (ci >= 0 && ci < (int)objects.size())
+			ResolveAndApplyLightmap(objects[ci], qscPath);
+	}
+
+	std::error_code qscEc; std::filesystem::remove(qscPath, qscEc);
+
+	if (baked > 0) {
+		// Repack updated .olm files back into lightmaps.res.
+		Logger::Get().Log(LogLevel::INFO, "[Lightmap] AutoRecalc: repacking lightmaps.res (" + std::to_string(baked) + " baked)");
+		const std::string tmpRes = lightmapsDir + "\\lightmaps_new.res";
+		std::string repackErr;
+		if (igi1conv::ResRepack(resPath, unpackedDir, tmpRes, repackErr)) {
+			std::error_code ec;
+			std::filesystem::rename(tmpRes, resPath, ec);
+			if (ec) {
+				std::filesystem::copy_file(tmpRes, resPath, std::filesystem::copy_options::overwrite_existing, ec);
+				std::error_code ec2; std::filesystem::remove(tmpRes, ec2);
+			}
+			if (!ec) {
+				Logger::Get().Log(LogLevel::INFO, "[Lightmap] Auto-recalc: repacked " +
+					std::to_string(baked) + " lightmap(s) into " + resPath);
+				status_message_ = "Lightmap recalculated (" + std::to_string(baked) + " object(s) baked)";
+			}
+		} else {
+			Logger::Get().Log(LogLevel::ERR, "[Lightmap] Auto-recalc: repack failed: " + repackErr);
+			status_message_ = "Lightmap baked but repack failed: " + repackErr;
+		}
+	} else {
+		status_message_ = "Lightmap reloaded (no .olm change needed)";
+	}
+}
+
+// Escape-menu "Lightmaps" checkbox, turned ON: resolve + apply baked lightmaps for
+// EVERY Building/EditRigidObj in the level (matches the game's always-on behavior),
+// instead of requiring the per-object "Calculate Lightmap" button for each one.
+void App::CalculateLightmapsForAllObjects() {
+	auto& objects = level_.GetLevelObjects().GetObjects();
+	std::vector<int> targets;
+	for (int i = 0; i < (int)objects.size(); ++i) {
+		const auto& o = objects[i];
+		if (o.type == "Building" || o.type == "EditRigidObj" || o.type == "EditObj") targets.push_back(i);
+	}
+	if (targets.empty()) {
+		Logger::Get().Log(LogLevel::INFO, "[Lightmap] No Building/EditRigidObj/EditObj objects in this level.");
+		return;
+	}
+
+	// Expand targets to include children of each Building/EditRigidObj — Door,
+	// Generator, etc. may have their own .olm lightmap bindings.
+	{
+		std::unordered_set<int> inTargets(targets.begin(), targets.end());
+		std::vector<int> toAdd;
+		for (int pi : targets) {
+			for (int ci : objects[pi].childrenIndices) {
+				if (ci >= 0 && ci < (int)objects.size() && !inTargets.count(ci)) {
+					toAdd.push_back(ci);
+					inTargets.insert(ci);
+				}
+			}
+		}
+		targets.insert(targets.end(), toAdd.begin(), toAdd.end());
+	}
+
+	const std::string levelDir = Utils::GetIGIRootPath() + "\\missions\\location0\\level" +
+		std::to_string(level_.GetLevelNo());
+	const std::string qvmPath = levelDir + "\\objects.qvm";
+	const std::string qscPath = levelDir + "\\objects_lightmap_tmp.qsc";
+
+	status_message_ = "Lightmaps: calculating for " + std::to_string(targets.size()) + " object(s)...";
+	DrawProgressOverlay("Calculating Lightmaps", 0, "unpacking lightmaps.res");
+
+	std::string unpackErr;
+	if (!EnsureLightmapsUnpacked(levelDir, unpackErr)) {
+		status_message_ = "Lightmaps: failed to unpack lightmaps.res: " + unpackErr;
+		Logger::Get().Log(LogLevel::WARNING, "[Lightmap] unpack failed: " + unpackErr);
+		return;
+	}
+
+	DrawProgressOverlay("Calculating Lightmaps", 2, "decompiling objects.qvm");
+	std::string decompileErr;
+	if (!igi1conv::QvmDecompile(qvmPath, qscPath, decompileErr)) {
+		status_message_ = "Lightmaps: " + decompileErr;
+		Logger::Get().Log(LogLevel::WARNING, "[Lightmap] decompile failed: " + decompileErr);
+		return;
+	}
+
+	size_t objectsWithLightmaps = 0;
+	for (size_t n = 0; n < targets.size(); ++n) {
+		// igi1ed is a 32-bit process; on large levels (1000+ objects, each with up to
+		// ~100 lightmap textures) its virtual address space runs out well before this
+		// loop's own bad_alloc catch below fires elsewhere in the frame — bail out with
+		// headroom to spare instead of racing the process toward a hard crash.
+		MEMORYSTATUSEX memStatus{};
+		memStatus.dwLength = sizeof(memStatus);
+		if (GlobalMemoryStatusEx(&memStatus) && memStatus.ullAvailVirtual < 300ull * 1024 * 1024) {
+			Logger::Get().Log(LogLevel::WARNING, "[Lightmap] Stopping bulk bake early at " +
+				std::to_string(n) + "/" + std::to_string(targets.size()) +
+				": process is low on virtual address space (32-bit build).");
+			break;
+		}
+		LevelObject& obj = objects[targets[n]];
+		DrawProgressOverlay("Calculating Lightmaps",
+			2 + static_cast<int>(98 * (n + 1) / targets.size()),
+			(std::to_string(n + 1) + "/" + std::to_string(targets.size()) + ": " + obj.name).c_str());
+		try {
+			if (ResolveAndApplyLightmap(obj, qscPath) > 0) ++objectsWithLightmaps;
+		} catch (const std::bad_alloc&) {
+			Logger::Get().Log(LogLevel::ERR, "[Lightmap] Out of memory loading lightmap for " + obj.name + "; skipping remaining.");
+			break;
+		} catch (const std::exception& e) {
+			Logger::Get().Log(LogLevel::WARNING, std::string("[Lightmap] Skipped object " + obj.name + " due to: ") + e.what());
+		}
+	}
+
+	std::error_code qscEc;
+	std::filesystem::remove(qscPath, qscEc);
+
+	Logger::Get().Log(LogLevel::INFO, "[Lightmap] Calculated lightmaps for " +
+		std::to_string(objectsWithLightmaps) + "/" + std::to_string(targets.size()) + " object(s).");
+	status_message_ = "Lightmaps calculated: " + std::to_string(objectsWithLightmaps) + "/" +
+		std::to_string(targets.size()) + " object(s)";
+}
+
 // Commit the active text/numeric box (prop_text_buf_) back to the object and
 // objects.qsc, then clear edit focus. Handles the note (-2) and any field box.
 void App::CommitPropTextEdit() {
 	if (prop_text_edit_field_ == -1) return;
+	PushUndoState();
 
 	// AI Script Path field: update path, reload and decompile the new .qvm.
 	if (prop_text_edit_field_ == PropPanel::kAIScriptPathField) {
@@ -177,6 +789,10 @@ void App::CommitPropTextEdit() {
 	}
 	obj.argTokens[argIdx] = tokenVal;
 
+	// Capture old transform BEFORE updating so we can compute deltas for children.
+	glm::dvec3 preCommitPos = obj.pos;
+	glm::dvec3 preCommitRot = obj.rot;
+
 	// Sync obj.rot after orientation field commits so the 3D marker updates.
 	bool is_ori_field = (tn == "Real32x9");
 	bool is_gamma_field = ((tn == "Real32" || tn == "Angle" || tn == "Degrees") && (fd.name == "Gamma" || fd.name == "Heading"));
@@ -250,14 +866,47 @@ void App::CommitPropTextEdit() {
 
 	obj.modified = true;
 	level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+
+	// When pos or rotation is typed in, propagate the transform delta to children.
+	if (is_pos || is_ori_field || is_gamma_field) {
+		glm::dvec3 deltaPos   = obj.pos - preCommitPos;
+		glm::dmat3 deltaWorld = BuildRotMatZXY(obj.rot) * glm::transpose(BuildRotMatZXY(preCommitRot));
+		PropagateTransformToChildren(oi, deltaPos, deltaWorld, preCommitPos);
+		AutoRecalcLightmapForManipulated(oi);
+	}
+
+	// If a soldier's weapon child (Gun*) enum was just edited, re-resolve the parent
+	// soldier's held-weapon model so the weapon shown in the editor updates live —
+	// without this it would only refresh on a full reload. If the soldier itself was
+	// edited, refresh it directly (harmless no-op when nothing weapon-related changed).
+	if (obj.type.rfind("Gun", 0) == 0 && obj.parentIndex >= 0) {
+		level_.GetLevelObjects().ResolveSoldierWeapon(obj.parentIndex);
+	} else {
+		level_.GetLevelObjects().ResolveSoldierWeapon(oi);
+	}
+
+	// Live-sync the graph overlay offset when the user moves the AIGraph
+	// task via the property panel — otherwise the 3D nodes/edges stay at the
+	// stale position while F7 is showing the graph.
+	SyncGraphOverlayOffsetFromAIGraph();
 }
 
 void App::PushUndoState() {
-	auto& objects = level_.GetLevelObjects().GetObjects();
-	object_undo_stack_.push_back(objects);
-	object_redo_stack_.clear();
-	if (object_undo_stack_.size() > 20)
-		object_undo_stack_.erase(object_undo_stack_.begin());
+	UndoState state;
+	state.objects = level_.GetLevelObjects().GetObjects();
+	state.ai_script_path = ai_script_path_;
+	state.ai_script_text = ai_script_text_;
+	state.ai_script_dirty = ai_script_dirty_;
+	state.terrain_mod_options = terrain_mod_options_;
+	state.terrain_hmp = level_.SnapshotTerrainHMP();
+	if (renderer_.IsGraphOverlayVisible()) {
+		state.graph_overlay = renderer_.GetGraphOverlaySnapshot();
+		state.graph_overlay_visible = true;
+	}
+	undo_stack_.push_back(std::move(state));
+	redo_stack_.clear();
+	if (undo_stack_.size() > 20)
+		undo_stack_.erase(undo_stack_.begin());
 }
 
 void App::SaveAndReloadObjects() {
@@ -265,6 +914,31 @@ void App::SaveAndReloadObjects() {
 	EvaluateTrainTrackPositions();
 	SnapObjectsToTerrain();
 	RebuildLevelModelIds();
+	// Reloading objects recreates them from the QSC, so the AIGraph task's pos
+	// is the source of truth again — re-apply it to the graph overlay.
+	SyncGraphOverlayOffsetFromAIGraph();
+}
+
+void App::SyncGraphOverlayOffsetFromAIGraph() {
+	// No-op unless the user has pressed F7 to show the graph (the offset is
+	// only consumed by the overlay draw path; the on-disk graph<id>.dat never
+	// changes here, only the displayed world position does).
+	if (!renderer_.IsGraphOverlayVisible()) return;
+	const std::string& tid = renderer_.GraphOverlayTaskId();
+	if (tid.empty()) return;
+	for (const auto& o : level_.GetLevelObjects().GetObjects()) {
+		if (o.type == "AIGraph" && o.taskId == tid) {
+			const glm::dvec3& current = renderer_.GraphOverlayOffset();
+			if (current != o.pos) {
+				renderer_.SetGraphOverlayOffset(o.pos);
+				Logger::Get().Log(LogLevel::INFO,
+					"[App] Graph overlay offset live-synced to AIGraph " + tid +
+					" pos=(" + std::to_string(o.pos.x) + ", " +
+					std::to_string(o.pos.y) + ", " + std::to_string(o.pos.z) + ")");
+			}
+			return;
+		}
+	}
 }
 
 void App::RebuildLevelModelIds() {
@@ -281,30 +955,174 @@ void App::RebuildLevelModelIds() {
 }
 
 void App::Undo() {
-	if (object_undo_stack_.empty()) { status_message_ = "Nothing to undo"; return; }
-	auto& objects = level_.GetLevelObjects().GetObjects();
-	object_redo_stack_.push_back(objects);
-	objects = object_undo_stack_.back();
-	object_undo_stack_.pop_back();
+	if (undo_stack_.empty()) { status_message_ = "Nothing to undo"; return; }
+	// Save current state to redo stack
+	UndoState current;
+	current.objects = level_.GetLevelObjects().GetObjects();
+	current.ai_script_path = ai_script_path_;
+	current.ai_script_text = ai_script_text_;
+	current.ai_script_dirty = ai_script_dirty_;
+	current.terrain_mod_options = terrain_mod_options_;
+	current.terrain_hmp = level_.SnapshotTerrainHMP();
+	if (renderer_.IsGraphOverlayVisible()) {
+		current.graph_overlay = renderer_.GetGraphOverlaySnapshot();
+		current.graph_overlay_visible = true;
+	}
+	redo_stack_.push_back(std::move(current));
+
+	// Restore from undo stack
+	const UndoState& s = undo_stack_.back();
+	level_.GetLevelObjects().GetObjects() = s.objects;
+	ai_script_path_ = s.ai_script_path;
+	ai_script_text_ = s.ai_script_text;
+	ai_script_dirty_ = s.ai_script_dirty;
+	terrain_mod_options_ = s.terrain_mod_options;
+	level_.RestoreTerrainHMP(s.terrain_hmp);
+
+	if (s.graph_overlay_visible) {
+		renderer_.RestoreGraphOverlay(s.graph_overlay);
+		if (!renderer_.IsGraphOverlayVisible())
+			renderer_.SetGraphOverlayVisible(true);
+	} else {
+		if (renderer_.IsGraphOverlayVisible())
+			renderer_.SetGraphOverlayVisible(false);
+	}
+
+	undo_stack_.pop_back();
+	// Mark ATTA proxies as modified so FlushAttaProxiesToMef() rewrites their
+	// local positions back into the MEF binary. Without this, undoing a building
+	// ATTA move left the MEF at the post-edit position while the proxy's world
+	// pos reverted — the 3D view and the saved level disagreed.
+	for (auto& o : level_.GetLevelObjects().GetObjects())
+		if (o.isAttaProxy) o.modified = true;
+	FlushAttaProxiesToMef();
+
+	// ATTA proxies have taskId=-1 and are deliberately never serialized to QSC
+	// (see CreateAttaProxy comment) — SaveAndReloadObjects() re-parses objects_
+	// from that QSC, which silently drops every ATTA proxy. Capture them here and
+	// re-append after the reload, or undoing/redoing an ATTA move makes the
+	// proxy (and anything selected on it) vanish from the scene.
+	std::vector<LevelObject> attaProxies;
+	for (const auto& o : level_.GetLevelObjects().GetObjects())
+		if (o.isAttaProxy) attaProxies.push_back(o);
+	std::string selectedAttaKey;
+	if (selected_object_index_ >= 0 && selected_object_index_ < (int)level_.GetLevelObjects().GetObjects().size()) {
+		const auto& sel = level_.GetLevelObjects().GetObjects()[selected_object_index_];
+		if (sel.isAttaProxy) selectedAttaKey = sel.attaParentModelId + ":" + std::to_string(sel.attaRecordIndex);
+	}
+
 	SaveAndReloadObjects();
+
+	{
+		auto& reloaded = level_.GetLevelObjects().GetObjects();
+		for (auto& proxy : attaProxies) {
+			std::string key = proxy.attaParentModelId + ":" + std::to_string(proxy.attaRecordIndex);
+			int newIdx = (int)reloaded.size();
+			// Re-link to the parent building so it still moves with it after undo.
+			proxy.parentIndex = -1;
+			for (int pi = 0; pi < (int)reloaded.size(); ++pi) {
+				if (reloaded[pi].modelId == proxy.attaParentModelId &&
+				    (reloaded[pi].isBuilding || reloaded[pi].type == "Building")) {
+					proxy.parentIndex = pi;
+					reloaded[pi].childrenIndices.push_back(newIdx);
+					break;
+				}
+			}
+			reloaded.push_back(proxy);
+			if (key == selectedAttaKey) selected_object_index_ = newIdx;
+		}
+	}
+
+	// The objects vector was just replaced with the snapshot; if a visible
+	// graph overlay's task id is present in the restored list, the AIGraph
+	// task's pos is now the canonical one and the overlay must follow it.
+	SyncGraphOverlayOffsetFromAIGraph();
 	status_message_ = "Undo";
 }
 
 void App::Redo() {
-	if (object_redo_stack_.empty()) { status_message_ = "Nothing to redo"; return; }
-	auto& objects = level_.GetLevelObjects().GetObjects();
-	object_undo_stack_.push_back(objects);
-	objects = object_redo_stack_.back();
-	object_redo_stack_.pop_back();
+	if (redo_stack_.empty()) { status_message_ = "Nothing to redo"; return; }
+	// Save current state to undo stack
+	UndoState current;
+	current.objects = level_.GetLevelObjects().GetObjects();
+	current.ai_script_path = ai_script_path_;
+	current.ai_script_text = ai_script_text_;
+	current.ai_script_dirty = ai_script_dirty_;
+	current.terrain_mod_options = terrain_mod_options_;
+	current.terrain_hmp = level_.SnapshotTerrainHMP();
+	if (renderer_.IsGraphOverlayVisible()) {
+		current.graph_overlay = renderer_.GetGraphOverlaySnapshot();
+		current.graph_overlay_visible = true;
+	}
+	undo_stack_.push_back(std::move(current));
+
+	// Restore from redo stack
+	const UndoState& s = redo_stack_.back();
+	level_.GetLevelObjects().GetObjects() = s.objects;
+	ai_script_path_ = s.ai_script_path;
+	ai_script_text_ = s.ai_script_text;
+	ai_script_dirty_ = s.ai_script_dirty;
+	terrain_mod_options_ = s.terrain_mod_options;
+	level_.RestoreTerrainHMP(s.terrain_hmp);
+
+	if (s.graph_overlay_visible) {
+		renderer_.RestoreGraphOverlay(s.graph_overlay);
+		if (!renderer_.IsGraphOverlayVisible())
+			renderer_.SetGraphOverlayVisible(true);
+	} else {
+		if (renderer_.IsGraphOverlayVisible())
+			renderer_.SetGraphOverlayVisible(false);
+	}
+
+	redo_stack_.pop_back();
+	// Same ATTA-proxy resync as Undo — see comment there.
+	for (auto& o : level_.GetLevelObjects().GetObjects())
+		if (o.isAttaProxy) o.modified = true;
+	FlushAttaProxiesToMef();
+
+	// Same ATTA-proxy survival fix as Undo — see comment there.
+	std::vector<LevelObject> attaProxies;
+	for (const auto& o : level_.GetLevelObjects().GetObjects())
+		if (o.isAttaProxy) attaProxies.push_back(o);
+	std::string selectedAttaKey;
+	if (selected_object_index_ >= 0 && selected_object_index_ < (int)level_.GetLevelObjects().GetObjects().size()) {
+		const auto& sel = level_.GetLevelObjects().GetObjects()[selected_object_index_];
+		if (sel.isAttaProxy) selectedAttaKey = sel.attaParentModelId + ":" + std::to_string(sel.attaRecordIndex);
+	}
+
 	SaveAndReloadObjects();
+
+	{
+		auto& reloaded = level_.GetLevelObjects().GetObjects();
+		for (auto& proxy : attaProxies) {
+			std::string key = proxy.attaParentModelId + ":" + std::to_string(proxy.attaRecordIndex);
+			int newIdx = (int)reloaded.size();
+			proxy.parentIndex = -1;
+			for (int pi = 0; pi < (int)reloaded.size(); ++pi) {
+				if (reloaded[pi].modelId == proxy.attaParentModelId &&
+				    (reloaded[pi].isBuilding || reloaded[pi].type == "Building")) {
+					proxy.parentIndex = pi;
+					reloaded[pi].childrenIndices.push_back(newIdx);
+					break;
+				}
+			}
+			reloaded.push_back(proxy);
+			if (key == selectedAttaKey) selected_object_index_ = newIdx;
+		}
+	}
+
+	// Same graph-overlay live-sync as Undo — see comment there.
+	SyncGraphOverlayOffsetFromAIGraph();
 	status_message_ = "Redo";
 }
 
 void App::PropagateTransformToChildren(int parentIdx, const glm::dvec3& deltaPos, const glm::dmat3& deltaWorld, const glm::dvec3& pivot) {
 	auto& objects = level_.GetLevelObjects().GetObjects();
+	if (parentIdx < 0 || parentIdx >= (int)objects.size()) return;
 	std::vector<int> children = objects[parentIdx].childrenIndices;
 
 	for (int childIdx : children) {
+		if (childIdx < 0 || childIdx >= (int)objects.size()) continue;
 		LevelObject& child = objects[childIdx];
 
 		// Rotate child's relative position around the parent's old pivot, then translate
@@ -334,10 +1152,9 @@ int App::PickObjectAtScreenPos(int screen_x, int screen_y) {
 
 	return renderer_.PickObjectAtScreen(
 		screen_x, screen_y, w, h,
-		view_define_,
-		objects,
-		renderer_.DRAW_OBJECTS | renderer_.DRAW_BUILDINGS | renderer_.DRAW_PROPS
-	);
+		view_define_, level_.GetLevelObjects().GetObjects(),
+		renderer_.DRAW_OBJECTS | renderer_.DRAW_BUILDINGS | renderer_.DRAW_PROPS,
+		selected_object_index_);
 }
 
 void App::PromoteAttaToObject(int entry) {
@@ -384,6 +1201,18 @@ void App::PromoteAttaToObject(int entry) {
 	obj.attaInvParentMat    = glm::inverse(e.parentWorldMat);
 
 	int newIdx = (int)objects.size();
+
+	// Link to the parent building so PropagateTransformToChildren moves this
+	// proxy when the parent building is dragged/rotated.
+	for (int pi = 0; pi < (int)objects.size(); ++pi) {
+		if (objects[pi].modelId == e.immediateParentModelId &&
+		    (objects[pi].isBuilding || objects[pi].type == "Building")) {
+			obj.parentIndex = pi;
+			objects[pi].childrenIndices.push_back(newIdx);
+			break;
+		}
+	}
+
 	objects.push_back(obj);
 
 	// Suppress this ATTA record from being re-offered for picking.
@@ -500,6 +1329,10 @@ void App::LaunchGame() {
 	// ── Toggle ON: save level and launch the game ──────────────────────────────
 	Logger::Get().Log(LogLevel::INFO, "[ToggleGame] Game is not running — launching level " +
 	                  std::to_string(level_.GetLevelNo()));
+
+	// Stop the editor's own level music before handing off — igi.exe plays its
+	// own copy of the same track, so leaving ours running doubles it up.
+	StopLevelMusic();
 
 	SaveCurrentLevel();
 	Logger::Get().Log(LogLevel::INFO, "[ToggleGame] Level saved");

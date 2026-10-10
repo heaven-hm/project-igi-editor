@@ -4,6 +4,7 @@
  *          Split from app.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include <unordered_set>
 
 void App::ProcessInput(float delta_seconds) {
 	// Safety check: ensure level is loaded before processing movement
@@ -230,42 +231,55 @@ void App::ProcessInput(float delta_seconds) {
 }
 
 void App::UpdateViewerVectors() {
-	// clamp yaw, pitch & roll
+	UpdateViewerVectors(viewer_);
+}
 
-	while (viewer_.yaw_ < 0.0f) {
-		viewer_.yaw_ += 360.0f;
+void App::UpdateGameplayViewerVectors() {
+	UpdateViewerVectors(gameplay_viewer_);
+}
+
+void App::UpdateViewerVectors(viewer_s& viewer) {
+	while (viewer.yaw_ < 0.0f) {
+		viewer.yaw_ += 360.0f;
 	}
 
-	while (viewer_.yaw_ > 360.0f) {
-		viewer_.yaw_ -= 360.0f;
+	while (viewer.yaw_ > 360.0f) {
+		viewer.yaw_ -= 360.0f;
 	}
 
-	if (viewer_.pitch_ < -89.0f) {
-		viewer_.pitch_ = -89.0f;
+	viewer.pitch_ = std::clamp(viewer.pitch_, -89.0f, 89.0f);
+
+	while (viewer.roll_ < 0.0f) {
+		viewer.roll_ += 360.0f;
 	}
 
-	if (viewer_.pitch_ > 89.0f) {
-		viewer_.pitch_ = 89.0f;
+	while (viewer.roll_ > 360.0f) {
+		viewer.roll_ -= 360.0f;
 	}
 
-	while (viewer_.roll_ < 0.0f) {
-		viewer_.roll_ += 360.0f;
-	}
-
-	while (viewer_.roll_ > 360.0f) {
-		viewer_.roll_ -= 360.0f;
-	}
-
-	AngleToVectors(viewer_.yaw_, viewer_.pitch_, viewer_.roll_,
-		viewer_.forward_, viewer_.right_, viewer_.up_);
+	AngleToVectors(
+		viewer.yaw_,
+		viewer.pitch_,
+		viewer.roll_,
+		viewer.forward_,
+		viewer.right_,
+		viewer.up_);
 }
 
 void App::UpdateViewDefine() {
-	view_define_.pos_ = viewer_.pos_;
-	view_define_.forward_ = viewer_.forward_;
-	view_define_.right_ = viewer_.right_;
-	view_define_.up_ = viewer_.up_;
-	view_define_.render_z_near_ = RENDER_Z_NEAR;
+	UpdateViewDefine(viewer_, view_define_);
+}
+
+void App::UpdateGameplayViewDefine() {
+	UpdateViewDefine(gameplay_viewer_, view_define_);
+}
+
+void App::UpdateViewDefine(const viewer_s& viewer, view_define_s& view_define) {
+	view_define.pos_ = viewer.pos_;
+	view_define.forward_ = viewer.forward_;
+	view_define.right_ = viewer.right_;
+	view_define.up_ = viewer.up_;
+	view_define.render_z_near_ = RENDER_Z_NEAR;
 
 	/* rotate to coordinate:
 
@@ -281,17 +295,17 @@ void App::UpdateViewDefine() {
 	 */
 
 	// rotation only, with out translate
-	view_define_.mat_rot_[0][0] = view_define_.right_.x;
-	view_define_.mat_rot_[1][0] = view_define_.right_.y;
-	view_define_.mat_rot_[2][0] = view_define_.right_.z;
+	view_define.mat_rot_[0][0] = view_define.right_.x;
+	view_define.mat_rot_[1][0] = view_define.right_.y;
+	view_define.mat_rot_[2][0] = view_define.right_.z;
 
-	view_define_.mat_rot_[0][1] = -view_define_.up_.x;
-	view_define_.mat_rot_[1][1] = -view_define_.up_.y;
-	view_define_.mat_rot_[2][1] = -view_define_.up_.z;
+	view_define.mat_rot_[0][1] = -view_define.up_.x;
+	view_define.mat_rot_[1][1] = -view_define.up_.y;
+	view_define.mat_rot_[2][1] = -view_define.up_.z;
 
-	view_define_.mat_rot_[0][2] = view_define_.forward_.x;
-	view_define_.mat_rot_[1][2] = view_define_.forward_.y;
-	view_define_.mat_rot_[2][2] = view_define_.forward_.z;
+	view_define.mat_rot_[0][2] = view_define.forward_.x;
+	view_define.mat_rot_[1][2] = view_define.forward_.y;
+	view_define.mat_rot_[2][2] = view_define.forward_.z;
 }
 
 void App::EditorProcessClick() {
@@ -301,6 +315,11 @@ void App::EditorProcessClick() {
 	std::vector<LevelObject>& objects = lo.GetObjects();
 
 	if (terrain_edit_enabled_) {
+		// Push undo state once per click-drag sequence for terrain edits
+		if (!undo_state_pushed_for_manip_) {
+			PushUndoState();
+			undo_state_pushed_for_manip_ = true;
+		}
 		// Terrain edit mode: build ray from camera through mouse and edit terrain
 		glm::dmat4 proj_matrix = glm::perspective(
 			(double)view_define_.fovy_,
@@ -388,20 +407,44 @@ void App::EditorProcessClick() {
 }
 
 bool App::CheckCollision(const glm::vec3& nextPos) {
-    if (noclip_mode_) return false; // Bypass collision
+    if (noclip_mode_) return false;
+    if (level_.GetLevelNo() == 0) return false;
 
-    // Safety check: ensure level is loaded
-    if (level_.GetLevelNo() == 0) {
-        return false; // No collision when level not loaded
-    }
-    
-    auto& objects = level_.GetLevelObjects().GetObjects();
-    
-    float playerRadius = 400.0f; 
+    const bool use_gameplay_snapshot =
+        igi::ResolveRuntimeAssetTarget(
+            in_game_mode_,
+            runtime_level_objects_.has_value()) ==
+        igi::RuntimeAssetTarget::GameplaySnapshot;
+    const LevelObjects& collision_level_objects = use_gameplay_snapshot &&
+            runtime_level_objects_.has_value()
+        ? runtime_level_objects_.value()
+        : level_.GetLevelObjects();
+    const auto& objects = collision_level_objects.GetObjects();
     constexpr float BASE_SCALE = 40.96f;
-    constexpr float FALLBACK_RADIUS_MODEL = 200.0f; // fallback collision radius in model units (tight)
-    
-    for (const auto& obj : objects) {
+    constexpr float EDITOR_CAMERA_RADIUS = 300.0f; // ~0.075m
+    const float collision_radius = in_game_mode_
+        ? igi::PlayerController::BODY_RADIUS
+        : EDITOR_CAMERA_RADIUS;
+
+	for (int object_index = 0; object_index < static_cast<int>(objects.size()); ++object_index) {
+		const auto& obj = objects[object_index];
+		if (obj.deleted) continue;
+		if (in_game_mode_ && obj.type == "Door" &&
+			gameplay_host_.GetWorld().IsDoorFullyOpen(object_index)) {
+			continue;
+		}
+        if (in_game_mode_ &&
+            (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale" ||
+             obj.type == "HumanSoldierRPG" || obj.type == "HumanPlayer" ||
+             obj.type == "HumanAI")) {
+            // Runtime AI is simulated as dynamic entities. The injected
+            // collision callback must represent static level geometry only;
+            // guards are handled by RuntimeWorld's obstacle and hit queries.
+            continue;
+        }
+        std::string mId = !obj.modelId.empty() ? obj.modelId : obj.segmentModelId;
+        if (mId.empty()) continue;
+
         float dist = glm::distance(nextPos, glm::vec3(obj.pos));
         if (dist > 150000.0f) continue;
 
@@ -410,30 +453,25 @@ bool App::CheckCollision(const glm::vec3& nextPos) {
         model = glm::rotate(model, (float)obj.rot.z, glm::vec3(0.0f, 0.0f, 1.0f));
         model = glm::rotate(model, (float)obj.rot.x, glm::vec3(1.0f, 0.0f, 0.0f));
         model = glm::rotate(model, (float)obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f));
-
-        model = glm::scale(model, glm::vec3(BASE_SCALE * obj.scale));
+        float s = (obj.scale > 0.0f) ? obj.scale : 1.0f;
+        model = glm::scale(model, glm::vec3(BASE_SCALE * s));
         model = glm::rotate(model, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
 
         glm::vec4 localPos = glm::inverse(model) * glm::vec4(nextPos, 1.0f);
-        glm::vec3 extents = renderer_.GetMeshExtents(obj.modelId, obj.isBuilding);
+        glm::vec3 extents = renderer_.GetMeshExtents(mId, obj.isBuilding);
+        glm::vec3 center = renderer_.GetMeshCenter(mId, obj.isBuilding);
 
-        // Fallback: if mesh failed to load, use a minimum collision radius
-        float ex = extents.x;
-        float ey = extents.y;
-        float ez = extents.z;
-        if (ex < 1.0f && ey < 1.0f && ez < 1.0f) {
-            ex = ey = ez = FALLBACK_RADIUS_MODEL;
-        }
+        if (extents.x < 1.0f && extents.y < 1.0f && extents.z < 1.0f) continue;
 
-        if (std::abs(localPos.x) < (ex + playerRadius/BASE_SCALE) &&
-            std::abs(localPos.y) < (ey + playerRadius/BASE_SCALE) &&
-            std::abs(localPos.z) < (ez + playerRadius/BASE_SCALE)) 
+        // Gameplay uses the same 0.4 m body envelope as the fixed-step
+        // HumanWallProbe port; the editor camera keeps its historical narrow
+        // pick/collision envelope so authoring navigation remains precise.
+        float pr = collision_radius / BASE_SCALE;
+        glm::vec3 rel = glm::vec3(localPos) - center;
+        if (std::abs(rel.x) < (extents.x + pr) &&
+            std::abs(rel.y) < (extents.y + pr) &&
+            std::abs(rel.z) < (extents.z + pr))
         {
-            static int collisionLogCount = 0;
-            if (collisionLogCount < 50) {
-                Logger::Get().Log(LogLevel::INFO, "[App] Collision with model=" + obj.modelId + " type=" + (obj.isBuilding ? "building" : "object"));
-                collisionLogCount++;
-            }
             return true;
         }
     }
@@ -581,6 +619,45 @@ void App::SnapObjectsToTerrain() {
     Logger::Get().Log(LogLevel::INFO, "[App] Snap complete. snapped=" + std::to_string(snapped) + " skipped=" + std::to_string(skipped) + " failed=" + std::to_string(failed));
 }
 
+void App::UpdateGraphNodeManipulation(int x, int y) {
+	const int id = renderer_.GraphSelected();
+	if (id < 0) return;
+
+	const int mods = glutGetModifiers();
+	const bool ctrl = (mods & GLUT_ACTIVE_CTRL);
+
+	// Cumulative pixel displacement from drag start.
+	const int dx = x - graph_node_manip_.start_x_;
+	const int dy = y - graph_node_manip_.start_y_;
+	const float moveSensitivity = 200.0f;  // same mapping as object manipulation
+
+	const glm::vec3 right = viewer_.right_;
+	glm::dvec3 np;
+	if (ctrl) {
+		// Vertical edit: horizontal via screen-right, height (Z) via -dy.
+		const glm::vec3 up(0.0f, 0.0f, 1.0f);
+		np = graph_node_manip_.start_pos_ +
+		     glm::dvec3(right * (float)dx * moveSensitivity +
+		                up    * (float)-dy * moveSensitivity);
+	} else {
+		// Default: move in the horizontal H/V plane (camera-relative).
+		const glm::vec3 fwd = glm::normalize(glm::vec3(viewer_.forward_.x, viewer_.forward_.y, 0.0f));
+		np = graph_node_manip_.start_pos_ +
+		     glm::dvec3(right * (float)dx * moveSensitivity +
+		                fwd   * (float)-dy * moveSensitivity);
+	}
+
+	renderer_.SetGraphNodePos(id, np);
+
+	// Live telemetry near the cursor (reuses the object-move status line).
+	const glm::dvec3 d = np - graph_node_manip_.start_pos_;
+	char buf[192];
+	snprintf(buf, sizeof(buf),
+	         "Node %d  H: %.1f  V: %.1f  Z: %.1f   dH: %.1f  dV: %.1f  dZ: %.1f",
+	         id, np.x, np.y, np.z, d.x, d.y, d.z);
+	status_message_ = buf;
+}
+
 void App::UpdateMarkerManipulation() {
 	if (selected_object_index_ < 0) return;
 	auto& objects = level_.GetLevelObjects().GetObjects();
@@ -619,7 +696,7 @@ void App::UpdateMarkerManipulation() {
 	marker_manip_.mode_ = current_mode;
 
 	// Push undo state once at the start of each new manipulation gesture
-	if (marker_manip_.mode_ != ManipulationMode::None) {
+	if (marker_manip_.mode_ != ManipulationMode::None || terrain_edit_enabled_) {
 		if (!undo_state_pushed_for_manip_) {
 			PushUndoState();
 			undo_state_pushed_for_manip_ = true;
@@ -752,4 +829,3 @@ void App::UpdateMarkerManipulation() {
 		level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
 	}
 }
-

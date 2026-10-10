@@ -4,6 +4,7 @@
  *          Split from renderer_objects.cpp; shares renderer_objects_internal.h.
  *****************************************************************************/
 #include "renderer_objects_internal.h"
+#include "../runtime/magic_object_registry.h"
 
 void Renderer_Objects::EnsurePortalDistancesLoaded() {
     if (portal_distances_loaded_) return;
@@ -234,17 +235,21 @@ void Renderer_Objects::EnsureMagicObjIdsLoaded() {
     QVMFile qvm = QVM_Parse(qvmPath);
     if (!qvm.valid) return;
 
-    const std::string src = QVM_DecompileToString(qvm);
-    std::istringstream ss(src);
-    std::string line;
-    while (std::getline(ss, line)) {
-        if (line.find("DefineMagicObj") == std::string::npos) continue;
-        const size_t q1 = line.find('"');
-        if (q1 == std::string::npos) continue;
-        const size_t q2 = line.find('"', q1 + 1);
-        if (q2 == std::string::npos) continue;
-        magicobj_ids_.insert(line.substr(q1 + 1, q2 - q1 - 1));
+    igi::MagicObjectRegistry registry;
+    if (!registry.LoadDecompiledSource(QVM_DecompileToString(qvm))) {
+        return;
     }
+    for (const igi::MagicObjectDefinition& definition : registry.GetDefinitions()) {
+        magicobj_ids_.insert(definition.attachment_name);
+        if (definition.task_type_name == "TASKTYPE_LADDER") {
+            ladder_magicobj_ids_.insert(definition.attachment_name);
+        }
+    }
+}
+
+bool Renderer_Objects::IsLadderMagicObject(const std::string& modelId) {
+    EnsureMagicObjIdsLoaded();
+    return ladder_magicobj_ids_.count(modelId) > 0;
 }
 
 // ─── InitSphereMesh ───────────────────────────────────────────────────────────

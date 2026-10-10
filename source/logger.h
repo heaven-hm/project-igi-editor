@@ -51,5 +51,6 @@ private:
 
     std::vector<LogEntry> entries_;
     std::ofstream file_;
+    int unflushed_lines_ = 0;
     mutable std::mutex mutex_;
 };

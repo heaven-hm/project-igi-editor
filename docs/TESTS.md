@@ -17,6 +17,23 @@ $env:IGI_TEST_LEVEL="1"; .\igi_tests.exe
 .\igi_tests.exe --gtest_filter="-AllLevels/VerifyLevelIntegration*"
 ```
 
+## MCP Verification
+
+The MCP additions are included in `igi_tests.exe` and can be focused with:
+
+```powershell
+$env:IGI_GAME_PATH="D:\IGI1"
+$env:Path = (Join-Path (Get-Location) 'assets/dlls/x86') + ';' + $env:Path
+.\igi_tests.exe --gtest_filter="Mcp*" --gtest_color=no
+```
+
+The focused MCP run contains 110 tests: 109 passed and one Windows symlink
+containment test skipped because the test account lacks symlink privilege. The
+full Win32 Release run against `D:\IGI1` completed 594 tests: 584 passed,
+9 expected skips, and one pre-existing `ConfigTest.SystemFontSizeIsValidGlutSize`
+failure. The skips are the symlink privilege case, the absent optional MEF
+corpus, and seven vanilla-fixture parity prerequisites.
+
 ---
 
 ## Controlling Which Levels Are Tested
@@ -64,7 +81,7 @@ $env:IGI_TEST_LEVEL="3"; .\igi_tests.exe --gtest_filter="AllLevels/VerifyLevelIn
 
 | Suite | Tests | What it covers |
 | --- | :---: | --- |
-| `QscLexerTest` | 52 | All token types, keywords, operators, escape sequences, qualified identifiers, line/block comments, error recovery with position reporting |
+| `QscLexerTest` | 53 | All token types, keywords, operators, escape sequences, qualified identifiers, line/block comments, error recovery with position reporting |
 | `QscParserTest` | 42 | AST node types, operator precedence, control flow (`if`/`else`/`while`), assignment associativity, parenthesised expressions, call/arg counters, error cases |
 | `QvmRoundTripTest` | 19 | Synthetic compile→write→parse→decompile cycles; identifier and string pool integrity; structural re-parse of decompiled output; fixture-based round-trip with `level01_simple.qsc` |
 | `ConfigTest` | 10 | Config defaults, field value ranges, singleton behaviour, multi-init safety, keybinding load |
@@ -105,6 +122,8 @@ $env:IGI_TEST_LEVEL="3"; .\igi_tests.exe --gtest_filter="AllLevels/VerifyLevelIn
 | Verify-level (all 14 levels) | 14 |
 | **Total — all levels** | **230** |
 | **Total — `IGI_TEST_LEVEL=1`** | **229** |
+| Focused MCP tests | 110 |
+| Current `igi_tests.exe` registration | **594 across 84 suites** |
 
 ---
 

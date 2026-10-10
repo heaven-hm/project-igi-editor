@@ -39,7 +39,7 @@ public:
 
 private:
 
-	static constexpr int	MAX_TEX_IN_LIST = 1024;
+	static constexpr int	MAX_TEX_IN_LIST = 4096;
 
 	struct gl_tex_list_s {
 		uint32_t			texs_[MAX_TEX_IN_LIST];

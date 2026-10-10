@@ -121,7 +121,14 @@ bool FlatSkyLayer::Update(const fsl_update_params_s& params) {
 
 	 */
 
+	// If the layer distance is at or below the near plane the layer is invisible.
+	// Also guards the division below against fog_start == distance (which happens
+	// when fog_amount=0 and distance=WORLD_Z_NEAR, the uninitialised default).
+	if (flat_sky_distance_in_world <= WORLD_Z_NEAR) return false;
+
 	float fog_start = flat_sky_distance_in_world - (flat_sky_distance_in_world - WORLD_Z_NEAR) * params.flat_sky_fog_amount_;
+	// fog_start >= distance_world means fully transparent — skip rendering.
+	if (fog_start >= flat_sky_distance_in_world) return false;
 	float one_over_flat_sky_distance_sub_remain_dist = 1.0f / (flat_sky_distance_in_world - fog_start);
 
 	glm::vec3 forward_dir_in_horizontal;

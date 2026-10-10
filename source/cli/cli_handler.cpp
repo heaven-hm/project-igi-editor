@@ -3,7 +3,7 @@
 #include "cli_tests.h"
 #include "common.h"
 #include "logger.h"
-#include "parsers/res_parser.h"
+#include "renderer/res_writer.h"
 #include "utils.h"
 #include <filesystem>
 #include <algorithm>
@@ -23,7 +23,7 @@ bool CLIHandler::IsCLICommand(int argc, char **argv) {
 
 void CLIHandler::PrintHelp() {
   std::cout
-      << "IGI Editor v3.0.0 - Game Editor\n\n"
+      << "IGI Editor v3.4.1-pre - Game Editor\n\n"
       << "GUI Editor Mode Options:\n"
       << "  -level <num>            Load specific level (1-14)\n"
       << "  -w <width> -h <height>  Set window dimensions\n"

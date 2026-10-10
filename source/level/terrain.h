@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <vector>
+
 /*
 ================================================================================
  Terrain
@@ -44,6 +46,13 @@ public:
 	bool					GetZ(const dyn_cube_s* root_dyn_cube, double x, double y, float & ret_z, bool ignore_discard = false);
 	void					EditorRaycastAndModify(const dyn_cube_s* root_dyn_cube, const glm::vec3& ray_origin, const glm::vec3& ray_dir, int brush_type, double radius, double strength);
 	bool					GetFirstHMPCenter(glm::vec3& out_pos) const;
+
+	// Snapshot/restore the height-map pixel buffer for undo/redo. The HMP file
+	// body is one contiguous block; height_map_items_[] points into it, so a
+	// byte-for-byte copy preserves all in-place edits without recomputing
+	// pointers. Returns an empty buffer when the level has no .hmp file.
+	std::vector<uint8_t>	SnapshotHMP() const;
+	void					RestoreHMP(const std::vector<uint8_t>& snap);
 
 	// Index (into ctr_) of the leaf CTR node found by the most recent GetZ() query,
 	// or -1 if none. Used to surface a "terrain id" for the hover tooltip (issue 3).
@@ -250,6 +259,7 @@ private:
 
 	// hmp file contents
 	void*					hmp_;
+	int32_t					hmp_sz_ = 0;
 	const int8_t *			height_map_items_[MAX_HMP];
 #ifdef _DEBUG
 	uint32_t				height_map_item_size_array_[MAX_HMP];

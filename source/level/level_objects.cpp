@@ -64,6 +64,9 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
         }
     }
 
+    // Resolve each HumanSoldier-family AI's held weapon (see ResolveSoldierWeapon).
+    for (int i = 0; i < (int)objects_.size(); ++i) ResolveSoldierWeapon(i);
+
     // Only generate qscLine for objects that didn't get a raw line from the parser
     for (int i = 0; i < (int)objects_.size(); ++i) {
         if (objects_[i].qscLine.empty()) {
@@ -119,6 +122,9 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
     bool isAmbient = (typeStr == "AmbientArea");
     bool isFence = (typeStr == "Fence");
     bool isTrain = (typeStr == "Train");
+    bool isGraph = (typeStr == "AIGraph");  // Task_New(id,"AIGraph",name,x,y,z,...)
+    bool isHumanAI = (typeStr == "HumanAI");  // Task_New(id,"HumanAI",name,aiType,graphId)
+    bool isWeaponChild = (typeStr.rfind("Gun", 0) == 0);  // Task_New(id,"Gun<Name>",name,"WEAPON_ID_*",count) — HumanSoldier weapon child
 
     bool isDecl = (typeStr == "Task_DeclareParameters");
     bool isGrouping = (typeStr == "Container" || typeStr == "Static" || typeStr == "Game" || typeStr == "Level" || typeStr == "Flow" || typeStr == "Task" || typeStr == "Folder" ||
@@ -207,6 +213,7 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                     // Resolve it to a model ID for rendering via IGIModels.json
                     if (cur_a->type_ == QSC::arg_s::type_t::STR) {
                         std::string enumId = Utils::Trim(cur_a->str_);
+                        obj.weaponEnumId = enumId;
                         obj.modelId = ResolvePickupModelId(enumId);
                     }
                     break;
@@ -236,6 +243,8 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
                 case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
                 case 7: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
+                case 9: if (cur_a->type_ == QSC::arg_s::type_t::DBL) obj.boneHierarchy = (int)cur_a->dbl_; break;
+                case 10: if (cur_a->type_ == QSC::arg_s::type_t::DBL) obj.standAnimation = (int)cur_a->dbl_; break;
             }
         } else if (isDoor) {
             switch (arg_idx) {
@@ -377,6 +386,30 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                     }
                     break;
             }
+        } else if (isGraph) {
+            // AIGraph "Graph position" (args 3/4/5) is the world origin its
+            // graph<taskId>.dat node coordinates are local to. arg@7 is Graphdata's
+            // node_count (args 7/8/9 = node_count, capacity, edge_count).
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                case 7: if (cur_a->type_ == QSC::arg_s::type_t::DBL) obj.graphNodeCount = (int)cur_a->dbl_; break;
+            }
+        } else if (isHumanAI) {
+            // Task_New(id, "HumanAI", name, "AITYPE_*", graphId)
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) obj.aiGraphTaskId = (int)cur_a->dbl_; break;
+            }
+        } else if (isWeaponChild) {
+            // Task_New(id, "Gun<Name>", name, "WEAPON_ID_*", count) — nested under HumanSoldier
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 3: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.weaponEnumId = Utils::Trim(cur_a->str_); break;
+            }
         } else {
             // Default: just try to get taskId from first arg
             if (arg_idx == 0) obj.taskId = TaskIdFromArg(cur_a);
@@ -517,3 +550,81 @@ std::string LevelObjects::ResolvePickupModelId(const std::string& enumId) {
     return enumId; // fallback: keep raw enum string
 }
 
+void LevelObjects::ResolveSoldierWeapon(int soldierIndex) {
+    if (soldierIndex < 0 || soldierIndex >= (int)objects_.size()) return;
+    LevelObject& obj = objects_[soldierIndex];
+    obj.weaponModelId.clear();  // recompute from scratch (also clears stale value on live edit)
+
+    bool isSoldierFamily = (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale" ||
+                             obj.type == "HumanPlayer" || obj.type == "HumanSoldierRPG" || obj.type == "Cabinet");
+    if (!isSoldierFamily || obj.boneHierarchy < 0) return;
+
+    // Read the weapon enum + AI graph from the soldier's children. The enum is read
+    // from the child's CURRENT argTokens (arg 3) so a live edit in the property panel
+    // is picked up immediately; the AI graph id comes from the parsed HumanAI field.
+    auto stripQuotes = [](std::string s) {
+        if (s.size() >= 2 && s.front() == '"' && s.back() == '"') s = s.substr(1, s.size() - 2);
+        return s;
+    };
+    std::string weaponEnumId;
+    int aiGraphTaskId = -1;
+    for (int ci : obj.childrenIndices) {
+        if (ci < 0 || ci >= (int)objects_.size() || objects_[ci].deleted) continue;
+        const auto& child = objects_[ci];
+        if (weaponEnumId.empty() && child.type.rfind("Gun", 0) == 0) {
+            if (child.argTokens.size() > 3) weaponEnumId = Utils::Trim(stripQuotes(child.argTokens[3]));
+            if (weaponEnumId.empty()) weaponEnumId = child.weaponEnumId;
+        }
+        if (aiGraphTaskId < 0 && child.type == "HumanAI") aiGraphTaskId = child.aiGraphTaskId;
+    }
+
+    if (weaponEnumId.empty()) return; // no weapon child -> nothing to resolve
+    obj.primaryWeapon = weaponEnumId;
+
+    bool excluded = false;
+    std::string excludeReason;
+    if (aiGraphTaskId < 0) {
+        excluded = true;
+        excludeReason = "no HumanAI/graph reference";
+    } else {
+        const LevelObject* graph = nullptr;
+        std::string graphTaskIdStr = std::to_string(aiGraphTaskId);
+        for (const auto& g : objects_) {
+            if (g.type == "AIGraph" && !g.deleted && g.taskId == graphTaskIdStr) { graph = &g; break; }
+        }
+        if (!graph) {
+            excluded = true;
+            excludeReason = "AIGraph task " + graphTaskIdStr + " not found";
+        } else {
+            obj.graphId = graphTaskIdStr;
+            obj.graphName = graph->name;
+            std::string nameLower = graph->name;
+            std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(),
+                           [](unsigned char c) { return std::tolower(c); });
+            if (graph->graphNodeCount >= 0 && graph->graphNodeCount <= 1) {
+                excluded = true;
+                excludeReason = "graph " + graphTaskIdStr + " has only " +
+                    std::to_string(graph->graphNodeCount) + " node(s)";
+            } else if (nameLower.find("cutscene") != std::string::npos) {
+                excluded = true;
+                excludeReason = "graph name '" + graph->name + "' is a cutscene area";
+            }
+        }
+    }
+
+    if (excluded) {
+        Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Weapon NOT attached for soldier task " +
+            obj.taskId + " (" + weaponEnumId + "): " + excludeReason);
+        return;
+    }
+
+    std::string resolvedModelId = ResolvePickupModelId(weaponEnumId);
+    if (resolvedModelId == weaponEnumId) {
+        Logger::Get().Log(LogLevel::WARNING, "[LevelObjects] No model ID mapping found for weapon enum: " +
+            weaponEnumId + " (soldier task " + obj.taskId + ")");
+        return;
+    }
+    obj.weaponModelId = resolvedModelId;
+    Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Weapon attached for soldier task " + obj.taskId +
+        ": " + weaponEnumId + " -> " + resolvedModelId);
+}

@@ -1,15 +1,16 @@
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <string>
 #include <fstream>
 #include <sstream>
 #include <regex>
 #include <cstdio>
 #include <filesystem>
-#include "parsers/qsc_lexer.h"
-#include "parsers/qsc_parser.h"
-#include "parsers/qvm_compiler.h"
-#include "parsers/qvm_decompiler.h"
-#include "parsers/qvm_parser.h"
+#include "../source/level/qsc_lexer.h"
+#include "../source/level/qsc_parser.h"
+#include "../source/level/qvm_compiler.h"
+#include "../source/level/qvm_decompiler.h"
+#include "../source/level/qvm_parser.h"
 #include "utils.h"
 
 // ============================================================
@@ -38,6 +39,37 @@ std::string ReadFile(const std::string& path) {
 std::string NormalizeQsc(const std::string& input) {
     std::string res = std::regex_replace(input, std::regex("\\s+"), " ");
     return Utils::Trim(res);
+}
+
+std::vector<uint8_t> BuildMinimalQvm(const std::vector<uint8_t>& code) {
+    std::vector<uint8_t> binary(60U + code.size(), 0U);
+    binary[0] = 'L';
+    binary[1] = 'O';
+    binary[2] = 'O';
+    binary[3] = 'P';
+
+    auto write_u32 = [&binary](size_t offset, uint32_t value) {
+        binary[offset + 0] = static_cast<uint8_t>(value & 0xFFU);
+        binary[offset + 1] = static_cast<uint8_t>((value >> 8U) & 0xFFU);
+        binary[offset + 2] = static_cast<uint8_t>((value >> 16U) & 0xFFU);
+        binary[offset + 3] = static_cast<uint8_t>((value >> 24U) & 0xFFU);
+    };
+
+    write_u32(0x04, 8U);                  // LOOP instruction-set identifier
+    write_u32(0x08, 5U);                  // IGI1 QVM version
+    write_u32(0x0C, 60U);                 // empty identifier table
+    write_u32(0x10, 60U);                 // empty identifier pool
+    write_u32(0x14, 0U);
+    write_u32(0x18, 0U);
+    write_u32(0x1C, 60U);                 // empty string table
+    write_u32(0x20, 60U);                 // empty string pool
+    write_u32(0x24, 0U);
+    write_u32(0x28, 0U);
+    write_u32(0x2C, 60U);                 // code section
+    write_u32(0x30, static_cast<uint32_t>(code.size()));
+
+    std::copy(code.begin(), code.end(), binary.begin() + 60);
+    return binary;
 }
 
 // Full compile→write→parse→decompile pipeline.
@@ -101,6 +133,42 @@ TEST(QvmRoundTripTest, CompileProducesNonEmptyBinary) {
     EXPECT_FALSE(cr.binary.empty());
     // QVM binary has a fixed 48-byte header; binary is always at least that size
     EXPECT_GE(cr.binary.size(), 4u);
+}
+
+TEST(QvmParserTest, DecodesRetailInlineAndSignedOperands) {
+    const std::vector<uint8_t> code = {
+        0x07, 'v', 'a', 'n', 'i', 'l', 'l', 'a', 0x00, // PUSHS
+        0x0B, 'G', 'O', 'S', 't', 'a', 'r', 't', 0x00, // PUSHI
+        0x03, 0xFF,                                     // PUSHB -1
+        0x04, 0xFF, 0xFF,                               // PUSHW -1
+        0x18, 0x01, 0x00, 0x00, 0x00,                  // CALL with one argument
+        0x00, 0x00, 0x00, 0x00,                         // argument code address
+        0x14, 0xFB, 0xFF, 0xFF, 0xFF,                   // BRA -5
+        0x00                                              // BRK
+    };
+    const std::string path = FixturePath("_rt_retail_operands.qvm");
+    const std::vector<uint8_t> binary = BuildMinimalQvm(code);
+    {
+        std::ofstream output(path, std::ios::binary);
+        ASSERT_TRUE(output.is_open());
+        output.write(reinterpret_cast<const char*>(binary.data()),
+                     static_cast<std::streamsize>(binary.size()));
+    }
+
+    const QVMFile qvm = QVM_Parse(path);
+    std::remove(path.c_str());
+
+    ASSERT_TRUE(qvm.valid) << qvm.error;
+    ASSERT_EQ(qvm.instructions.size(), 7U);
+    EXPECT_EQ(qvm.instructions[0].type, QVMOpType::PUSHS);
+    EXPECT_EQ(qvm.instructions[0].inline_text, "vanilla");
+    EXPECT_EQ(qvm.instructions[1].type, QVMOpType::PUSHI);
+    EXPECT_EQ(qvm.instructions[1].inline_text, "GOStart");
+    EXPECT_EQ(qvm.instructions[2].signed_operand, -1);
+    EXPECT_EQ(qvm.instructions[3].signed_operand, -1);
+    EXPECT_EQ(qvm.instructions[4].type, QVMOpType::CALL);
+    EXPECT_EQ(qvm.instructions[4].signed_operand, 1);
+    EXPECT_EQ(qvm.instructions[5].signed_operand, -5);
 }
 
 TEST(QvmRoundTripTest, CompileEmptyProgram) {

@@ -23,6 +23,11 @@ glm::vec3 Renderer_Objects::GetMeshExtents(const std::string& modelId, bool isBu
     return mesh.halfExtents;
 }
 
+glm::vec3 Renderer_Objects::GetMeshCenter(const std::string& modelId, bool isBuilding) {
+    Mesh mesh = GetOrLoadMesh(modelId, isBuilding);
+    return mesh.center;
+}
+
 Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding) {
     std::string cacheKey = std::to_string(current_level_) + ":" + (isBuilding ? "building:" : "object:") + modelId;
     Logger::Get().Log(LogLevel::DEBUG,
@@ -37,7 +42,35 @@ Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding
         return it->second;
     }
 
-    // Find the file on disk
+    // ── 1. Try in-memory .res index first (no disk extraction needed) ────────────
+    {
+        std::vector<uint8_t> meshBytes = FindMeshData(modelId);
+        if (!meshBytes.empty()) {
+            try {
+                // Pre-populate ATTA cache from the bytes we already have so
+                // LoadAttachmentsRecursive doesn't need to call FindMeshData again
+                // for this model (avoids a second costly .res read under memory pressure).
+                try {
+                    ParsedGeometry geoForAtta = ParseMefFileFromMemory(meshBytes, modelId);
+                    PrePopulateAttaFromParsed(modelId, isBuilding, geoForAtta.mefAttachments);
+                } catch (...) {}
+
+                Mesh mesh = loadObjModelFromMemory(meshBytes, modelId);
+                ApplyTexturesToMesh(mesh, modelId);
+                mesh_cache_[cacheKey] = mesh;
+                Logger::Get().Log(LogLevel::DEBUG, "[Renderer_Objects] Loaded '" + modelId +
+                    "' from ResCache (" + std::to_string(mesh.vertexCount) + " vertices)");
+                std::unordered_set<std::string> visited;
+                LoadAttachmentsRecursive(modelId, isBuilding, visited);
+                return mesh_cache_[cacheKey];
+            } catch (const std::exception& e) {
+                Logger::Get().Log(LogLevel::WARNING, "[Renderer_Objects] ResCache parse failed for " +
+                    modelId + ": " + e.what() + " — falling back to disk");
+            }
+        }
+    }
+
+    // ── 2. Fall back to disk file ─────────────────────────────────────────────
     std::string filepath = FindModelFile(modelId, isBuilding);
     if (filepath.empty()) {
         Logger::Get().Log(LogLevel::WARNING, "[Renderer_Objects] Model search FAILED for ID: " + modelId + ". Skipping render.");
@@ -49,13 +82,13 @@ Mesh Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding
     Logger::Get().Log(LogLevel::DEBUG,
         "[Renderer_Objects] Resolved modelId=" + modelId + " to path=" + filepath);
 
-
     // Load and cache
     try {
         Mesh mesh = loadObjModel(filepath, "");
         ApplyTexturesToMesh(mesh, modelId);
         mesh_cache_[cacheKey] = mesh;
-        Logger::Get().Log(LogLevel::DEBUG, "[Renderer_Objects] Success: Loaded model '" + modelId + "' from " + filepath + " (" + std::to_string(mesh.vertexCount) + " vertices)");
+        Logger::Get().Log(LogLevel::DEBUG, "[Renderer_Objects] Success: Loaded model '" + modelId +
+            "' from disk " + filepath + " (" + std::to_string(mesh.vertexCount) + " vertices)");
 
         // Recursively parse ATTA records for this model and all nested children.
         std::unordered_set<std::string> visited;
@@ -247,16 +280,16 @@ std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isB
         return result;
     }
 
-    // Lazy On-Demand Extraction check
-    EnsureGlobalTextureMapLoaded();
-    auto mit = model_level_map_.find(modelId);
-    if (mit != model_level_map_.end()) {
-        int targetLvl = mit->second;
-        if (targetLvl != current_level_) {
-            Logger::Get().Log(LogLevel::INFO,
-                "[Renderer_Objects] Lazy extracting textures/models on-demand for level " + std::to_string(targetLvl) +
-                " to resolve cross-level model: " + modelId);
-            AssetExtractor::EnsureLevelAssets(targetLvl, Utils::GetIGIRootPath(), Utils::GetExeDirectory());
+    // Lazy cross-level .res index: index that level's archives in memory so the
+    // caller can try FindMeshData() before falling through to other-level disk scan.
+    {
+        EnsureGlobalTextureMapLoaded();
+        auto mit = model_level_map_.find(modelId);
+        if (mit != model_level_map_.end() && mit->second != current_level_) {
+            int targetLvl = mit->second;
+            Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Lazy indexing level " +
+                std::to_string(targetLvl) + " .res for cross-level model: " + modelId);
+            LoadResCache(targetLvl, Utils::GetIGIRootPath());
         }
     }
 
@@ -294,6 +327,57 @@ std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isB
         "' — searched level " + std::to_string(current_level_) +
         ", all other levels, and common folder.");
     return "";
+}
+
+std::string Renderer_Objects::GetOrExtractMefTemp(const std::string& modelId, bool isBuilding) {
+    // Try disk first (fast path).
+    std::string diskPath = FindModelFile(modelId, isBuilding);
+    if (!diskPath.empty()) return diskPath;
+
+    // Check if already extracted this session.
+    std::string tmpPath = (std::filesystem::temp_directory_path() / ("igi1ed_" + modelId + ".mef")).string();
+    if (std::filesystem::exists(tmpPath)) return tmpPath;
+
+    // Extract from res cache to temp.
+    std::vector<uint8_t> bytes = FindMeshData(modelId);
+    if (bytes.empty()) return "";
+
+    std::ofstream f(tmpPath, std::ios::binary);
+    if (!f) return "";
+    f.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    f.close();
+    tmp_mef_paths_.push_back(tmpPath);
+    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Extracted MEF to temp: " + tmpPath);
+    return tmpPath;
+}
+
+const ParsedGeometry* Renderer_Objects::GetOrLoadSkinGeometry(const std::string& modelId, bool isBuilding) {
+    auto it = skin_geometry_cache_.find(modelId);
+    if (it != skin_geometry_cache_.end()) return &it->second;
+
+    ParsedGeometry geo;
+    {
+        std::vector<uint8_t> mefBytes = FindMeshData(modelId);
+        if (!mefBytes.empty()) {
+            try { geo = ParseMefFileFromMemory(mefBytes, modelId); } catch (...) {}
+        }
+        if (geo.vertices.empty()) {
+            std::string filepath = FindModelFile(modelId, isBuilding);
+            if (filepath.empty()) {
+                Logger::Get().Log(LogLevel::WARNING, "[Anim] No .mef found for skin geometry: " + modelId);
+                return nullptr;
+            }
+            try { geo = ParseMefFile(filepath); } catch (...) {}
+        }
+    }
+    if (geo.vertices.empty() || geo.bones.empty()) {
+        Logger::Get().Log(LogLevel::WARNING, "[Anim] " + modelId + " has no skeletal vertex/bone data for skinning");
+        return nullptr;
+    }
+
+    Logger::Get().Log(LogLevel::INFO, "[Anim] Loaded skin geometry for " + modelId + ": " +
+        std::to_string(geo.vertices.size()) + " vertices, " + std::to_string(geo.bones.size()) + " bones");
+    return &(skin_geometry_cache_[modelId] = std::move(geo));
 }
 
 

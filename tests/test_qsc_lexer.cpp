@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "parsers/qsc_lexer.h"
+#include "../source/level/qsc_lexer.h"
 
 using namespace qsc;
 
@@ -293,6 +293,12 @@ TEST(QscLexerTest, BlockCommentBetweenTokens) {
     ASSERT_GE(r.tokens.size(), 2u);
     EXPECT_EQ(r.tokens[0].lexeme, "A");
     EXPECT_EQ(r.tokens[1].lexeme, "B");
+}
+
+TEST(QscLexerTest, UnterminatedBlockCommentIsRejected) {
+    const auto r = Lex("/* missing terminator");
+    EXPECT_FALSE(r.ok);
+    EXPECT_NE(r.error.find("unterminated block comment"), std::string::npos);
 }
 
 // ---------- operators ----------

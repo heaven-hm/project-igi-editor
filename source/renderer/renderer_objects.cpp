@@ -1,4 +1,5 @@
 #include "renderer_objects_internal.h"
+#include "object_lightmap.h"
 
 
 
@@ -13,12 +14,57 @@ bool Renderer_Objects::IsSkippedModelId(const std::string& modelId) {
     return modelId == "colbox" || modelId == "colbox2" || modelId == "colbox4" || modelId == "colbox66";
 }
 
+// Per-frame delta seconds feeder for continuous animations (e.g. helicopter rotor spin).
+// Written by App::Frame before each Draw; consumed inside DrawAttachmentsRecursive via the
+// elapsed_time_secs_ accumulator. Defined here so the extern reference in the draw path links.
+float g_renderer_delta_secs = 0.0f;
+
+void Renderer_Objects::SetLightmapForTask(const std::string& taskId, std::vector<GLuint> textures,
+                                          const glm::dvec3& bakedPos, const glm::dvec3& bakedRot) {
+    ClearLightmapForTask(taskId);
+    lightmap_textures_by_task_[taskId] = std::move(textures);
+    lightmap_bake_pose_by_task_[taskId] = { bakedPos, bakedRot, sun_dir_ };
+}
+
+void Renderer_Objects::ClearLightmapForTask(const std::string& taskId) {
+    auto it = lightmap_textures_by_task_.find(taskId);
+    if (it == lightmap_textures_by_task_.end()) return;
+    for (GLuint tex : it->second) {
+        if (tex != 0) glDeleteTextures(1, &tex);
+    }
+    lightmap_textures_by_task_.erase(it);
+    lightmap_bake_pose_by_task_.erase(taskId);
+}
+
+const std::vector<GLuint>* Renderer_Objects::GetLightmapForTask(const std::string& taskId) const {
+    auto it = lightmap_textures_by_task_.find(taskId);
+    return it != lightmap_textures_by_task_.end() ? &it->second : nullptr;
+}
+
+bool Renderer_Objects::IsLightmapStale(const std::string& taskId, const glm::dvec3& curPos, const glm::dvec3& curRot) const {
+    auto it = lightmap_bake_pose_by_task_.find(taskId);
+    if (it == lightmap_bake_pose_by_task_.end()) return false;
+    constexpr double kPosEpsilon = 1.0;    // world units
+    constexpr double kRotEpsilon = 0.01;   // radians
+    constexpr float  kSunEpsilon = 0.05f;  // angle change (dot-product threshold ~3 degrees)
+    const auto& bp = it->second;
+    if (glm::length(curPos - bp.pos) > kPosEpsilon) return true;
+    if (glm::length(curRot - bp.rot) > kRotEpsilon) return true;
+    // Sun direction change: if sun moved more than ~3° since bake, lightmap is stale.
+    if (glm::length(sun_dir_) > 1e-6f && glm::length(bp.sun_dir) > 1e-6f) {
+        float dot = glm::dot(glm::normalize(sun_dir_), glm::normalize(bp.sun_dir));
+        if (dot < 1.0f - kSunEpsilon) return true;
+    }
+    return false;
+}
+
 // ─── Shader Sources ───────────────────────────────────────────────────────────
 static const char* OBJ_VERT_SRC = R"(
 #version 330 core
 layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_normal;
 layout(location = 2) in vec2 a_uv;
+layout(location = 3) in vec2 a_uv2;
 
 layout(std140) uniform Matrices {
     mat4 u_unused1;
@@ -31,6 +77,7 @@ uniform mat4 u_model;
 
 out vec3 v_normal;
 out vec2 v_uv;
+out vec2 v_uv2;
 out vec3 v_fragPos;
 
 void main() {
@@ -38,6 +85,7 @@ void main() {
     v_fragPos       = worldPos.xyz;
     v_normal        = mat3(transpose(inverse(u_model))) * a_normal;
     v_uv            = a_uv;
+    v_uv2           = a_uv2;
     gl_Position     = u_mvp * u_model * vec4(a_pos, 1.0);
 }
 
@@ -47,48 +95,67 @@ static const char* OBJ_FRAG_SRC = R"(
 #version 330 core
 in vec3 v_normal;
 in vec2 v_uv;
+in vec2 v_uv2;
 in vec3 v_fragPos;
 
-uniform vec3 u_dirlight;   // directional light RGB
-uniform vec3 u_ambient;    // ambient light RGB
+uniform vec3  u_dirlight;      // directional light RGB (sun)
+uniform vec3  u_ambient;       // ambient light RGB
+uniform vec3  u_lightDir;      // direction toward the sun (world space)
 uniform sampler2D u_texture;
-uniform int u_useTexture;
-uniform float u_alpha;     // material alpha (1.0 = opaque, <1.0 = transparent)
-uniform vec4 u_baseColor;  // Base color when no texture
-uniform vec3 u_tint; // per-object multiplicative tint (default white); magenta = missing-in-res warning
-uniform float u_glassMin;  // glass sheen floor: clean (low-alpha) glass renders at
-                           // least this opaque so the pane is visible. 0 = not glass.
-
+uniform int   u_useTexture;
+uniform sampler2D u_lightmap;
+uniform int   u_useLightmap;   // 0 = no baked lightmap for this submesh
+uniform vec3  u_lightmapScale; // live re-light scale when object was moved since bake
+uniform float u_alpha;
+uniform vec4  u_baseColor;
+uniform vec3  u_tint;
+uniform float u_glassMin;
+uniform float u_gamma;
 out vec4 fragColor;
 
 void main() {
     vec3 N = normalize(v_normal);
-    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5));
-    float diff = max(dot(N, lightDir), 0.0);
+    vec3 lightDir = normalize(u_lightDir);
 
+    // Hemisphere ambient: sky (up) is warmer/brighter, ground (down) is dimmer.
+    // This ensures every face — including side walls — always gets meaningful light.
+    float hemiT = dot(N, vec3(0.0, 0.0, 1.0)) * 0.5 + 0.5; // 0=down, 1=up
+    vec3 hemi = mix(u_ambient * 0.75, u_ambient * 1.35, hemiT);
+
+    // Sun: front faces bright, back faces get 40% warm fill (no black backs).
+    float diff     = max(dot(N, lightDir), 0.0);
+    float backFill = max(-dot(N, lightDir), 0.0) * 0.40;
+
+    // Subtle specular
     vec3 viewDir = normalize(vec3(0.0, 1.0, 1.0));
     vec3 halfVec = normalize(lightDir + viewDir);
-    float spec = pow(max(dot(N, halfVec), 0.0), 32.0) * 0.25;
+    float spec = pow(max(dot(N, halfVec), 0.0), 32.0) * 0.08;
 
-    vec3 light = u_ambient + u_dirlight * (diff + spec);
+    vec3 light = hemi + u_dirlight * (diff + backFill + spec);
 
     vec4 texColor = (u_useTexture != 0) ? texture(u_texture, v_uv) : u_baseColor;
-
     float finalAlpha = (u_useTexture != 0 ? texColor.a : 1.0) * u_alpha;
 
-    // Glass: even a perfectly clear pane (texture alpha ~0) must show a faint
-    // reflective sheen, so floor the alpha. Add a subtle specular highlight so the
-    // glass reads as a surface, not an empty hole.
     if (u_glassMin > 0.0) {
         finalAlpha = max(finalAlpha, u_glassMin);
         light += vec3(spec * 1.5);
     }
 
-    fragColor = vec4(light * texColor.rgb * u_tint, finalAlpha);
+    vec3 litColor;
+    if (u_useLightmap != 0) {
+        vec2 olmUV = vec2(v_uv2.x, 1.0 - v_uv2.y);
+        vec3 lm = texture(u_lightmap, olmUV).rgb * u_lightmapScale;
+        // Warm ambient floor: no lightmapped face should be black.
+        // OLM stores absolute lighting; dark faces get lifted to warm minimum.
+        lm = max(lm, u_ambient * 0.90);
+        litColor = texColor.rgb * lm * u_tint;
+    } else {
+        litColor = light * texColor.rgb * u_tint;
+    }
 
-    // Alpha-test cutout for foliage / fences / grilles only (alpha >= 0.9). Glass
-    // (lower alpha or u_glassMin set) is NEVER cut out — it blends so you can see
-    // through it while still seeing the pane.
+    litColor = pow(max(litColor, 0.0), vec3(u_gamma));
+    fragColor = vec4(litColor, finalAlpha);
+
     if (u_glassMin <= 0.0 && u_alpha >= 0.9 && texColor.a < 0.75) discard;
     if (fragColor.a < 0.01) discard;
 }
@@ -272,6 +339,126 @@ void Renderer_Objects::ClearCaches() {
     persistent_dat_path_.clear();
     logged_draw_buildings_.clear();
 
+    // Lightmaps are keyed by taskId, which is only unique WITHIN a level — task
+    // 1104 in level1 and task 1104 in level6 are unrelated. Without clearing
+    // these on a level switch, a previous level's baked lightmap (and its bake
+    // pose) would bind to the new level's same-numbered task.
+    // indoor_ambient_by_task_ is also per-level (rebuilt from LightmapInfo tasks
+    // on each level load in app_level.cpp), so clear it here too.
+    ClearAllLightmaps();
+    indoor_ambient_by_task_.clear();
+    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Cleared per-task lightmap caches on level switch");
+    ClearResCache();
+}
+
+void Renderer_Objects::ClearResCache() {
+    res_tex_indexes_.clear();
+    res_model_indexes_.clear();
+    for (const auto& p : tmp_mef_paths_) {
+        std::error_code ec;
+        std::filesystem::remove(p, ec);
+    }
+    tmp_mef_paths_.clear();
+    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] ResCache cleared");
+}
+
+void Renderer_Objects::LoadResCache(int levelNo, const std::string& igi_path) {
+    // APPEND-ONLY: never clear existing indexes. Cross-level lazy calls add new
+    // .res archives without evicting the current level's already-indexed files.
+    const std::string levelName = "level" + std::to_string(levelNo);
+    const std::string missionDir = igi_path + "\\missions\\location0\\" + levelName;
+    const std::string commonDir  = igi_path + "\\missions\\location0\\common";
+
+    // Helper: only add a path if not already in the index list.
+    auto addTex = [&](const std::string& p) {
+        for (const auto& ri : res_tex_indexes_)
+            if (ri.res_path == p) return; // already indexed
+        ResIndex ri;
+        ri.res_path = p;
+        std::string err;
+        if (RES_BuildIndex(p, ri.index, err)) {
+            Logger::Get().Log(LogLevel::INFO, "[ResCache] Indexed " +
+                std::to_string(ri.index.size()) + " entries from " + p);
+            res_tex_indexes_.push_back(std::move(ri));
+        } else if (!err.empty()) {
+            Logger::Get().Log(LogLevel::WARNING, "[ResCache] Texture index failed: " + err);
+        }
+    };
+    auto addModel = [&](const std::string& p) {
+        for (const auto& ri : res_model_indexes_)
+            if (ri.res_path == p) return; // already indexed
+        ResIndex ri;
+        ri.res_path = p;
+        std::string err;
+        if (RES_BuildIndex(p, ri.index, err)) {
+            Logger::Get().Log(LogLevel::INFO, "[ResCache] Indexed " +
+                std::to_string(ri.index.size()) + " entries from " + p);
+            res_model_indexes_.push_back(std::move(ri));
+        } else if (!err.empty()) {
+            Logger::Get().Log(LogLevel::WARNING, "[ResCache] Model index failed: " + err);
+        }
+    };
+
+    // Level-specific comes first so it wins over common on name collisions.
+    addTex  (missionDir + "\\textures\\" + levelName + ".res");
+    addTex  (commonDir  + "\\textures\\location0.res");
+    addModel(missionDir + "\\models\\" + levelName + ".res");
+    addModel(commonDir  + "\\models\\location0.res");
+
+}
+
+// Try to find texture bytes in the in-memory .res index.
+std::vector<uint8_t> Renderer_Objects::FindTextureData(const std::string& textureId) const {
+    // Try exact name + .tex, then common format-suffix variant
+    auto tryId = [&](const std::string& id) -> std::vector<uint8_t> {
+        const std::string fname = id + ".tex";
+        for (const auto& ri : res_tex_indexes_) {
+            auto it = ri.index.find(fname);
+            if (it != ri.index.end())
+                return RES_ReadEntry(ri.res_path, it->second);
+        }
+        return {};
+    };
+    auto bytes = tryId(textureId);
+    if (!bytes.empty()) return bytes;
+    // Try stripped name (remove _argb8888 etc.) as fallback
+    const std::string& id = textureId;
+    size_t us = id.rfind('_');
+    if (us != std::string::npos && us > 0) {
+        // Only strip if the suffix looks like a format tag (all lower alpha/digits)
+        bool isFormat = true;
+        for (size_t i = us + 1; i < id.size(); ++i) {
+            if (!std::islower((unsigned char)id[i]) && !std::isdigit((unsigned char)id[i])) {
+                isFormat = false; break;
+            }
+        }
+        if (isFormat) bytes = tryId(id.substr(0, us));
+    }
+    return bytes;
+}
+
+// Try to find mesh bytes in the in-memory .res index.
+std::vector<uint8_t> Renderer_Objects::FindMeshData(const std::string& modelId) const {
+    const std::string fname = modelId + ".mef";
+    for (const auto& ri : res_model_indexes_) {
+        auto it = ri.index.find(fname);
+        if (it != ri.index.end())
+            return RES_ReadEntry(ri.res_path, it->second);
+    }
+    return {};
+}
+
+// Free every baked lightmap's GL textures and drop the per-task bake state.
+// Used on level switch (above) and by the Escape-menu Lightmaps checkbox when
+// toggled OFF (so OFF reverts to the default bright look).
+void Renderer_Objects::ClearAllLightmaps() {
+    for (auto& pair : lightmap_textures_by_task_) {
+        for (GLuint tex : pair.second) {
+            if (tex != 0) glDeleteTextures(1, &tex);
+        }
+    }
+    lightmap_textures_by_task_.clear();
+    lightmap_bake_pose_by_task_.clear();
 }
 
 // ─── Shutdown ─────────────────────────────────────────────────────────────────
@@ -340,7 +527,7 @@ void Renderer_Objects::Shutdown() {
 // ─── InitPickingFBO ───────────────────────────────────────────────────────────
 void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                             const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts,
-                            const glm::vec3& camera_pos, bool show_magic_obj_spheres)
+                            const glm::vec3& camera_pos, bool show_magic_obj_spheres, const std::unordered_set<int>* skip_static_draw_indices)
 {
     // Define the flags (must match renderer.h)
     const int DRAW_OBJECTS = 4;
@@ -396,8 +583,31 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     GLint loc_model    = glGetUniformLocation(shader_program_, "u_model");
     GLint loc_dirlight = glGetUniformLocation(shader_program_, "u_dirlight");
     GLint loc_ambient  = glGetUniformLocation(shader_program_, "u_ambient");
+
+    static bool logged_light_once = false;
+    if (!logged_light_once) {
+        Logger::Get().Log(LogLevel::INFO, "[Renderer] Lighting params: front=(" + std::to_string(sun_front_color_.r) + "," + std::to_string(sun_front_color_.g) + "," + std::to_string(sun_front_color_.b) + ") back=(" + std::to_string(sun_back_color_.r) + "," + std::to_string(sun_back_color_.g) + "," + std::to_string(sun_back_color_.b) + ") gamma=" + std::to_string(global_gamma_));
+        logged_light_once = true;
+    }
+
+    glUniform3f(loc_dirlight, sun_front_color_.x, sun_front_color_.y, sun_front_color_.z);
+    glUniform3f(loc_ambient,  global_ambient_.x,  global_ambient_.y,  global_ambient_.z);
+    // Use the level's actual sun direction so dynamic-lit (non-lightmapped) objects
+    // face the same light source as the game. Falls back to a sensible default if
+    // the level hasn't set a sun direction yet.
+    GLint loc_lightDir = glGetUniformLocation(shader_program_, "u_lightDir");
+    {
+        glm::vec3 sdir = (glm::length(sun_dir_) > 0.01f)
+            ? glm::normalize(sun_dir_) : glm::vec3(0.5f, 1.0f, 0.5f);
+        glUniform3f(loc_lightDir, sdir.x, sdir.y, sdir.z);
+    }
+    GLint loc_gamma = glGetUniformLocation(shader_program_, "u_gamma");
+    glUniform1f(loc_gamma, global_gamma_);
+    GLint loc_lightmap_scale = glGetUniformLocation(shader_program_, "u_lightmapScale");
     GLint loc_useTex   = glGetUniformLocation(shader_program_, "u_useTexture");
     GLint loc_tex      = glGetUniformLocation(shader_program_, "u_texture");
+    GLint loc_lightmap    = glGetUniformLocation(shader_program_, "u_lightmap");
+    GLint loc_useLightmap = glGetUniformLocation(shader_program_, "u_useLightmap");
     GLint loc_alpha    = glGetUniformLocation(shader_program_, "u_alpha");
     GLint loc_baseColor = glGetUniformLocation(shader_program_, "u_baseColor");
     GLint loc_tint     = glGetUniformLocation(shader_program_, "u_tint");
@@ -406,6 +616,8 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     glUniform1f(loc_glass_min_, 0.0f); // default: not glass
     glUniform4f(loc_baseColor, 1.0f, 1.0f, 1.0f, 1.0f); // default: white
     glUniform3f(loc_tint, 1.0f, 1.0f, 1.0f); // default: no tint
+
+    // Fog is terrain-only — objects/buildings are never fogged.
 
     EnsurePortalDistancesLoaded();
 
@@ -417,8 +629,20 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             glDepthMask(GL_TRUE);
         }
 
+        // Accumulate elapsed time for continuous animations (helicopter rotor spin).
+        {
+            extern float g_renderer_delta_secs;
+            elapsed_time_secs_ += g_renderer_delta_secs;
+            g_renderer_delta_secs = 0.0f;  // consume once per frame
+        }
+
         for (const auto& obj : objects) {
             if (obj.deleted) continue;
+
+            // This object's rigid mesh is being replaced by a live skinned/animated
+            // draw elsewhere this frame (see Renderer::DrawSkinnedMesh) — skip it
+            // here so the two don't render on top of each other.
+            if (skip_static_draw_indices && skip_static_draw_indices->count((int)(&obj - &objects[0]))) continue;
 
             // Reset tint to white at the start of EVERY iteration so a magenta tint
             // set for a previous object can never leak into this one, regardless of
@@ -485,6 +709,13 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             model = glm::rotate(model, (float)obj.rot.z, glm::vec3(0.0f, 0.0f, 1.0f)); // Yaw
             model = glm::rotate(model, (float)obj.rot.x, glm::vec3(1.0f, 0.0f, 0.0f)); // Pitch
             model = glm::rotate(model, (float)obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f)); // Roll
+        }
+
+        // RotatingObject preview: radar dishes etc. spin continuously in-game via
+        // runtime; we preview the same motion in-editor by adding a live yaw spin
+        // on top of the placed orientation (mirrors the Heli rotor preview above).
+        if (obj.type == "RotatingObject") {
+            model = glm::rotate(model, elapsed_time_secs_ * 1.0f, glm::vec3(0.0f, 0.0f, 1.0f));
         }
 
         // Weapon/ammo pickups are authored with barrel along model +Y (standing upright).
@@ -602,7 +833,67 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                     }
                 }
                 bool mixedMesh = hasTextured && hasUntextured;
-                for (const auto& sub : mesh.subMeshes) {
+                // taskId="-1" marks a nested/non-addressable task (DirlightKeyframe,
+                // LightmapInfo, ATTA proxies, etc. all use this literal string) — it is
+                // NOT unique, so looking it up here would apply whichever unrelated
+                // object's lightmap/indoor-ambient happened to be registered under "-1"
+                // to every other "-1" object too (e.g. unrelated crates turning the same
+                // flat blue as some other building's interior ambient).
+                // Lightmaps are keyed by LightmapTaskKey (task id, or authored position
+                // for non-unique "-1" tasks) — the same key the apply path stores under.
+                // Display is NOT gated on the global "Lightmaps" checkbox: any baked
+                // lightmap present is shown (so the per-object Calculate button works
+                // even with the checkbox off). The checkbox governs bulk calculate (ON)
+                // and bulk clear (OFF). A baked lightmap stays bound even after the
+                // object is moved/rotated — never deleted — and is modulated LIVE per
+                // submesh by u_lightmapScale (below), so lighting adjusts smoothly as you
+                // drag an object, with no "stale" fallback and no subprocess.
+                const std::string lmKey = LightmapTaskKey(obj);
+                const std::vector<GLuint>* lightmaps = GetLightmapForTask(lmKey);
+                bool hasWorkingLightmap = lightmaps && !lightmaps->empty();
+                glm::dvec3 bakedPos, bakedRot;
+                const bool haveBakePose = hasWorkingLightmap &&
+                    GetLightmapBakePose(lmKey, bakedPos, bakedRot);
+
+                // Default lighting matches the pre-lightmap look:
+                // Exterior — neutral ambient (0.4) + full sun diffuse from QSC sun color.
+                // Interior — no direct sun, dim ambient only (clearly darker than outside).
+                glm::vec3 kDefDirlight = sun_front_color_;
+                // Warm floor matching the game's feel — no harsh flat daylight
+                // Match the pre-lightmap default: every face was at least 40% ambient.
+                // That commit hardcoded ambient=0.4/dirlight=0.6 so nothing looked dark.
+                glm::vec3 kDefAmbient  = glm::max(global_ambient_, glm::vec3(0.40f, 0.40f, 0.40f));
+                {
+                    const glm::vec3* indoorAmb = GetIndoorAmbientForTask(obj.taskId);
+                    if (indoorAmb && !hasWorkingLightmap) {
+                        kDefDirlight = glm::vec3(0.0f);
+                        // Interior: use authored ambient, clamped well below exterior floor.
+                        kDefAmbient = glm::clamp(*indoorAmb, glm::vec3(0.22f), glm::vec3(0.40f, 0.40f, 0.40f));
+                    }
+                }
+
+                // Precompute the per-channel modulation lambda for lightmapped submeshes.
+                auto blockScale = [&](const glm::vec3& nLocal) -> glm::vec3 {
+                    if (!haveBakePose) return glm::vec3(1.0f);
+                    auto eul = [](const glm::dvec3& e) {
+                        glm::mat4 m(1.0f);
+                        m = glm::rotate(m, (float)e.z, glm::vec3(0,0,1));
+                        m = glm::rotate(m, (float)e.x, glm::vec3(1,0,0));
+                        m = glm::rotate(m, (float)e.y, glm::vec3(0,1,0));
+                        return glm::mat3(m);
+                    };
+                    glm::vec3 nO = glm::normalize(eul(bakedRot) * nLocal);
+                    glm::vec3 nN = glm::normalize(eul(obj.rot)  * nLocal);
+                    glm::vec3 sd = glm::length(sun_dir_) > 1e-6f ? glm::normalize(sun_dir_) : glm::vec3(0,0,1);
+                    auto L = [&](const glm::vec3& n){ return global_ambient_ + sun_front_color_ * std::max(glm::dot(n, sd), 0.0f); };
+                    glm::vec3 lo = L(nO), ln = L(nN);
+                    const float eps = 1e-3f, maxF = 4.0f;
+                    return glm::vec3(std::min(ln.x/std::max(lo.x,eps),maxF),
+                                     std::min(ln.y/std::max(lo.y,eps),maxF),
+                                     std::min(ln.z/std::max(lo.z,eps),maxF));
+                };
+                for (size_t si = 0; si < mesh.subMeshes.size(); ++si) {
+                    const auto& sub = mesh.subMeshes[si];
                     if (sub.VAO == 0 || sub.vertexCount == 0) continue;
                     (void)mixedMesh; // render all submeshes — floors/stories must not be skipped
 
@@ -641,25 +932,46 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                         // Textured submesh: neutral lighting so the texture looks natural.
                         // Windows/glass keep their transparency (alpha 0.4 above) but render
                         // with the SAME normal lighting as everything else, so glass stays
-                        // clear and see-through. The earlier flat-gray override (dirlight 0 /
-                        // ambient 0.45) darkened panes into murky panels — reverted to the
-                        // pre-3986cd9 "before" look the user asked to restore.
-                        glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                        glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+                        // clear and see-through.
+                        auto mode = igi::ObjectLightmapManager::Get().GetRenderMode();
+                        float dirI = (mode == igi::LightmapRenderMode::Baked) ? 0.15f : (mode == igi::LightmapRenderMode::Hybrid ? 0.6f : 0.8f);
+                        float ambI = (mode == igi::LightmapRenderMode::Baked) ? 0.85f : (mode == igi::LightmapRenderMode::Hybrid ? 0.4f : 0.3f);
+                        if (mode == igi::LightmapRenderMode::Off) { dirI = 0.6f; ambI = 0.6f; }
+
+                        glUniform3f(loc_dirlight, dirI, dirI, dirI);
+                        glUniform3f(loc_ambient,  ambI, ambI, ambI);
                         glUniform1i(loc_useTex, 1);
                         glActiveTexture(GL_TEXTURE0);
                         glBindTexture(GL_TEXTURE_2D, sub.textureID);
                         glUniform1i(loc_tex, 0);
                     } else {
-                        // Untextured submesh: use material baseColorFactor if available,
-                        // otherwise fall back to the hash-based color.
+                        // Untextured submesh: material baseColorFactor if set, else neutral
+                        // GRAY (not the per-object hash color, which tinted buildings blue).
                         glm::vec3 color(sub.baseColorFactor.r, sub.baseColorFactor.g, sub.baseColorFactor.b);
                         if (color.r >= 0.99f && color.g >= 0.99f && color.b >= 0.99f) {
-                            color = glm::vec3(r, g, b);
+                            color = glm::vec3(0.6f, 0.6f, 0.6f);
                         }
-                        glUniform3f(loc_dirlight, color.r * 0.6f, color.g * 0.6f, color.b * 0.6f);
-                        glUniform3f(loc_ambient,  color.r * 0.4f, color.g * 0.4f, color.b * 0.4f);
+                        auto mode = igi::ObjectLightmapManager::Get().GetRenderMode();
+                        float dirMult = (mode == igi::LightmapRenderMode::Baked) ? 0.15f : (mode == igi::LightmapRenderMode::Hybrid ? 0.6f : 0.8f);
+                        float ambMult = (mode == igi::LightmapRenderMode::Baked) ? 0.85f : (mode == igi::LightmapRenderMode::Hybrid ? 0.4f : 0.3f);
+                        if (mode == igi::LightmapRenderMode::Off) { dirMult = 0.6f; ambMult = 0.6f; }
+
+                        glUniform3f(loc_dirlight, color.r * dirMult, color.g * dirMult, color.b * dirMult);
+                        glUniform3f(loc_ambient,  color.r * ambMult, color.g * ambMult, color.b * ambMult);
                         glUniform1i(loc_useTex, 0);
+                    }
+
+                    // Lightmap: bind unit 1 if this submesh has a baked lightmap and mode is not Off.
+                    auto curMode = igi::ObjectLightmapManager::Get().GetRenderMode();
+                    if (curMode != igi::LightmapRenderMode::Off && hasWorkingLightmap && si < lightmaps->size() && (*lightmaps)[si] != 0) {
+                        glm::vec3 scale = blockScale(sub.avgNormal);
+                        glActiveTexture(GL_TEXTURE1);
+                        glBindTexture(GL_TEXTURE_2D, (*lightmaps)[si]);
+                        glUniform1i(loc_lightmap, 1);
+                        glUniform1i(loc_useLightmap, 1);
+                        glUniform3f(loc_lightmap_scale, scale.r, scale.g, scale.b);
+                    } else {
+                        glUniform1i(loc_useLightmap, 0);
                     }
 
                     glBindVertexArray(sub.VAO);
@@ -673,13 +985,17 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 glBindVertexArray(0);
             } else {
                 // Legacy single-texture path (e.g. old OBJ models)
+                auto mode = igi::ObjectLightmapManager::Get().GetRenderMode();
+                float dirI = (mode == igi::LightmapRenderMode::Baked) ? 0.15f : (mode == igi::LightmapRenderMode::Hybrid ? 0.6f : 0.8f);
+                float ambI = (mode == igi::LightmapRenderMode::Baked) ? 0.85f : (mode == igi::LightmapRenderMode::Hybrid ? 0.4f : 0.3f);
+
                 bool hasTexture = (mesh.textureID > 0);
                 if (hasTexture) {
-                    glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                    glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+                    glUniform3f(loc_dirlight, dirI, dirI, dirI);
+                    glUniform3f(loc_ambient,  ambI, ambI, ambI);
                 } else {
-                    glUniform3f(loc_dirlight, 0.7f, 0.7f, 0.7f);
-                    glUniform3f(loc_ambient,  r * 0.4f, g * 0.4f, b * 0.4f);
+                    glUniform3f(loc_dirlight, dirI, dirI, dirI);
+                    glUniform3f(loc_ambient,  r * ambI, g * ambI, b * ambI);
                 }
                 if (mesh.textureID > 0) {
                     glUniform1i(loc_useTex, 1);
@@ -733,6 +1049,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 rootWorldMat = glm::translate(rootWorldMat, glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z));
                 rootWorldMat = rootWorldMat * parentRot;
 
+                current_draw_obj_type_ = obj.type;  // tells DrawAttachmentsRecursive if parent is Heli (rotor spin)
                 std::unordered_set<std::string> drawn;
                 DrawAttachmentsRecursive(obj.modelId, obj.modelId, obj.isBuilding, rootWorldMat, isTransparentPass,
                                           loc_model, loc_dirlight, loc_ambient,

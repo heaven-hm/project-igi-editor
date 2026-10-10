@@ -6,6 +6,11 @@ project (igi_editor
   VERSION 3.0
   LANGUAGES C CXX)
 
+if (NOT WIN32)
+  message(FATAL_ERROR
+    "igi-editor gameplay mode is supported on Windows only; configure with a Windows toolchain.")
+endif()
+
 # Designated initializers, introduced in C++20
 set(CMAKE_CXX_STANDARD 20)
 
@@ -39,8 +44,8 @@ endif()
 
 file(GLOB SOURCES "source/*.h" "source/*.cpp")
 file(GLOB SOURCES_LEVEL "source/level/*.*")
+file(GLOB SOURCES_RUNTIME "source/runtime/*.*")
 file(GLOB SOURCES_RENDERER "source/renderer/*.*")
-file(GLOB SOURCES_PARSERS "source/parsers/*.*")
 file(GLOB SOURCES_CLI "source/cli/*.*")
 file(GLOB SHADERS_41 "shaders/41/*.*")
 file(GLOB SHADERS_45 "shaders/45/*.*")
@@ -51,13 +56,13 @@ if (WIN32)
 endif()
 
 source_group("level" FILES ${SOURCES_LEVEL})
+source_group("runtime" FILES ${SOURCES_RUNTIME})
 source_group("renderer" FILES ${SOURCES_RENDERER})
-source_group("parsers" FILES ${SOURCES_PARSERS})
 source_group("cli" FILES ${SOURCES_CLI})
 source_group("shaders/41" FILES ${SHADERS_41})
 source_group("shaders/45" FILES ${SHADERS_45})
 
-add_executable(igi-editor ${SOURCES} ${SOURCES_LEVEL} ${SOURCES_RENDERER} ${SOURCES_PARSERS} ${SOURCES_CLI} ${SHADERS_41} ${SHADERS_45})
+add_executable(igi-editor ${SOURCES} ${SOURCES_LEVEL} ${SOURCES_RUNTIME} ${SOURCES_RENDERER} ${SOURCES_CLI} ${SHADERS_41} ${SHADERS_45})
 
 if (WIN32)
   set_target_properties(igi-editor PROPERTIES
@@ -91,40 +96,45 @@ set_source_files_properties(
   source/renderer/renderer_objects_picking.cpp
   source/renderer/renderer_objects_texture.cpp
   source/renderer/renderer_objects_visual.cpp
+  source/renderer/renderer_rain.cpp
   source/renderer/renderer_skydome.cpp
   source/renderer/renderer_splines.cpp
   source/renderer/renderer_terrain.cpp
   source/renderer/wic_loader.cpp
-  source/parsers/qvm_parser.cpp
-  source/parsers/res_parser.cpp
+  source/level/qvm_parser.cpp
+  source/renderer/res_writer.cpp
   source/level/res_model_set.cpp
-  source/parsers/res_compiler.cpp
-  source/parsers/dat_parser.cpp
-  source/parsers/mtp_parser.cpp
-  source/parsers/mtp_tool.cpp
-  source/parsers/tex_parser.cpp
-  source/parsers/graph_parser.cpp
+  source/renderer/res_compiler.cpp
+  source/renderer/dat_writer.cpp
+  source/level/mtp_writer.cpp
+  source/renderer/tex_writer.cpp
+  source/renderer/graph_writer.cpp
   source/cli/asset_extractor.cpp
   source/level/terrain.cpp
   source/level/terrain_io.cpp
   source/level/terrain_lod.cpp
   source/level/terrain_mesh.cpp
   source/level/terrain_query.cpp
-  source/parsers/qvm_decompiler.cpp
-  source/parsers/qsc_lexer.cpp
-  source/parsers/qsc_parser.cpp
-  source/parsers/qvm_compiler.cpp
+  source/level/qvm_decompiler.cpp
+  source/level/qsc_lexer.cpp
+  source/level/qsc_parser.cpp
+  source/level/qvm_compiler.cpp
   source/cli/cli_handler.cpp
   source/cli/cli_tests.cpp
   source/cli/verify_level.cpp
+  source/utils_igi1conv.cpp
+  source/runtime/config_qvm.cpp
+  source/runtime/human_player_config.cpp
+  source/runtime/audio_system.cpp
+  source/runtime/audio_asset_resolver.cpp
+  source/renderer/object_lightmap.cpp
   PROPERTIES SKIP_PRECOMPILE_HEADERS ON
 )
 
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party/glm-1.0.1)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party/GL/include)
-target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/source)
-target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/source/parsers)
+target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/source/runtime)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/source/cli)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party/tinygltf)
 
@@ -139,7 +149,7 @@ if (WIN32)
   message("Selected GL library path: ${GL_LIB_DIR}")
 
   target_link_directories(igi-editor PRIVATE ${GL_LIB_DIR})
-  target_link_libraries(igi-editor PRIVATE freeglut glew32 OpenGL32)
+  target_link_libraries(igi-editor PRIVATE freeglut glew32 OpenGL32 winmm)
 
   # Increase PCH memory limit to fix compiler heap errors
   if (MSVC)
@@ -222,10 +232,25 @@ FetchContent_Declare(
 # CRT), causing __imp__calloc_dbg / _CrtDbgReport link errors when mixing
 # gtest.lib with DLL-CRT object files.
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+set(FETCHCONTENT_FULLY_DISCONNECTED ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 enable_testing()
 
 add_executable(igi_tests
+    tests/test_mcp_json.cpp
+    tests/test_mcp_json_rpc.cpp
+    tests/test_mcp_paths.cpp
+    tests/test_mcp_transaction.cpp
+    tests/test_mcp_game_snapshot.cpp
+    tests/test_mcp_session_tools.cpp
+    tests/test_mcp_server.cpp
+    tests/test_mcp_domain_tools.cpp
+    tests/test_mcp_player_tools.cpp
+    tests/test_mcp_runtime_tools.cpp
+    tests/test_mcp_audio_tools.cpp
+    tests/test_mcp_string_tools.cpp
+    tests/test_mcp_cutscene_tools.cpp
+    tests/test_mcp_http.cpp
     tests/test_qsc_lexer.cpp
     tests/test_qsc_parser.cpp
     tests/test_qvm_roundtrip.cpp
@@ -236,6 +261,7 @@ add_executable(igi_tests
     tests/test_dat_parser.cpp
     tests/test_dat_writer.cpp
     tests/test_graph_parser.cpp
+    tests/test_graph_overlay.cpp
     tests/test_res_parser.cpp
     tests/test_tex_parser.cpp
     tests/test_mtp_parser.cpp
@@ -243,7 +269,16 @@ add_executable(igi_tests
     tests/test_fnt_parser.cpp
     tests/test_pickup_resolve.cpp
     tests/test_res_model_set.cpp
-    tests/test_res_stream_append.cpp
+    tests/test_mef_native_lightmap.cpp
+    tests/test_igi1conv_lightmap.cpp
+    tests/test_debug_command_parser.cpp
+    tests/test_runtime_subsystems.cpp
+    tests/test_ai_patrol_port.cpp
+    tests/test_audio_asset_resolver.cpp
+    tests/test_vanilla_fixture_parity.cpp
+    tests/test_mission_objectives.cpp
+    tests/test_mission_expression.cpp
+    tests/test_mission_state.cpp
 )
 
 # Explicit runtime so igi_tests always matches igi-editor (/MDd Debug, /MD Release).
@@ -254,19 +289,48 @@ if (MSVC)
 endif()
 
 target_include_directories(igi_tests PRIVATE source)
-target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/source/parsers)
+target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/source/runtime)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/source/cli)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/glm-1.0.1)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/GL/include)
-target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
-target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/tinygltf)
-target_link_libraries(igi_tests PRIVATE gtest_main)
+# gameplay_window.cpp uses FreeGLUT directly, so the test target needs the same
+# GL library path and libs as the editor target.
+if (WIN32)
+  if (CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(TESTS_GL_LIB_DIR "${PROJECT_SOURCE_DIR}/third_party/GL/lib/x64")
+  else()
+    set(TESTS_GL_LIB_DIR "${PROJECT_SOURCE_DIR}/third_party/GL/lib/x86")
+  endif()
+  target_link_directories(igi_tests PRIVATE ${TESTS_GL_LIB_DIR})
+  target_link_libraries(igi_tests PRIVATE gtest_main winmm ws2_32 bcrypt freeglut glew32 OpenGL32 gdiplus psapi wbemuuid ole32)
+else()
+  target_link_libraries(igi_tests PRIVATE gtest_main winmm)
+endif()
 target_sources(igi_tests PRIVATE
-    source/parsers/qsc_lexer.cpp
-    source/parsers/qsc_parser.cpp
-    source/parsers/qvm_parser.cpp
-    source/parsers/qvm_compiler.cpp
-    source/parsers/qvm_decompiler.cpp
+    source/mcp/mcp_json.cpp
+    source/mcp/mcp_json_rpc.cpp
+    source/mcp/game_data_service.cpp
+    source/mcp/mcp_transaction.cpp
+    source/mcp/mcp_tools_session.cpp
+    source/mcp/mcp_server.cpp
+    source/mcp/mcp_transport_stdio.cpp
+    source/mcp/mcp_transport_http.cpp
+    source/mcp/mcp_tools_objects.cpp
+    source/mcp/mcp_tools_ai.cpp
+    source/mcp/mcp_tools_player.cpp
+    source/mcp/mcp_tools_runtime.cpp
+    source/mcp/mcp_tools_audio.cpp
+    source/mcp/mcp_tools_strings.cpp
+    source/mcp/mcp_tools_cutscene.cpp
+    source/mcp/mcp_tools_mission.cpp
+    source/mcp/mcp_tools_graph.cpp
+    source/mcp/mcp_tools_assets.cpp
+    source/level/qsc_lexer.cpp
+    source/level/qsc_parser.cpp
+    source/level/qvm_parser.cpp
+    source/level/qvm_ai_bindings.cpp
+    source/level/qvm_compiler.cpp
+    source/level/qvm_decompiler.cpp
     source/config.cpp
     source/utils.cpp
     source/common.cpp
@@ -275,14 +339,67 @@ target_sources(igi_tests PRIVATE
     source/level/level_objects.cpp
     source/level/level_objects_serialize.cpp
     source/cli/verify_level_core.cpp
-    source/parsers/dat_parser.cpp
-    source/parsers/graph_parser.cpp
-    source/parsers/res_parser.cpp
-    source/parsers/res_compiler.cpp
+    source/renderer/dat_writer.cpp
+    source/renderer/graph_writer.cpp
+    source/renderer/graph_project.cpp
+    source/renderer/res_writer.cpp
+    source/renderer/res_compiler.cpp
     source/level/res_model_set.cpp
-    source/parsers/tex_parser.cpp
-    source/parsers/mtp_parser.cpp
-    source/parsers/fnt_parser.cpp
+    source/renderer/tex_writer.cpp
+    source/level/mtp_writer.cpp
+    source/renderer/fnt_parser.cpp
+    source/level/terrain_files.cpp
+    source/renderer/mef_native.cpp
+    source/utils_igi1conv.cpp
+    source/game_clock.cpp
+    source/level/qvm_native_registry.cpp
+    source/level/qvm_interpreter.cpp
+    source/level/task_tree.cpp
+    source/player_collision.cpp
+    source/player_fall_impact.cpp
+    source/player_motion.cpp
+    source/player_ladder.cpp
+    source/player_separation.cpp
+    source/animation_motion.cpp
+    source/player_animation_driver.cpp
+    source/weapon_view_sway.cpp
+    source/weapon_view_recoil.cpp
+    source/player_controller.cpp
+    source/weapon_system.cpp
+    source/ai_events.cpp
+    source/ai_script_host.cpp
+    source/ai_system.cpp
+    source/level_flow.cpp
+    source/mission_objective_loader.cpp
+    source/mission_flow_loader.cpp
+    source/mission_state_loader.cpp
+    source/mission_expression.cpp
+    source/runtime/runtime_world.cpp
+    source/runtime/runtime_session.cpp
+    source/runtime/gameplay_window.cpp
+    source/runtime/editor_snapshot.cpp
+    source/runtime/window_input_router.cpp
+    source/runtime/simulation_scheduler.cpp
+    source/runtime/gameplay_host.cpp
+    source/runtime/gameplay_spawn.cpp
+    source/runtime/runtime_renderer.cpp
+    source/runtime/projectile_system.cpp
+    source/runtime/door_state.cpp
+    source/runtime/audio_system.cpp
+    source/runtime/audio_asset_resolver.cpp
+    source/runtime/config_qvm.cpp
+    source/runtime/human_player_config.cpp
+    source/runtime/magic_object_registry.cpp
+    source/runtime/map_computer_camera.cpp
+    source/runtime/map_computer_projection.cpp
+)
+
+set_source_files_properties(
+    source/runtime/audio_system.cpp
+    source/runtime/audio_asset_resolver.cpp
+    source/runtime/config_qvm.cpp
+    source/runtime/human_player_config.cpp
+    PROPERTIES SKIP_PRECOMPILE_HEADERS ON
 )
 
 # level_objects.cpp (and its pch.h header graph: app.h, renderer, level.h) relies
@@ -293,6 +410,44 @@ target_precompile_headers(igi_tests PRIVATE source/pch.h)
 include(GoogleTest)
 gtest_discover_tests(igi_tests WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
+add_executable(igi_mcp
+    source/mcp/mcp_main.cpp
+    source/mcp/mcp_server.cpp
+    source/mcp/mcp_transport_stdio.cpp
+    source/mcp/mcp_transport_http.cpp
+    source/mcp/mcp_json.cpp
+    source/mcp/mcp_json_rpc.cpp
+    source/mcp/game_data_service.cpp
+    source/mcp/mcp_transaction.cpp
+    source/mcp/mcp_tools_session.cpp
+    source/mcp/mcp_tools_objects.cpp
+    source/mcp/mcp_tools_ai.cpp
+    source/mcp/mcp_tools_player.cpp
+    source/mcp/mcp_tools_runtime.cpp
+    source/mcp/mcp_tools_audio.cpp
+    source/mcp/mcp_tools_strings.cpp
+    source/mcp/mcp_tools_cutscene.cpp
+    source/mcp/mcp_tools_mission.cpp
+    source/mcp/mcp_tools_graph.cpp
+    source/mcp/mcp_tools_assets.cpp
+    source/mcp/mcp_logger_stub.cpp
+    source/level/qsc_lexer.cpp
+    source/level/qsc_parser.cpp
+    source/level/qvm_parser.cpp
+    source/level/qvm_compiler.cpp
+    source/level/qvm_decompiler.cpp
+    source/level/task_schema.cpp
+    source/renderer/res_writer.cpp
+)
+target_include_directories(igi_mcp PRIVATE source)
+if (WIN32)
+    target_link_libraries(igi_mcp PRIVATE ws2_32 bcrypt gdiplus psapi wbemuuid ole32)
+    set_target_properties(igi_mcp PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG "${PROJECT_SOURCE_DIR}/bin/Debug"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${PROJECT_SOURCE_DIR}/bin/Release"
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
+
 # Copy test fixtures next to igi_tests.exe so tests work from any directory
 add_custom_command(TARGET igi_tests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -300,4 +455,3 @@ add_custom_command(TARGET igi_tests POST_BUILD
         "$<TARGET_FILE_DIR:igi_tests>/fixtures"
     COMMENT "Copying test fixtures to output directory"
 )
-

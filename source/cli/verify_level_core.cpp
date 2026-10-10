@@ -1,7 +1,7 @@
 #include "verify_level_core.h"
 #include "level/task_schema.h"
-#include "parsers/qvm_parser.h"
-#include "parsers/qvm_decompiler.h"
+#include "level/qvm_parser.h"
+#include "level/qvm_decompiler.h"
 
 #include <fstream>
 #include <sstream>

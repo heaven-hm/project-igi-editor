@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 #include "level/res_model_set.h"
-#include "parsers/res_parser.h"
+#include "../source/renderer/res_writer.h"
 
 static RESFile MakeRes(std::initializer_list<std::string> names) {
     RESFile r; r.valid = true;

@@ -51,13 +51,19 @@ void Logger::Log(LogLevel level, const std::string& message) {
         }
 
         if (file_.is_open()) {
-            file_ << fullMessage << std::endl;
+            // Buffered write with periodic flush: an endl-flush per line made
+            // every log call a synchronous disk stall and stuttered frames.
+            file_ << fullMessage << '\n';
+            static constexpr int kFlushEveryLines = 64;
+            if (++unflushed_lines_ >= kFlushEveryLines ||
+                level >= LogLevel::ERR) {
+                file_.flush();
+                unflushed_lines_ = 0;
+            }
         }
     }
 
     if (level == LogLevel::ERR || level == LogLevel::FATAL) {
         std::cerr << fullMessage << std::endl;
-    } else {
-        std::cout << fullMessage << std::endl;
     }
 }

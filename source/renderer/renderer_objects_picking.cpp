@@ -50,7 +50,8 @@ void Renderer_Objects::DrawAttachmentsForPicking(
     const std::string& parentModelId, bool isBuilding,
     const glm::mat4& parentWorldMat, float parentScale,
     GLint loc_model, GLint loc_id, int parentObjIndex,
-    std::unordered_set<std::string>& drawn)
+    std::unordered_set<std::string>& drawn,
+    int selected_object_index)
 {
     const std::string prefix = isBuilding ? "building:" : "object:";
     const std::string attKey = std::to_string(current_level_) + ":" + prefix + parentModelId;
@@ -110,6 +111,7 @@ void Renderer_Objects::DrawAttachmentsForPicking(
 
             glm::mat4 leafModel = glm::scale(childWorldMat, glm::vec3(40.96f * parentScale));
             glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(leafModel));
+            
             glUniform1i(loc_id, kAttaPickBase + 1 + entry);
 
             if (!subMesh.subMeshes.empty()) {
@@ -126,7 +128,7 @@ void Renderer_Objects::DrawAttachmentsForPicking(
 
         if (recurse) {
             DrawAttachmentsForPicking(att.modelId, isBuilding, childWorldMat, parentScale,
-                                      loc_model, loc_id, parentObjIndex, drawn);
+                                      loc_model, loc_id, parentObjIndex, drawn, selected_object_index);
         }
     }
 }
@@ -135,7 +137,8 @@ void Renderer_Objects::DrawAttachmentsForPicking(
 void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
                                       const std::vector<LevelObject>& objects,
                                       int draw_parts,
-                                      const glm::vec3& camera_pos)
+                                      const glm::vec3& camera_pos,
+                                      int selected_object_index)
 {
     if (!pick_shader_prog_) return;
 
@@ -251,7 +254,7 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
             parentWorldMat = glm::rotate(parentWorldMat, (float)obj.rot.y, glm::vec3(0.f, 1.f, 0.f));
             std::unordered_set<std::string> drawn;
             DrawAttachmentsForPicking(obj.modelId, obj.isBuilding, parentWorldMat, obj.scale,
-                                      loc_model, loc_id, i, drawn);
+                                      loc_model, loc_id, i, drawn, selected_object_index);
             glUseProgram(pick_shader_prog_);
             glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
         }
@@ -271,7 +274,8 @@ int Renderer_Objects::PickObjectAtScreen(int x, int y, int w, int h,
                                           GLuint ubo_mats,
                                           const std::vector<LevelObject>& objects,
                                           int draw_parts,
-                                          const glm::vec3& camera_pos)
+                                          const glm::vec3& camera_pos,
+                                          int selected_object_index)
 {
     if (!pick_shader_prog_ || w <= 0 || h <= 0) return -1;
 
@@ -281,7 +285,7 @@ int Renderer_Objects::PickObjectAtScreen(int x, int y, int w, int h,
     }
     if (!pick_fbo_) return -1;
 
-    DrawForPicking(ubo_mats, objects, draw_parts, camera_pos);
+    DrawForPicking(ubo_mats, objects, draw_parts, camera_pos, selected_object_index);
 
     // Read back the single pixel under the cursor.
     // OpenGL origin is bottom-left; screen coords are top-left → flip Y.

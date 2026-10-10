@@ -45,12 +45,20 @@ public:
 	void					TeleportToHMP(glm::vec3& pos) const;
 	void					CompileCurrentQSC(int level_no);
 
+	// Terrain height-map snapshot/restore for undo/redo. Returns an empty
+	// vector when the level has no .hmp file (no terrain edits to undo).
+	std::vector<uint8_t>	SnapshotTerrainHMP() const { return terrain_.SnapshotHMP(); }
+	void					RestoreTerrainHMP(const std::vector<uint8_t>& snap) { terrain_.RestoreHMP(snap); }
+
 	const LevelObjects&		GetLevelObjects() const { return level_objects_; }
 	LevelObjects&			GetLevelObjects() { return level_objects_; }
 
-
+	const glm::vec3&		GetStartPos() const { return start_pos_; }
+	float					GetStartYaw() const { return start_yaw_; }
 
 private:
+	glm::vec3				start_pos_ = glm::vec3(0.0f);
+	float					start_yaw_ = 0.0f;
 
 	int						cur_level_no_;
 	std::string				qsc_path_;

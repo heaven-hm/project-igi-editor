@@ -4,6 +4,144 @@
  *          font/text helpers + cursor unproject. Split from renderer.cpp.
  *****************************************************************************/
 #include "renderer_internal.h"
+#include "graph_overlay.h"
+#include "object_lightmap.h"
+#include "tex_writer.h"
+#include "../runtime/map_computer_projection.h"
+#include "../utils.h"
+#include <vector>
+#include <unordered_map>
+#include <limits>
+#include <cctype>
+
+struct HudSprite {
+  std::vector<GLuint> tex_ids;   // one texture per sprite frame (frame 0 for single-frame sprites)
+  int width = 0;
+  int height = 0;
+  int frame_count = 0;
+  bool valid = false;
+};
+
+static std::unordered_map<std::string, HudSprite> g_hudSprites;
+
+static HudSprite GetOrLoadHudSprite(const std::string& spr_name) {
+  auto it = g_hudSprites.find(spr_name);
+  if (it != g_hudSprites.end()) return it->second;
+
+  std::vector<std::string> paths = {
+    Utils::GetIGIRootPath() + "\\screens\\game\\status\\STATUS_unpacked\\" + spr_name,
+    "screens\\game\\status\\STATUS_unpacked\\" + spr_name,
+    Utils::GetExeDirectory() + "\\screens\\game\\status\\STATUS_unpacked\\" + spr_name,
+    "D:\\IGI1\\screens\\game\\status\\STATUS_unpacked\\" + spr_name
+  };
+
+  HudSprite res;
+  for (const auto& p : paths) {
+    if (File_Exists(p.c_str())) {
+      TEXFile tex = TEX_Parse(p);
+      if (tex.valid && !tex.images.empty()) {
+        res.width       = (int)tex.images[0].width;
+        res.height      = (int)tex.images[0].height;
+        res.frame_count = (int)tex.images.size();
+        for (size_t f = 0; f < tex.images.size(); ++f) {
+          const TEXImage& img = tex.images[f];
+          std::vector<uint8_t> rgba;
+          if (img.mode == 2) {
+            rgba.reserve(img.width * img.height * 4);
+            for (size_t i = 0; i + 1 < img.pixels.size(); i += 2) {
+              uint16_t p16 = img.pixels[i] | ((uint16_t)img.pixels[i + 1] << 8);
+              uint8_t r = ((p16 >> 11) & 0x1F) << 3;
+              uint8_t g = ((p16 >> 5)  & 0x3F) << 2;
+              uint8_t b =  (p16        & 0x1F) << 3;
+              uint8_t a = (r < 25 && g < 25 && b < 25) ? 0 : 255;
+              rgba.push_back(r); rgba.push_back(g); rgba.push_back(b); rgba.push_back(a);
+            }
+          } else {
+            rgba.resize(img.pixels.size());
+            for (size_t i = 0; i + 3 < img.pixels.size(); i += 4) {
+              rgba[i + 0] = img.pixels[i + 2]; // R <- B
+              rgba[i + 1] = img.pixels[i + 1]; // G
+              rgba[i + 2] = img.pixels[i + 0]; // B <- R
+              rgba[i + 3] = img.pixels[i + 3]; // A
+            }
+          }
+          pic_s pic;
+          pic.width_  = (int)img.width;
+          pic.height_ = (int)img.height;
+          pic.pixels_ = rgba.data();
+          GLuint t = GL_RegisterTexture(&pic, GL_CLAMP_TO_EDGE, GL_LINEAR, GL_LINEAR, false);
+          if (t) res.tex_ids.push_back(t);
+        }
+        res.valid = !res.tex_ids.empty();
+        break;
+      }
+    }
+  }
+  g_hudSprites[spr_name] = res;
+  return res;
+}
+
+// Draw a whole selected frame of a HUD sprite. x,y = bottom-left corner in the
+// ortho space (y=0 bottom), matching the existing crosshair/powerbar quads.
+static void DrawHudFrame(const HudSprite& s, int frame, int x, int y, float r, float g, float b, float a) {
+  if (!s.valid || s.tex_ids.empty()) return;
+  if (frame < 0) frame = 0;
+  if (frame >= (int)s.tex_ids.size()) frame = (int)s.tex_ids.size() - 1;
+  glEnable(GL_TEXTURE_2D);
+  glBindTexture(GL_TEXTURE_2D, s.tex_ids[frame]);
+  glColor4f(r, g, b, a);
+  glBegin(GL_QUADS);
+  glTexCoord2f(0.0f, 1.0f); glVertex2i(x, y);
+  glTexCoord2f(1.0f, 1.0f); glVertex2i(x + s.width, y);
+  glTexCoord2f(1.0f, 0.0f); glVertex2i(x + s.width, y + s.height);
+  glTexCoord2f(0.0f, 0.0f); glVertex2i(x, y + s.height);
+  glEnd();
+  glBindTexture(GL_TEXTURE_2D, 0);
+  glDisable(GL_TEXTURE_2D);
+}
+
+// Draw the bottom-filled portion of the powerbar frame 0. x,y = bottom-left
+// corner; the top `1 - frac` of the sprite is cropped so it fills bottom-up.
+static void DrawHudBarFill(const HudSprite& s, int x, int y, float frac, float r, float g, float b, float a) {
+  if (!s.valid || s.tex_ids.empty()) return;
+  frac = std::clamp(frac, 0.0f, 1.0f);
+  int fill_h = (int)(s.height * frac);
+  if (fill_h <= 0) return;
+  glEnable(GL_TEXTURE_2D);
+  glBindTexture(GL_TEXTURE_2D, s.tex_ids[0]);
+  glColor4f(r, g, b, a);
+  glBegin(GL_QUADS);
+  glTexCoord2f(0.0f, 1.0f);           glVertex2i(x, y);
+  glTexCoord2f(1.0f, 1.0f);           glVertex2i(x + s.width, y);
+  glTexCoord2f(1.0f, 1.0f - frac);    glVertex2i(x + s.width, y + fill_h);
+  glTexCoord2f(0.0f, 1.0f - frac);    glVertex2i(x, y + fill_h);
+  glEnd();
+  glBindTexture(GL_TEXTURE_2D, 0);
+  glDisable(GL_TEXTURE_2D);
+}
+
+static std::string GetWeaponSpriteName(const std::string& weapon_name) {
+  std::string lower;
+  for (char c : weapon_name) lower += (char)std::tolower((unsigned char)c);
+  if (lower.find("m16") != std::string::npos) return "M16.spr";
+  if (lower.find("ak") != std::string::npos) return "ak47.spr";
+  if (lower.find("colt") != std::string::npos || lower.find("anaconda") != std::string::npos) return "colt.spr";
+  if (lower.find("glock") != std::string::npos) return "glock.spr";
+  if (lower.find("eagle") != std::string::npos) return "deserteagle.spr";
+  if (lower.find("mp5") != std::string::npos) return "Mp5.spr";
+  if (lower.find("uzi") != std::string::npos) return "uzi.spr";
+  if (lower.find("spas") != std::string::npos || lower.find("spaz") != std::string::npos) return "spaz.spr";
+  if (lower.find("jackhammer") != std::string::npos) return "jackhammer.spr";
+  if (lower.find("saw") != std::string::npos || lower.find("minimi") != std::string::npos || lower.find("m249") != std::string::npos) return "SAW.spr";
+  if (lower.find("dragunov") != std::string::npos || lower.find("druganov") != std::string::npos || lower.find("svd") != std::string::npos) return "druganov.spr";
+  if (lower.find("law") != std::string::npos) return "LAW80.spr";
+  if (lower.find("rpg") != std::string::npos || lower.find("rocket") != std::string::npos) return "rocket.spr";
+  if (lower.find("knife") != std::string::npos) return "knife.spr";
+  if (lower.find("flash") != std::string::npos) return "flashgrenade.spr";
+  if (lower.find("grenade") != std::string::npos) return "spl_grenade.spr";
+  if (lower.find("binocular") != std::string::npos) return "binoculars.spr";
+  return "weapon.spr";
+}
 
 static FntFont g_editorFont;
 static GLuint  g_editorFontTex = 0;
@@ -228,10 +366,37 @@ void Renderer::Draw(const draw_params_s &params,
                   params.level_objects_->GetObjects(),
                   params.selected_object_index_, task_tree_view.hover_object_index_,
                   params.draw_parts_, params.view_define_->pos_,
-                  params.show_magic_obj_spheres_);
+                  params.show_magic_obj_spheres_, params.skip_static_draw_indices_);
     splines_.Draw(params.level_objects_->GetObjects(), ubo_mats_,
                   objects_.GetShaderProgram());
+
+    // Suppress rain when the camera is inside a building AABB.
+    // Uses the mesh's local-space halfExtents scaled to world units (BASE_SCALE=40.96).
+    {
+        constexpr float BASE_SCALE = 40.96f;
+        bool indoors = false;
+        const glm::vec3 camPos = params.view_define_->pos_;
+        for (const auto& obj : params.level_objects_->GetObjects()) {
+            if (obj.deleted || !obj.isBuilding || obj.modelId.empty()) continue;
+            Mesh bm = objects_.GetOrLoadMesh(obj.modelId, true);
+            if (bm.vertexCount == 0 && bm.subMeshes.empty()) continue;
+            float ws = BASE_SCALE * obj.scale;
+            glm::vec3 wc = glm::vec3(obj.pos) + bm.center * ws;
+            glm::vec3 hw = bm.halfExtents * ws;
+            glm::vec3 d  = camPos - wc;
+            if (glm::abs(d.x) < hw.x && glm::abs(d.y) < hw.y && glm::abs(d.z) < hw.z) {
+                indoors = true;
+                break;
+            }
+        }
+        rain_.SetIndoors(indoors);
+    }
+    rain_.Draw(ubo_mats_, params.view_define_->pos_);
   }
+
+  // 3D navigation-graph pass: solid boxes + edges, depth-tested, before the HUD.
+  if (graph_overlay_visible_)
+    DrawGraphNodes3D(params);
 
   // 2D HUD overlay — always active so tooltip/pause/debug show even when TreeView is hidden
   {
@@ -449,8 +614,8 @@ void Renderer::Draw(const draw_params_s &params,
 
     int line_y = 30;
 
-    // --- TreeView HUD Implementation (only when TaskTree is visible) ---
-    if (task_tree_view.show_hud_) {
+    // --- TreeView HUD Implementation (only when TaskTree is visible and not in game mode) ---
+    if (task_tree_view.show_hud_ && !task_tree_view.in_game_mode_) {
     if (task_tree_view.level_objects_ && !task_tree_view.prop_editor_open_ && !task_tree_view.task_picker_open_) {
       const auto &objects = task_tree_view.level_objects_->GetObjects();
       int tree_x = 20;
@@ -736,20 +901,21 @@ void Renderer::Draw(const draw_params_s &params,
       line_y = start_y + (current_row - scroll_offset) * row_h + 20;
     }
     } // end show_hud_ tree panel
-
+    
     // Display object info at mouse position
     int info_object_index = task_tree_view.hover_object_index_;
+    if (task_tree_view.in_game_mode_) info_object_index = -1;
     if (!task_tree_view.status_msg_.empty() &&
         task_tree_view.selected_object_index_ >= 0) {
       info_object_index = task_tree_view.selected_object_index_;
     }
 
-    // Suppress tooltip when: camera orbit mode, over TaskTree, or over property panel
+    // Suppress tooltip when: in game mode, camera orbit mode, over TaskTree, or over property panel
     {
         bool over_tree  = task_tree_view.show_hud_ && task_tree_view.mouse_x_ < 350;
         bool over_panel = task_tree_view.prop_editor_open_ &&
                           task_tree_view.mouse_x_ < (PropPanel::kLeft + PropPanel::kWidth);
-        if (over_tree || over_panel || task_tree_view.enable_camera_mode_) info_object_index = -1;
+        if (task_tree_view.in_game_mode_ || over_tree || over_panel || task_tree_view.enable_camera_mode_) info_object_index = -1;
     }
 
     if (info_object_index >= 0 && task_tree_view.level_objects_) {
@@ -868,7 +1034,7 @@ void Renderer::Draw(const draw_params_s &params,
                     1.0f, 0.6f);
         }
       }
-    } else if (!task_tree_view.pause_mode_ && (!task_tree_view.show_hud_ || task_tree_view.mouse_x_ >= 350)) {
+    } else if (!task_tree_view.in_game_mode_ && !task_tree_view.pause_mode_ && (!task_tree_view.show_hud_ || task_tree_view.mouse_x_ >= 350)) {
       int terrainId = -1;
       if (params.terrain_id_at_world_xy_) {
         // Same world->clip transform the 3D scene uses (proj * view * scale_down);
@@ -896,7 +1062,7 @@ void Renderer::Draw(const draw_params_s &params,
     // Terrain-edit overlay: 3D brush-radius rings + brush name label.
     // Rendered independently of hover state so rings appear on right-click regardless
     // of whether an object is under the cursor or where the task tree panel is.
-    if (!task_tree_view.pause_mode_ && task_tree_view.terrain_edit_enabled_) {
+    if (!task_tree_view.in_game_mode_ && !task_tree_view.pause_mode_ && task_tree_view.terrain_edit_enabled_) {
       const int vpW = params.view_define_->viewport_width_;
       const int vpH = params.view_define_->viewport_height_;
 
@@ -947,6 +1113,15 @@ void Renderer::Draw(const draw_params_s &params,
       int b = task_tree_view.terrain_brush_;
       if (b < 0) b = 0; if (b > 3) b = 3;
       draw_text_sm(tooltip_x, tooltip_y + 16, kBrushNames[b], 1.0f, 0.7f, 0.2f);
+    }
+
+    // Navigation-graph overlay (ShowGraphNodes): nodes/edges/labels + hover tooltip.
+    if (graph_overlay_visible_) {
+      DrawGraphOverlayInternal(params, draw_text_sm,
+                               task_tree_view.mouse_x_, task_tree_view.mouse_y_);
+      // Left-side properties panel for the selected node.
+      if (graph_overlay_selected_ >= 0)
+        DrawGraphNodePanel(params, draw_text_sm);
     }
 
     // On-screen terrain editor panel (bottom-right): 5 brush buttons + a 2x2 grid
@@ -1102,6 +1277,47 @@ void Renderer::Draw(const draw_params_s &params,
                                   (const unsigned char *)s_ver_watermark.c_str());
       int wm_x = (params.view_define_->viewport_width_ - wm_w) / 2;
       draw_text(wm_x, params.view_define_->viewport_height_ - 20, s_ver_watermark.c_str(), 0.7f, 0.7f, 0.7f);
+    }
+
+    // Animation status panel (bottom-left)
+    if (task_tree_view.anim_debug_visible_ && !task_tree_view.anim_status_.empty()) {
+      const int aX = 10;
+      const int aY = 80;
+      const int aW = 360;
+      const int aRowH = 16;
+      int lines = 1;
+      for (char c : task_tree_view.anim_status_) if (c == '\n') lines++;
+      const int aH = 28 + lines * aRowH + 6;
+      const int vph = params.view_define_->viewport_height_;
+
+      // Background
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glColor4f(0.04f, 0.04f, 0.05f, 0.78f);
+      glBegin(GL_QUADS);
+      glVertex2f((float)aX, (float)(vph - aY));
+      glVertex2f((float)(aX + aW), (float)(vph - aY));
+      glVertex2f((float)(aX + aW), (float)(vph - (aY + aH)));
+      glVertex2f((float)aX, (float)(vph - (aY + aH)));
+      glEnd();
+
+      // Border
+      glColor4f(0.3f, 0.8f, 0.3f, 0.9f);
+      glLineWidth(1.0f);
+      glBegin(GL_LINE_LOOP);
+      glVertex2f((float)aX, (float)(vph - aY));
+      glVertex2f((float)(aX + aW), (float)(vph - aY));
+      glVertex2f((float)(aX + aW), (float)(vph - (aY + aH)));
+      glVertex2f((float)aX, (float)(vph - (aY + aH)));
+      glEnd();
+
+      // Title
+      const char* title = task_tree_view.anim_playing_ ? "Animations Playing" : "Animations Loaded";
+      draw_text_sm(aX + 6, aY - 4, title, 0.3f, 0.8f, 0.3f);
+
+      // Status text
+      draw_text_sm(aX + 6, aY - 22, task_tree_view.anim_status_.c_str(), 0.7f, 0.9f, 0.7f);
+      glDisable(GL_BLEND);
     }
 
     if (task_tree_view.task_picker_open_ && task_tree_view.level_objects_) {
@@ -1349,7 +1565,7 @@ void Renderer::Draw(const draw_params_s &params,
 
     if (task_tree_view.pause_mode_) {
       const int menu_w = 460;
-      const int menu_h = 480;
+      const int menu_h = 714; // +38 for Bake All Lightmaps button row
       const int menu_x = (params.view_define_->viewport_width_ - menu_w) / 2;
       const int menu_y = (params.view_define_->viewport_height_ - menu_h) / 2;
       const int viewport_h = params.view_define_->viewport_height_;
@@ -1384,16 +1600,30 @@ void Renderer::Draw(const draw_params_s &params,
       glLineWidth(1.0f);
 
       int screen_menu_top = (viewport_h - menu_h) / 2;
-      draw_text_sys(menu_x + menu_w / 2 - 45, screen_menu_top + 22, "IGI EDITOR",
-                0.0f, 1.0f, 0.0f);
-      draw_text_sys(menu_x + menu_w / 2 - 35, screen_menu_top + 46, "PAUSED", 0.8f,
-                0.8f, 0.8f);
+      // Title — centered, bright green
+      const char* title = "IGI EDITOR";
+      draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(title) * 3),
+                 screen_menu_top + 22, title, 0.0f, 1.0f, 0.0f);
+      // Subtitle — centered, dim white
+      const char* subtitle = "PAUSED";
+      draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(subtitle) * 3),
+                 screen_menu_top + 46, subtitle, 0.8f, 0.8f, 0.8f);
 
       // Font row is rendered specially (index 1): a "Font: <type>" toggle on the
       // left plus a [-] [size] [+] size control on the right, all on one line.
       char font_btn_label[32];
       snprintf(font_btn_label, sizeof(font_btn_label), "Font: %s",
                Config::Get().useEditorFont ? "Editor" : "System");
+      char mode_btn_label[64];
+      snprintf(mode_btn_label, sizeof(mode_btn_label), "Mode: [%s]",
+               task_tree_view.in_game_mode_ ? "Game Play" : "Editor");
+      char clip_btn_label[64];
+      snprintf(clip_btn_label, sizeof(clip_btn_label), "Collision: [%s]",
+               task_tree_view.noclip_mode_ ? "Clip" : "Normal");
+      char lightmap_btn_label[64];
+      snprintf(lightmap_btn_label, sizeof(lightmap_btn_label), "Lightmap: [%s]",
+               igi::ObjectLightmapManager::Get().GetRenderModeName());
+
       int mods = task_tree_view.terrain_mod_options_;
       bool tex = (mods & TERRAIN_TEXTURE_MOD) != 0;
       bool hgt = (mods & TERRAIN_HEIGHT_MOD) != 0;
@@ -1403,25 +1633,43 @@ void Renderer::Draw(const draw_params_s &params,
       snprintf(bufTex, sizeof(bufTex), "  [%c] Texture", tex ? 'X' : ' ');
       snprintf(bufHgt, sizeof(bufHgt), "  [%c] Height", hgt ? 'X' : ' ');
       snprintf(bufDsc, sizeof(bufDsc), "  [%c] Discard", dsc ? 'X' : ' ');
+      int draws = task_tree_view.terrain_draw_options_;
+      bool fog = (draws & Renderer_Terrain::DRAW_TERRAIN_OPT_FOG) != 0;
+      char bufFog[32];
+      snprintf(bufFog, sizeof(bufFog), "  [%c] Fog", fog ? 'X' : ' ');
 
       std::vector<const char*> btn_labels;
       btn_labels.push_back("Resume");
+      const int MODE_ROW = btn_labels.size();
+      btn_labels.push_back(mode_btn_label);
+      const int CLIP_ROW = btn_labels.size();
+      btn_labels.push_back(clip_btn_label);
       const int FONT_ROW = btn_labels.size();
       btn_labels.push_back(font_btn_label);
       const int LEVEL_ROW = btn_labels.size();
       btn_labels.push_back("Select Level");
+      const int AUTOSAVE_ROW = btn_labels.size();
+      btn_labels.push_back("Auto Save");
       const int SEARCH_ROW = btn_labels.size();
       btn_labels.push_back("Model Search");
+      const int MUSIC_ROW = btn_labels.size();
+      btn_labels.push_back("Music");
+      const int LIGHTMAPS_ROW = btn_labels.size();
+      btn_labels.push_back(lightmap_btn_label);
+      const int LIGHTMAPS_CALC_ROW = btn_labels.size();
+      btn_labels.push_back("Calculate Lightmaps");
       const int TERRAIN_HEADER_ROW = btn_labels.size();
 
       bool exp = task_tree_view.pause_terrain_expanded_;
       btn_labels.push_back(exp ? "Terrain Options: [-]" : "Terrain Options: [+]");
 
-      int TERRAIN_TEX_ROW = -1, TERRAIN_HGT_ROW = -1, TERRAIN_DSC_ROW = -1;
+      int TERRAIN_TEX_ROW = -1, TERRAIN_HGT_ROW = -1, TERRAIN_DSC_ROW = -1, TERRAIN_FOG_ROW = -1, TERRAIN_FOGINT_ROW = -1;
       if (exp) {
         TERRAIN_TEX_ROW = btn_labels.size(); btn_labels.push_back(bufTex);
         TERRAIN_HGT_ROW = btn_labels.size(); btn_labels.push_back(bufHgt);
         TERRAIN_DSC_ROW = btn_labels.size(); btn_labels.push_back(bufDsc);
+        TERRAIN_FOG_ROW = btn_labels.size(); btn_labels.push_back(bufFog);
+        TERRAIN_FOGINT_ROW = btn_labels.size(); btn_labels.push_back("Fog Intensity");
       }
 
       const int RESET_ROW = btn_labels.size();
@@ -1433,8 +1681,12 @@ void Renderer::Draw(const draw_params_s &params,
 
       const int NUM_BTNS = btn_labels.size();
 
+      // Consistent row spacing — 38px between centres for a clean, airy layout
+      const int row_h = 38;
+      const int first_row_y = screen_menu_top + 90;
+
       auto row_screen_y = [&](int idx) {
-        return screen_menu_top + 85 + idx * 35;
+        return first_row_y + idx * row_h;
       };
 
       // Shared spinner-box draw helper (reused for FONT_ROW and LEVEL_ROW)
@@ -1457,46 +1709,86 @@ void Renderer::Draw(const draw_params_s &params,
                         task_tree_view.mouse_y_ >= screen_btn_y - 15 &&
                         task_tree_view.mouse_y_ <= screen_btn_y + 15);
 
-        if (i == FONT_ROW) {
-          // "Font: <type>  [-] <n> [+]" — layout MUST match click handler
-          const int sz_box_w = 34, btn_w = 22, gap = 6;
-          const int label_w = 96, label_gap = 16;
-          const int group_w = label_w + label_gap + btn_w + gap + sz_box_w + gap + btn_w;
+        if (i == MODE_ROW) {
+          int tw = (int)strlen(mode_btn_label) * 8;
+          int gx = menu_x + (menu_w - tw) / 2;
+          draw_text_sys(gx, screen_btn_y, mode_btn_label,
+                        task_tree_view.in_game_mode_ ? 0.2f : (hovered ? 1.0f : 0.0f),
+                        task_tree_view.in_game_mode_ ? 1.0f : (hovered ? 1.0f : 0.85f),
+                        task_tree_view.in_game_mode_ ? 0.3f : 0.0f);
+        } else if (i == CLIP_ROW) {
+          int tw = (int)strlen(clip_btn_label) * 8;
+          int gx = menu_x + (menu_w - tw) / 2;
+          draw_text_sys(gx, screen_btn_y, clip_btn_label,
+                        task_tree_view.noclip_mode_ ? 0.85f : (hovered ? 1.0f : 0.0f),
+                        task_tree_view.noclip_mode_ ? 0.45f : (hovered ? 1.0f : 0.85f),
+                        task_tree_view.noclip_mode_ ? 0.0f : 0.0f);
+        } else if (i == FONT_ROW) {
+          // "Font: <type>  [-] <n> [+]" — label left, spinner group right; whole row centered
+          const int btn_w = 22, gap = 6, val_w = 44, label_gap = 14;
+          const char* lbl = font_btn_label;
+          int label_px = (int)strlen(lbl) * 6;
+          int group_w = label_px + label_gap + btn_w + gap + val_w + gap + btn_w;
           int gx = menu_x + (menu_w - group_w) / 2;
-          draw_text_sys(gx, screen_btn_y, font_btn_label,
+          draw_text_sys(gx, screen_btn_y, lbl,
                         hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
-          int minus_x = gx + label_w + label_gap;
+          int minus_x = gx + label_px + label_gap;
           int box_x   = minus_x + btn_w + gap;
-          int plus_x  = box_x + sz_box_w + gap;
+          int plus_x  = box_x + val_w + gap;
           int rt = gl_btn_y - 14, rb = gl_btn_y + 10;
           char szbuf[8]; snprintf(szbuf, sizeof(szbuf), "%d", Config::Get().systemFontSize);
-          sbox(minus_x, btn_w,    "-",    rt, rb, screen_btn_y);
-          sbox(box_x,   sz_box_w, szbuf,  rt, rb, screen_btn_y);
-          sbox(plus_x,  btn_w,    "+",    rt, rb, screen_btn_y);
+          sbox(minus_x, btn_w, "-",    rt, rb, screen_btn_y);
+          sbox(box_x,   val_w, szbuf,  rt, rb, screen_btn_y);
+          sbox(plus_x,  btn_w, "+",    rt, rb, screen_btn_y);
 
         } else if (i == LEVEL_ROW) {
-          // Level spinner: "Select Level  [-] [N] [+]" — layout MUST match click handler
-          const int num_box_w = 40, btn_w = 22, gap = 6;
-          const int label_w = 96, label_gap = 16;
-          const int group_w = label_w + label_gap + btn_w + gap + num_box_w + gap + btn_w;
+          // Level spinner: "Select Level  [-] [N] [+]" — same width as Font row for visual alignment
+          const int btn_w = 22, gap = 6, val_w = 44, label_gap = 14;
+          const char* lbl = "Select Level";
+          int label_px = (int)strlen(lbl) * 6;
+          int group_w = label_px + label_gap + btn_w + gap + val_w + gap + btn_w;
           int gx = menu_x + (menu_w - group_w) / 2;
-          draw_text_sys(gx, screen_btn_y, "Select Level",
+          draw_text_sys(gx, screen_btn_y, lbl,
                         hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
-          int minus_x = gx + label_w + label_gap;
+          int minus_x = gx + label_px + label_gap;
           int box_x   = minus_x + btn_w + gap;
-          int plus_x  = box_x + num_box_w + gap;
+          int plus_x  = box_x + val_w + gap;
           int rt = gl_btn_y - 14, rb = gl_btn_y + 10;
-          sbox(minus_x, btn_w,      "-",   rt, rb, screen_btn_y);
-          sbox(box_x,   num_box_w, task_tree_view.pause_level_input_.c_str(), rt, rb, screen_btn_y);
-          sbox(plus_x,  btn_w,      "+",   rt, rb, screen_btn_y);
+          sbox(minus_x, btn_w, "-",   rt, rb, screen_btn_y);
+          sbox(box_x,   val_w, task_tree_view.pause_level_input_.c_str(), rt, rb, screen_btn_y);
+          sbox(plus_x,  btn_w, "+",   rt, rb, screen_btn_y);
+
+        } else if (i == AUTOSAVE_ROW) {
+          // Auto Save: "Save Enable/Disable  [-] [Ns] [+]" — same width as Font/Level for alignment
+          const int btn_w = 22, gap = 6, val_w = 44, label_gap = 14;
+          const char* lbl = task_tree_view.auto_save_enabled_
+                                 ? "Save Enable" : "Save Disable";
+          int label_px = (int)strlen(lbl) * 6;
+          int group_w = label_px + label_gap + btn_w + gap + val_w + gap + btn_w;
+          int gx = menu_x + (menu_w - group_w) / 2;
+          draw_text_sys(gx, screen_btn_y, lbl,
+                        hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
+          int minus_x = gx + label_px + label_gap;
+          int box_x   = minus_x + btn_w + gap;
+          int plus_x  = box_x + val_w + gap;
+          int rt = gl_btn_y - 14, rb = gl_btn_y + 10;
+          char secbuf[16];
+          snprintf(secbuf, sizeof(secbuf), "%ds", task_tree_view.auto_save_interval_seconds_);
+          sbox(minus_x, btn_w, "-",     rt, rb, screen_btn_y);
+          sbox(box_x,   val_w, secbuf,  rt, rb, screen_btn_y);
+          sbox(plus_x,  btn_w, "+",     rt, rb, screen_btn_y);
 
         } else if (i == SEARCH_ROW) {
-          // Model Search text input box
-          const int label_w = 110, box_w = 200, gap = 10;
-          int gx = menu_x + (menu_w - (label_w + gap + box_w)) / 2;
-          draw_text_sys(gx, screen_btn_y, "Model Search",
+          // Model Search text input box — narrower so it fits inside the 460px menu
+          const int btn_w = 22, gap = 6, val_w = 44, label_gap = 14;
+          const char* lbl = "Model Search";
+          int label_px = (int)strlen(lbl) * 6;
+          int box_w = 200;
+          int group_w = label_px + label_gap + box_w;
+          int gx = menu_x + (menu_w - group_w) / 2;
+          draw_text_sys(gx, screen_btn_y, lbl,
                         hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
-          int box_x = gx + label_w + gap;
+          int box_x = gx + label_px + label_gap;
           int rt = gl_btn_y - 14, rb = gl_btn_y + 10;
           bool is_active = (task_tree_view.pause_active_input_ == 1);
           glColor3f(0.0f, is_active ? 1.0f : 0.5f, 0.0f);
@@ -1508,8 +1800,74 @@ void Renderer::Draw(const draw_params_s &params,
           if (is_active && (clock() / 500) % 2 == 0) buf += "_";
           draw_text_sys(box_x + 5, screen_btn_y, buf.c_str(), 1.0f, 1.0f, 1.0f);
 
+        } else if (i == MUSIC_ROW) {
+          // Music on/off checkbox: "[X] Music" / "[ ] Music", centered, hover-highlighted.
+          if (hovered) {
+            glEnable(GL_BLEND);
+            glColor4f(0.0f, 0.8f, 0.0f, 0.35f);
+            glBegin(GL_QUADS);
+            glVertex2i(menu_x, gl_btn_y - 15); glVertex2i(menu_x + menu_w, gl_btn_y - 15);
+            glVertex2i(menu_x + menu_w, gl_btn_y + 15); glVertex2i(menu_x, gl_btn_y + 15);
+            glEnd();
+            glDisable(GL_BLEND);
+          }
+          char musicbuf[24];
+          snprintf(musicbuf, sizeof(musicbuf), "[%c] Music", task_tree_view.music_on_ ? 'X' : ' ');
+          int tw = (int)strlen(musicbuf) * 6;
+          draw_text_sys(menu_x + (menu_w - tw) / 2, screen_btn_y, musicbuf,
+                        hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
+
+        } else if (i == LIGHTMAPS_ROW) {
+          if (hovered) {
+            glEnable(GL_BLEND);
+            glColor4f(0.0f, 0.8f, 0.0f, 0.35f);
+            glBegin(GL_QUADS);
+            glVertex2i(menu_x, gl_btn_y - 15); glVertex2i(menu_x + menu_w, gl_btn_y - 15);
+            glVertex2i(menu_x + menu_w, gl_btn_y + 15); glVertex2i(menu_x, gl_btn_y + 15);
+            glEnd();
+            glDisable(GL_BLEND);
+          }
+          int lmtw = (int)strlen(lightmap_btn_label) * 6;
+          draw_text_sys(menu_x + (menu_w - lmtw) / 2, screen_btn_y, lightmap_btn_label,
+                        hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
+
+        } else if (i == LIGHTMAPS_CALC_ROW) {
+          if (hovered) {
+            glEnable(GL_BLEND);
+            glColor4f(0.0f, 0.8f, 0.0f, 0.35f);
+            glBegin(GL_QUADS);
+            glVertex2i(menu_x, gl_btn_y - 15); glVertex2i(menu_x + menu_w, gl_btn_y - 15);
+            glVertex2i(menu_x + menu_w, gl_btn_y + 15); glVertex2i(menu_x, gl_btn_y + 15);
+            glEnd();
+            glDisable(GL_BLEND);
+          }
+          const char* calc_lbl = "Calculate Lightmaps";
+          int btw = (int)strlen(calc_lbl) * 6;
+          draw_text_sys(menu_x + (menu_w - btw) / 2, screen_btn_y, calc_lbl,
+                        hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
+
         } else if (i == TERRAIN_HEADER_ROW) {
-          draw_text_sys(menu_x + menu_w / 2 - 50, screen_btn_y, btn_labels[i], 0.0f, 0.8f, 0.0f);
+          draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(btn_labels[i]) * 3),
+                        screen_btn_y, btn_labels[i], 0.0f, 0.8f, 0.0f);
+        } else if (i == TERRAIN_FOGINT_ROW) {
+          // Fog Intensity: "Fog Intensity  [-] [N%] [+]" — same spinner layout as Auto Save
+          const int btn_w = 22, gap = 6, val_w = 56, label_gap = 14;
+          const char* lbl = "Fog Intensity";
+          int label_px = (int)strlen(lbl) * 6;
+          int group_w = label_px + label_gap + btn_w + gap + val_w + gap + btn_w;
+          int gx = menu_x + (menu_w - group_w) / 2;
+          draw_text_sys(gx, screen_btn_y, lbl,
+                        hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
+          int minus_x = gx + label_px + label_gap;
+          int box_x   = minus_x + btn_w + gap;
+          int plus_x  = box_x + val_w + gap;
+          int rt = gl_btn_y - 14, rb = gl_btn_y + 10;
+          char fibuf[8];
+          snprintf(fibuf, sizeof(fibuf), "%d%%", Config::Get().fogIntensity);
+          sbox(minus_x, btn_w, "-",    rt, rb, screen_btn_y);
+          sbox(box_x,   val_w, fibuf,  rt, rb, screen_btn_y);
+          sbox(plus_x,  btn_w, "+",    rt, rb, screen_btn_y);
+
         } else if (i == TERRAIN_TEX_ROW || i == TERRAIN_HGT_ROW || i == TERRAIN_DSC_ROW) {
           if (hovered) {
             glEnable(GL_BLEND);
@@ -1520,10 +1878,12 @@ void Renderer::Draw(const draw_params_s &params,
             glEnd();
             glDisable(GL_BLEND);
           }
-          draw_text_sys(menu_x + menu_w / 2 - 40, screen_btn_y, btn_labels[i],
+          draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(btn_labels[i]) * 3),
+                        screen_btn_y, btn_labels[i],
                         hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
 
         } else {
+          // Plain centered buttons: Resume, Reset Level, Save Level, Quit
           if (hovered) {
             glEnable(GL_BLEND);
             glColor4f(0.0f, 0.8f, 0.0f, 0.35f);
@@ -1534,10 +1894,10 @@ void Renderer::Draw(const draw_params_s &params,
             glVertex2i(menu_x + 20, gl_btn_y + 12);
             glEnd();
             glDisable(GL_BLEND);
-            draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(btn_labels[i]) * 4),
+            draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(btn_labels[i]) * 3),
                       screen_btn_y, btn_labels[i], 1.0f, 1.0f, 1.0f);
           } else {
-            draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(btn_labels[i]) * 4),
+            draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(btn_labels[i]) * 3),
                       screen_btn_y, btn_labels[i], 0.0f, 0.85f, 0.0f);
           }
         }
@@ -1655,7 +2015,7 @@ void Renderer::Draw(const draw_params_s &params,
       }
     }
 
-    // ── C2: IGI2-style property panel (left side, replaces tree) ───────────────
+    // ── C2: Property panel (left side, replaces tree) ───────────────────────────
     if (task_tree_view.prop_editor_open_ && task_tree_view.selected_object_index_ >= 0 && task_tree_view.level_objects_) {
       const auto& objects = task_tree_view.level_objects_->GetObjects();
       int sel = task_tree_view.selected_object_index_;
@@ -1666,19 +2026,28 @@ void Renderer::Draw(const draw_params_s &params,
           const TaskSchema& schema = *scp;
           int vh = params.view_define_->viewport_height_;
 
-          // Gather editable child-task sections (weapon/ammo/AI sub-tasks). Only
-          // shown when the task actually has children; appended to the layout so
-          // their fields are real editable widgets (routed to the child object).
+          // Gather editable child-task sections (weapon/ammo/AI sub-tasks). Scoped to
+          // AI/soldier-family selections only — every other object type (Building,
+          // EditRigidObj, etc.) shows ONLY its own fields. Without this gate, ANY
+          // selected object with schema-having children (e.g. a Building's nested
+          // LightmapInfo) pulled those children's fields into the panel too, even
+          // though they're not meant to be edited inline for non-AI objects.
           std::vector<std::pair<int,const TaskSchema*>> child_schemas; // (child obj idx, schema)
-          for (int ci : obj.childrenIndices) {
-              if (ci < 0 || ci >= (int)objects.size()) continue;
-              const auto& child = objects[ci];
-              if (child.deleted) continue;
-              const TaskSchema* cscp = GetSchema(child.type);
-              if (cscp && !cscp->empty()) child_schemas.push_back({ci, cscp});
+          if (task_tree_view.selected_obj_is_ai) {
+            for (int ci : obj.childrenIndices) {
+                if (ci < 0 || ci >= (int)objects.size()) continue;
+                const auto& child = objects[ci];
+                if (child.deleted) continue;
+                const TaskSchema* cscp = GetSchema(child.type);
+                if (cscp && !cscp->empty()) child_schemas.push_back({ci, cscp});
+            }
           }
 
-          PropPanel::Layout L = PropPanel::BuildLayout(schema, task_tree_view.selected_obj_is_ai, child_schemas);
+          bool showLightmapButton = (obj.type == "Building" || obj.type == "EditRigidObj") && !obj.isAttaProxy;
+          PropPanel::Layout L = PropPanel::BuildLayout(schema, task_tree_view.selected_obj_is_ai, child_schemas,
+                                                        task_tree_view.prop_anim_bone_hierarchy_,
+                                                        task_tree_view.prop_anim_ids_,
+                                                        showLightmapButton);
 
           // Apply vertical scroll: shift all widget Y positions.
           const int scroll = task_tree_view.prop_panel_scroll_;
@@ -1777,10 +2146,47 @@ void Renderer::Draw(const draw_params_s &params,
             int max_chars = std::max(1, (w.x2 - w.x1 - 6) / cw);
             int box_lines_cap = std::max(1, (w.y2 - w.y1) / PropPanel::kBoxH);
 
+            // Selection range for THIS field (if active). anchor == focus
+            // means caret-only, no highlight.
+            int sel_a = -1, sel_b = -1;
+            if (editing && task_tree_view.prop_text_sel_anchor_ >= 0
+                && task_tree_view.prop_text_sel_focus_  >= 0
+                && task_tree_view.prop_text_sel_anchor_ != task_tree_view.prop_text_sel_focus_) {
+              sel_a = std::min(task_tree_view.prop_text_sel_anchor_,
+                               task_tree_view.prop_text_sel_focus_);
+              sel_b = std::max(task_tree_view.prop_text_sel_anchor_,
+                               task_tree_view.prop_text_sel_focus_);
+              sel_a = std::max(0, std::min(sel_a, (int)txt.size()));
+              sel_b = std::max(0, std::min(sel_b, (int)txt.size()));
+            }
+
             if (!multiline) {
               // Single-line with horizontal scroll
               int hs = std::max(0, std::min(hscroll, (int)txt.size()));
               std::string disp = txt.size() > (size_t)hs ? txt.substr(hs, max_chars) : "";
+              // Selection highlight (single-line)
+              if (sel_a < sel_b) {
+                int vis_a = std::max(0, sel_a - hs);
+                int vis_b = std::max(0, sel_b - hs);
+                vis_a = std::min(vis_a, (int)disp.size());
+                vis_b = std::min(vis_b, (int)disp.size());
+                if (vis_a < vis_b) {
+                  std::string beforeA = disp.substr(0, vis_a);
+                  std::string beforeB = disp.substr(0, vis_b);
+                  int xa = w.x1 + 3 + measure_text_width(beforeA.c_str(), (int)beforeA.size());
+                  int xb = w.x1 + 3 + measure_text_width(beforeB.c_str(), (int)beforeB.size());
+                  glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                  glColor4f(0.3f, 0.6f, 1.0f, 0.45f); // pale blue highlight
+                  // OpenGL Y is bottom-up — convert top-down `w.y1` via gl_y.
+                  int yt_top_gl = gl_y(w.y1 + 3);
+                  int yt_bot    = gl_y(w.y1 + 16);
+                  glBegin(GL_QUADS);
+                  glVertex2i(xa, yt_top_gl); glVertex2i(xb, yt_top_gl);
+                  glVertex2i(xb, yt_bot);    glVertex2i(xa, yt_bot);
+                  glEnd();
+                  glDisable(GL_BLEND);
+                }
+              }
               draw_text(w.x1 + 3, w.y1 + 12, disp.c_str(), 1.0f, 1.0f, 0.85f);
               if (editing && caret_on) {
                 int vis = std::max(0, caret_idx - hs);
@@ -1803,6 +2209,37 @@ void Renderer::Draw(const draw_params_s &params,
               caret_line = (int)(std::upper_bound(lstarts.begin(), lstarts.end(), caret_idx) - lstarts.begin()) - 1;
               caret_line = std::max(0, std::min(caret_line, (int)lstarts.size() - 1));
               caret_col  = caret_idx - lstarts[caret_line];
+            }
+            // Selection highlight pass: one translucent rectangle per visible
+            // line that overlaps the [sel_a, sel_b) range. Drawn BEFORE the
+            // text so the white characters stay readable on top.
+            if (sel_a < sel_b) {
+              glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+              glColor4f(0.3f, 0.6f, 1.0f, 0.45f);
+              int rl = 0;
+              for (int li = start_line; li < (int)lstarts.size() && rl < box_lines_cap; li++, rl++) {
+                int ls = lstarts[li];
+                int le = (li + 1 < (int)lstarts.size()) ? lstarts[li + 1] : (int)txt.size();
+                if (le > ls && txt[le - 1] == '\n') le--;
+                int line_len = std::max(0, le - ls);
+                // Clip the selection to this visual line.
+                int hi_a = std::max(sel_a, ls);
+                int hi_b = std::min(sel_b, ls + line_len);
+                if (hi_a >= hi_b) continue;
+                std::string beforeA = txt.substr(ls, std::min(hi_a - ls, line_len));
+                std::string beforeB = txt.substr(ls, std::min(hi_b - ls, line_len));
+                int xa = w.x1 + 3 + measure_text_width(beforeA.c_str(), (int)beforeA.size());
+                int xb = w.x1 + 3 + measure_text_width(beforeB.c_str(), (int)beforeB.size());
+                // OpenGL Y is bottom-up — convert top-down `w.y1` via gl_y.
+                int yt_top = w.y1 + 3 + rl * PropPanel::kBoxH;
+                int yt_bot = gl_y(yt_top + 13);
+                int yt_top_gl = gl_y(yt_top);
+                glBegin(GL_QUADS);
+                glVertex2i(xa, yt_top_gl); glVertex2i(xb, yt_top_gl);
+                glVertex2i(xb, yt_bot);    glVertex2i(xa, yt_bot);
+                glEnd();
+              }
+              glDisable(GL_BLEND);
             }
             // Render visible lines from start_line
             int render_line = 0;
@@ -2092,7 +2529,16 @@ void Renderer::Draw(const draw_params_s &params,
           // widget objIndex / resolveEdit / resolveDrag, so weapons/AI/EditRigidObj
           // children get pads, sliders and boxes exactly like a top-level task.
           int wi = 1;                        // widget 0 is the parent note box
-          int y  = L.widgets[0].y2 + 6;
+          // Lightmap button at widget 1 (Building/EditRigidObj) — draw it before
+          // the scrollable field sections so it stays near the top.
+          if (wi < (int)L.widgets.size() &&
+              L.widgets[wi].kind == PropPanel::WidgetKind::LightmapButton) {
+              const auto& bw = L.widgets[wi++];
+              quad(bw.x1, bw.y1, bw.x2, bw.y2, 0.0f, 0.0f, 0.0f, 0.40f);
+              border(bw.x1, bw.y1, bw.x2, bw.y2, 1.0f, 1.0f, 1.0f);
+              draw_text(bw.x1 + 6, bw.y1 + 12, "Calculate Light Mapping", 1.0f, 0.9f, 0.2f);
+          }
+          int y  = L.widgets[wi - 1].y2 + 6;
           renderFields(obj, schema, sel, wi, y);
           for (const auto& [ci, cscp] : child_schemas) {
               if (wi < (int)L.widgets.size() &&
@@ -2112,7 +2558,34 @@ void Renderer::Draw(const draw_params_s &params,
           while (wi < (int)L.widgets.size()) {
               using K = PropPanel::WidgetKind;
               const auto& w = L.widgets[wi++];
-              if (w.kind == K::AIScriptPath) {
+              if (w.kind == K::AnimIdButton) {
+                  bool isFirst = (wi - 2 < 0) || (L.widgets[wi - 2].kind != K::AnimIdButton);
+                  if (isFirst) {
+                      char lbl[80];
+                      snprintf(lbl, sizeof(lbl), "Bone Hierarchy: %03d.IFF (check an id to play/pause)",
+                               task_tree_view.prop_anim_bone_hierarchy_);
+                      draw_text(w.x1, w.y1 - PropPanel::kRowH + 12, lbl, 0.8f, 0.8f, 1.0f);
+                  }
+                  // Checkbox glyph, left-aligned within the row.
+                  const int boxSz = w.y2 - w.y1 - 4;
+                  const int boxX1 = w.x1, boxY1 = w.y1 + 2;
+                  if (w.comp < 0) {
+                      // "No animations found" placeholder — informational only.
+                      border(boxX1, boxY1, boxX1 + boxSz, boxY1 + boxSz, 0.5f, 0.5f, 0.5f);
+                      draw_text(boxX1 + boxSz + 8, w.y1 + 12, "No animations found", 0.6f, 0.6f, 0.6f);
+                  } else {
+                      bool isActive  = (w.comp == task_tree_view.prop_anim_active_id_);
+                      bool isPlaying = isActive && task_tree_view.prop_anim_is_playing_;
+                      border(boxX1, boxY1, boxX1 + boxSz, boxY1 + boxSz, 1.0f, 1.0f, 1.0f);
+                      if (isPlaying) {
+                          quad(boxX1 + 3, boxY1 + 3, boxX1 + boxSz - 3, boxY1 + boxSz - 3,
+                               0.2f, 0.9f, 0.3f, 0.95f);
+                      }
+                      char idLbl[32];
+                      snprintf(idLbl, sizeof(idLbl), "Animation %d%s", w.comp, isPlaying ? "  (playing)" : "");
+                      draw_text(boxX1 + boxSz + 8, w.y1 + 12, idLbl, 1.0f, 1.0f, 1.0f);
+                  }
+              } else if (w.kind == K::AIScriptPath) {
                   bool ed = resolveEdit(sel) &&
                             task_tree_view.prop_text_edit_field_ == PropPanel::kAIScriptPathField;
                   draw_text(w.x1, w.y1 - PropPanel::kRowH + 12, "AI Script Path:", 0.8f, 0.8f, 1.0f);
@@ -2479,6 +2952,446 @@ void Renderer::Draw(const draw_params_s &params,
       draw_text(px + 4, vh - ftr_h + 4, "[Enter] Insert  [Esc] Cancel  [Type] Filter", 0.5f, 0.5f, 0.5f);
     }
 
+    // ── In-Game HUD overlay (Authentic OpenIGI / Retail IGI StatusScreen) ──
+    if (task_tree_view.in_game_mode_ && !task_tree_view.pause_mode_ &&
+        task_tree_view.hud_overlay_visible_) {
+      int vw = params.view_define_->viewport_width_;
+      int vh = params.view_define_->viewport_height_;
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+      // ── 1. Tactical Reticle / Crosshair (Center) ─────────────────────────
+      // OpenIGI Crosshair(): (w*0.5 - (int)(spriteW*0.5), h*0.5 - (int)(spriteH*0.5)).
+      HudSprite cross_spr = GetOrLoadHudSprite("cross.spr");
+      if (cross_spr.valid) {
+        int cx = (int)(vw * 0.5f) - (int)(cross_spr.width  * 0.5f);
+        int cy = (int)(vh * 0.5f) - (int)(cross_spr.height * 0.5f);
+        DrawHudFrame(cross_spr, 0, cx, cy, 1.0f, 1.0f, 1.0f, 0.95f);
+      } else {
+        int cx = vw / 2, cy = vh / 2;
+        glColor4f(0.0f, 1.0f, 0.2f, 0.9f);
+        glLineWidth(1.5f);
+        glBegin(GL_LINES);
+        glVertex2i(cx - 10, cy); glVertex2i(cx - 3, cy);
+        glVertex2i(cx + 3,  cy); glVertex2i(cx + 10, cy);
+        glVertex2i(cx, cy - 10); glVertex2i(cx, cy - 3);
+        glVertex2i(cx, cy + 3);  glVertex2i(cx, cy + 10);
+        glEnd();
+        glLineWidth(1.0f);
+      }
+
+      // ── 2. Authentic Health Powerbar (Bottom Left) ─────────────────────────
+      // StatusScreenLayout: both sprites centred on (0.0625w, 0.89583331h from
+      // the top); foreground inset 2px up-left; bottom-filled by remaining hp.
+      const float maximum_health = std::max(0.0001f, task_tree_view.player_maximum_health_);
+      const float maximum_armor = std::max(0.0001f, task_tree_view.player_maximum_armor_);
+      float hp  = std::clamp(task_tree_view.player_health_, 0.0f, maximum_health);
+      float arm = std::clamp(task_tree_view.player_armor_,  0.0f, maximum_armor);
+      const float health_fraction = std::clamp(hp / maximum_health, 0.0f, 1.0f);
+
+      HudSprite pb_bg  = GetOrLoadHudSprite("powerbarbackground.spr");
+      HudSprite pb_fg  = GetOrLoadHudSprite("powerbar.spr");
+      HudSprite hp_icon = GetOrLoadHudSprite("health.spr");
+
+      const float kBaseline     = 0.89583331f;
+      const int   kHealthInset  = 2;
+      int anchor_x = (int)(vw * 0.0625f);
+      int anchor_gl_y = (int)(vh * (1.0f - kBaseline));   // centre height above bottom
+
+      if (pb_bg.valid && pb_fg.valid) {
+        int bg_left = anchor_x - pb_bg.width / 2;
+        int bg_top  = anchor_gl_y + pb_bg.height / 2;      // top edge in gl space
+        DrawHudFrame(pb_bg, 0, bg_left, bg_top - pb_bg.height, 1.0f, 1.0f, 1.0f, 0.9f);
+
+        // Foreground inset 2px up-left from the background top-left corner.
+        int fg_left = bg_left - kHealthInset;
+        int fg_top  = bg_top  + kHealthInset;
+        DrawHudBarFill(pb_fg, fg_left, fg_top - pb_fg.height, health_fraction, 1.0f, 1.0f, 1.0f, 0.95f);
+
+        // Health cross icon beside the bar (top-right of the background).
+        if (hp_icon.valid) {
+          int ix = bg_left + pb_bg.width + 6;
+          DrawHudFrame(hp_icon, 0, ix, bg_top - hp_icon.height, 1.0f, 1.0f, 1.0f, 0.95f);
+        }
+
+        // Numeric HP & Armor readouts beside the icon.
+        char hp_buf[32], arm_buf[32];
+        snprintf(hp_buf, sizeof(hp_buf), "%d", (int)hp);
+        snprintf(arm_buf, sizeof(arm_buf), "ARM %d", (int)arm);
+        int text_x = bg_left + pb_bg.width + (hp_icon.valid ? (hp_icon.width + 12) : 10);
+        draw_text_sys(text_x, vh - (bg_top - 2),                    hp_buf, 0.0f, 1.0f, 0.3f);
+        draw_text_sys(text_x, vh - (bg_top - 22),                   arm_buf, 0.2f, 0.75f, 1.0f);
+      } else {
+        // High-fidelity fallback powerbar (same fractional anchor).
+        const int BAR_W = 22, BAR_H = 80;
+        int bx = (int)(vw * 0.0625f) - BAR_W / 2;
+        int by = anchor_gl_y - BAR_H / 2;
+        glColor4f(0.08f, 0.08f, 0.08f, 0.85f);
+        glBegin(GL_QUADS);
+        glVertex2i(bx, by); glVertex2i(bx + BAR_W, by);
+        glVertex2i(bx + BAR_W, by + BAR_H); glVertex2i(bx, by + BAR_H);
+        glEnd();
+
+        int fill_h = (int)(BAR_H * health_fraction);
+        if (health_fraction > 0.5f)      glColor4f(0.0f, 0.95f, 0.25f, 0.9f);
+        else if (health_fraction > 0.25f) glColor4f(0.95f, 0.8f, 0.0f, 0.9f);
+        else                 glColor4f(0.95f, 0.15f, 0.1f, 0.9f);
+        glBegin(GL_QUADS);
+        glVertex2i(bx + 2, by + 2); glVertex2i(bx + BAR_W - 2, by + 2);
+        glVertex2i(bx + BAR_W - 2, by + 2 + fill_h); glVertex2i(bx + 2, by + 2 + fill_h);
+        glEnd();
+
+        glColor4f(0.0f, 0.8f, 0.2f, 0.8f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2i(bx, by); glVertex2i(bx + BAR_W, by);
+        glVertex2i(bx + BAR_W, by + BAR_H); glVertex2i(bx, by + BAR_H);
+        glEnd();
+
+        char hp_buf[32], arm_buf[32];
+        snprintf(hp_buf, sizeof(hp_buf), "HP  %d", (int)hp);
+        snprintf(arm_buf, sizeof(arm_buf), "ARM %d", (int)arm);
+        draw_text_sys(bx + BAR_W + 12, vh - (by + BAR_H - 4), hp_buf, 0.0f, 1.0f, 0.3f);
+        draw_text_sys(bx + BAR_W + 12, vh - (by + BAR_H - 24), arm_buf, 0.2f, 0.75f, 1.0f);
+      }
+
+      // ── 3. Authentic Weapon & Ammo Readout (Bottom Right) ───────────────────
+      // Right edge at 0.984375*vw; readout baseline shared with the health bar.
+      int right_m = (int)(vw * 0.984375f);
+      int bline   = anchor_gl_y;   // GL-y of the weapon readout baseline
+      int char_w  = (sysFontSize <= 11) ? 6 : (sysFontSize >= 15) ? 9 : 7;
+
+      std::string wname = task_tree_view.active_weapon_name_;
+      for (char& c : wname) c = (char)std::toupper((unsigned char)c);
+
+      std::string wspr_name = GetWeaponSpriteName(wname);
+      HudSprite wspr = GetOrLoadHudSprite(wspr_name);
+
+      // Magazine gauge (clip20.spr): frame 0 when full, 60 when empty.
+      HudSprite clip_spr = GetOrLoadHudSprite("clip20.spr");
+      int clip_frame = 60;
+      if (task_tree_view.clip_capacity_ > 0) {
+        int rounds = (int)task_tree_view.clip_ammo_;
+        if (rounds < 0) rounds = 0;
+        clip_frame = 60 - (int)((60 * rounds) / (int)task_tree_view.clip_capacity_);
+        if (clip_frame < 0) clip_frame = 0;
+        if (clip_frame > 60) clip_frame = 60;
+      }
+
+      // Ammo count: right-aligned at right margin - AmmoInset(4), baseline 4px
+      // below the shared readout baseline, "%-4d".
+      char ammobuf[32];
+      snprintf(ammobuf, sizeof(ammobuf), "%-4d", (int)task_tree_view.clip_ammo_);
+      int ammoW = 4 * char_w;
+      int ammo_x = right_m - 4 - ammoW;
+      draw_text_sys(ammo_x, vh - (bline - 4), ammobuf, 0.0f, 1.0f, 0.4f);
+
+      // Magazine gauge sits left of the ammo count with an 8px gap.
+      if (clip_spr.valid) {
+        int gx = ammo_x - 8 - clip_spr.width;
+        int gy = (bline - 4) - clip_spr.height / 2 - sysLineH / 4;
+        DrawHudFrame(clip_spr, clip_frame, gx, gy, 1.0f, 1.0f, 1.0f, 0.9f);
+      }
+
+      // Weapon name: right-aligned, baseline 2px above the shared baseline.
+      int name_w = (int)wname.length() * char_w;
+      int name_x = right_m - name_w;
+      draw_text_sys(name_x, vh - (bline + 2), wname.c_str(), 0.0f, 1.0f, 0.3f);
+
+      // Green underline below the name (right-aligned at the right margin).
+      glColor4f(0.0f, 0.9f, 0.0f, 0.5f);
+      glLineWidth(2.0f);
+      glBegin(GL_LINES);
+      glVertex2i(name_x - 3, bline);
+      glVertex2i(right_m,    bline);
+      glEnd();
+      glLineWidth(1.0f);
+
+      // Weapon icon above the name (right-aligned), 2px gap.
+      if (wspr.valid) {
+        int wy = bline + sysLineH + 2;                 // bottom of the icon
+        DrawHudFrame(wspr, 0, right_m - wspr.width, wy, 1.0f, 1.0f, 1.0f, 0.95f);
+      }
+
+      // ── 4. Tactical Status / Objective Card (Top Left - StatusScreen style) ─
+      if (!task_tree_view.objective_text_.empty()) {
+        int ox = (int)(vw * 0.015625f);
+        int oy = vh - 52;
+        int pw = 280, ph = 38;
+
+        glColor4f(0.02f, 0.10f, 0.03f, 0.80f);
+        glBegin(GL_QUADS);
+        glVertex2i(ox, oy); glVertex2i(ox + pw, oy);
+        glVertex2i(ox + pw, oy + ph); glVertex2i(ox, oy + ph);
+        glEnd();
+
+        glColor4f(0.0f, 0.8f, 0.2f, 0.85f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2i(ox, oy); glVertex2i(ox + pw, oy);
+        glVertex2i(ox + pw, oy + ph); glVertex2i(ox, oy + ph);
+        glEnd();
+
+        draw_text_sys(ox + 8, 22, task_tree_view.objective_text_.c_str(), 0.0f, 0.95f, 0.25f);
+      }
+
+      // Authored StatusMessage tasks share the retail top-left message column.
+      // The runtime has already applied the fixed-step typewriter state; this
+      // pass only clips the immutable presentation text to the revealed count.
+      const int status_left = (int)(vw * 0.015625f);
+      const int status_top = 62;
+      for (size_t message_index = 0;
+           message_index < task_tree_view.mission_status_messages_.size();
+           ++message_index) {
+        const igi::MissionStatusMessageDisplay& message =
+            task_tree_view.mission_status_messages_[message_index];
+        const size_t visible_character_count = std::min<size_t>(
+            message.revealed_characters,
+            message.text.size());
+        const std::string visible_text = message.text.substr(
+            0,
+            visible_character_count);
+        const int card_top = status_top + static_cast<int>(message_index) * 28;
+        const int card_bottom = card_top + 24;
+        const int card_width = std::min(420, std::max(220,
+            16 + static_cast<int>(visible_text.size()) * 8));
+        glColor4f(0.02f, 0.10f, 0.03f, 0.82f);
+        glBegin(GL_QUADS);
+        glVertex2i(status_left, vh - card_bottom);
+        glVertex2i(status_left + card_width, vh - card_bottom);
+        glVertex2i(status_left + card_width, vh - card_top);
+        glVertex2i(status_left, vh - card_top);
+        glEnd();
+
+        glColor4f(0.0f, 0.8f, 0.2f, 0.85f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2i(status_left, vh - card_bottom);
+        glVertex2i(status_left + card_width, vh - card_bottom);
+        glVertex2i(status_left + card_width, vh - card_top);
+        glVertex2i(status_left, vh - card_top);
+        glEnd();
+        draw_text_sys(
+            status_left + 8,
+            card_top + 5,
+            visible_text.c_str(),
+            0.0f,
+            0.95f,
+            0.25f);
+      }
+
+      if (task_tree_view.mission_timer_remaining_ticks_ >= 0) {
+        const int total_seconds = static_cast<int>(
+            task_tree_view.mission_timer_remaining_ticks_ / 30);
+        char timer_text[32];
+        snprintf(
+            timer_text,
+            sizeof(timer_text),
+            "TIME %02d:%02d",
+            total_seconds / 60,
+            total_seconds % 60);
+        draw_text_sys(vw - 108, 16, timer_text, 1.0f, 0.9f, 0.2f);
+      }
+
+      // The vanilla first-person muzzle cue is normally an authored weapon
+      // sprite. Keep a small deterministic additive fallback so a firearm
+      // still reads as firing when that sprite is not unpacked locally.
+      const float muzzle_flash_alpha = std::clamp(
+          task_tree_view.muzzle_flash_strength_, 0.0f, 1.0f);
+      if (muzzle_flash_alpha > 0.0f) {
+        const int flash_center_x = vw / 2 + std::max(18, vw / 12);
+        const int flash_center_y = vh / 2 - std::max(12, vh / 10);
+        const int outer_radius = std::max(16, std::min(vw, vh) / 18);
+        const int inner_radius = std::max(5, outer_radius / 3);
+
+        glDisable(GL_TEXTURE_2D);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        glColor4f(1.0f, 0.55f, 0.08f, 0.70f * muzzle_flash_alpha);
+        glBegin(GL_TRIANGLE_FAN);
+        glVertex2i(flash_center_x, flash_center_y);
+        glVertex2i(flash_center_x, flash_center_y + outer_radius);
+        glVertex2i(flash_center_x + inner_radius, flash_center_y + inner_radius);
+        glVertex2i(flash_center_x + outer_radius, flash_center_y);
+        glVertex2i(flash_center_x + inner_radius, flash_center_y - inner_radius);
+        glVertex2i(flash_center_x, flash_center_y - outer_radius);
+        glVertex2i(flash_center_x - inner_radius, flash_center_y - inner_radius);
+        glVertex2i(flash_center_x - outer_radius, flash_center_y);
+        glVertex2i(flash_center_x - inner_radius, flash_center_y + inner_radius);
+        glVertex2i(flash_center_x, flash_center_y + outer_radius);
+        glEnd();
+
+        glColor4f(1.0f, 0.95f, 0.70f, 0.85f * muzzle_flash_alpha);
+        glBegin(GL_QUADS);
+        glVertex2i(flash_center_x - inner_radius, flash_center_y - inner_radius);
+        glVertex2i(flash_center_x + inner_radius, flash_center_y - inner_radius);
+        glVertex2i(flash_center_x + inner_radius, flash_center_y + inner_radius);
+        glVertex2i(flash_center_x - inner_radius, flash_center_y + inner_radius);
+        glEnd();
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      }
+
+      // Incoming fire needs an immediate readable cue even when the authored
+      // damage sprite is unavailable. Keep it brief and translucent so the
+      // health bar remains visible and the scene is not hidden behind a full
+      // opaque flash.
+      const float damage_alpha = std::clamp(
+          task_tree_view.player_damage_effect_strength_, 0.0f, 1.0f);
+      if (damage_alpha > 0.0f) {
+        glColor4f(0.85f, 0.03f, 0.02f, 0.28f * damage_alpha);
+        glBegin(GL_QUADS);
+        glVertex2i(0, 0);
+        glVertex2i(vw, 0);
+        glVertex2i(vw, vh);
+        glVertex2i(0, vh);
+        glEnd();
+      }
+
+      // Flashbang exposure is drawn last so it washes out the weapon, HUD, and
+      // scene together, matching the player-facing effect instead of merely
+      // playing an audio cue.
+      const float flash_alpha = std::clamp(
+          task_tree_view.flash_effect_strength_, 0.0f, 1.0f);
+      if (flash_alpha > 0.0f) {
+        glColor4f(1.0f, 1.0f, 1.0f, flash_alpha);
+        glBegin(GL_QUADS);
+        glVertex2i(0, 0);
+        glVertex2i(vw, 0);
+        glVertex2i(vw, vh);
+        glVertex2i(0, vh);
+        glEnd();
+      }
+
+      // The retail map computer takes over the player-facing display. The
+      // simulation has already copied the active objective rows into the
+      // immutable snapshot; this pass only paints the phosphor-style panel.
+      if (task_tree_view.map_computer_open_) {
+        glColor4f(0.005f, 0.025f, 0.012f, 0.96f);
+        glBegin(GL_QUADS);
+        glVertex2i(0, 0);
+        glVertex2i(vw, 0);
+        glVertex2i(vw, vh);
+        glVertex2i(0, vh);
+        glEnd();
+
+        const int panel_left = std::max(24, vw / 10);
+        const int panel_right = std::min(vw - 24, (vw * 9) / 10);
+        const int panel_top = std::max(36, vh / 10);
+        const int panel_bottom = std::min(vh - 36, (vh * 9) / 10);
+        glColor4f(0.0f, 0.75f, 0.18f, 0.80f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2i(panel_left, panel_top);
+        glVertex2i(panel_right, panel_top);
+        glVertex2i(panel_right, panel_bottom);
+        glVertex2i(panel_left, panel_bottom);
+        glEnd();
+
+        draw_text_sys(panel_left + 18, panel_top + 24,
+                      "MAP COMPUTER", 0.0f, 1.0f, 0.30f);
+        draw_text_sys(panel_left + 18, panel_top + 44,
+                      "OBJECTIVES", 0.0f, 0.75f, 0.22f);
+
+        // The map rows remain readable text, but the linked task locations
+        // also need a spatial cue to make the tactical computer useful during
+        // play. The simulation publishes immutable world positions; this
+        // projection converts them to the current top-down map panel without
+        // exposing mutable mission state to the renderer.
+        const int map_left = panel_left + 18;
+        const int map_top = panel_top + 64;
+        const int map_right = panel_right - 18;
+        const int map_bottom = panel_bottom - 64;
+        const igi::RuntimeMapComputerProjection map_projection =
+            igi::BuildRuntimeMapComputerProjection(
+                params.view_define_->pos_,
+                params.view_define_->fovy_,
+                params.view_define_->viewport_width_,
+                params.view_define_->viewport_height_,
+                map_left,
+                map_top,
+                map_right,
+                map_bottom);
+
+        glColor4f(0.0f, 0.35f, 0.12f, 0.55f);
+        glBegin(GL_LINES);
+        for (int grid_line = 0; grid_line <= 8; ++grid_line) {
+          const float horizontal_amount = static_cast<float>(grid_line) / 8.0f;
+          const float x = static_cast<float>(map_left) +
+              horizontal_amount * static_cast<float>(map_right - map_left);
+          const float y = static_cast<float>(map_top) +
+              horizontal_amount * static_cast<float>(map_bottom - map_top);
+          glVertex2f(x, static_cast<float>(map_top));
+          glVertex2f(x, static_cast<float>(map_bottom));
+          glVertex2f(static_cast<float>(map_left), y);
+          glVertex2f(static_cast<float>(map_right), y);
+        }
+        glEnd();
+
+        const glm::vec2 player_marker = map_projection.Project(
+            params.view_define_->pos_);
+        glColor4f(0.2f, 1.0f, 0.35f, 0.95f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2f(player_marker.x, player_marker.y + 8.0f);
+        glVertex2f(player_marker.x + 8.0f, player_marker.y);
+        glVertex2f(player_marker.x, player_marker.y - 8.0f);
+        glVertex2f(player_marker.x - 8.0f, player_marker.y);
+        glEnd();
+
+        for (const igi::RuntimeMapComputerObjective& objective :
+             task_tree_view.map_computer_objectives_) {
+          if (!objective.has_location) {
+            continue;
+          }
+          const glm::vec2 marker = map_projection.Project(objective.location);
+          if (!map_projection.Contains(marker)) {
+            continue;
+          }
+
+          if (objective.state == igi::ObjectiveState::Failed) {
+            glColor4f(1.0f, 0.15f, 0.10f, 0.95f);
+          } else if (objective.state == igi::ObjectiveState::Completed) {
+            glColor4f(0.25f, 0.75f, 1.0f, 0.95f);
+          } else {
+            glColor4f(1.0f, 0.85f, 0.15f, 0.95f);
+          }
+          glBegin(GL_LINE_LOOP);
+          glVertex2f(marker.x, marker.y + 6.0f);
+          glVertex2f(marker.x + 6.0f, marker.y);
+          glVertex2f(marker.x, marker.y - 6.0f);
+          glVertex2f(marker.x - 6.0f, marker.y);
+          glEnd();
+        }
+
+        for (size_t objective_index = 0;
+             objective_index < task_tree_view.map_computer_objectives_.size();
+             ++objective_index) {
+          const igi::RuntimeMapComputerObjective& objective =
+              task_tree_view.map_computer_objectives_[objective_index];
+          const char* state_marker = "[ ]";
+          if (objective.state == igi::ObjectiveState::Completed) {
+            state_marker = "[X]";
+          } else if (objective.state == igi::ObjectiveState::Failed) {
+            state_marker = "[!]";
+          } else if (objective.state == igi::ObjectiveState::Cancelled) {
+            state_marker = "[-]";
+          }
+
+          const int row_y = panel_top + 78 +
+              static_cast<int>(objective_index) * 24;
+          const std::string row_text = std::to_string(objective_index + 1) +
+              " " + state_marker + " " + objective.text;
+          const float red = objective.state == igi::ObjectiveState::Failed
+              ? 1.0f
+              : 0.0f;
+          const float green = objective.state == igi::ObjectiveState::Failed
+              ? 0.25f
+              : 0.95f;
+          draw_text_sys(panel_left + 18, row_y, row_text.c_str(),
+                        red, green, 0.25f);
+        }
+
+        draw_text_sys(panel_left + 18, panel_bottom - 22,
+                      "[MAP COMPUTER] C TO CLOSE", 0.0f, 0.60f, 0.18f);
+      }
+
+      glDisable(GL_BLEND);
+    }
+
     glMatrixMode(GL_PROJECTION);
     glPopMatrix();
     glMatrixMode(GL_MODELVIEW);
@@ -2497,3 +3410,615 @@ void Renderer::Draw(const draw_params_s &params,
   glFlush();
 }
 
+// ---------------------------------------------------------------------------
+// Navigation-graph overlay
+// ---------------------------------------------------------------------------
+
+// Load a single navigation graph for display. The caller maps the selected
+// AIGraph task to graph<taskId>.dat. Read-only display.
+bool Renderer::LoadGraphOverlayFile(const std::string& graphFilePath,
+                                    const glm::dvec3& worldOffset) {
+  graph_overlay_ = GRAPH_Parse(graphFilePath);
+  graph_overlay_path_ = graphFilePath;
+  graph_overlay_offset_ = worldOffset;
+  graph_overlay_selected_ = -1;
+  graph_link_source_ = -1;
+  graph_overlay_dirty_ = false;
+
+  if (graph_overlay_.valid && !graph_overlay_.nodes.empty()) {
+    Logger::Get().Log(LogLevel::INFO,
+        "[GRAPH] Overlay loaded " + std::to_string(graph_overlay_.nodes.size()) +
+        " nodes, " + std::to_string(graph_overlay_.edges.size()) +
+        " edges from: " + graphFilePath);
+    return true;
+  }
+  Logger::Get().Log(LogLevel::INFO, "[GRAPH] Overlay: no usable graph at " + graphFilePath);
+  return false;
+}
+
+bool Renderer::GetGraphNodePos(int id, glm::dvec3& out) const {
+  const GraphNode* n = GRAPH_FindNode(graph_overlay_, id);
+  if (!n) return false;
+  // Return world position (file coords are local to the task graph origin).
+  out = graph_overlay_offset_ + glm::dvec3(n->x, n->y, n->z);
+  return true;
+}
+
+void Renderer::SetGraphNodePos(int id, const glm::dvec3& worldPos) {
+  GraphNode* n = GRAPH_FindNode(graph_overlay_, id);
+  if (!n) return;
+  // Store back as local coords so the saved .dat stays in its native space.
+  const glm::dvec3 local = worldPos - graph_overlay_offset_;
+  n->x = local.x; n->y = local.y; n->z = local.z;
+  graph_overlay_dirty_ = true;
+}
+
+bool Renderer::SaveGraphOverlay() {
+  if (!graph_overlay_.valid || graph_overlay_path_.empty()) return false;
+  // Full serialize so node moves, scales, creates and deletes all persist.
+  if (!GRAPH_Write(graph_overlay_path_, graph_overlay_path_, graph_overlay_)) {
+    Logger::Get().Log(LogLevel::ERR, "[GRAPH] Save failed: " + graph_overlay_path_);
+    return false;
+  }
+  graph_overlay_dirty_ = false;
+  Logger::Get().Log(LogLevel::INFO, "[GRAPH] Saved graph to: " + graph_overlay_path_);
+  return true;
+}
+
+void Renderer::ScaleSelectedGraphNode(float factor) {
+  GraphNode* n = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
+  if (!n) return;
+  n->radius = (factor <= 0.0f) ? 1.0f : n->radius * factor;
+  if (n->radius < 0.05f)  n->radius = 0.05f;
+  if (n->radius > 100.0f) n->radius = 100.0f;
+  graph_overlay_dirty_ = true;
+}
+
+int Renderer::CreateGraphNode() {
+  if (!graph_overlay_.valid) return -1;
+  int maxId = 0;
+  for (const GraphNode& n : graph_overlay_.nodes) maxId = std::max(maxId, n.id);
+  GraphNode nn;
+  nn.id = maxId + 1;
+  nn.radius = 1.0f;
+  // Place near the current selection (offset a little), else near the first node.
+  const GraphNode* anchor = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
+  if (!anchor && !graph_overlay_.nodes.empty()) anchor = &graph_overlay_.nodes.front();
+  if (anchor) { nn.x = anchor->x + 500.0; nn.y = anchor->y + 500.0; nn.z = anchor->z; }
+  graph_overlay_.nodes.push_back(nn);
+  graph_overlay_selected_ = nn.id;
+  graph_overlay_dirty_ = true;
+  Logger::Get().Log(LogLevel::INFO, "[GRAPH] Created node " + std::to_string(nn.id));
+  return nn.id;
+}
+
+void Renderer::DeleteSelectedGraphNode() {
+  const int id = graph_overlay_selected_;
+  if (id < 0) return;
+  auto& ns = graph_overlay_.nodes;
+  ns.erase(std::remove_if(ns.begin(), ns.end(),
+           [id](const GraphNode& n) { return n.id == id; }), ns.end());
+  auto& es = graph_overlay_.edges;
+  es.erase(std::remove_if(es.begin(), es.end(),
+           [id](const GraphEdge& e) { return e.node1 == id || e.node2 == id; }), es.end());
+  graph_overlay_selected_ = -1;
+  graph_overlay_dirty_ = true;
+  Logger::Get().Log(LogLevel::INFO, "[GRAPH] Deleted node " + std::to_string(id));
+}
+
+std::string Renderer::AddGraphLinkStep() {
+  if (!graph_overlay_.valid) return "";
+  // First step: mark the selected node as the link source.
+  if (graph_link_source_ < 0) {
+    if (graph_overlay_selected_ < 0) return "Select a node first, then Alt++";
+    graph_link_source_ = graph_overlay_selected_;
+    return "Link source: node " + std::to_string(graph_link_source_) +
+           " — select target, press Alt++ to link";
+  }
+  // Second step: link source to the currently selected node.
+  const int src = graph_link_source_;
+  const int dst = graph_overlay_selected_;
+  graph_link_source_ = -1;
+  if (dst < 0) return "Link cancelled (no target selected)";
+  if (dst == src) return "Link cancelled (same node)";
+  auto exists = std::find_if(graph_overlay_.edges.begin(), graph_overlay_.edges.end(),
+      [&](const GraphEdge& e) {
+        return (e.node1 == src && e.node2 == dst) || (e.node1 == dst && e.node2 == src);
+      });
+  if (exists != graph_overlay_.edges.end())
+    return "Link " + std::to_string(src) + "-" + std::to_string(dst) + " already exists";
+  GraphEdge e; e.node1 = src; e.node2 = dst; e.link_type = 1;
+  graph_overlay_.edges.push_back(e);
+  graph_overlay_dirty_ = true;
+  Logger::Get().Log(LogLevel::INFO, "[GRAPH] Added link " +
+      std::to_string(src) + "-" + std::to_string(dst));
+  return "Link added " + std::to_string(src) + "-" + std::to_string(dst);
+}
+
+std::string Renderer::RemoveGraphLinkStep() {
+  if (!graph_overlay_.valid) return "";
+  if (graph_link_source_ < 0) {
+    if (graph_overlay_selected_ < 0) return "Select a node first, then Alt+-";
+    graph_link_source_ = graph_overlay_selected_;
+    return "Link source: node " + std::to_string(graph_link_source_) +
+           " — select target, press Alt+- to unlink";
+  }
+  const int src = graph_link_source_;
+  const int dst = graph_overlay_selected_;
+  graph_link_source_ = -1;
+  if (dst < 0) return "Unlink cancelled (no target selected)";
+  if (dst == src) return "Unlink cancelled (same node)";
+  auto it = std::find_if(graph_overlay_.edges.begin(), graph_overlay_.edges.end(),
+      [&](const GraphEdge& e) {
+        return (e.node1 == src && e.node2 == dst) || (e.node1 == dst && e.node2 == src);
+      });
+  if (it == graph_overlay_.edges.end())
+    return "No link between " + std::to_string(src) + "-" + std::to_string(dst);
+  graph_overlay_.edges.erase(it);
+  graph_overlay_dirty_ = true;
+  Logger::Get().Log(LogLevel::INFO, "[GRAPH] Removed link " +
+      std::to_string(src) + "-" + std::to_string(dst));
+  return "Link removed " + std::to_string(src) + "-" + std::to_string(dst);
+}
+
+void Renderer::NudgeSelectedGraphNode(double dx, double dy, double dz) {
+  GraphNode* n = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
+  if (!n) return;
+  n->x += dx; n->y += dy; n->z += dz;
+  graph_overlay_dirty_ = true;
+}
+void Renderer::AdjustSelectedGraphGamma(float d) {
+  GraphNode* n = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
+  if (!n) return;
+  n->gamma += d;
+  graph_overlay_dirty_ = true;
+}
+void Renderer::AdjustSelectedGraphRadius(float d) {
+  GraphNode* n = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
+  if (!n) return;
+  n->radius += d;
+  if (n->radius < 0.05f) n->radius = 0.05f;
+  graph_overlay_dirty_ = true;
+}
+void Renderer::AdjustSelectedGraphMaterial(int d) {
+  GraphNode* n = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
+  if (!n) return;
+  n->material += d;
+  if (n->material < 0)  n->material = 0;
+  if (n->material > 23) n->material = 23;
+  graph_overlay_dirty_ = true;
+}
+void Renderer::ToggleSelectedGraphCriteria(const std::string& key) {
+  GraphNode* n = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
+  if (!n) return;
+  if (n->criteria.find(key) != std::string::npos) n->criteria.clear();
+  else n->criteria = "NODECRITERIA_" + key;
+  graph_overlay_dirty_ = true;
+}
+bool Renderer::GetSelectedGraphNode(GraphNode& out) const {
+  const GraphNode* n = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
+  if (!n) return false;
+  out = *n;
+  return true;
+}
+
+void Renderer::DrawGraphNodePanel(
+    const draw_params_s& params,
+    const std::function<void(int,int,const char*,float,float,float)>& draw_text_sm) {
+  GraphNode node;
+  if (!GetSelectedGraphNode(node)) return;
+
+  const int vpH = params.view_define_->viewport_height_;
+  const glm::dvec3 w = graph_overlay_offset_ + glm::dvec3(node.x, node.y, node.z);
+
+  // Filled quad from a top-down rect (convert to GL bottom-up).
+  auto quad = [&](int x, int y, int wd, int ht, float r, float g, float b, float a) {
+    const float y0 = (float)(vpH - y), y1 = (float)(vpH - (y + ht));
+    glColor4f(r, g, b, a);
+    glBegin(GL_QUADS);
+    glVertex2f((float)x, y1); glVertex2f((float)(x + wd), y1);
+    glVertex2f((float)(x + wd), y0); glVertex2f((float)x, y0);
+    glEnd();
+  };
+  using namespace GraphNodePanel;
+  glEnable(GL_BLEND);
+
+  // Panel background + border (yellow theme — matches PropPanel).
+  quad(PX, PY, PW, PanelHeight(), 0.04f, 0.04f, 0.05f, 0.78f);
+  glColor4f(1.0f, 0.9f, 0.2f, 0.9f); glLineWidth(1.0f);
+  glBegin(GL_LINE_LOOP);
+  glVertex2f((float)PX, (float)(vpH - PY));
+  glVertex2f((float)(PX + PW), (float)(vpH - PY));
+  glVertex2f((float)(PX + PW), (float)(vpH - (PY + PanelHeight())));
+  glVertex2f((float)PX, (float)(vpH - (PY + PanelHeight())));
+  glEnd();
+
+  char buf[96];
+  snprintf(buf, sizeof(buf), "Graph Node  %d", node.id);
+  draw_text_sm(PX + 8, PY + 6, buf, 1.0f, 0.9f, 0.2f);
+
+  // A button helper: filled rect + centered-ish label (yellow theme).
+  auto button = [&](int idx, const char* label, bool active) {
+    int x, y, bw, bh; GetButtonRect(idx, x, y, bw, bh);
+    if (active) quad(x, y, bw, bh, 0.85f, 0.72f, 0.08f, 0.95f);
+    else        quad(x, y, bw, bh, 0.14f, 0.14f, 0.16f, 0.95f);
+    draw_text_sm(x + 5, y + 4, label, 1.0f, 1.0f, 1.0f);
+  };
+
+  // Six numeric rows: label + value, with [-]/[+] buttons.
+  const char* names[kNumericFields] = { "X", "Y", "Z", "Gamma", "Radius", "Mat" };
+  double vals[kNumericFields] = { w.x, w.y, w.z, node.gamma, node.radius, (double)node.material };
+  for (int f = 0; f < kNumericFields; ++f) {
+    int rx, ry, rw, rh; GetButtonRect(kXDn + f * 2, rx, ry, rw, rh);
+    if (f < 5) snprintf(buf, sizeof(buf), "%s: %.2f", names[f], vals[f]);
+    else       snprintf(buf, sizeof(buf), "%s: %d", names[f], node.material);
+    draw_text_sm(PX + 8, ry + 4, buf, 1.0f, 0.9f, 0.2f);
+    button(kXDn + f * 2, "-", false);
+    button(kXDn + f * 2 + 1, "+", false);
+  }
+
+  // Criteria toggles.
+  draw_text_sm(PX + 8, GraphNodePanel::PY + HEADER_H + kNumericFields * ROW_H - 18, "Criteria:", 1.0f, 0.9f, 0.2f);
+  button(kCrDoor,  "DOOR",  node.criteria.find("DOOR")  != std::string::npos);
+  button(kCrView,  "VIEW",  node.criteria.find("VIEW")  != std::string::npos);
+  button(kCrStair, "STAIR", node.criteria.find("STAIR") != std::string::npos);
+
+  // Actions.
+  button(kDelete, "Delete Node", false);
+  button(kSave,   graph_overlay_dirty_ ? "Save Graph *" : "Save Graph", false);
+}
+
+int Renderer::PickGraphNodeAtScreen(int mx, int my, int vpW, int vpH) {
+  if (!graph_overlay_.valid || graph_overlay_.nodes.empty()) return -1;
+  // Same world-coord projection as the overlay draw (proj*view*scale on
+  // offset+local), so picking lines up exactly with the rendered boxes.
+  const glm::mat4 worldToClip =
+      mat_proj_ * mat_view_ *
+      glm::scale(glm::mat4(1.0f), glm::vec3(RENDERER_MODEL_SCALE_DOWN));
+  const float baseH = (float)Config::Get().graphNodeSize * 100.0f;
+  const float kMinThreshPx = 14.0f;
+  int   bestId = -1;
+  float bestD2 = std::numeric_limits<float>::max();
+  for (const GraphNode& n : graph_overlay_.nodes) {
+    const float H = baseH * std::max(1.0f, (float)n.radius);
+    const glm::dvec3 w = graph_overlay_offset_ + glm::dvec3(n.x, n.y, n.z);
+    const glm::vec4 clip = worldToClip * glm::vec4((float)w.x, (float)w.y, (float)w.z, 1.0f);
+    if (clip.w <= 0.0f) continue;
+    const float sx = (clip.x / clip.w * 0.5f + 0.5f) * vpW;
+    const float sy = (-clip.y / clip.w * 0.5f + 0.5f) * vpH;
+    // Project center+(H,0,0) to compute the node's screen-space half-extent so the
+    // hit threshold matches the visible box size at any camera distance.
+    float thresh = kMinThreshPx;
+    const glm::vec4 eClip = worldToClip * glm::vec4((float)w.x + H, (float)w.y, (float)w.z, 1.0f);
+    if (eClip.w > 0.0f) {
+      const float ex = (eClip.x / eClip.w * 0.5f + 0.5f) * vpW;
+      const float ey = (-eClip.y / eClip.w * 0.5f + 0.5f) * vpH;
+      thresh = std::max(kMinThreshPx, std::sqrt((ex - sx) * (ex - sx) + (ey - sy) * (ey - sy)));
+    }
+    const float dx = sx - (float)mx, dy = sy - (float)my;
+    const float d2 = dx * dx + dy * dy;
+    if (d2 < thresh * thresh && d2 < bestD2) { bestD2 = d2; bestId = n.id; }
+  }
+  return bestId;
+}
+
+// Build the hover/selection info text for a node: id, criteria, world position,
+// gamma/radius, and each link with its length (IGI units).
+static std::string BuildGraphNodeInfo(const GraphFile& g, const glm::dvec3& offset, int id) {
+  const GraphNode* n = GRAPH_FindNode(g, id);
+  if (!n) return "";
+  const glm::dvec3 w = offset + glm::dvec3(n->x, n->y, n->z);
+  char buf[256];
+  std::string s;
+  snprintf(buf, sizeof(buf), "Node %d", id);                       s  = buf;
+  s += "\nCriteria: " + (n->criteria.empty() ? std::string("(none)") : n->criteria);
+  snprintf(buf, sizeof(buf), "\nX: %.1f  Y: %.1f  Z: %.1f", w.x, w.y, w.z); s += buf;
+  snprintf(buf, sizeof(buf), "\nGamma: %.3f  Radius: %.3f", n->gamma, n->radius); s += buf;
+
+  std::string links; int cnt = 0;
+  for (const GraphEdge& e : g.edges) {
+    int other = (e.node1 == id) ? e.node2 : (e.node2 == id) ? e.node1 : -1;
+    if (other < 0) continue;
+    const GraphNode* o = GRAPH_FindNode(g, other);
+    if (!o) continue;
+    const double dx = o->x - n->x, dy = o->y - n->y, dz = o->z - n->z;
+    snprintf(buf, sizeof(buf), "\n  -> %d  (len %.0f)", other, std::sqrt(dx*dx + dy*dy + dz*dz));
+    links += buf; ++cnt;
+  }
+  snprintf(buf, sizeof(buf), "\nLinks: %d", cnt); s += buf;
+  s += links;
+  return s;
+}
+
+void Renderer::DrawGraphOverlayInternal(
+    const draw_params_s& params,
+    const std::function<void(int,int,const char*,float,float,float)>& draw_text_sm,
+    int mouseX, int mouseY) {
+  if (!graph_overlay_.valid || graph_overlay_.nodes.empty()) return;
+
+  const int vpW = params.view_define_->viewport_width_;
+  const int vpH = params.view_define_->viewport_height_;
+
+  // EXACT same transform the 3D scene/terrain uses (renderer.cpp mvp_objects_):
+  // proj * view * scale applied to full WORLD coordinates. Node coords are local
+  // to the task graph origin, so add the offset in double precision and project
+  // the world point - this keeps the overlay locked to the world like real
+  // geometry (no swimming/jitter relative to the terrain as the camera moves).
+  const glm::mat4 worldToClip =
+      mat_proj_ * mat_view_ *
+      glm::scale(glm::mat4(1.0f), glm::vec3(RENDERER_MODEL_SCALE_DOWN));
+
+  // Project a node LOCAL point to GL screen pixels (bottom-up) + window depth.
+  auto project = [&](double lx, double ly, double lz, float& sx, float& sy, float& sz) -> bool {
+    const glm::dvec3 w = graph_overlay_offset_ + glm::dvec3(lx, ly, lz);
+    const glm::vec4 clip = worldToClip * glm::vec4((float)w.x, (float)w.y, (float)w.z, 1.0f);
+    if (clip.w <= 0.0f) return false;
+    sx = (clip.x / clip.w * 0.5f + 0.5f) * vpW;
+    sy = (clip.y / clip.w * 0.5f + 0.5f) * vpH;
+    sz = (clip.z / clip.w * 0.5f + 0.5f);  // window-space depth [0,1]
+    return true;
+  };
+
+  // Node screen-space half-size (pixels) — used only for hover threshold and label offset.
+  auto hsFor = [](float radius) -> float {
+    float h = (radius > 0.01f ? radius : 0.5f) * 14.0f;
+    return h < 5.0f ? 5.0f : (h > 30.0f ? 30.0f : h);
+  };
+
+  // Precompute screen position per node (in-front-of-camera check only; depth
+  // occlusion is now handled by the GPU in the 3D node pass).
+  struct NodeScreen { float sx, sy; bool vis; };
+  const size_t NN = graph_overlay_.nodes.size();
+  std::vector<NodeScreen> nsv(NN);
+  std::unordered_map<int, int> idIdx;
+  for (size_t i = 0; i < NN; ++i) {
+    const GraphNode& n = graph_overlay_.nodes[i];
+    idIdx[n.id] = static_cast<int>(i);
+    float sx = 0, sy = 0, sz = 0;
+    bool vis = project(n.x, n.y, n.z, sx, sy, sz);
+    if (vis) {
+      const int ix = (int)sx, iy = (int)sy;
+      if (ix < 0 || iy < 0 || ix >= vpW || iy >= vpH) vis = false;
+    }
+    nsv[i] = { sx, sy, vis };
+  }
+  auto nsById = [&](int id) -> const NodeScreen* {
+    auto it = idIdx.find(id); return it == idIdx.end() ? nullptr : &nsv[it->second];
+  };
+
+  // --- Hover detection (visible, non-occluded nodes only). ---
+  int hoveredId = -1;
+  {
+    float bestD2 = 1e30f;
+    for (size_t i = 0; i < NN; ++i) {
+      if (!nsv[i].vis) continue;
+      const GraphNode& n = graph_overlay_.nodes[i];
+      const float dx = nsv[i].sx - (float)mouseX;
+      const float dy = (vpH - nsv[i].sy) - (float)mouseY;
+      const float d2 = dx * dx + dy * dy;
+      const float thr = hsFor(n.radius) + 6.0f;
+      if (d2 < thr * thr && d2 < bestD2) { bestD2 = d2; hoveredId = n.id; }
+    }
+  }
+  const int activeId = (hoveredId >= 0) ? hoveredId : graph_overlay_selected_;
+
+  glEnable(GL_BLEND);
+
+  // Screen-space rings for selected (yellow) and hovered (white) nodes. The 3D
+  // solid boxes are drawn in DrawGraphNodes3D (before the HUD); the rings are
+  // intentionally in HUD space so they always show on top for quick identification.
+  // Highlight rings for selected (yellow) and hovered (white), if visible.
+  auto ring = [&](int id, float h, float r, float g, float b) {
+    const NodeScreen* s = nsById(id);
+    if (!s || !s->vis) return;
+    glColor4f(r, g, b, 1.0f);
+    glLineWidth(2.0f);
+    glBegin(GL_LINE_LOOP);
+    glVertex2f(s->sx - h, s->sy - h); glVertex2f(s->sx + h, s->sy - h);
+    glVertex2f(s->sx + h, s->sy + h); glVertex2f(s->sx - h, s->sy + h);
+    glEnd();
+  };
+  if (graph_overlay_selected_ >= 0) {
+    const GraphNode* s = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
+    if (s) ring(graph_overlay_selected_, hsFor(s->radius) + 4.0f, 1.0f, 0.9f, 0.2f);
+  }
+  if (hoveredId >= 0) {
+    const GraphNode* h = GRAPH_FindNode(graph_overlay_, hoveredId);
+    if (h) ring(hoveredId, hsFor(h->radius) + 3.0f, 1.0f, 1.0f, 1.0f);
+  }
+  // Link source node (two-step link edit) — green dashed-style double ring.
+  if (graph_link_source_ >= 0 && graph_link_source_ != graph_overlay_selected_) {
+    const GraphNode* ls = GRAPH_FindNode(graph_overlay_, graph_link_source_);
+    if (ls) {
+      ring(graph_link_source_, hsFor(ls->radius) + 6.0f, 0.2f, 1.0f, 0.2f);
+      ring(graph_link_source_, hsFor(ls->radius) + 9.0f, 0.2f, 1.0f, 0.2f);
+    }
+  }
+
+  // --- Node id labels (visible nodes only, top-down y). ---
+  if (graph_overlay_show_labels_) {
+    for (size_t i = 0; i < NN; ++i) {
+      if (!nsv[i].vis) continue;
+      const GraphNode& n = graph_overlay_.nodes[i];
+      char lbl[16]; snprintf(lbl, sizeof(lbl), "%d", n.id);
+      draw_text_sm((int)nsv[i].sx + (int)hsFor(n.radius) + 2, vpH - (int)nsv[i].sy - 6, lbl, 1.0f, 1.0f, 1.0f);
+    }
+  }
+
+  // --- Title banner: graph id + Area (from graph_level<N>.json) + counts. ---
+  {
+    char title[200];
+    snprintf(title, sizeof(title), "Graph %s%s%s   (%zu nodes, %zu links)%s",
+             graph_overlay_taskid_.empty() ? "?" : graph_overlay_taskid_.c_str(),
+             graph_overlay_area_.empty() ? "" : " - ",
+             graph_overlay_area_.c_str(),
+             graph_overlay_.nodes.size(), graph_overlay_.edges.size(),
+             graph_overlay_show_labels_ ? "" : "   [labels off]");
+    draw_text_sm(360, 22, title, 1.0f, 0.85f, 0.4f);
+  }
+
+  // --- Info tooltip for the hovered node (or, if none, the selected node). ---
+  if (activeId >= 0) {
+    const std::string info = BuildGraphNodeInfo(graph_overlay_, graph_overlay_offset_, activeId);
+    int lines = 1; for (char c : info) if (c == '\n') ++lines;
+
+    int tx, ty;
+    if (hoveredId >= 0) { tx = mouseX + 16; ty = mouseY + 16; }
+    else {
+      const NodeScreen* s = nsById(activeId);
+      if (s) { tx = (int)s->sx + 12; ty = vpH - (int)s->sy + 8; }
+      else { tx = 360; ty = 80; }
+    }
+    const int boxW = 230, boxH = lines * 14 + 8;
+    if (tx + boxW > vpW) tx = vpW - boxW - 4;
+    if (ty + boxH > vpH) ty = vpH - boxH - 4;
+
+    // Dark background panel (top-down rect -> GL bottom-up quad).
+    const float gx0 = (float)(tx - 6),       gx1 = (float)(tx + boxW);
+    const float gy0 = (float)(vpH - (ty - 6)), gy1 = (float)(vpH - (ty + boxH));
+    glColor4f(0.05f, 0.05f, 0.07f, 0.85f);
+    glBegin(GL_QUADS);
+    glVertex2f(gx0, gy1); glVertex2f(gx1, gy1); glVertex2f(gx1, gy0); glVertex2f(gx0, gy0);
+    glEnd();
+    glColor4f(1.0f, 0.9f, 0.2f, 0.9f);
+    glLineWidth(1.0f);
+    glBegin(GL_LINE_LOOP);
+    glVertex2f(gx0, gy1); glVertex2f(gx1, gy1); glVertex2f(gx1, gy0); glVertex2f(gx0, gy0);
+    glEnd();
+
+    draw_text_sm(tx, ty, info.c_str(), 1.0f, 1.0f, 1.0f);
+  }
+}
+
+void Renderer::DrawGraphNodes3D(const draw_params_s& params) {
+  if (!graph_overlay_.valid || graph_overlay_.nodes.empty()) return;
+
+  // Switch from object shader to fixed-function for 3D graph geometry.
+  glUseProgram(0);
+  glBindVertexArray(0);
+  glBindBufferBase(GL_UNIFORM_BUFFER, 0, 0);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, 0);
+  glDisable(GL_TEXTURE_2D);
+  glDisable(GL_LIGHTING);
+
+  // Same world→clip transform as the 3D scene: proj * view * scale.
+  glMatrixMode(GL_PROJECTION);
+  glLoadMatrixf(glm::value_ptr(mat_proj_));
+  glMatrixMode(GL_MODELVIEW);
+  const glm::mat4 mv = mat_view_ *
+      glm::scale(glm::mat4(1.0f), glm::vec3(RENDERER_MODEL_SCALE_DOWN));
+  glLoadMatrixf(glm::value_ptr(mv));
+
+  glEnable(GL_DEPTH_TEST);
+  glDepthMask(GL_TRUE);
+  glDepthFunc(GL_LEQUAL);
+  glDisable(GL_CULL_FACE);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+  // Box half-extent in IGI world units, driven by QGraphNodeSize config and per-node radius.
+  const float baseH = (float)Config::Get().graphNodeSize * 100.0f;
+
+  // Draw solid cube faces with per-face shading (no GL lighting needed).
+  glBegin(GL_QUADS);
+  for (const GraphNode& n : graph_overlay_.nodes) {
+    const float H = baseH * std::max(1.0f, (float)n.radius);
+    const glm::dvec3 w = graph_overlay_offset_ + glm::dvec3(n.x, n.y, n.z);
+    const float cx = (float)w.x, cy = (float)w.y;
+    // Box sits entirely above the node's Z so it never clips into the ground.
+    const float zBot = (float)w.z, zTop = zBot + H * 2.0f;
+
+    float r, g, b;
+    if (n.id == graph_overlay_selected_)      { r=1.0f;  g=0.6f;  b=0.0f;  }
+    else switch (GRAPH_NodeKind(n)) {
+      case GraphNodeKind::Door:  r=1.0f;  g=1.0f;  b=0.0f;  break;
+      case GraphNodeKind::Stair: r=1.0f;  g=0.0f;  b=1.0f;  break;
+      case GraphNodeKind::View:  r=0.0f;  g=1.0f;  b=1.0f;  break;
+      default:                   r=0.85f; g=0.12f; b=0.12f; break;
+    }
+
+    // Top face (z+) — brightest
+    glColor4f(r, g, b, 1.0f);
+    glVertex3f(cx-H, cy-H, zTop); glVertex3f(cx+H, cy-H, zTop);
+    glVertex3f(cx+H, cy+H, zTop); glVertex3f(cx-H, cy+H, zTop);
+
+    // Front/back faces (y±) — medium
+    glColor4f(r*0.72f, g*0.72f, b*0.72f, 1.0f);
+    glVertex3f(cx-H, cy-H, zBot); glVertex3f(cx+H, cy-H, zBot);
+    glVertex3f(cx+H, cy-H, zTop); glVertex3f(cx-H, cy-H, zTop);
+    glVertex3f(cx+H, cy+H, zBot); glVertex3f(cx-H, cy+H, zBot);
+    glVertex3f(cx-H, cy+H, zTop); glVertex3f(cx+H, cy+H, zTop);
+
+    // Left/right faces (x±) — slightly darker
+    glColor4f(r*0.58f, g*0.58f, b*0.58f, 1.0f);
+    glVertex3f(cx-H, cy+H, zBot); glVertex3f(cx-H, cy-H, zBot);
+    glVertex3f(cx-H, cy-H, zTop); glVertex3f(cx-H, cy+H, zTop);
+    glVertex3f(cx+H, cy-H, zBot); glVertex3f(cx+H, cy+H, zBot);
+    glVertex3f(cx+H, cy+H, zTop); glVertex3f(cx+H, cy-H, zTop);
+
+    // Bottom face (z-) — darkest
+    glColor4f(r*0.38f, g*0.38f, b*0.38f, 1.0f);
+    glVertex3f(cx+H, cy-H, zBot); glVertex3f(cx-H, cy-H, zBot);
+    glVertex3f(cx-H, cy+H, zBot); glVertex3f(cx+H, cy+H, zBot);
+  }
+  glEnd();
+
+  // Wireframe outline for the selected node (yellow, slightly oversized).
+  if (graph_overlay_selected_ >= 0) {
+    const GraphNode* sn = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
+    if (sn) {
+      const float H = baseH * std::max(1.0f, (float)sn->radius);
+      const glm::dvec3 sw = graph_overlay_offset_ + glm::dvec3(sn->x, sn->y, sn->z);
+      const float cx=(float)sw.x, cy=(float)sw.y, OH=H*1.08f;
+      // Outline sits 8% oversized around the box; box runs [cz, cz+2H] so outline runs
+      // [cz-(OH-H), cz+2H+(OH-H)] = [cz-0.08H, cz+2.08H].
+      const float oBot = (float)sw.z - (OH - H);
+      const float oTop = (float)sw.z + H*2.0f + (OH - H);
+      glColor4f(1.0f, 0.9f, 0.2f, 1.0f);
+      glLineWidth(2.5f);
+      glBegin(GL_LINES);
+      // Bottom ring (at ground level, slightly below box bottom)
+      glVertex3f(cx-OH,cy-OH,oBot); glVertex3f(cx+OH,cy-OH,oBot);
+      glVertex3f(cx+OH,cy-OH,oBot); glVertex3f(cx+OH,cy+OH,oBot);
+      glVertex3f(cx+OH,cy+OH,oBot); glVertex3f(cx-OH,cy+OH,oBot);
+      glVertex3f(cx-OH,cy+OH,oBot); glVertex3f(cx-OH,cy-OH,oBot);
+      // Top ring
+      glVertex3f(cx-OH,cy-OH,oTop); glVertex3f(cx+OH,cy-OH,oTop);
+      glVertex3f(cx+OH,cy-OH,oTop); glVertex3f(cx+OH,cy+OH,oTop);
+      glVertex3f(cx+OH,cy+OH,oTop); glVertex3f(cx-OH,cy+OH,oTop);
+      glVertex3f(cx-OH,cy+OH,oTop); glVertex3f(cx-OH,cy-OH,oTop);
+      // Verticals
+      glVertex3f(cx-OH,cy-OH,oBot); glVertex3f(cx-OH,cy-OH,oTop);
+      glVertex3f(cx+OH,cy-OH,oBot); glVertex3f(cx+OH,cy-OH,oTop);
+      glVertex3f(cx+OH,cy+OH,oBot); glVertex3f(cx+OH,cy+OH,oTop);
+      glVertex3f(cx-OH,cy+OH,oBot); glVertex3f(cx-OH,cy+OH,oTop);
+      glEnd();
+    }
+  }
+
+  // Edges as 3D lines between node centres.
+  glLineWidth(1.5f);
+  glBegin(GL_LINES);
+  for (const GraphEdge& e : graph_overlay_.edges) {
+    const GraphNode* na = GRAPH_FindNode(graph_overlay_, e.node1);
+    const GraphNode* nb = GRAPH_FindNode(graph_overlay_, e.node2);
+    if (!na || !nb) continue;
+    const glm::dvec3 wa = graph_overlay_offset_ + glm::dvec3(na->x, na->y, na->z);
+    const glm::dvec3 wb = graph_overlay_offset_ + glm::dvec3(nb->x, nb->y, nb->z);
+    // Draw edges at the vertical centre of the node boxes (z + H) so they sit
+    // above the ground and are clearly visible, not buried at ground level.
+    const float Ha = baseH * std::max(1.0f, (float)na->radius);
+    const float Hb = baseH * std::max(1.0f, (float)nb->radius);
+    const bool active = graph_overlay_selected_ >= 0 &&
+                        (e.node1 == graph_overlay_selected_ || e.node2 == graph_overlay_selected_);
+    if (active) glColor4f(1.0f, 0.6f, 0.0f, 0.95f);
+    else        glColor4f(0.72f, 0.72f, 0.72f, 0.55f);
+    glVertex3f((float)wa.x, (float)wa.y, (float)wa.z + Ha);
+    glVertex3f((float)wb.x, (float)wb.y, (float)wb.z + Hb);
+  }
+  glEnd();
+
+  glLineWidth(1.0f);
+  glDepthFunc(GL_LESS);
+}

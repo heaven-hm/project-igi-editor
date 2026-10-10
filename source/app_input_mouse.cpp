@@ -4,8 +4,20 @@
  *          Split from app_input.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include "renderer/object_lightmap.h"
 
 void App::Input_OnMouseWheel(int wheel, int direction, int x, int y) {
+	if (in_game_mode_ && IsGameplayInputFocused() &&
+		!gameplay_host_.IsGameplayWindowCurrent()) return;
+	if (in_game_mode_ && IsGameplayInputFocused() && !pause_mode_) {
+		// Weapon switching is disabled in play mode; only the map computer
+		// consumes the wheel for zoom.
+		if (gameplay_host_.GetWorld().IsMapComputerOpen()) {
+			gameplay_host_.GetInputRouter().OnMouseWheel(direction);
+		}
+		return;
+	}
+	if (in_game_mode_ && IsGameplayInputFocused() && pause_mode_) return;
 	if (show_help_) {
 		// Scroll keybindings help panel
 		if (direction > 0) { if (help_scroll_offset_ > 0) help_scroll_offset_--; }
@@ -31,16 +43,99 @@ void App::Input_OnMouseWheel(int wheel, int direction, int x, int y) {
 }
 
 void App::Input_OnMouse(int button, int state, int x, int y) {
-	bool enableCameraMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
+	if (in_game_mode_ && IsGameplayInputFocused() &&
+		!gameplay_host_.IsGameplayWindowCurrent()) return;
 
-	// Update mouse position first so EditorProcessClick uses correct coords
+	if (in_game_mode_ && IsGameplayInputFocused() && !pause_mode_) {
+		// Weapon fire/aim buttons are disabled in play mode (no weapon
+		// gameplay); swallow them so nothing downstream reacts.
+		if (gameplay_host_.GetWorld().IsMapComputerOpen()) {
+			gameplay_host_.GetInputRouter().OnMouseButton(1, state == GLUT_DOWN);
+		}
+		// Keep relative-look deltas measured from the recenter point. A click
+		// event may arrive at an arbitrary screen coordinate and must not create
+		// a one-frame camera jump on the next motion callback.
+		mouse_state_.prior_x_ = gameplay_viewport_width_ >> 1;
+		mouse_state_.prior_y_ = gameplay_viewport_height_ >> 1;
+		return;
+	}
+
+	// Update mouse position first so EditorProcessClick uses correct coords.
 	mouse_state_.prior_x_ = x;
 	mouse_state_.prior_y_ = y;
+
+	bool enableCameraMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
 
 	if (button == GLUT_LEFT_BUTTON) {
 		if (GLUT_DOWN == state) {
 			mouse_state_.left_button_down_ = true;
-			
+			// Any left-click outside the AI Script text box should drop the
+			// current selection so stale highlighting doesn't linger. The
+			// AIScriptText click handler re-installs the selection if the
+			// user is dragging inside the text box.
+			if (!ai_text_dragging_) {
+				ClearPropTextSelection();
+			}
+
+			// Graph node properties panel (left side): handle button clicks first.
+			if (IsEditorInputActive() && renderer_.IsGraphOverlayVisible() && renderer_.GraphSelected() >= 0 &&
+			    !enableCameraMode && GraphNodePanel::InPanel(x, y)) {
+				const double POS = 256.0; const float GAM = 0.1f, RAD = 0.25f;
+				if (GraphNodePanel::HitTest(x, y) >= 0) {
+					// Any graph node panel action is undoable
+					PushUndoState();
+				}
+				switch (GraphNodePanel::HitTest(x, y)) {
+					case GraphNodePanel::kXDn: renderer_.NudgeSelectedGraphNode(-POS, 0, 0); break;
+					case GraphNodePanel::kXUp: renderer_.NudgeSelectedGraphNode(+POS, 0, 0); break;
+					case GraphNodePanel::kYDn: renderer_.NudgeSelectedGraphNode(0, -POS, 0); break;
+					case GraphNodePanel::kYUp: renderer_.NudgeSelectedGraphNode(0, +POS, 0); break;
+					case GraphNodePanel::kZDn: renderer_.NudgeSelectedGraphNode(0, 0, -POS); break;
+					case GraphNodePanel::kZUp: renderer_.NudgeSelectedGraphNode(0, 0, +POS); break;
+					case GraphNodePanel::kGDn: renderer_.AdjustSelectedGraphGamma(-GAM); break;
+					case GraphNodePanel::kGUp: renderer_.AdjustSelectedGraphGamma(+GAM); break;
+					case GraphNodePanel::kRDn: renderer_.AdjustSelectedGraphRadius(-RAD); break;
+					case GraphNodePanel::kRUp: renderer_.AdjustSelectedGraphRadius(+RAD); break;
+					case GraphNodePanel::kMDn: renderer_.AdjustSelectedGraphMaterial(-1); break;
+					case GraphNodePanel::kMUp: renderer_.AdjustSelectedGraphMaterial(+1); break;
+					case GraphNodePanel::kCrDoor:  renderer_.ToggleSelectedGraphCriteria("DOOR"); break;
+					case GraphNodePanel::kCrView:  renderer_.ToggleSelectedGraphCriteria("VIEW"); break;
+					case GraphNodePanel::kCrStair: renderer_.ToggleSelectedGraphCriteria("STAIR"); break;
+					case GraphNodePanel::kDelete:  renderer_.DeleteSelectedGraphNode(); break;
+					case GraphNodePanel::kSave:    SaveCurrentLevel(); status_message_ = "Graph + level saved."; break;
+					default: break;
+				}
+				return;  // consume any click inside the panel
+			}
+
+			// Graph overlay editing: left-click on a node selects it and begins a
+			// drag; clicking empty space deselects. Only intercepts the click when
+			// the overlay is visible and a node is actually under the cursor, so
+			// normal object/terrain selection is unaffected.
+			if (IsEditorInputActive() && renderer_.IsGraphOverlayVisible() && !enableCameraMode) {
+				int picked = renderer_.PickGraphNodeAtScreen(
+					x, y, window_state_.viewport_width_, window_state_.viewport_height_);
+				if (picked >= 0) {
+					renderer_.SetGraphSelected(picked);
+					show_hud_ = false;
+					prop_editor_open_ = false;
+					glm::dvec3 p;
+					if (renderer_.GetGraphNodePos(picked, p)) {
+						// Capture graph state before the drag so a move is undoable.
+						PushUndoState();
+						graph_node_manip_.active_  = true;
+						graph_node_manip_.start_x_ = x;
+						graph_node_manip_.start_y_ = y;
+						graph_node_manip_.start_pos_ = p;
+					}
+					Logger::Get().Log(LogLevel::INFO,
+						"[App] Graph node selected: " + std::to_string(picked));
+					return;
+				}
+				renderer_.SetGraphSelected(-1);  // clicked empty space: deselect, fall through
+				show_hud_ = true;
+			}
+
 			if (enableCameraMode) {
 				int cx = window_state_.viewport_width_ >> 1;
 				int cy = window_state_.viewport_height_ >> 1;
@@ -63,8 +158,8 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 				return;
 			}
 			
-			// C2: Property editor click handling (IGI2-style left panel)
-			if (prop_editor_open_ && selected_object_index_ >= 0) {
+			// C2: Property editor click handling.
+			if (IsEditorInputActive() && prop_editor_open_ && selected_object_index_ >= 0) {
 				auto& objects = level_.GetLevelObjects().GetObjects();
 				if (selected_object_index_ < (int)objects.size()) {
 					LevelObject& obj = objects[selected_object_index_];
@@ -80,7 +175,10 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 							const TaskSchema* cscp = GetSchema(objects[ci].type);
 							if (cscp && !cscp->empty()) children.push_back({ci, cscp});
 						}
-						PropPanel::Layout L = PropPanel::BuildLayout(schema, is_ai, children);
+						int animBoneHierarchy; std::vector<int> animIds; int animActiveId; bool animIsPlaying;
+						ComputePropAnimUiState(animBoneHierarchy, animIds, animActiveId, animIsPlaying);
+						bool showLightmapButton = (obj.type == "Building" || obj.type == "EditRigidObj");
+						PropPanel::Layout L = PropPanel::BuildLayout(schema, is_ai, children, animBoneHierarchy, animIds, showLightmapButton);
 						// Apply the same vertical scroll the renderer uses so hit-tests align.
 						if (prop_panel_scroll_ > 0)
 							for (auto& w : L.widgets) { w.y1 -= prop_panel_scroll_; w.y2 -= prop_panel_scroll_; }
@@ -118,7 +216,17 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 									return 0.f;
 								};
 
-								if (w.kind == K::NoteBox) {
+								if (w.kind == K::AnimIdButton) {
+									if (w.comp >= 0) ToggleAnimationForObject(selected_object_index_, w.comp);
+									return;
+								} else if (w.kind == K::LightmapButton) {
+									// Resolve + apply this object's baked lightmap. Moving the
+									// object afterward adjusts it live, so there's no separate
+									// "recalculate" action — the game-facing .olm rewrite for
+									// moved objects happens automatically on Save.
+									CalculateLightmapForSelectedObject();
+									return;
+								} else if (w.kind == K::NoteBox) {
 									prop_edit_obj_index_ = tIdx;
 									prop_text_edit_field_ = -2; // sentinel: editing note
 									prop_text_buf_ = tobj.name;
@@ -196,6 +304,24 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 										if (len > 0 && (ls + len) <= (int)ai_script_text_.size() &&
 										    ai_script_text_[ls + len - 1] == '\n') --len;
 										prop_text_caret_ = ls + std::min(click_col, len);
+										// Click in the AI Script text starts a possible
+										// drag-selection. Shift+click extends from the
+										// existing anchor (or the caret if no anchor).
+										const bool shiftDown = (glutGetModifiers() & GLUT_ACTIVE_SHIFT) != 0;
+										if (shiftDown && prop_text_sel_anchor_ < 0) {
+											prop_text_sel_anchor_ = prop_text_caret_;
+										} else if (!shiftDown) {
+											prop_text_sel_anchor_ = prop_text_caret_;
+											prop_text_sel_focus_  = -1;
+										}
+										ai_text_dragging_  = true;
+										// Stash the box geometry so Input_OnMotion can map
+										// subsequent cursor positions back to caret indices
+										// for drag-selection.
+										ai_text_box_x1_ = w.x1;
+										ai_text_box_y1_ = w.y1;
+										ai_text_box_w_  = w.x2 - w.x1;
+										ai_text_box_h_  = w.y2 - w.y1;
 									}
 								} else {
 									// PosZSlider / OriSlider / RgbSlider / NumSlider — single-value drag
@@ -217,7 +343,7 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 			if (pause_mode_) {
 				// *** Layout MUST match renderer_draw.cpp pause menu exactly ***
 				const int menu_w = 460;
-				const int menu_h = 480;
+				const int menu_h = 714; // matches renderer_draw.cpp (Bake All Lightmaps row added)
 				const int menu_x = (window_state_.viewport_width_  - menu_w) / 2;
 				const int screen_menu_top = (window_state_.viewport_height_ - menu_h) / 2;
 
@@ -227,50 +353,69 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 					int clicked_input = -1;
 
 					int btn_idx = 0;
-					int RESUME_ROW = btn_idx++;
-					int FONT_ROW = btn_idx++;
+int RESUME_ROW = btn_idx++;
+				int MODE_ROW = btn_idx++;
+				int CLIP_ROW = btn_idx++;
+				int FONT_ROW = btn_idx++;
 					int LEVEL_ROW = btn_idx++;
+					int AUTOSAVE_ROW = btn_idx++;
 					int SEARCH_ROW = btn_idx++;
+					int MUSIC_ROW = btn_idx++;
+					int LIGHTMAPS_ROW = btn_idx++;
+					int LIGHTMAPS_CALC_ROW = btn_idx++;
 					int TERRAIN_HEADER_ROW = btn_idx++;
-					int TERRAIN_TEX_ROW = -1, TERRAIN_HGT_ROW = -1, TERRAIN_DSC_ROW = -1;
-					if (pause_terrain_expanded_) {
-						TERRAIN_TEX_ROW = btn_idx++;
-						TERRAIN_HGT_ROW = btn_idx++;
-						TERRAIN_DSC_ROW = btn_idx++;
-					}
+				int TERRAIN_TEX_ROW = -1, TERRAIN_HGT_ROW = -1, TERRAIN_DSC_ROW = -1, TERRAIN_FOG_ROW = -1, TERRAIN_FOGINT_ROW = -1;
+				if (pause_terrain_expanded_) {
+					TERRAIN_TEX_ROW = btn_idx++;
+					TERRAIN_HGT_ROW = btn_idx++;
+					TERRAIN_DSC_ROW = btn_idx++;
+					TERRAIN_FOG_ROW = btn_idx++;
+					TERRAIN_FOGINT_ROW = btn_idx++;
+				}
 					int RESET_ROW = btn_idx++;
 					int SAVE_ROW = btn_idx++;
 					int QUIT_ROW = btn_idx++;
 
+					const int row_h = 38;
+					const int first_row_y = screen_menu_top + 90;
 					auto btn_hit2 = [&](int idx) -> bool {
-						int ry = screen_menu_top + 85 + idx * 35;
-						return (y >= ry - 15 && y <= ry + 15);
+						int ry = first_row_y + idx * row_h;
+						return (y >= ry - 16 && y <= ry + 16);
 					};
 
 					if      (btn_hit2(RESUME_ROW)) { TogglePauseMenu(); }
-					else if (btn_hit2(FONT_ROW)) {
-						const int sz_box_w = 34, btn_w = 22, gap = 6, label_w = 96, label_gap = 16;
-						const int group_w = label_w + label_gap + btn_w + gap + sz_box_w + gap + btn_w;
+else if (btn_hit2(MODE_ROW))   { ToggleGamePlayMode(); TogglePauseMenu(); }
+				else if (btn_hit2(CLIP_ROW))  { noclip_mode_ = !noclip_mode_; }
+				else if (btn_hit2(FONT_ROW)) {
+						// Layout MUST match renderer: dynamic label width, val_w=44
+						const int btn_w = 22, gap = 6, val_w = 44, label_gap = 14;
+						char font_lbl[32];
+						snprintf(font_lbl, sizeof(font_lbl), "Font: %s",
+								 Config::Get().useEditorFont ? "Editor" : "System");
+						int label_px = (int)strlen(font_lbl) * 6;
+						int group_w = label_px + label_gap + btn_w + gap + val_w + gap + btn_w;
 						int gx = menu_x + (menu_w - group_w) / 2;
-						int minus_x = gx + label_w + label_gap;
+						int minus_x = gx + label_px + label_gap;
 						int box_x   = minus_x + btn_w + gap;
-						int plus_x  = box_x + sz_box_w + gap;
+						int plus_x  = box_x + val_w + gap;
 						int& fs = Config::Get().systemFontSize;
-						if (x >= minus_x && x < minus_x + 22) {
+						if (x >= minus_x && x < minus_x + btn_w) {
 							fs = std::max(8, fs - 1); Config::Save();
-						} else if (x >= plus_x && x < plus_x + 22) {
+						} else if (x >= plus_x && x < plus_x + btn_w) {
 							fs = std::min(32, fs + 1); Config::Save();
 						} else if (x < minus_x) {
 							Config::Get().useEditorFont = !Config::Get().useEditorFont; Config::Save();
 						}
 					}
 					else if (btn_hit2(LEVEL_ROW)) {
-						// Level spinner: [-] [N] [+] — layout MUST match renderer
-						const int num_box_w = 40, btn_w = 22, gap = 6, label_w = 96, label_gap = 16;
-						const int group_w = label_w + label_gap + btn_w + gap + num_box_w + gap + btn_w;
+						// Layout MUST match renderer: dynamic label width, val_w=44
+						const int btn_w = 22, gap = 6, val_w = 44, label_gap = 14;
+						const char* lbl = "Select Level";
+						int label_px = (int)strlen(lbl) * 6;
+						int group_w = label_px + label_gap + btn_w + gap + val_w + gap + btn_w;
 						int gx = menu_x + (menu_w - group_w) / 2;
-						int minus_x = gx + label_w + label_gap;
-						int plus_x  = minus_x + btn_w + gap + num_box_w + gap;
+						int minus_x = gx + label_px + label_gap;
+						int plus_x  = minus_x + btn_w + gap + val_w + gap;
 						int cur = pause_level_input_.empty() ? 1 : std::atoi(pause_level_input_.c_str());
 						if (x >= minus_x && x < minus_x + btn_w) {
 							cur = (cur > 1) ? cur - 1 : 1;
@@ -280,11 +425,56 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 							pause_level_input_ = std::to_string(cur);
 						}
 					}
+					else if (btn_hit2(AUTOSAVE_ROW)) {
+						// Layout MUST match renderer: dynamic label width, val_w=44
+						const int btn_w = 22, gap = 6, val_w = 44, label_gap = 14;
+						const char* lbl = Config::Get().auto_save_enabled
+								 ? "Save Enable" : "Save Disable";
+						int label_px = (int)strlen(lbl) * 6;
+						int group_w = label_px + label_gap + btn_w + gap + val_w + gap + btn_w;
+						int gx = menu_x + (menu_w - group_w) / 2;
+						int minus_x = gx + label_px + label_gap;
+						int plus_x  = minus_x + btn_w + gap + val_w + gap;
+						if      (x >= minus_x && x < minus_x + btn_w) AdjustAutoSaveInterval(-10);
+						else if (x >= plus_x  && x < plus_x  + btn_w) AdjustAutoSaveInterval(10);
+						else if (x >= gx      && x < minus_x)         ToggleAutoSave();
+					}
 					else if (btn_hit2(SEARCH_ROW)) { clicked_input = 1; }
+					else if (btn_hit2(MUSIC_ROW)) { ToggleMusic(); }
+					else if (btn_hit2(LIGHTMAPS_ROW)) { igi::ObjectLightmapManager::Get().CycleRenderMode(); }
+					else if (btn_hit2(LIGHTMAPS_CALC_ROW)) {
+						CalculateLightmapsForAllObjects();
+					}
 					else if (btn_hit2(TERRAIN_HEADER_ROW)) { pause_terrain_expanded_ = !pause_terrain_expanded_; }
 					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_TEX_ROW)) { ToggleTerrainModOption(1); }
 					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_HGT_ROW)) { ToggleTerrainModOption(2); }
 					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_DSC_ROW)) { ToggleTerrainModOption(4); }
+					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_FOG_ROW)) {
+						ToggleTerrainDrawOption(Renderer_Terrain::DRAW_TERRAIN_OPT_FOG);
+						int dOpts = GetTerrainDrawOptions();
+						bool fogOn = (dOpts & Renderer_Terrain::DRAW_TERRAIN_OPT_FOG) != 0;
+						SetFogEnabled(fogOn);
+						Config::Get().enableFog = fogOn;
+						Config::Save();
+					}
+					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_FOGINT_ROW)) {
+						// Layout MUST match renderer: dynamic label width, val_w=56
+						const int btn_w = 22, gap = 6, val_w = 56, label_gap = 14;
+						const char* lbl = "Fog Intensity";
+						int label_px = (int)strlen(lbl) * 6;
+						int group_w = label_px + label_gap + btn_w + gap + val_w + gap + btn_w;
+						int gx = menu_x + (menu_w - group_w) / 2;
+						int minus_x = gx + label_px + label_gap;
+						int plus_x  = minus_x + btn_w + gap + val_w + gap;
+						int& fi = Config::Get().fogIntensity;
+						if (x >= minus_x && x < minus_x + btn_w) {
+							fi = std::max(0, fi - 100);
+							SetFogIntensity(fi); Config::Save();
+						} else if (x >= plus_x && x < plus_x + btn_w) {
+							fi = std::min(1000, fi + 100);
+							SetFogIntensity(fi); Config::Save();
+						}
+					}
 					else if (btn_hit2(RESET_ROW)) { ResetLevel(); TogglePauseMenu(); }
 					else if (btn_hit2(SAVE_ROW)) { SaveCurrentLevel(); }
 					else if (btn_hit2(QUIT_ROW)) { exit(0); }
@@ -354,12 +544,14 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 			}
 			else if (edit_mode_ && !enableCameraMode) {
 				if (terrain_edit_enabled_) {
+					// Left-click while terrain edit is open: exit terrain mode if an object is
+					// clicked, otherwise EditorProcessClick sculpts terrain at cursor.
 					int picked = PickObjectAtScreenPos(x, y);
 					if (picked >= 0) {
 						SetTerrainEditEnabled(false);
 					}
 				}
-				EditorProcessClick(); 
+				EditorProcessClick();
 				// Update manipulation data AFTER selection, so we get the newly selected object
 				marker_manip_.start_x_ = x;
 				marker_manip_.start_y_ = y;
@@ -372,13 +564,32 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 		}
 		else if (GLUT_UP == state) {
 			mouse_state_.left_button_down_ = false;
+			undo_state_pushed_for_manip_ = false; // reset undo guard for next click-drag
+
+			// Auto-recalc lightmap if the user dragged an object and it actually moved.
+			if (edit_dragging_ && selected_object_index_ >= 0) {
+				auto& objects = level_.GetLevelObjects().GetObjects();
+				if (selected_object_index_ < (int)objects.size()) {
+					const auto& obj = objects[selected_object_index_];
+					bool movedPos = glm::length(obj.pos - marker_manip_.start_pos_) > 0.5;
+					bool movedRot = glm::length(obj.rot - glm::dvec3(marker_manip_.start_rot_)) > 0.01;
+					if (movedPos || movedRot)
+						AutoRecalcLightmapForManipulated(selected_object_index_);
+				}
+			}
+
 			edit_dragging_ = false;
 			orbit_active_ = false;
+			graph_node_manip_.active_ = false;
 			prop_field_index_ = -1; // C2: stop dragging property field
 			prop_drag_obj_index_ = -1;
 			prop_drag_speed_ = 0.f;
 			prop_last_drag_dx_ = 0;
 			prop_last_drag_dy_ = 0;
+			// End AI Script editor drag-selection: commit the selection
+			// range (anchor / focus already populated) and stop tracking the
+			// cursor. The next click in the text box will start a new range.
+			ai_text_dragging_ = false;
 			status_message_.clear(); // Clear movement telemetry status when mouse is released
 
 			if (window_state_.cursor_visible_) {
@@ -388,22 +599,29 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 		}
 	}
 
-	// Right-click: open property editor for the object under cursor
-	if (button == GLUT_RIGHT_BUTTON && state == GLUT_DOWN && !pause_mode_ && !enableCameraMode) {
-		int target = hover_object_index_;
-		if (target >= 0) {
-			if (terrain_edit_enabled_) {
-				SetTerrainEditEnabled(false);
+	// Right-click: open property editor for the object under cursor, or sculpt terrain.
+	if (button == GLUT_RIGHT_BUTTON) {
+		if (state == GLUT_DOWN) {
+			mouse_state_.right_button_down_ = true;
+			if (!pause_mode_ && !enableCameraMode) {
+				int target = hover_object_index_;
+				if (target >= 0) {
+					if (terrain_edit_enabled_) {
+						SetTerrainEditEnabled(false);
+					}
+					selected_object_index_ = target;
+					prop_editor_open_ = true; prop_panel_scroll_ = 0; prop_text_edit_field_ = -1; prop_edit_obj_index_ = -1;
+					LoadAIScriptForSelected();
+				} else {
+					prop_editor_open_ = false;
+					// Right-click on empty space: open terrain editor (hold to sculpt)
+					if (!terrain_edit_enabled_) {
+						SetTerrainEditEnabled(true);
+					}
+				}
 			}
-			selected_object_index_ = target;
-			prop_editor_open_ = true; prop_panel_scroll_ = 0; prop_text_edit_field_ = -1; prop_edit_obj_index_ = -1;
-			LoadAIScriptForSelected();
-		} else {
-			prop_editor_open_ = false;
-			// Right Click on empty space toggles terrain editor
-			if (!terrain_edit_enabled_) {
-				SetTerrainEditEnabled(true);
-			}
+		} else if (state == GLUT_UP) {
+			mouse_state_.right_button_down_ = false;
 		}
 	}
 
@@ -411,11 +629,37 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 	if (window_state_.cursor_visible_ && !pause_mode_) {
 		glutSetCursor(GLUT_CURSOR_NONE);
 	}
+
 }
 
 void App::Input_OnMotion(int x, int y) {
+	if (in_game_mode_ && IsGameplayInputFocused() &&
+		!gameplay_host_.IsGameplayWindowCurrent()) return;
 	int dx = x - mouse_state_.prior_x_;
 	int dy = y - mouse_state_.prior_y_;
+
+	if (in_game_mode_ && IsGameplayInputFocused() && !pause_mode_) {
+		gameplay_host_.GetInputRouter().OnMouseMove(static_cast<float>(dx), static_cast<float>(dy));
+
+		// Gameplay uses relative mouse look. Re-centering after each delivered
+		// motion event prevents the OS cursor from reaching a window edge and
+		// keeps long turns continuous, matching the first-person runtime contract.
+		const int center_x = gameplay_viewport_width_ >> 1;
+		const int center_y = gameplay_viewport_height_ >> 1;
+		mouse_state_.prior_x_ = center_x;
+		mouse_state_.prior_y_ = center_y;
+		if (dx != 0 || dy != 0) {
+			glutWarpPointer(center_x, center_y);
+		}
+		return;
+	}
+	if (in_game_mode_ && IsGameplayInputFocused() && pause_mode_) {
+		// Paused with the pause menu up: gameplay look is frozen but the
+		// pointer drives the menu, so keep tracking its position for hover.
+		mouse_state_.prior_x_ = x;
+		mouse_state_.prior_y_ = y;
+		return;
+	}
 
 	bool enableCameraMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
 	if (enableCameraMode && (dx != 0 || dy != 0))
@@ -424,6 +668,28 @@ void App::Input_OnMotion(int x, int y) {
 	// Always update mouse coordinates for hover tooltip/interaction
 	mouse_state_.prior_x_ = x;
 	mouse_state_.prior_y_ = y;
+
+	// AI Script editor drag-selection: while the left button is down inside
+	// the text box, move the focus end of the selection with the cursor.
+	// Caret is updated in tandem so the next typed character lands where the
+	// cursor is.
+	if (ai_text_dragging_ && prop_text_edit_field_ == PropPanel::kAIScriptTextField
+	    && mouse_state_.left_button_down_) {
+		const int local_x = x - ai_text_box_x1_;
+		const int local_y = y - ai_text_box_y1_;
+		const int row_h   = PropPanel::kBoxH;
+		prop_text_caret_ = AiScriptPixelToCaret(prop_text_buf_,
+		                                         local_x - 3, local_y,
+		                                         ai_script_vscroll_,
+		                                         ai_text_box_h_, AiScriptMaxChars(), row_h);
+		prop_text_sel_focus_ = prop_text_caret_;
+		// Auto-scroll vertically if the drag moves above/below the box.
+		if (local_y < 0)
+			ai_script_vscroll_ = std::max(0, ai_script_vscroll_ - 1);
+		else if (local_y > ai_text_box_h_)
+			ai_script_vscroll_ = ai_script_vscroll_ + 1;
+		return; // consume the motion — don't pass to camera/treeview
+	}
 
 	// Priority 1: TreeView Hover
 	if (show_hud_ && x < 350 && !enableCameraMode) {
@@ -444,7 +710,11 @@ void App::Input_OnMotion(int x, int y) {
 			input_.mouse_delta_x_ = dx;
 			input_.mouse_delta_y_ = dy;
 
-			if (edit_mode_ && selected_object_index_ >= 0 && !terrain_edit_enabled_) {
+			// Graph-node drag takes priority over object manipulation when active.
+			if (graph_node_manip_.active_ && renderer_.GraphSelected() >= 0) {
+				UpdateGraphNodeManipulation(x, y);
+			}
+			else if (edit_mode_ && selected_object_index_ >= 0 && !terrain_edit_enabled_) {
 				UpdateMarkerManipulation();
 			}
 		}
@@ -621,8 +891,11 @@ void App::ApplyPropPositionDrag() {
 		glm::dvec3 deltaPos = obj.pos - oldPos;
 		PropagateTransformToChildren(dragIdx, deltaPos, glm::dmat3(1.0), oldPos);
 		level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+		// Live-sync the graph overlay offset when the user drags an AIGraph
+		// task's position pad / Z slider — the 3D nodes/edges follow along
+		// while F7 is showing the graph.
+		SyncGraphOverlayOffsetFromAIGraph();
 		// Camera follows the object so it stays in view as it accelerates/travels.
 		viewer_.pos_ += glm::vec3(deltaPos);
 	}
 }
-

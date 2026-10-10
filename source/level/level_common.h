@@ -165,6 +165,9 @@ static_assert(sizeof(tex_head_v11_s) == 32, "bad size of tex_head_v11_s");
 #pragma pack(pop)
 
 bool	Tex_Load(const char* filename, pics_s& pics);
+// Decode a .tex file that is already in memory (no disk I/O).
+// The data buffer must remain valid until after GL_RegisterTexture is called.
+bool	Tex_LoadFromMemory(const uint8_t* data, size_t size, pics_s& pics);
 
 /*
 ================================================================================
@@ -220,6 +223,12 @@ public:
 	const char*				GetScripts() const { return pristine_scripts_ ? pristine_scripts_ : scripts_; }
 	const char*				GetParsedScripts() const { return scripts_; }
 
+	// True when the parser hit one of its fixed-size pool limits (too many root
+	// functions, nested calls, or arguments). When set, the parse was aborted and
+	// the QSC contents are incomplete — callers must fail level load with a clear
+	// error instead of trusting the partial/corrupt parse result.
+	bool			HadOverflow() const { return parse_overflow_; }
+
 	// debug
 	void					Print() const;
 
@@ -232,6 +241,7 @@ private:
 	char*					pristine_scripts_;
 	char*					pc_;
 	int						line_;
+	bool			parse_overflow_;
 
 	func_s*					root_funcs_[MAX_QSC_FUNCS];
 

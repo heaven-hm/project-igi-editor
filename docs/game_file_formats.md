@@ -17,6 +17,7 @@
 8. [QSC -- Script Source](#8-qsc----script-source)
 9. [MagicObject System](#9-magicobject-system)
 10. [FNT -- Font Format](#10-fnt----font-format)
+11. [Graph DAT -- Navigation Graph](#11-graph-dat----navigation-graph)
 
 ---
 
@@ -1273,3 +1274,102 @@ The texture stores glyphs as follows:
 | A       | Glyph shape / opacity                             |
 
 Some fonts (e.g. `font2.fnt`) are strictly binary — only values `0x00` and `0xFF` — producing sharp pixel fonts. Others (e.g. `fontmp.fnt`) use grayscale alpha values for anti-aliased rendering.
+
+---
+
+## 11. Graph DAT -- Navigation Graph
+
+**File type**: Binary AI navigation graph (confirmed by reverse engineering).
+
+**Location**: `missions/location0/level<N>/graphs/graph<taskId>.dat`
+
+**Purpose**: Defines a network of pathfinding nodes (nav mesh) used by the AI system for unit movement. Each level can have multiple graphs (one per `AIGraph` task); most are sparse (1–10 nodes), but some can be large (100–266 nodes).
+
+### 11.1 Header
+
+| Offset | Size | Type     | Value / Description                       |
+|--------|------|----------|-------------------------------------------|
+| 0x00   | 4    | uint32   | Magic: `0xFFEEDDCC` (bytes `CC DD EE FF` in file, little-endian read) |
+| 0x04   | 12   | record   | MaxNodes header (8-byte record header + int32 value indicating total node capacity) |
+| 0x10   | 12   | record   | Secondary header (signature `0x040D`, unused)  |
+| 0x1C   | 2    | padding  | Two zero bytes |
+| 0x1E   | —    | table    | **Adjacency table (APSP)**: `MaxNodes × MaxNodes × 8` bytes |
+
+### 11.2 Tagged Record Header (8 bytes each)
+
+Every field (node or edge) is preceded by:
+
+| Offset | Size | Description                     |
+|--------|------|---------------------------------|
+| 0x00   | 2    | Signature (big-endian uint16)   |
+| 0x02   | 2    | Sub-tag (unused by the editor)  |
+| 0x04   | 4    | Unknown (unused)                |
+
+Data begins at `header_offset + 8`.
+
+### 11.3 Adjacency Table (APSP)
+
+Occupies bytes `0x1E` to `0x1E + (MaxNodes × MaxNodes × 8)`.
+
+Pre-computed All-Pairs Shortest Path (Floyd–Warshall) routing table: each entry is `(int32 nodeRef, float32 distance)` = 8 bytes. A value of `nodeRef == -1` with `distance == -1.0f` indicates no connection between two nodes. The editor **preserves this table verbatim** during save.
+
+### 11.4 Node Records (Tagged)
+
+After the adjacency table, one node group per active node:
+
+| Signature (BE) | Payload type    | Field          |
+|----------------|-----------------|----------------|
+| `0x04CE`       | int32           | Node ID        |
+| `0x0495`       | double × 3      | X, Y, Z (24 bytes, local to AIGraph task world origin) |
+| `0x049C`       | float32         | Gamma (orientation angle, radians) |
+| `0x0423`       | float32         | Radius (influence radius, also scales 3D visual in editor) |
+| `0x0429`       | int32           | Material (surface type, 0–23) |
+| `0x04E5`       | pascal string   | Criteria (e.g. `"NODECRITERIA_DOOR"`, `"NODECRITERIA_VIEW"`, `"NODECRITERIA_STAIR"`) |
+
+**Criteria string format**: 1 length byte + `<length>` bytes of data (last byte is null; empty string = length 1, byte 0x00).
+
+### 11.5 Edge Records (Tagged)
+
+After all node records:
+
+| Signature (BE) | Payload type | Field              |
+|----------------|--------------|-------------------|
+| `0x044A`       | int32        | First node ID      |
+| `0x04F6`       | int32        | Second node ID     |
+| `0x0423` (alt) | int32        | Link type (engine-defined) |
+
+Note: Link type reuses the `0x0423` signature but with a different sub-tag.
+
+### 11.6 Node Criteria Classification
+
+| Criteria substring | Constant               | Visual colour (editor) |
+|-------------------|------------------------|------------------------|
+| `"DOOR"`          | `NODECRITERIA_DOOR`    | Yellow                 |
+| `"VIEW"`          | `NODECRITERIA_VIEW`    | Cyan                   |
+| `"STAIR"`         | `NODECRITERIA_STAIR`   | Magenta                |
+| (none / other)    | Default                | Red                    |
+
+Precedence (when multiple flags present): **Door > Stair > View > Default**.
+
+### 11.7 Coordinate System
+
+All node X, Y, Z values are **local to the AIGraph task's world position** in the level's `objects.qsc`. To convert to absolute world coordinates:
+
+```
+world_pos = aiGraph_task.pos + graph_node.xyz
+```
+
+IGI world units scale to GL render units via `× 0.001`.
+
+### 11.8 Parsing and Editing
+
+**Full documentation** of the graph editor interface, 3D rendering, node selection, properties panel, keybindings, and backup/reset is in [graph_editor.md](graph_editor.md).
+
+**API**:
+- `GRAPH_Parse(filepath)` → `GraphFile` struct with all nodes and edges
+- `GRAPH_Save(srcPath, outPath, graph)` → patch node positions in-place only (preserves adjacency table and all other fields)
+- `GRAPH_Write(srcPath, outPath, graph)` → full serializer (supports add/remove nodes and edges)
+
+**Tests**:
+- `test_graph_parser.cpp` — round-trip parse + write tests
+- `test_graph_overlay.cpp` — 3D projection and hit-test math (unit-tested, pure functions)

@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
-#include "parsers/res_parser.h"
-#include "parsers/res_compiler.h"
+#include "../source/renderer/res_writer.h"
+#include "../source/renderer/res_compiler.h"
 #include "utils.h"
 #include <filesystem>
 #include <string>

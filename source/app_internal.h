@@ -17,16 +17,19 @@
 #include <freeglut.h>
 #include "logger.h"
 #include "utils.h"
-#include "parsers/qsc_lexer.h"
-#include "parsers/qsc_parser.h"
-#include "parsers/qvm_compiler.h"
-#include "parsers/qvm_parser.h"
-#include "parsers/qvm_decompiler.h"
-#include "cli/asset_extractor.h"
-#include "parsers/dat_parser.h"
-#include "parsers/tex_parser.h"
-#include "parsers/res_parser.h"
+#include "level/qsc_lexer.h"
+#include "level/qsc_parser.h"
+#include "level/qvm_compiler.h"
+#include "level/qvm_parser.h"
+#include "level/qvm_decompiler.h"
+
+#include "renderer/dat_writer.h"
+#include "renderer/tex_writer.h"
+#include "renderer/res_writer.h"
 #include "renderer/gl_helper.h"
+#include "renderer/png_loader.h"
+#include "renderer/olm_texture.h"
+#include "utils_igi1conv.h"
 #include "level/task_schema.h"
 using namespace TaskSchemaNS;
 #include <filesystem>
@@ -34,8 +37,14 @@ using namespace TaskSchemaNS;
 #include <sstream>
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 #include <atomic>
 
+
+// Ensure <levelDir>/lightmaps/lightmaps_unpacked/ is populated (unpacking
+// lightmaps.res if needed). Defined in app_editor.cpp; used there and by the
+// Save write-back in app_level.cpp.
+bool EnsureLightmapsUnpacked(const std::string& levelDir, std::string& err);
 
 // ── game-process monitor + global-hotkey id (shared: core + app_editor) ──
 struct GameMonitorParam {
@@ -78,7 +87,7 @@ constexpr int MK_JUMP			= FLAG_BIT(6);
 constexpr int MK_ROLL_INC		= FLAG_BIT(7);
 constexpr int MK_ROLL_DEC		= FLAG_BIT(8);
 
-// IGI 2 Style Manipulation Flags
+// Editor manipulation flags
 constexpr int MK_MANIP_A		= FLAG_BIT(10);
 constexpr int MK_MANIP_B		= FLAG_BIT(11);
 constexpr int MK_MANIP_G		= FLAG_BIT(12);
@@ -103,6 +112,24 @@ inline std::vector<int> AiTextLineStarts(const std::string& txt, int max_chars) 
 
 inline int AiScriptMaxChars() {
 	return std::max(1, (PropPanel::kWidth - 2 * PropPanel::kPad - 6) / 7);
+}
+
+// Map a (x,y) screen coord inside the AI script text box (origin at the
+// box's top-left, y grows down) to a caret index in `txt`. Returns the
+// closest valid position. Used by mouse drag-selection.
+inline int AiScriptPixelToCaret(const std::string& txt, int x, int y,
+                                 int vscroll, int box_h,
+                                 int max_chars, int row_h) {
+	if (txt.empty()) return 0;
+	const auto starts = AiTextLineStarts(txt, max_chars);
+	int row = std::max(0, y / std::max(1, row_h));
+	int abs_line = std::max(0, std::min((int)starts.size() - 1, vscroll + row));
+	int col = std::max(0, x / 7);
+	int ls   = starts[abs_line];
+	int next = (abs_line + 1 < (int)starts.size()) ? starts[abs_line + 1] : (int)txt.size();
+	int len  = next - ls;
+	if (len > 0 && (ls + len) <= (int)txt.size() && txt[ls + len - 1] == '\n') --len;
+	return std::max(0, std::min((int)txt.size(), ls + std::min(col, len)));
 }
 
 // ── movement key table ──

@@ -21,6 +21,13 @@ This document tracks all known rendering bugs, engine limitations, and editor wo
 
 ---
 
+## 1b. 32-bit address-space ceiling and x64 feasibility
+
+* **Symptom**: Lightmap auto-load and other large contiguous allocations (200+ MB `.res` archives, many `.olm` lightmap textures) can exhaust the 32-bit process address space, especially after in-session level switches fragment it. Level 3+ with lightmaps on historically crashed here, which is why `QEDLightmaps` defaulted to OFF.
+* **Root Cause**: The editor builds only as a Win32 (`-A Win32`) process, capping usable contiguous memory near ~2 GB. The `.res` streaming reader (`RES_ForEachEntry`) and the `.olm` lightmap loader (`olm_texture.cpp`) already read chunk-by-chunk to keep peak memory to one entry/texture, which removes the crash without changing the build target.
+* **x64 feasibility spike**: An x64 (`-A x64`) build is viable at the build-config level: `CMakeLists.txt` already selects `third_party/GL/lib/x64` (freeglut/glew32 `.lib`) and `assets/dlls/x64` runtime DLLs when `CMAKE_SIZEOF_VOID_P == 8`, and the freeglut+GLEW+OpenGL32 toolchain is architecture-agnostic. The remaining porting work is auditing pointer-width assumptions (file offsets cast to `int`, `DWORD`-sized `tellg` results, hand-packed struct reads) before flipping the default. Not implemented in this issue; tracked as a future structural fix.
+* **Note**: With the streaming `.olm` loader, `QEDLightmaps` no longer needs to stay OFF purely to avoid crashing level 3; it remains OFF by default as a conservative opt-in, and the Escape-menu checkbox turns it on without crashing.
+
 ## 🛤️ 2. Splines and Placements
 
 ### 📍 Missing Position
