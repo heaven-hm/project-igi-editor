@@ -89,7 +89,10 @@ TEST_F(MtpWriterTest, PreservesUntouchedChunksByteForByte) {
     auto c = readChunks(tmpOut);
     for (auto& kv : a) {
         const std::string& cc = kv.first;
-        if (cc == "MODS" || cc == "TEXF" || cc == "INST") continue;
+        // MODS/TEXF/INST are directly extended, while VNAM/GTT are derived
+        // indexes that must be rebuilt for the new model and texture.
+        if (cc == "MODS" || cc == "TEXF" || cc == "INST" ||
+            cc == "VNAM" || cc == "GTT ") continue;
         ASSERT_TRUE(c.count(cc)) << "chunk lost: " << cc;
         EXPECT_EQ(c[cc], kv.second) << "chunk changed: " << cc;
     }

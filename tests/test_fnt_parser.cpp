@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include "parsers/fnt_parser.h"
+#include "parsers/res_parser.h"
 #include "utils.h"
+#include <fstream>
 #include <string>
 #include <filesystem>
 #include <algorithm>
@@ -57,4 +59,30 @@ TEST_F(FntParserTest, AtlasPixelDataSizeMatchesDimensions) {
     size_t expected = (size_t)font.texWidth * font.texHeight * 4;
     EXPECT_EQ(font.rgba.size(), expected)
         << "texWidth=" << font.texWidth << " texHeight=" << font.texHeight;
+}
+
+TEST(RetailMenuResourceTest, IngameMenuArchiveContainsUsableFont3) {
+    namespace fs = std::filesystem;
+    const fs::path archive = fs::path(Utils::GetIGIRootPath()) /
+        "MENUSYSTEM" / "ingamemenu.res";
+    if (!fs::exists(archive)) GTEST_SKIP() << "Missing retail menu archive: " << archive;
+
+    const auto font_bytes = RES_Extract(archive.string(), "LOCAL:menusystem/font3.fnt");
+    ASSERT_FALSE(font_bytes.empty()) << "LOCAL:menusystem/font3.fnt missing from " << archive;
+
+    const fs::path staged = fs::temp_directory_path() / "igi_editor_test_ingamemenu_font3.fnt";
+    {
+        std::ofstream out(staged, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.is_open());
+        out.write(reinterpret_cast<const char*>(font_bytes.data()),
+                  static_cast<std::streamsize>(font_bytes.size()));
+        ASSERT_TRUE(out.good());
+    }
+    const FntFont retail_font = FNT_Parse(staged.string());
+    std::error_code ec;
+    fs::remove(staged, ec);
+
+    ASSERT_TRUE(retail_font.valid);
+    EXPECT_GT(retail_font.lineHeight, 0);
+    EXPECT_FALSE(retail_font.glyphs.empty());
 }

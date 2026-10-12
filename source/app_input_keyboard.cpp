@@ -4,8 +4,16 @@
  *          Split from app_input.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include "runtime/pause_menu_layout.h"
 
 void App::Input_OnSpecial(int key, int x, int y) {
+	if (pause_mode_) {
+		return;
+	}
+	if (in_game_mode_ && !pause_mode_) {
+		return;
+	}
+
 	auto& config = Config::Get();
 
 	// Autocomplete task picker navigation
@@ -353,6 +361,13 @@ void App::Input_OnSpecial(int key, int x, int y) {
 }
 
 void App::Input_OnSpecialUp(int key, int x, int y) {
+	if (pause_mode_) {
+		return;
+	}
+	if (in_game_mode_ && !pause_mode_) {
+		return;
+	}
+
 	auto& config = Config::Get();
 
 	if (key == config.keyMoveForward)  { input_.keys_ &= ~MK_FORWARD;  return; }
@@ -443,10 +458,23 @@ bool App::InlineAutocomplete() {
 void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	auto& config = Config::Get();
 
+	if (in_game_mode_ && !pause_mode_) {
+		if (key == 27) { // ESC
+			TogglePauseMenu();
+			return;
+		}
+		gameplay_host_.GetInputRouter().OnKeyboardKey(key, true);
+		return;
+	}
+
 	bool ctrlDown = (glutGetModifiers() & GLUT_ACTIVE_CTRL) != 0 ||
 	                (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
 	bool shiftDown = (glutGetModifiers() & GLUT_ACTIVE_SHIFT) != 0 ||
 	                 (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+
+	if (pause_mode_ && ctrlDown && (key == 8 || key == 'h' || key == 'H')) {
+		return;
+	}
 
 	if (ctrlDown && (key == 8 || key == 'h' || key == 'H')) { // CTRL+H
 		ToggleOverlayWireframe();
@@ -454,45 +482,32 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	}
 
 	if (pause_mode_) {
-		if (key == 13) { // Enter
-			if (pause_active_input_ == 1) {
-				// Submit model search
-				if (!pause_search_input_.empty()) {
-					bool isId = true;
-					if (pause_search_input_.length() != 8 || pause_search_input_[3] != '_' || pause_search_input_[6] != '_') isId = false;
-					for (int i = 0; i < (int)pause_search_input_.length(); i++) {
-						if (i != 3 && i != 6 && !isdigit(pause_search_input_[i])) isId = false;
-					}
-					if (isId) SearchModelById(pause_search_input_);
-					else       SearchModelByName(pause_search_input_);
-					TogglePauseMenu();
-				}
-				pause_active_input_ = -1;
+		if (key == 13) {
+			if (pause_active_input_ == 1 && !pause_search_input_.empty()) {
+				bool is_id = pause_search_input_.size() == 8 && pause_search_input_[3] == '_' && pause_search_input_[6] == '_';
+				for (size_t i = 0; is_id && i < pause_search_input_.size(); ++i)
+					if (i != 3 && i != 6 && !isdigit(static_cast<unsigned char>(pause_search_input_[i]))) is_id = false;
+				if (is_id) SearchModelById(pause_search_input_); else SearchModelByName(pause_search_input_);
+				TogglePauseMenu();
 			} else {
-				// Load level from spinner
-				if (!pause_level_input_.empty()) {
-					int lvl = std::atoi(pause_level_input_.c_str());
-					if (lvl >= 1 && lvl <= 14) {
-						LoadLevel(lvl);
-						TogglePauseMenu();
-					} else {
-						Logger::Get().Log(LogLevel::ERR, "Level must be between 1 and 14.");
-					}
-				}
+				const auto selected = igi::ResolvePauseLevelSelection(std::atoi(pause_level_input_.c_str()), in_game_mode_);
+				if (selected.valid) {
+					if (selected.leave_gameplay) ToggleGamePlayMode();
+					LoadLevel(selected.level);
+					TogglePauseMenu();
+				} else status_message_ = "Level must be between 1 and 14.";
 			}
+			pause_active_input_ = -1;
 			return;
 		}
-		if (key == 27) { // ESC: clear search focus or close menu
-			if (pause_active_input_ != -1) { pause_active_input_ = -1; return; }
-			TogglePauseMenu();
+		if (key == 27) { if (pause_active_input_ != -1) pause_active_input_ = -1; else TogglePauseMenu(); return; }
+		std::string* input = pause_active_input_ == 1 ? &pause_search_input_ : (pause_active_input_ == 2 ? &pause_level_input_ : nullptr);
+		if (input) {
+			if (key == 8 && !input->empty()) input->pop_back();
+			else if (key >= 32 && key < 127 && (pause_active_input_ == 1 || isdigit(key))) input->push_back(static_cast<char>(key));
 			return;
 		}
-		if (pause_active_input_ == 1) {
-			// Search text input
-			if (key == 8 && !pause_search_input_.empty()) { pause_search_input_.pop_back(); return; }
-			if (key >= 32 && key < 127) { pause_search_input_ += (char)key; return; }
-		}
-		if (key != 27) return;
+		return;
 	}
 
 	// Autocomplete Ctrl combos — intercept before prop text editor so they work while editing.
@@ -1254,6 +1269,15 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 
 void App::Input_OnKeyboardUp(unsigned char key, int x, int y) {
 	auto& config = Config::Get();
+
+	if (pause_mode_) {
+		return;
+	}
+
+	if (in_game_mode_ && !pause_mode_) {
+		gameplay_host_.GetInputRouter().OnKeyboardKey(key, false);
+		return;
+	}
 
 	// Check for modifier keys - if pressed, skip movement key checks
 	int modifiers = glutGetModifiers();

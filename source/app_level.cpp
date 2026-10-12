@@ -4,6 +4,7 @@
  *          Split from app.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include "renderer/object_lightmap.h"
 
 void App::LoadLevel(int level_no) {
 	try {
@@ -65,6 +66,8 @@ void App::LoadLevel(int level_no) {
 		renderer_.SetSplineTerrainQuery([this](double x, double y, float& z) {
 			return level_.GetTerrainZ(x, y, z);
 		});
+
+		igi::ObjectLightmapManager::Get().LoadLevelLightmaps(level_no);
 
 		Level::load_params_s level_load_params_s = {
 			.level_no_ = level_no,

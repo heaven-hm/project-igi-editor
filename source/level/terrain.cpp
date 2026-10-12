@@ -6,9 +6,9 @@
 #include "terrain_internal.h"
 
 // cube data pool capacities (tune these values)
-constexpr int CUBE_DATA_1600_POOL_CAPACITY = 700;
-constexpr int CUBE_DATA_3200_POOL_CAPACITY = 50;
-constexpr int CUBE_DATA_8000_POOL_CAPACITY = 16;
+constexpr int CUBE_DATA_1600_POOL_CAPACITY = 16384;
+constexpr int CUBE_DATA_3200_POOL_CAPACITY = 4096;
+constexpr int CUBE_DATA_8000_POOL_CAPACITY = 1024;
 
 
 

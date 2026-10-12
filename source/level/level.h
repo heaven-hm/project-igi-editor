@@ -48,9 +48,12 @@ public:
 	const LevelObjects&		GetLevelObjects() const { return level_objects_; }
 	LevelObjects&			GetLevelObjects() { return level_objects_; }
 
-
+	const glm::vec3&		GetStartPos() const { return start_pos_; }
+	float					GetStartYaw() const { return start_yaw_; }
 
 private:
+	glm::vec3				start_pos_ = glm::vec3(0.0f);
+	float					start_yaw_ = 0.0f;
 
 	int						cur_level_no_;
 	std::string				qsc_path_;

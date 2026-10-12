@@ -13,6 +13,7 @@
 #include "renderer_objects.h"
 #include "renderer_splines.h"
 #include "../level/task_schema.h"
+#include "../runtime/pause_menu_layout.h"
 #include <functional>
 
 /*
@@ -334,10 +335,13 @@ public:
 		bool show_hud_;
 		std::string status_msg_;
 		bool pause_mode_;
-		int pause_active_input_ = -1;
+		igi::PauseMenuPage pause_menu_page_ = igi::PauseMenuPage::Main;
 		std::string pause_level_input_;
 		std::string pause_search_input_;
+		int pause_active_input_ = -1;
 		bool pause_terrain_expanded_ = false;
+		bool auto_save_enabled_ = false;
+		int auto_save_interval_seconds_ = 300;
 		bool show_debug_;
 		bool show_help_;
 		bool edit_mode_;
@@ -372,6 +376,14 @@ public:
 		std::string find_query_;
 		int  find_result_idx_ = -1;
 		bool selected_obj_is_ai    = false;
+
+		bool in_game_mode_ = false;
+		float player_health_ = 100.0f;
+		float player_armor_ = 100.0f;
+		std::string active_weapon_name_ = "M16A2";
+		uint32_t clip_ammo_ = 30;
+		uint32_t reserve_ammo_ = 120;
+		std::string objective_text_ = "";
 
 		// Help panel (keybindings from qedkeybindings.qsc)
 		int  help_scroll_offset_    = 0;

@@ -20,8 +20,11 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <vector>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 
 #include <freeglut.h>
 #include "../level/task_schema.h"
 #include "../parsers/fnt_parser.h"
+#include "../parsers/res_parser.h"
 using namespace TaskSchemaNS;

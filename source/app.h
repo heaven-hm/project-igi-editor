@@ -9,6 +9,8 @@
 #include "igi_bridge.h"
 #include "level/res_model_set.h"
 #include "renderer/model.h"
+#include "runtime/gameplay_host.h"
+#include "runtime/pause_menu_layout.h"
 #include <atomic>
 #include <optional>
 #include <set>
@@ -38,11 +40,14 @@ public:
   void LaunchGame();
   void ExportTextureMap();
   int GetCurLevelNo() const;
+  bool GetLevelZ(float x, float y, float& z) { return level_.GetTerrainZ(x, y, z); }
 
   // draw wireframe on top of solid mesh
   void ToggleOverlayWireframe();
   void ToggleDrawParts(int part);
   void SetDrawParts(int parts);
+  void ToggleGamePlayMode();
+  bool IsGamePlayMode() const { return in_game_mode_; }
   void ToggleTerrainDrawOption(int opt);
   void ToggleTerrainModOption(int opt);
 
@@ -136,13 +141,16 @@ private:
   IGIBridge bridge_;
   Renderer::draw_params_s draw_params_;
   int terrain_mod_options_;
-  // editor
+  // editor & runtime
+  bool in_game_mode_ = false;
+  igi::GameplayHost gameplay_host_;
   bool edit_mode_;
   bool terrain_edit_enabled_;
   bool pause_mode_;
-  std::string pause_level_input_ = "";
-  std::string pause_search_input_ = "";
-  int pause_active_input_ = -1; // -1: none, 1: search
+  igi::PauseMenuPage pause_menu_page_ = igi::PauseMenuPage::Main;
+  std::string pause_level_input_;
+  std::string pause_search_input_;
+  int pause_active_input_ = -1; // 1=model search, 2=level entry
   bool pause_terrain_expanded_ = false;
   int edit_brush_;
   double edit_brush_radius_ = 5000.0;
@@ -312,6 +320,9 @@ private:
   bool undo_state_pushed_for_manip_ = false;
 
   int64_t prior_frame_time_;
+  bool auto_save_enabled_ = false;
+  int auto_save_interval_seconds_ = 300;
+  int64_t auto_save_last_time_ms_ = 0;
 
   window_state_s window_state_;
   mouse_state_s mouse_state_;
@@ -416,6 +427,9 @@ private:
   void LoadAutoCompleteKeywords();
   bool InlineAutocomplete(); // complete/cycle the token left of the caret
   void RebuildLevelModelIds();
+  void HandlePauseMenuClick(int x, int y);
+  void ToggleAutoSave();
+  void AdjustAutoSaveInterval(int delta_seconds);
 
 public:
   // QSC/QVM workflow

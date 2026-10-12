@@ -1,4 +1,6 @@
 #include "app_internal.h"
+#include "runtime/config_qvm.h"
+#include "runtime/human_player_config.h"
 
 // GameMonitorParam, GameMonitorProc, and HOTKEY_ID_TOGGLE_GAME live in
 // app_internal.h (shared with app_editor.cpp's LaunchGame). The mutable window
@@ -94,6 +96,9 @@ bool App::Init(int argc, char** argv) {
 	}
 
 	ConfigData& cfg = Config::Get();
+	auto_save_enabled_ = cfg.auto_save_enabled;
+	auto_save_interval_seconds_ = cfg.auto_save_interval_seconds;
+	auto_save_last_time_ms_ = Sys_Milliseconds();
 
 
 	// read options from command line
@@ -165,6 +170,15 @@ bool App::Init(int argc, char** argv) {
 	} else {
 		Logger::Get().Log(LogLevel::WARNING, "[App] editor_hwnd_ is NULL — global hotkey will not work");
 	}
+
+	extern App g_app;
+	static auto s_terrain_cb = [](float x, float y) -> float {
+		extern App g_app;
+		float z = 0.0f;
+		g_app.GetLevelZ(x, y, z);
+		return z;
+	};
+	gameplay_host_.Initialize(s_terrain_cb);
 
 	return true;
 }
@@ -350,6 +364,14 @@ void App::OnIdle() {
 }
 
 void App::Frame(float delta_seconds) {
+	if (auto_save_enabled_ && !pause_mode_ && !in_game_mode_ && level_.GetLevelNo() > 0) {
+		const int64_t now = Sys_Milliseconds();
+		if (now - auto_save_last_time_ms_ >= static_cast<int64_t>(auto_save_interval_seconds_) * 1000) {
+			SaveCurrentLevel();
+			auto_save_last_time_ms_ = now;
+			status_message_ = "Auto-saved level";
+		}
+	}
 	if (pause_mode_) {
 		// Skip all updates when paused, just render
 		UpdateViewDefine();
@@ -365,10 +387,13 @@ void App::Frame(float delta_seconds) {
 			.show_hud_ = show_hud_,
 			.status_msg_ = status_message_,
 			.pause_mode_ = true,
-			.pause_active_input_ = pause_active_input_,
+			.pause_menu_page_ = pause_menu_page_,
 			.pause_level_input_ = pause_level_input_,
 			.pause_search_input_ = pause_search_input_,
+			.pause_active_input_ = pause_active_input_,
 			.pause_terrain_expanded_ = pause_terrain_expanded_,
+			.auto_save_enabled_ = auto_save_enabled_,
+			.auto_save_interval_seconds_ = auto_save_interval_seconds_,
 			.show_debug_ = show_debug_,
 			.show_help_ = show_help_,
 			.edit_mode_ = edit_mode_,
@@ -401,6 +426,13 @@ void App::Frame(float delta_seconds) {
 			.selected_obj_is_ai    = (selected_object_index_ >= 0 &&
 				selected_object_index_ < (int)level_.GetLevelObjects().GetObjects().size() &&
 				ai_model_ids_.count(level_.GetLevelObjects().GetObjects()[selected_object_index_].modelId) > 0),
+			.in_game_mode_         = in_game_mode_,
+			.player_health_        = gameplay_host_.GetWorld().GetPlayer().GetHealth(),
+			.player_armor_         = gameplay_host_.GetWorld().GetPlayer().GetArmor(),
+			.active_weapon_name_   = gameplay_host_.GetWorld().GetWeapons().GetActiveWeapon().name,
+			.clip_ammo_            = gameplay_host_.GetWorld().GetWeapons().GetCurrentClipAmmo(),
+			.reserve_ammo_         = gameplay_host_.GetWorld().GetWeapons().GetReserveAmmo(),
+			.objective_text_       = (gameplay_host_.GetWorld().GetLevelFlow().GetObjectives().empty() ? "" : gameplay_host_.GetWorld().GetLevelFlow().GetObjectives()[0].description),
 			.help_scroll_offset_   = help_scroll_offset_,
 			.help_entries_         = &help_entries_,
 			.show_task_type_       = show_task_type_,
@@ -442,7 +474,18 @@ void App::Frame(float delta_seconds) {
 	frame_++;
 	frame_ %= 0xFFFFFFFF;	// reserve value 0xFFFFFFFF (-1) for INVALID_FRAME
 
-	ProcessInput(delta_seconds);
+	if (in_game_mode_) {
+		int64_t now_ms = Sys_Milliseconds();
+		gameplay_host_.Update(now_ms);
+
+		const auto& player = gameplay_host_.GetWorld().GetPlayer();
+		viewer_.pos_ = player.GetEyePosition();
+		viewer_.yaw_ = player.GetYaw();
+		viewer_.pitch_ = player.GetPitch();
+		UpdateViewerVectors();
+	} else {
+		ProcessInput(delta_seconds);
+	}
 
 	// Per-frame position-drag velocity: the pad / Z slider accelerate while held in
 	// a direction and keep moving when the cursor is pinned at the window edge.
@@ -518,10 +561,13 @@ void App::Frame(float delta_seconds) {
 		.show_hud_ = show_hud_,
 		.status_msg_ = status_message_,
 		.pause_mode_ = pause_mode_,
-		.pause_active_input_ = pause_active_input_,
+		.pause_menu_page_ = pause_menu_page_,
 		.pause_level_input_ = pause_level_input_,
 		.pause_search_input_ = pause_search_input_,
+		.pause_active_input_ = pause_active_input_,
 		.pause_terrain_expanded_ = pause_terrain_expanded_,
+		.auto_save_enabled_ = auto_save_enabled_,
+		.auto_save_interval_seconds_ = auto_save_interval_seconds_,
 		.show_debug_ = show_debug_,
 		.show_help_ = show_help_,
 		.edit_mode_ = edit_mode_,
@@ -554,6 +600,13 @@ void App::Frame(float delta_seconds) {
 		.selected_obj_is_ai    = (selected_object_index_ >= 0 &&
 			selected_object_index_ < (int)level_.GetLevelObjects().GetObjects().size() &&
 			ai_model_ids_.count(level_.GetLevelObjects().GetObjects()[selected_object_index_].modelId) > 0),
+		.in_game_mode_         = in_game_mode_,
+		.player_health_        = gameplay_host_.GetWorld().GetPlayer().GetHealth(),
+		.player_armor_         = gameplay_host_.GetWorld().GetPlayer().GetArmor(),
+		.active_weapon_name_   = gameplay_host_.GetWorld().GetWeapons().GetActiveWeapon().name,
+		.clip_ammo_            = gameplay_host_.GetWorld().GetWeapons().GetCurrentClipAmmo(),
+		.reserve_ammo_         = gameplay_host_.GetWorld().GetWeapons().GetReserveAmmo(),
+		.objective_text_       = (gameplay_host_.GetWorld().GetLevelFlow().GetObjectives().empty() ? "" : gameplay_host_.GetWorld().GetLevelFlow().GetObjectives()[0].description),
 		.help_scroll_offset_   = help_scroll_offset_,
 		.help_entries_         = &help_entries_,
 		.show_task_type_       = show_task_type_,
@@ -630,13 +683,16 @@ bool App::GetTerrainEditEnabled() const {
 
 void App::TogglePauseMenu() {
 	pause_mode_ = !pause_mode_;
+	if (in_game_mode_) {
+		gameplay_host_.SetPaused(pause_mode_);
+	}
 	// cursor_visible_ stays TRUE always — camera lock is handled dynamically in Input_OnMotion.
 	// Hiding the cursor permanently caused the "mouse stuck" bug after resuming.
 	window_state_.cursor_visible_ = true;
 	if (pause_mode_) {
-		// Opening pause menu: seed level spinner with current level
-		int cur = level_.GetLevelNo();
-		if (cur > 0) pause_level_input_ = std::to_string(cur);
+		pause_menu_page_ = igi::PauseMenuPage::Main;
+		pause_active_input_ = -1;
+		if (level_.GetLevelNo() > 0) pause_level_input_ = std::to_string(level_.GetLevelNo());
 		glutSetCursor(GLUT_CURSOR_NONE);
 	} else {
 		// Closing pause menu: reset mouse state so no stale drag occurs
@@ -648,8 +704,101 @@ void App::TogglePauseMenu() {
 	}
 }
 
+void App::ToggleAutoSave() {
+	auto_save_enabled_ = !auto_save_enabled_;
+	auto_save_last_time_ms_ = Sys_Milliseconds();
+	Config::Get().auto_save_enabled = auto_save_enabled_;
+	Config::Save();
+	status_message_ = auto_save_enabled_ ? "Auto-save enabled" : "Auto-save disabled";
+}
+
+void App::AdjustAutoSaveInterval(int delta_seconds) {
+	auto_save_interval_seconds_ = std::clamp(auto_save_interval_seconds_ + delta_seconds, 10, 3600);
+	auto_save_last_time_ms_ = Sys_Milliseconds();
+	Config::Get().auto_save_interval_seconds = auto_save_interval_seconds_;
+	Config::Save();
+}
+
 bool App::GetPauseMode() const {
 	return pause_mode_;
+}
+
+void App::ToggleGamePlayMode() {
+	in_game_mode_ = !in_game_mode_;
+	if (in_game_mode_) {
+		igi::EditorSnapshot snap;
+		snap.camera_pos = viewer_.pos_;
+		snap.camera_yaw = viewer_.yaw_;
+		snap.camera_pitch = viewer_.pitch_;
+		snap.was_edit_mode = edit_mode_;
+		snap.selected_object_id = selected_object_index_;
+
+		// 1. Read config.qvm profile for controls, sensitivity, sound volume
+		igi::ProfileConfig profile = igi::ConfigQvmLoader::GetActiveProfile();
+		gameplay_host_.GetInputRouter().SetProfile(profile);
+
+		// 2. Read humanplayer.qvm tuning for player speed, jump impulse, health
+		igi::HumanPlayerTuning tuning = igi::HumanPlayerConfigLoader::Load();
+		gameplay_host_.GetWorld().GetPlayer().ApplyTuning(tuning.max_health, tuning.max_armor);
+
+		// 3. Find HumanPlayer spawn position from level start pos or objects
+		glm::vec3 spawn_pos = level_.GetStartPos();
+		float spawn_yaw = level_.GetStartYaw();
+		bool found_spawn = (spawn_pos.z < 100000000.0f && (spawn_pos.x != 0.0f || spawn_pos.y != 0.0f));
+
+		if (!found_spawn) {
+			const auto& objects = level_.GetLevelObjects().GetObjects();
+			for (const auto& obj : objects) {
+				if (obj.taskId == "0" || obj.type == "HumanPlayer" || obj.name == "HumanPlayer" ||
+				    obj.modelId == "000_01_1" || obj.name.find("HumanPlayer") != std::string::npos) {
+					spawn_pos = glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z);
+					spawn_yaw = (float)obj.rot.z;
+					found_spawn = true;
+					break;
+				}
+			}
+		}
+
+		if (!found_spawn) {
+			spawn_pos = viewer_.pos_;
+			spawn_yaw = viewer_.yaw_;
+		}
+
+		// Snap to terrain height if available
+		float tz = 0.0f;
+		if (level_.GetTerrainZ(spawn_pos.x, spawn_pos.y, tz)) {
+			spawn_pos.z = tz;
+		}
+
+		gameplay_host_.OpenGameplay(snap);
+
+		gameplay_host_.GetWorld().GetPlayer().SetPosition(spawn_pos);
+		gameplay_host_.GetWorld().GetPlayer().SetOrientation(spawn_yaw, 0.0f);
+		viewer_.pos_ = gameplay_host_.GetWorld().GetPlayer().GetEyePosition();
+		viewer_.yaw_ = spawn_yaw;
+		viewer_.pitch_ = 0.0f;
+		viewer_.roll_ = 0.0f;
+		UpdateViewerVectors();
+
+		// Disable all editor modes and editor tools
+		edit_mode_ = false;
+		terrain_edit_enabled_ = false;
+		prop_editor_open_ = false;
+		task_picker_open_ = false;
+		ac_task_picker_open_ = false;
+		model_picker_open_ = false;
+		show_hud_ = true;
+		status_message_ = "Game Mode Active (Profile: " + profile.name + "): WASD move, Mouse look/fire, Space jump, C crouch, R reload, ESC menu";
+	} else {
+		igi::EditorSnapshot snap;
+		gameplay_host_.CloseGameplay(snap);
+		viewer_.pos_ = snap.camera_pos;
+		viewer_.yaw_ = snap.camera_yaw;
+		viewer_.pitch_ = snap.camera_pitch;
+		edit_mode_ = snap.was_edit_mode;
+		UpdateViewerVectors();
+		status_message_ = "Editor Mode Restored";
+	}
 }
 
 void App::SetEditBrush(int brush) {

@@ -16,7 +16,7 @@
  global variables & constants
 ================================================================================
 */
-static App g_app;
+App g_app;
 
 // menu ids
 
@@ -283,6 +283,9 @@ static void UpdateScaleMenuText() {
 
 static void OnMenu(int menu) {
   if (menu >= MENU_LEVEL_FIRST && menu <= MENU_LEVEL_LAST) {
+    if (!igi::IsEditorInteractionActive(g_app.GetPauseMode(), g_app.IsGamePlayMode())) {
+      return;
+    }
     g_app.LoadLevel(menu);
     g_app.SetGameLevel(menu);
 
@@ -602,8 +605,8 @@ int main(int argc, char **argv) {
 #endif
 
   // read window width & height from command line
-  int wnd_w = Arg_ReadInt(argc, argv, "-w", 800);
-  int wnd_h = Arg_ReadInt(argc, argv, "-h", 600);
+  int wnd_w = Arg_ReadInt(argc, argv, "-w", 1280);
+  int wnd_h = Arg_ReadInt(argc, argv, "-h", 720);
 
   // read level from command line
   int level_no = Arg_ReadInt(argc, argv, "-level", 1);
@@ -791,7 +794,7 @@ int main(int argc, char **argv) {
   glutAddSubMenu("Choose Level", g_menu_choose_level);
   glutAddMenuEntry("Close", MENU_CLOSE);
 
-  // Menus are defined but not attached to any mouse button since we use the pause menu and specific input handlers.
+  // No mouse context menu: editor level selection belongs to the Escape overlay.
 
   // init menu text
   UpdateOverlayWireframeMenuText();
@@ -800,9 +803,8 @@ int main(int argc, char **argv) {
   UpdateChooseLevelMenuText();
   UpdateScaleMenuText();
 
-  // Start in fullscreen (ALT+ENTER toggles back to the windowed size below).
-  g_app.SetInitialFullscreen(wnd_w, wnd_h);
-  glutFullScreen();
+  // Start in windowed mode (ALT+ENTER toggles fullscreen)
+  g_app.OnWindowResize(wnd_w, wnd_h);
 
   try {
     // enter main loop

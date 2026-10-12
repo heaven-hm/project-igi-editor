@@ -51,5 +51,6 @@ private:
 
     std::vector<LogEntry> entries_;
     std::ofstream file_;
+    std::string log_file_path_;
     mutable std::mutex mutex_;
 };

@@ -1,4 +1,5 @@
 #include "renderer_objects_internal.h"
+#include "object_lightmap.h"
 
 
 
@@ -644,8 +645,12 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                         // clear and see-through. The earlier flat-gray override (dirlight 0 /
                         // ambient 0.45) darkened panes into murky panels — reverted to the
                         // pre-3986cd9 "before" look the user asked to restore.
-                        glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                        glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+                        auto mode = igi::ObjectLightmapManager::Get().GetRenderMode();
+                        float dirI = (mode == igi::LightmapRenderMode::Baked) ? 0.15f : (mode == igi::LightmapRenderMode::Hybrid ? 0.6f : 0.8f);
+                        float ambI = (mode == igi::LightmapRenderMode::Baked) ? 0.85f : (mode == igi::LightmapRenderMode::Hybrid ? 0.4f : 0.3f);
+
+                        glUniform3f(loc_dirlight, dirI, dirI, dirI);
+                        glUniform3f(loc_ambient,  ambI, ambI, ambI);
                         glUniform1i(loc_useTex, 1);
                         glActiveTexture(GL_TEXTURE0);
                         glBindTexture(GL_TEXTURE_2D, sub.textureID);
@@ -657,8 +662,12 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                         if (color.r >= 0.99f && color.g >= 0.99f && color.b >= 0.99f) {
                             color = glm::vec3(r, g, b);
                         }
-                        glUniform3f(loc_dirlight, color.r * 0.6f, color.g * 0.6f, color.b * 0.6f);
-                        glUniform3f(loc_ambient,  color.r * 0.4f, color.g * 0.4f, color.b * 0.4f);
+                        auto mode = igi::ObjectLightmapManager::Get().GetRenderMode();
+                        float dirMult = (mode == igi::LightmapRenderMode::Baked) ? 0.15f : (mode == igi::LightmapRenderMode::Hybrid ? 0.6f : 0.8f);
+                        float ambMult = (mode == igi::LightmapRenderMode::Baked) ? 0.85f : (mode == igi::LightmapRenderMode::Hybrid ? 0.4f : 0.3f);
+
+                        glUniform3f(loc_dirlight, color.r * dirMult, color.g * dirMult, color.b * dirMult);
+                        glUniform3f(loc_ambient,  color.r * ambMult, color.g * ambMult, color.b * ambMult);
                         glUniform1i(loc_useTex, 0);
                     }
 
@@ -673,13 +682,17 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 glBindVertexArray(0);
             } else {
                 // Legacy single-texture path (e.g. old OBJ models)
+                auto mode = igi::ObjectLightmapManager::Get().GetRenderMode();
+                float dirI = (mode == igi::LightmapRenderMode::Baked) ? 0.15f : (mode == igi::LightmapRenderMode::Hybrid ? 0.6f : 0.8f);
+                float ambI = (mode == igi::LightmapRenderMode::Baked) ? 0.85f : (mode == igi::LightmapRenderMode::Hybrid ? 0.4f : 0.3f);
+
                 bool hasTexture = (mesh.textureID > 0);
                 if (hasTexture) {
-                    glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                    glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+                    glUniform3f(loc_dirlight, dirI, dirI, dirI);
+                    glUniform3f(loc_ambient,  ambI, ambI, ambI);
                 } else {
-                    glUniform3f(loc_dirlight, 0.7f, 0.7f, 0.7f);
-                    glUniform3f(loc_ambient,  r * 0.4f, g * 0.4f, b * 0.4f);
+                    glUniform3f(loc_dirlight, dirI, dirI, dirI);
+                    glUniform3f(loc_ambient,  r * ambI, g * ambI, b * ambI);
                 }
                 if (mesh.textureID > 0) {
                     glUniform1i(loc_useTex, 1);

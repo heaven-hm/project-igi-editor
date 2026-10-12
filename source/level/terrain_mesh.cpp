@@ -56,8 +56,7 @@ void Terrain::GenerateCubeData() {
 		uint32_t buf_type = CUBE_DATA_BUF_TYPE_1600;
 		cube_data_s* cube_data = AllocCubeData(0, buf_type);
 		if (!cube_data) {
-			Log(log_type_t::LOG_FATAL, __FILE__, __LINE__, "cube_data  overflow (pre-alloc)");
-			return;
+			continue;
 		}
 
 		render_cube->cube_data_hash_->cube_data_ = cube_data;

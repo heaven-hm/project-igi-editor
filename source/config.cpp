@@ -22,6 +22,13 @@ static std::string Trim(const std::string& s) {
     return s.substr(start, end - start + 1);
 }
 
+static int NormalizeSystemFontSize(int size) {
+    if (size == 10 || size == 12 || size == 18) return size;
+    if (size < 11) return 10;
+    if (size < 15) return 12;
+    return 18;
+}
+
 static KeyBinding ParseKeyBinding(const std::string& binding) {
     KeyBinding kb = {0, false, false, false};
 
@@ -88,6 +95,7 @@ std::string Config::GetKeybindingsPath() {
 }
 
 void Config::CreateDefault() {
+    data_ = ConfigData{};
     data_.level = 1;
     data_.keySnapGround = 'S';
     data_.keySnapObject = 'O';
@@ -118,15 +126,24 @@ void Config::CreateDefault() {
     data_.keyDeleteTask = {VK_DELETE, false, false, false};
     data_.keyUndo = {0x5A, true, false, false};    // Ctrl+Z
     data_.keyRedo = {0x59, true, false, false};    // Ctrl+Y
-    data_.enableLogging = true;
+    // Logging is fail-closed until the authoritative qedconfig.qsc has been
+    // compiled and loaded. This prevents Logger initialization from creating a
+    // file while a disabled configuration is still being resolved.
+    data_.enableLogging = false;
     data_.debugLogging = false;
     data_.enableLOD = true;
+    data_.enableLightmaps = false;
+    data_.enableFog = true;
+    data_.fogIntensity = 200;
+    data_.musicEnabled = true;
     data_.consoleAutoActivate = 2;
     data_.searchType = 133577004;
     data_.invertMouse = false;
     data_.displayTaskNote = true;
     data_.allowDynamicSwitching = false;
     data_.saveConfigOnExit = true;
+    data_.auto_save_enabled = false;
+    data_.auto_save_interval_seconds = 300;
     data_.runEvent = true;
     data_.cameraLock = false;
     data_.enableBackup = false;
@@ -147,39 +164,52 @@ void Config::CreateDefault() {
 }
 
 void Config::Init() {
-    CreateDefault();
     std::string contentDir = Utils::GetExeDirectory() + "\\editor";
     if (!std::filesystem::exists(contentDir)) {
         Logger::Get().Log(LogLevel::FATAL, "FATAL: editor directory not found: " + contentDir);
         Utils::ShowError("ERROR: FATAL\neditor directory not found:\n" + contentDir + "\nEditor will now exit.", "IGI Editor - Launch Error");
         std::exit(1);
     }
-    std::string qedDir = contentDir + "\\qed";
-
-    // Compile all .qsc files to .qvm
-    for (const auto& entry : std::filesystem::directory_iterator(qedDir)) {
-        if (entry.path().extension() == ".qsc") {
-            std::string qscPath = entry.path().string();
-            std::string qvmPath = entry.path().parent_path().string() + "\\" + entry.path().stem().string() + ".qvm";
-            std::ifstream qscIn(qscPath);
-            std::string qscSrc((std::istreambuf_iterator<char>(qscIn)), std::istreambuf_iterator<char>());
-            qscIn.close();
-            auto lexResult = qsc::Lex(qscSrc);
-            if (lexResult.ok) {
-                auto parseResult = qsc::Parse(lexResult.tokens);
-                if (parseResult.ok) {
-                    std::string compileErr;
-                    qvm::CompileToFile(*parseResult.program, qvmPath, &compileErr);
-                }
-            }
-        }
-    }
-    Load();
+    InitFromDirectory(contentDir + "\\qed");
 }
 
-void Config::Load() {
-    std::string qedDir = Utils::GetExeDirectory() + "\\editor\\qed";
-    if (!std::filesystem::exists(qedDir)) return;
+static bool CompileQscFile(const std::string& qscPath, const std::string& qvmPath) {
+    std::ifstream qscIn(qscPath);
+    if (!qscIn.is_open()) return false;
+    std::string qscSrc((std::istreambuf_iterator<char>(qscIn)), std::istreambuf_iterator<char>());
+    auto lexResult = qsc::Lex(qscSrc);
+    if (!lexResult.ok) return false;
+    auto parseResult = qsc::Parse(lexResult.tokens);
+    if (!parseResult.ok) return false;
+    std::string compileErr;
+    return qvm::CompileToFile(*parseResult.program, qvmPath, &compileErr);
+}
+
+bool Config::InitFromDirectory(const std::string& qedDirectory) {
+    CreateDefault();
+    if (!std::filesystem::exists(qedDirectory)) return false;
+
+    const std::filesystem::path qedDir(qedDirectory);
+    const std::string configQsc = (qedDir / "qedconfig.qsc").string();
+    const std::string configQvm = (qedDir / "qedconfig.qvm").string();
+
+    // Compile the authoritative config first, before any config-dependent log.
+    const bool configQvmReady = CompileQscFile(configQsc, configQvm);
+    for (const auto& entry : std::filesystem::directory_iterator(qedDir)) {
+        if (entry.path().extension() == ".qsc" &&
+            entry.path().filename() != "qedconfig.qsc") {
+            const std::string qvmPath = (entry.path().parent_path() /
+                                         (entry.path().stem().string() + ".qvm")).string();
+            CompileQscFile(entry.path().string(), qvmPath);
+        }
+    }
+
+    Load(qedDirectory, configQvmReady ? configQvm : std::string());
+    return configQvmReady;
+}
+
+void Config::Load(const std::string& qedDirectory, const std::string& configQvmPath) {
+    if (!std::filesystem::exists(qedDirectory)) return;
 
     auto ParseLine = [&](const std::string& line) {
         std::string clean = Trim(line);
@@ -208,9 +238,16 @@ void Config::Load() {
                     RENDER_Z_NEAR = data_.renderZNear;
                     WORLD_Z_NEAR = RENDER_Z_NEAR / 0.001f;
                 }
-                else if (key == "Logs" || key == "Enable" || key == "SaveConfigOnExit") data_.enableLogging = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "Logs") data_.enableLogging = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "SaveConfigOnExit") data_.saveConfigOnExit = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "Debug") data_.debugLogging = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "Lod") data_.enableLOD = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "Lightmaps") data_.enableLightmaps = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "Fog") data_.enableFog = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "FogIntensity") data_.fogIntensity = std::clamp(std::stoi(val), 0, 1000);
+                else if (key == "Music") data_.musicEnabled = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "AutoSaveEnabled") data_.auto_save_enabled = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "AutoSaveInterval") data_.auto_save_interval_seconds = std::clamp(std::stoi(val), 10, 3600);
                 else if (key == "ConsoleAutoActivate") data_.consoleAutoActivate = std::stoi(val);
                 else if (key == "SearchType") data_.searchType = std::stoll(val);
                 else if (key == "InvertMouse") data_.invertMouse = (val == "TRUE" || val == "true" || val == "1");
@@ -220,7 +257,7 @@ void Config::Load() {
                 else if (key == "CameraLock") data_.cameraLock = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "Backup") data_.enableBackup = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "UseEditorFont") data_.useEditorFont = (val == "TRUE" || val == "true" || val == "1");
-                else if (key == "SystemFontSize") { int s = std::stoi(val); data_.systemFontSize = std::max(8, std::min(32, s)); }
+                else if (key == "SystemFontSize") data_.systemFontSize = NormalizeSystemFontSize(std::stoi(val));
                 else if (key == "FindTaskName") data_.findTaskName = val;
                 else if (key == "FindTaskNote") data_.findTaskNote = val;
                 else if (key == "FindTaskID") data_.findTaskID = val;
@@ -302,8 +339,15 @@ void Config::Load() {
                 RENDER_Z_NEAR = data_.renderZNear;
                 WORLD_Z_NEAR = RENDER_Z_NEAR / 0.001f;
             }
-            else if (key == "Logs" || key == "Enable" || key == "SaveConfigOnExit") data_.enableLogging = (val == "TRUE" || val == "true" || val == "1");
+            else if (key == "Logs") data_.enableLogging = (val == "TRUE" || val == "true" || val == "1");
+            else if (key == "SaveConfigOnExit") data_.saveConfigOnExit = (val == "TRUE" || val == "true" || val == "1");
             else if (key == "Debug") data_.debugLogging = (val == "TRUE" || val == "true" || val == "1");
+            else if (key == "Lightmaps") data_.enableLightmaps = (val == "TRUE" || val == "true" || val == "1");
+            else if (key == "Fog") data_.enableFog = (val == "TRUE" || val == "true" || val == "1");
+            else if (key == "FogIntensity") data_.fogIntensity = std::clamp(std::stoi(val), 0, 1000);
+            else if (key == "Music") data_.musicEnabled = (val == "TRUE" || val == "true" || val == "1");
+            else if (key == "AutoSaveEnabled") data_.auto_save_enabled = (val == "TRUE" || val == "true" || val == "1");
+            else if (key == "AutoSaveInterval") data_.auto_save_interval_seconds = std::clamp(std::stoi(val), 10, 3600);
             else if (key == "ConsoleAutoActivate") data_.consoleAutoActivate = std::stoi(val);
             else if (key == "SearchType") data_.searchType = std::stoll(val);
             else if (key == "InvertMouse") data_.invertMouse = (val == "TRUE" || val == "true" || val == "1");
@@ -321,16 +365,14 @@ void Config::Load() {
         }
     };
 
-    for (const auto& entry : std::filesystem::directory_iterator(qedDir)) {
-        if (entry.path().extension() == ".qvm") {
-            QVMFile qvm = QVM_Parse(entry.path().string());
-            if (qvm.valid) {
-                std::string decompiled = QVM_DecompileToString(qvm);
-                std::stringstream ss(decompiled);
-                std::string line;
-                while (std::getline(ss, line)) ParseLine(line);
-                Logger::Get().Log(LogLevel::INFO, "[Config] Loaded from memory-decompiled: " + entry.path().filename().string());
-            }
+    if (!configQvmPath.empty()) {
+        QVMFile qvm = QVM_Parse(configQvmPath);
+        if (qvm.valid) {
+            std::string decompiled = QVM_DecompileToString(qvm);
+            std::stringstream ss(decompiled);
+            std::string line;
+            while (std::getline(ss, line)) ParseLine(line);
+            Logger::Get().Log(LogLevel::INFO, "[Config] Loaded from memory-decompiled: qedconfig.qvm");
         }
     }
 
@@ -338,14 +380,15 @@ void Config::Load() {
     // Parse it last so it overrides any stale bindings from a compiled .qvm and so
     // the full set (TaskMagicObjToggle, AutoComplete*, SaveSubTask*, ...) is loaded.
     {
-        std::ifstream kbFile(GetKeybindingsPath());
+        std::ifstream kbFile(std::filesystem::path(qedDirectory) / "qedkeybindings.qsc");
         if (kbFile.is_open()) {
             std::string line;
             int n = 0;
             while (std::getline(kbFile, line)) { ParseLine(line); ++n; }
             Logger::Get().Log(LogLevel::INFO, "[Config] Loaded event bindings from qedkeybindings.qsc (" + std::to_string(n) + " lines)");
         } else {
-            Logger::Get().Log(LogLevel::WARNING, "[Config] qedkeybindings.qsc not found at: " + GetKeybindingsPath());
+            Logger::Get().Log(LogLevel::WARNING, "[Config] qedkeybindings.qsc not found at: " +
+                               (std::filesystem::path(qedDirectory) / "qedkeybindings.qsc").string());
         }
     }
 }
@@ -373,6 +416,12 @@ void Config::Save() {
         file << "QEDBackup(" << (data_.enableBackup ? "TRUE" : "FALSE") << ");\n";
         file << "QEDUseEditorFont(" << (data_.useEditorFont ? "TRUE" : "FALSE") << ");\n";
         file << "QEDSystemFontSize(" << data_.systemFontSize << ");\n";
+        file << "QEDAutoSaveEnabled(" << (data_.auto_save_enabled ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDAutoSaveInterval(" << data_.auto_save_interval_seconds << ");\n";
+        file << "QEDLightmaps(" << (data_.enableLightmaps ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDFog(" << (data_.enableFog ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDFogIntensity(" << data_.fogIntensity << ");\n";
+        file << "QEDMusic(" << (data_.musicEnabled ? "TRUE" : "FALSE") << ");\n";
         file << "QEDFindTaskName(\"" << data_.findTaskName << "\");\n";
         file << "QEDFindTaskNote(\"" << data_.findTaskNote << "\");\n";
         file << "QEDFindTaskID(\"" << data_.findTaskID << "\");\n";
@@ -392,20 +441,10 @@ void Config::Save() {
     // named bindings, which silently dropped TaskMagicObjToggle, AutoComplete*,
     // SaveSubTask*, TaskMove*, find variants, etc. — leaving most hotkeys unbound on the
     // next launch. The editor now only reads that file (see Config::Init).
-    for (const auto& path : { qscPath }) {
-        std::string qvmPath = std::filesystem::path(path).parent_path().string() + "\\" + std::filesystem::path(path).stem().string() + ".qvm";
-        std::ifstream qscIn(path);
-        std::string qscSrc((std::istreambuf_iterator<char>(qscIn)), std::istreambuf_iterator<char>());
-        qscIn.close();
-        auto lexResult = qsc::Lex(qscSrc);
-        if (lexResult.ok) {
-            auto parseResult = qsc::Parse(lexResult.tokens);
-            if (parseResult.ok) {
-                std::string compileErr;
-                qvm::CompileToFile(*parseResult.program, qvmPath, &compileErr);
-            }
-        }
-    }
+    const std::string qvmPath =
+        (std::filesystem::path(qscPath).parent_path() /
+         (std::filesystem::path(qscPath).stem().string() + ".qvm")).string();
+    CompileQscFile(qscPath, qvmPath);
 }
 
 ConfigData& Config::Get() { return data_; }

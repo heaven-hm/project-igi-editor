@@ -5,12 +5,11 @@
 
 void Logger::Init(const std::string& logFile) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (file_.is_open()) {
-        return;
-    }
-    file_.open(logFile, std::ios::out | std::ios::app);
-    if (!file_.is_open()) {
-        std::cerr << "Failed to open log file: " << logFile << std::endl;
+    if (log_file_path_ != logFile) {
+        if (file_.is_open()) {
+            file_.close();
+        }
+        log_file_path_ = logFile;
     }
 }
 
@@ -50,6 +49,13 @@ void Logger::Log(LogLevel level, const std::string& message) {
             entries_.erase(entries_.begin());
         }
 
+        if (!file_.is_open()) {
+            const std::string path = log_file_path_.empty() ? "editor.log" : log_file_path_;
+            file_.open(path, std::ios::out | std::ios::app);
+            if (!file_.is_open()) {
+                std::cerr << "Failed to open log file: " << path << std::endl;
+            }
+        }
         if (file_.is_open()) {
             file_ << fullMessage << std::endl;
         }

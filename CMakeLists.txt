@@ -39,6 +39,7 @@ endif()
 
 file(GLOB SOURCES "source/*.h" "source/*.cpp")
 file(GLOB SOURCES_LEVEL "source/level/*.*")
+file(GLOB SOURCES_RUNTIME "source/runtime/*.*")
 file(GLOB SOURCES_RENDERER "source/renderer/*.*")
 file(GLOB SOURCES_PARSERS "source/parsers/*.*")
 file(GLOB SOURCES_CLI "source/cli/*.*")
@@ -51,13 +52,14 @@ if (WIN32)
 endif()
 
 source_group("level" FILES ${SOURCES_LEVEL})
+source_group("runtime" FILES ${SOURCES_RUNTIME})
 source_group("renderer" FILES ${SOURCES_RENDERER})
 source_group("parsers" FILES ${SOURCES_PARSERS})
 source_group("cli" FILES ${SOURCES_CLI})
 source_group("shaders/41" FILES ${SHADERS_41})
 source_group("shaders/45" FILES ${SHADERS_45})
 
-add_executable(igi-editor ${SOURCES} ${SOURCES_LEVEL} ${SOURCES_RENDERER} ${SOURCES_PARSERS} ${SOURCES_CLI} ${SHADERS_41} ${SHADERS_45})
+add_executable(igi-editor ${SOURCES} ${SOURCES_LEVEL} ${SOURCES_RUNTIME} ${SOURCES_RENDERER} ${SOURCES_PARSERS} ${SOURCES_CLI} ${SHADERS_41} ${SHADERS_45})
 
 if (WIN32)
   set_target_properties(igi-editor PROPERTIES
@@ -117,6 +119,10 @@ set_source_files_properties(
   source/cli/cli_handler.cpp
   source/cli/cli_tests.cpp
   source/cli/verify_level.cpp
+  source/runtime/config_qvm.cpp
+  source/runtime/human_player_config.cpp
+  source/runtime/audio_system.cpp
+  source/renderer/object_lightmap.cpp
   PROPERTIES SKIP_PRECOMPILE_HEADERS ON
 )
 
@@ -124,6 +130,7 @@ target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party/
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party/GL/include)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/source)
+target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/source/runtime)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/source/parsers)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/source/cli)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party/tinygltf)
@@ -133,13 +140,30 @@ if (WIN32)
   # Dynamically select GL library path based on target architecture
   if (CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(GL_LIB_DIR "${PROJECT_SOURCE_DIR}/third_party/GL/lib/x64")
+    set(GL_DLL_DIR "${PROJECT_SOURCE_DIR}/assets/dlls/x64")
+    set(GL_VCPKG_TRIPLET "x64-windows")
   else()
     set(GL_LIB_DIR "${PROJECT_SOURCE_DIR}/third_party/GL/lib/x86")
+    set(GL_DLL_DIR "${PROJECT_SOURCE_DIR}/assets/dlls/x86")
+    set(GL_VCPKG_TRIPLET "x86-windows")
+  endif()
+
+  # The repository carries the x64 OpenGL runtime. On x86, use an installed
+  # vcpkg triplet when the equivalent bundled import libraries are absent.
+  if (NOT EXISTS "${GL_LIB_DIR}/freeglut.lib" OR NOT EXISTS "${GL_LIB_DIR}/glew32.lib")
+    if (DEFINED ENV{VCPKG_ROOT} AND
+        EXISTS "$ENV{VCPKG_ROOT}/installed/${GL_VCPKG_TRIPLET}/lib/freeglut.lib" AND
+        EXISTS "$ENV{VCPKG_ROOT}/installed/${GL_VCPKG_TRIPLET}/lib/glew32.lib")
+      set(GL_LIB_DIR "$ENV{VCPKG_ROOT}/installed/${GL_VCPKG_TRIPLET}/lib")
+      set(GL_DLL_DIR "$ENV{VCPKG_ROOT}/installed/${GL_VCPKG_TRIPLET}/bin")
+    else()
+      message(FATAL_ERROR "Missing freeglut/glew for ${GL_VCPKG_TRIPLET}. Install freeglut:${GL_VCPKG_TRIPLET} and glew:${GL_VCPKG_TRIPLET}, or provide third_party/GL libraries.")
+    endif()
   endif()
   message("Selected GL library path: ${GL_LIB_DIR}")
 
   target_link_directories(igi-editor PRIVATE ${GL_LIB_DIR})
-  target_link_libraries(igi-editor PRIVATE freeglut glew32 OpenGL32)
+  target_link_libraries(igi-editor PRIVATE freeglut glew32 OpenGL32 winmm)
 
   # Increase PCH memory limit to fix compiler heap errors
   if (MSVC)
@@ -177,12 +201,6 @@ if (WIN32)
   )
 
   # Copy required runtime files (DLLs, config, version, shaders) next to the exe
-  if (CMAKE_SIZEOF_VOID_P EQUAL 8)
-    set(DLL_SRC_DIR "${PROJECT_SOURCE_DIR}/assets/dlls/x64")
-  else()
-    set(DLL_SRC_DIR "${PROJECT_SOURCE_DIR}/assets/dlls/x86")
-  endif()
-
   add_custom_command(TARGET igi-editor POST_BUILD
     # Copy assets/editor structure directly
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -191,8 +209,8 @@ if (WIN32)
 
     # Copy files to root (DLLs and version)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${DLL_SRC_DIR}/freeglut.dll"
-      "${DLL_SRC_DIR}/glew32.dll"
+      "${GL_DLL_DIR}/freeglut.dll"
+      "${GL_DLL_DIR}/glew32.dll"
       "${PROJECT_SOURCE_DIR}/version"
       "$<TARGET_FILE_DIR:igi-editor>"
 
@@ -230,6 +248,7 @@ add_executable(igi_tests
     tests/test_qsc_parser.cpp
     tests/test_qvm_roundtrip.cpp
     tests/test_config.cpp
+    tests/test_logger.cpp
     tests/test_utils.cpp
     tests/test_verify_unit.cpp
     tests/test_verify_level.cpp
@@ -244,6 +263,7 @@ add_executable(igi_tests
     tests/test_pickup_resolve.cpp
     tests/test_res_model_set.cpp
     tests/test_res_stream_append.cpp
+    tests/test_runtime_subsystems.cpp
 )
 
 # Explicit runtime so igi_tests always matches igi-editor (/MDd Debug, /MD Release).
@@ -254,13 +274,17 @@ if (MSVC)
 endif()
 
 target_include_directories(igi_tests PRIVATE source)
+target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/source/runtime)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/source/parsers)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/source/cli)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/glm-1.0.1)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/GL/include)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/tinygltf)
-target_link_libraries(igi_tests PRIVATE gtest_main)
+target_compile_definitions(igi_tests PRIVATE
+    IGI_EDITOR_QED_ASSETS_DIR="${PROJECT_SOURCE_DIR}/assets/editor/qed"
+)
+target_link_libraries(igi_tests PRIVATE gtest_main winmm)
 target_sources(igi_tests PRIVATE
     source/parsers/qsc_lexer.cpp
     source/parsers/qsc_parser.cpp
@@ -283,6 +307,31 @@ target_sources(igi_tests PRIVATE
     source/parsers/tex_parser.cpp
     source/parsers/mtp_parser.cpp
     source/parsers/fnt_parser.cpp
+    source/game_clock.cpp
+    source/level/qvm_native_registry.cpp
+    source/level/qvm_interpreter.cpp
+    source/level/task_tree.cpp
+    source/player_collision.cpp
+    source/player_controller.cpp
+    source/weapon_system.cpp
+    source/ai_events.cpp
+    source/ai_system.cpp
+    source/level_flow.cpp
+    source/runtime/runtime_world.cpp
+    source/runtime/editor_snapshot.cpp
+    source/runtime/window_input_router.cpp
+    source/runtime/simulation_scheduler.cpp
+    source/runtime/gameplay_host.cpp
+    source/runtime/audio_system.cpp
+    source/runtime/config_qvm.cpp
+    source/runtime/human_player_config.cpp
+)
+
+set_source_files_properties(
+    source/runtime/audio_system.cpp
+    source/runtime/config_qvm.cpp
+    source/runtime/human_player_config.cpp
+    PROPERTIES SKIP_PRECOMPILE_HEADERS ON
 )
 
 # level_objects.cpp (and its pch.h header graph: app.h, renderer, level.h) relies

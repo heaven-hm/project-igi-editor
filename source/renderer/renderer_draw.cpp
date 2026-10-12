@@ -4,6 +4,8 @@
  *          font/text helpers + cursor unproject. Split from renderer.cpp.
  *****************************************************************************/
 #include "renderer_internal.h"
+#include "object_lightmap.h"
+#include "../runtime/pause_menu_layout.h"
 
 static FntFont g_editorFont;
 static GLuint  g_editorFontTex = 0;
@@ -12,6 +14,10 @@ static bool    g_editorFontTried = false;
 static FntFont g_editorSmFont;
 static GLuint  g_editorSmFontTex = 0;
 static bool    g_editorSmFontTried = false;
+
+static FntFont g_retailPauseFont;
+static GLuint  g_retailPauseFontTex = 0;
+static bool    g_retailPauseFontTried = false;
 
 // Lazily load + upload the editor font atlas on first HUD draw.
 static void EnsureEditorFont() {
@@ -50,6 +56,51 @@ static void EnsureEditorSmFont() {
   pic.height_ = g_editorSmFont.texHeight;
   pic.pixels_ = g_editorSmFont.rgba.data();
   g_editorSmFontTex = GL_RegisterTexture(&pic, GL_CLAMP_TO_EDGE, GL_NEAREST, GL_NEAREST, false);
+}
+
+// ingamemenu.qvm names font3.fnt from ingamemenu.res.  The archive remains the
+// source of truth; its extracted copy is only a parser bridge because FNT_Parse
+// currently accepts a path rather than an in-memory ILFF buffer.
+static void EnsureRetailPauseFont() {
+  if (g_retailPauseFontTried) return;
+  g_retailPauseFontTried = true;
+
+  const std::filesystem::path game_root(Utils::GetIGIRootPath());
+  const std::filesystem::path menu_qvm = game_root / "MENUSYSTEM" / "ingamemenu.qvm";
+  const std::filesystem::path menu_res = game_root / "MENUSYSTEM" / "ingamemenu.res";
+  if (!std::filesystem::exists(menu_qvm) || !std::filesystem::exists(menu_res)) {
+    Logger::Get().Log(LogLevel::WARNING,
+        "[PauseMenu] Retail ingamemenu.qvm/.res unavailable; using system font fallback");
+    return;
+  }
+
+  const auto font_bytes = RES_Extract(menu_res.string(), "LOCAL:menusystem/font3.fnt");
+  if (font_bytes.empty()) {
+    Logger::Get().Log(LogLevel::WARNING,
+        "[PauseMenu] LOCAL:menusystem/font3.fnt missing from ingamemenu.res; using system font fallback");
+    return;
+  }
+
+  const std::filesystem::path font_path =
+      std::filesystem::temp_directory_path() / "igi1ed-ingamemenu-font3.fnt";
+  std::ofstream out(font_path, std::ios::binary | std::ios::trunc);
+  out.write(reinterpret_cast<const char*>(font_bytes.data()),
+            static_cast<std::streamsize>(font_bytes.size()));
+  out.close();
+  if (!out) {
+    Logger::Get().Log(LogLevel::WARNING,
+        "[PauseMenu] Cannot stage retail font; using system font fallback");
+    return;
+  }
+
+  g_retailPauseFont = FNT_Parse(font_path.string());
+  if (!g_retailPauseFont.valid) return;
+  pic_s pic;
+  pic.width_ = g_retailPauseFont.texWidth;
+  pic.height_ = g_retailPauseFont.texHeight;
+  pic.pixels_ = g_retailPauseFont.rgba.data();
+  g_retailPauseFontTex = GL_RegisterTexture(&pic, GL_CLAMP_TO_EDGE, GL_NEAREST,
+                                            GL_NEAREST, false);
 }
 
 // Draw a string with the editor bitmap font in the HUD ortho space (y=0 bottom).
@@ -109,6 +160,48 @@ static void DrawFontText(int x, int y_gl, const char* str, float r, float g, flo
   glBindTexture(GL_TEXTURE_2D, 0);
   glDisable(GL_TEXTURE_2D);
   glDisable(GL_BLEND);
+}
+
+static void DrawRetailPauseText(int x, int y_gl, const char* str,
+                                float r, float g, float b) {
+  if (!g_retailPauseFont.valid || !g_retailPauseFontTex) return;
+  glEnable(GL_TEXTURE_2D);
+  glBindTexture(GL_TEXTURE_2D, g_retailPauseFontTex);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glColor4f(r, g, b, 1.0f);
+  float pen_x = static_cast<float>(x);
+  const float space = g_retailPauseFont.lineHeight > 0
+      ? g_retailPauseFont.lineHeight / 2.0f : 4.0f;
+  glBegin(GL_QUADS);
+  for (const char* p = str; *p; ++p) {
+    const auto it = g_retailPauseFont.glyphs.find(static_cast<unsigned char>(*p));
+    if (it == g_retailPauseFont.glyphs.end()) { pen_x += space; continue; }
+    const FntGlyph& glyph = it->second;
+    const float x1 = pen_x + glyph.width;
+    const float y1 = y_gl - glyph.height;
+    glTexCoord2f(glyph.u0, glyph.v0); glVertex2f(pen_x, y_gl);
+    glTexCoord2f(glyph.u1, glyph.v0); glVertex2f(x1, y_gl);
+    glTexCoord2f(glyph.u1, glyph.v1); glVertex2f(x1, y1);
+    glTexCoord2f(glyph.u0, glyph.v1); glVertex2f(pen_x, y1);
+    pen_x += glyph.advance;
+  }
+  glEnd();
+  glBindTexture(GL_TEXTURE_2D, 0);
+  glDisable(GL_TEXTURE_2D);
+  glDisable(GL_BLEND);
+}
+
+static int RetailPauseTextWidth(const char* str) {
+  if (!g_retailPauseFont.valid) return static_cast<int>(strlen(str)) * 8;
+  const float space = g_retailPauseFont.lineHeight > 0
+      ? g_retailPauseFont.lineHeight / 2.0f : 4.0f;
+  float width = 0.0f;
+  for (const char* p = str; *p; ++p) {
+    const auto it = g_retailPauseFont.glyphs.find(static_cast<unsigned char>(*p));
+    width += it == g_retailPauseFont.glyphs.end() ? space : it->second.advance;
+  }
+  return static_cast<int>(width);
 }
 
 // Draw a string with the small editor bitmap font (editorsm.fnt) for tooltips.
@@ -1348,16 +1441,25 @@ void Renderer::Draw(const draw_params_s &params,
     // SPR sprite cursors are drawn by App::DrawCustomCursor() — no GLUT overlays here
 
     if (task_tree_view.pause_mode_) {
-      const int menu_w = 460;
-      const int menu_h = 480;
+      const int menu_w = igi::kPauseMenuWidth;
+      const int menu_h = igi::kPauseMenuHeight;
       const int menu_x = (params.view_define_->viewport_width_ - menu_w) / 2;
-      const int menu_y = (params.view_define_->viewport_height_ - menu_h) / 2;
+      const int menu_y = igi::PauseMenuTop(params.view_define_->viewport_height_);
       const int viewport_h = params.view_define_->viewport_height_;
+      EnsureRetailPauseFont();
+      auto draw_pause_text = [&](int x, int y, const char* text,
+                                 float r, float g, float b) {
+        if (g_retailPauseFont.valid && g_retailPauseFontTex) {
+          DrawRetailPauseText(x, viewport_h - y, text, r, g, b);
+        } else {
+          draw_text_sys(x, y, text, r, g, b);
+        }
+      };
 
-      // Glassmorphism-style background
+      // Use the retail menu font but keep QED's editor actions and green theme.
       glEnable(GL_BLEND);
       glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-      glColor4f(0.02f, 0.15f, 0.02f, 0.94f); // Deep emerald
+      glColor4f(0.01f, 0.12f, 0.03f, 0.94f);
       glBegin(GL_QUADS);
       glVertex2i(menu_x, menu_y);
       glVertex2i(menu_x + menu_w, menu_y);
@@ -1366,182 +1468,68 @@ void Renderer::Draw(const draw_params_s &params,
       glEnd();
       glDisable(GL_BLEND);
 
-      // Sharp green border
-      glLineWidth(2.5f);
-      glColor3f(0.0f, 1.0f, 0.0f);
+      glColor3f(0.0f, 0.95f, 0.20f);
+      glLineWidth(2.0f);
       glBegin(GL_LINE_LOOP);
       glVertex2i(menu_x, menu_y);
       glVertex2i(menu_x + menu_w, menu_y);
       glVertex2i(menu_x + menu_w, menu_y + menu_h);
       glVertex2i(menu_x, menu_y + menu_h);
       glEnd();
-
-      // Header separator
-      glBegin(GL_LINES);
-      glVertex2i(menu_x + 10, menu_y + menu_h - 45);
-      glVertex2i(menu_x + menu_w - 10, menu_y + menu_h - 45);
-      glEnd();
       glLineWidth(1.0f);
 
-      int screen_menu_top = (viewport_h - menu_h) / 2;
-      draw_text_sys(menu_x + menu_w / 2 - 45, screen_menu_top + 22, "IGI EDITOR",
-                0.0f, 1.0f, 0.0f);
-      draw_text_sys(menu_x + menu_w / 2 - 35, screen_menu_top + 46, "PAUSED", 0.8f,
-                0.8f, 0.8f);
+      const char* title = "IGI EDITOR PAUSED";
 
-      // Font row is rendered specially (index 1): a "Font: <type>" toggle on the
-      // left plus a [-] [size] [+] size control on the right, all on one line.
-      char font_btn_label[32];
-      snprintf(font_btn_label, sizeof(font_btn_label), "Font: %s",
-               Config::Get().useEditorFont ? "Editor" : "System");
-      int mods = task_tree_view.terrain_mod_options_;
-      bool tex = (mods & TERRAIN_TEXTURE_MOD) != 0;
-      bool hgt = (mods & TERRAIN_HEIGHT_MOD) != 0;
-      bool dsc = (mods & TERRAIN_DISCARD_MOD) != 0;
-
-      char bufTex[32], bufHgt[32], bufDsc[32];
-      snprintf(bufTex, sizeof(bufTex), "  [%c] Texture", tex ? 'X' : ' ');
-      snprintf(bufHgt, sizeof(bufHgt), "  [%c] Height", hgt ? 'X' : ' ');
-      snprintf(bufDsc, sizeof(bufDsc), "  [%c] Discard", dsc ? 'X' : ' ');
-
-      std::vector<const char*> btn_labels;
-      btn_labels.push_back("Resume");
-      const int FONT_ROW = btn_labels.size();
-      btn_labels.push_back(font_btn_label);
-      const int LEVEL_ROW = btn_labels.size();
-      btn_labels.push_back("Select Level");
-      const int SEARCH_ROW = btn_labels.size();
-      btn_labels.push_back("Model Search");
-      const int TERRAIN_HEADER_ROW = btn_labels.size();
-
-      bool exp = task_tree_view.pause_terrain_expanded_;
-      btn_labels.push_back(exp ? "Terrain Options: [-]" : "Terrain Options: [+]");
-
-      int TERRAIN_TEX_ROW = -1, TERRAIN_HGT_ROW = -1, TERRAIN_DSC_ROW = -1;
-      if (exp) {
-        TERRAIN_TEX_ROW = btn_labels.size(); btn_labels.push_back(bufTex);
-        TERRAIN_HGT_ROW = btn_labels.size(); btn_labels.push_back(bufHgt);
-        TERRAIN_DSC_ROW = btn_labels.size(); btn_labels.push_back(bufDsc);
-      }
-
-      const int RESET_ROW = btn_labels.size();
-      btn_labels.push_back("Reset Level");
-      const int SAVE_ROW = btn_labels.size();
-      btn_labels.push_back("Save Level");
-      const int QUIT_ROW = btn_labels.size();
-      btn_labels.push_back("Quit");
-
-      const int NUM_BTNS = btn_labels.size();
-
-      auto row_screen_y = [&](int idx) {
-        return screen_menu_top + 85 + idx * 35;
-      };
-
-      // Shared spinner-box draw helper (reused for FONT_ROW and LEVEL_ROW)
-      auto sbox = [&](int x1, int w, const char *txt, int row_top, int row_bot, int lbl_y) {
-        glColor3f(0.0f, 0.7f, 0.0f);
-        glBegin(GL_LINE_LOOP);
-        glVertex2i(x1, row_bot); glVertex2i(x1 + w, row_bot);
-        glVertex2i(x1 + w, row_top); glVertex2i(x1, row_top);
-        glEnd();
-        int tw = (int)strlen(txt) * 6;
-        draw_text_sys(x1 + (w - tw) / 2, lbl_y, txt, 0.0f, 0.9f, 0.0f);
-      };
-
-      for (int i = 0; i < NUM_BTNS; ++i) {
-        int screen_btn_y = row_screen_y(i);
-        int gl_btn_y = viewport_h - screen_btn_y;
-
-        bool hovered = (task_tree_view.mouse_x_ >= menu_x &&
-                        task_tree_view.mouse_x_ <= menu_x + menu_w &&
-                        task_tree_view.mouse_y_ >= screen_btn_y - 15 &&
-                        task_tree_view.mouse_y_ <= screen_btn_y + 15);
-
-        if (i == FONT_ROW) {
-          // "Font: <type>  [-] <n> [+]" — layout MUST match click handler
-          const int sz_box_w = 34, btn_w = 22, gap = 6;
-          const int label_w = 96, label_gap = 16;
-          const int group_w = label_w + label_gap + btn_w + gap + sz_box_w + gap + btn_w;
-          int gx = menu_x + (menu_w - group_w) / 2;
-          draw_text_sys(gx, screen_btn_y, font_btn_label,
-                        hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
-          int minus_x = gx + label_w + label_gap;
-          int box_x   = minus_x + btn_w + gap;
-          int plus_x  = box_x + sz_box_w + gap;
-          int rt = gl_btn_y - 14, rb = gl_btn_y + 10;
-          char szbuf[8]; snprintf(szbuf, sizeof(szbuf), "%d", Config::Get().systemFontSize);
-          sbox(minus_x, btn_w,    "-",    rt, rb, screen_btn_y);
-          sbox(box_x,   sz_box_w, szbuf,  rt, rb, screen_btn_y);
-          sbox(plus_x,  btn_w,    "+",    rt, rb, screen_btn_y);
-
-        } else if (i == LEVEL_ROW) {
-          // Level spinner: "Select Level  [-] [N] [+]" — layout MUST match click handler
-          const int num_box_w = 40, btn_w = 22, gap = 6;
-          const int label_w = 96, label_gap = 16;
-          const int group_w = label_w + label_gap + btn_w + gap + num_box_w + gap + btn_w;
-          int gx = menu_x + (menu_w - group_w) / 2;
-          draw_text_sys(gx, screen_btn_y, "Select Level",
-                        hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
-          int minus_x = gx + label_w + label_gap;
-          int box_x   = minus_x + btn_w + gap;
-          int plus_x  = box_x + num_box_w + gap;
-          int rt = gl_btn_y - 14, rb = gl_btn_y + 10;
-          sbox(minus_x, btn_w,      "-",   rt, rb, screen_btn_y);
-          sbox(box_x,   num_box_w, task_tree_view.pause_level_input_.c_str(), rt, rb, screen_btn_y);
-          sbox(plus_x,  btn_w,      "+",   rt, rb, screen_btn_y);
-
-        } else if (i == SEARCH_ROW) {
-          // Model Search text input box
-          const int label_w = 110, box_w = 200, gap = 10;
-          int gx = menu_x + (menu_w - (label_w + gap + box_w)) / 2;
-          draw_text_sys(gx, screen_btn_y, "Model Search",
-                        hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
-          int box_x = gx + label_w + gap;
-          int rt = gl_btn_y - 14, rb = gl_btn_y + 10;
-          bool is_active = (task_tree_view.pause_active_input_ == 1);
-          glColor3f(0.0f, is_active ? 1.0f : 0.5f, 0.0f);
-          glBegin(GL_LINE_LOOP);
-          glVertex2i(box_x, rb); glVertex2i(box_x + box_w, rb);
-          glVertex2i(box_x + box_w, rt); glVertex2i(box_x, rt);
-          glEnd();
-          std::string buf = task_tree_view.pause_search_input_;
-          if (is_active && (clock() / 500) % 2 == 0) buf += "_";
-          draw_text_sys(box_x + 5, screen_btn_y, buf.c_str(), 1.0f, 1.0f, 1.0f);
-
-        } else if (i == TERRAIN_HEADER_ROW) {
-          draw_text_sys(menu_x + menu_w / 2 - 50, screen_btn_y, btn_labels[i], 0.0f, 0.8f, 0.0f);
-        } else if (i == TERRAIN_TEX_ROW || i == TERRAIN_HGT_ROW || i == TERRAIN_DSC_ROW) {
-          if (hovered) {
-            glEnable(GL_BLEND);
-            glColor4f(0.0f, 0.8f, 0.0f, 0.35f);
-            glBegin(GL_QUADS);
-            glVertex2i(menu_x, gl_btn_y - 15); glVertex2i(menu_x + menu_w, gl_btn_y - 15);
-            glVertex2i(menu_x + menu_w, gl_btn_y + 15); glVertex2i(menu_x, gl_btn_y + 15);
-            glEnd();
-            glDisable(GL_BLEND);
-          }
-          draw_text_sys(menu_x + menu_w / 2 - 40, screen_btn_y, btn_labels[i],
-                        hovered ? 1.0f : 0.0f, hovered ? 1.0f : 0.85f, 0.0f);
-
-        } else {
-          if (hovered) {
-            glEnable(GL_BLEND);
-            glColor4f(0.0f, 0.8f, 0.0f, 0.35f);
-            glBegin(GL_QUADS);
-            glVertex2i(menu_x + 20, gl_btn_y - 16);
-            glVertex2i(menu_x + menu_w - 20, gl_btn_y - 16);
-            glVertex2i(menu_x + menu_w - 20, gl_btn_y + 12);
-            glVertex2i(menu_x + 20, gl_btn_y + 12);
-            glEnd();
-            glDisable(GL_BLEND);
-            draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(btn_labels[i]) * 4),
-                      screen_btn_y, btn_labels[i], 1.0f, 1.0f, 1.0f);
-          } else {
-            draw_text_sys(menu_x + menu_w / 2 - (int)(strlen(btn_labels[i]) * 4),
-                      screen_btn_y, btn_labels[i], 0.0f, 0.85f, 0.0f);
-          }
+      draw_pause_text(menu_x + (menu_w - RetailPauseTextWidth(title)) / 2,
+                      menu_y + 24, title, 0.55f, 1.0f, 0.65f);
+      const auto& config = Config::Get();
+      auto label_for = [&](igi::PauseMenuItem item) {
+        switch (item) {
+        case igi::PauseMenuItem::Resume: return std::string("Resume");
+        case igi::PauseMenuItem::Mode: return std::string("Mode: ") + (task_tree_view.in_game_mode_ ? "Game Play" : "Editor");
+        case igi::PauseMenuItem::Font: return std::string("Font: ") + (config.useEditorFont ? "Editor" : "System") + "  [-] [" + std::to_string(config.systemFontSize) + "] [+]";
+        case igi::PauseMenuItem::LevelSelector: return std::string("Select Level  [-] [") + task_tree_view.pause_level_input_ + "] [+]";
+        case igi::PauseMenuItem::AutoSave: return std::string(task_tree_view.auto_save_enabled_ ? "Save Enable" : "Save Disable") + "  [-] [" + std::to_string(task_tree_view.auto_save_interval_seconds_) + "s] [+]";
+        case igi::PauseMenuItem::ModelSearch: return std::string("Model Search  [") + task_tree_view.pause_search_input_ + "]";
+        case igi::PauseMenuItem::Music: return std::string("Music: ") + (config.musicEnabled ? "On" : "Off");
+        case igi::PauseMenuItem::Lightmaps: return std::string("Lightmaps: ") + (config.enableLightmaps ? "On" : "Off");
+        case igi::PauseMenuItem::TerrainOptions: return std::string(task_tree_view.pause_terrain_expanded_ ? "Terrain Options: [-]" : "Terrain Options: [+]");
+        case igi::PauseMenuItem::TerrainTexture: return std::string("Terrain Texture");
+        case igi::PauseMenuItem::TerrainHeight: return std::string("Terrain Height");
+        case igi::PauseMenuItem::TerrainDiscard: return std::string("Terrain Discard");
+        case igi::PauseMenuItem::TerrainFog: return std::string("Terrain Fog: ") + (config.enableFog ? "On" : "Off");
+        case igi::PauseMenuItem::FogIntensity: return std::string("Fog Intensity  [-] [") + std::to_string(config.fogIntensity) + "%] [+]";
+        case igi::PauseMenuItem::ResetLevel: return std::string("Reset Level");
+        case igi::PauseMenuItem::SaveLevel: return std::string("Save Level");
+        case igi::PauseMenuItem::Quit: return std::string("Quit");
+        default: return std::string();
         }
+      };
+
+      for (int row = 0; row < igi::PauseMenuItemCount(task_tree_view.pause_terrain_expanded_); ++row) {
+        const int text_y = igi::PauseMenuRowCenter(viewport_h, row);
+        const int gl_y = viewport_h - text_y;
+        const bool hovered = task_tree_view.mouse_x_ >= menu_x + 20 &&
+            task_tree_view.mouse_x_ <= menu_x + menu_w - 20 &&
+            igi::IsPauseMenuRowHit(viewport_h, row, task_tree_view.mouse_y_);
+        if (hovered) {
+          glEnable(GL_BLEND);
+          glColor4f(0.0f, 0.85f, 0.15f, 0.35f);
+          glBegin(GL_QUADS);
+          glVertex2i(menu_x + 20, gl_y - 14);
+          glVertex2i(menu_x + menu_w - 20, gl_y - 14);
+          glVertex2i(menu_x + menu_w - 20, gl_y + 12);
+          glVertex2i(menu_x + 20, gl_y + 12);
+          glEnd();
+          glDisable(GL_BLEND);
+        }
+        const std::string label = label_for(igi::PauseMenuItemAt(task_tree_view.pause_terrain_expanded_, row));
+        draw_pause_text(menu_x + (menu_w - RetailPauseTextWidth(label.c_str())) / 2, text_y,
+                        label.c_str(), hovered ? 0.65f : 0.0f,
+                        hovered ? 1.0f : 0.90f,
+                        hovered ? 0.70f : 0.20f);
       }
+
     }
 
     if (task_tree_view.show_debug_) {
@@ -2477,6 +2465,59 @@ void Renderer::Draw(const draw_params_s &params,
         }
       }
       draw_text(px + 4, vh - ftr_h + 4, "[Enter] Insert  [Esc] Cancel  [Type] Filter", 0.5f, 0.5f, 0.5f);
+    }
+
+    // ── In-Game HUD overlay ──────────────────────────────────────────────────
+    if (task_tree_view.in_game_mode_ && !task_tree_view.pause_mode_) {
+      int vw = params.view_define_->viewport_width_;
+      int vh = params.view_define_->viewport_height_;
+
+      // 1. Center Crosshair
+      int cx = vw / 2;
+      int cy = vh / 2;
+      glLineWidth(1.5f);
+      glColor4f(0.0f, 1.0f, 0.0f, 0.9f);
+      glBegin(GL_LINES);
+      glVertex2i(cx - 12, cy); glVertex2i(cx - 3, cy);
+      glVertex2i(cx + 3, cy);  glVertex2i(cx + 12, cy);
+      glVertex2i(cx, cy - 12); glVertex2i(cx, cy - 3);
+      glVertex2i(cx, cy + 3);  glVertex2i(cx, cy + 12);
+      glEnd();
+      glLineWidth(1.0f);
+
+      // 2. Health & Armor HUD (Bottom Left)
+      char hp_str[64], arm_str[64];
+      snprintf(hp_str, sizeof(hp_str), "HEALTH: %d", (int)task_tree_view.player_health_);
+      snprintf(arm_str, sizeof(arm_str), "ARMOR:  %d", (int)task_tree_view.player_armor_);
+
+      draw_text_sys(24, vh - 60, hp_str, 0.2f, 1.0f, 0.2f);
+      draw_text_sys(24, vh - 40, arm_str, 0.3f, 0.8f, 1.0f);
+
+      // Health bar quad
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glColor4f(0.0f, 0.8f, 0.0f, 0.7f);
+      glBegin(GL_QUADS);
+      glVertex2i(24, 65);
+      glVertex2i(24 + (int)(task_tree_view.player_health_ * 1.5f), 65);
+      glVertex2i(24 + (int)(task_tree_view.player_health_ * 1.5f), 75);
+      glVertex2i(24, 75);
+      glEnd();
+      glDisable(GL_BLEND);
+
+      // 3. Weapon Name & Ammo Counter (Bottom Right)
+      char ammo_str[96];
+      snprintf(ammo_str, sizeof(ammo_str), "%s   %d / %d", task_tree_view.active_weapon_name_.c_str(), task_tree_view.clip_ammo_, task_tree_view.reserve_ammo_);
+      int aw_w = (int)strlen(ammo_str) * 8;
+      draw_text_sys(vw - aw_w - 30, vh - 45, ammo_str, 1.0f, 0.9f, 0.2f);
+
+      // 4. Mission Objective Banner (Top Center)
+      if (!task_tree_view.objective_text_.empty()) {
+        char obj_str[256];
+        snprintf(obj_str, sizeof(obj_str), "MISSION: %s", task_tree_view.objective_text_.c_str());
+        int ob_w = (int)strlen(obj_str) * 8;
+        draw_text_sys((vw - ob_w) / 2, 28, obj_str, 1.0f, 1.0f, 1.0f);
+      }
     }
 
     glMatrixMode(GL_PROJECTION);

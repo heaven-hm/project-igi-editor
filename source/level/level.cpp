@@ -140,6 +140,8 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 
 	try {
 		LoadStartPosInfo(qsc_objects, start_pos, start_yaw);
+		start_pos_ = start_pos;
+		start_yaw_ = start_yaw;
 		LoadFogInfo(qsc_objects, params.render_res_loader_);
 		LoadSkydomeInfo(qsc_objects, params.render_res_loader_);
 		LoadFlatSkyLayersInfo(qsc_objects, params.render_res_loader_);
