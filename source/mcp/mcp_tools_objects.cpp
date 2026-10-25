@@ -426,10 +426,16 @@ Layout LayoutFor(const std::string& type) {
         } else if (field.typeName == "Real32x9" && field.argCount == 3) {
             for (int component = 0; component < 3; ++component)
                 layout.rotation[component] = field.argOffset + component;
-        } else if (field.name == "Model" && field.argCount == 1 &&
+        } else if (field.argCount == 1 &&
+                   (field.name == "Model" || field.name == "Holder Model") &&
                    (field.typeName == "String16" || field.typeName == "String32" ||
                     field.typeName == "String256" ||
                     field.typeName == "VarString")) {
+            // "Holder Model" is the model the SCamera task itself draws (arg 7): IGI-RE
+            // src/scamera/scamera.c:116-131 makes it the third param-table entry, which
+            // SCamera_Create passes to RigidDynCubeObj_SetModel (scamera.c:240). The
+            // SCamera's other two strings are the SCameraLens child's model (arg 10) and
+            // the destroyed model (arg 11), so neither is matched here.
             layout.model = field.argOffset;
         }
     }

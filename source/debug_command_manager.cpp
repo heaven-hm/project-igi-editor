@@ -2,6 +2,7 @@
 #include "debug_command_manager.h"
 #include "debug_command_parser.h"
 #include "app.h"
+#include "renderer/igi_transform.h"
 #include "logger.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "../third_party/tinygltf/stb_image_write.h"
@@ -392,12 +393,13 @@ void DebugCommandManager::CaptureModel(const DebugCommand& cmd) {
     glm::vec3 extEngine = meshExt * kMefToEngine;
     float boundRadius = glm::length(extEngine);
 
-    // Compute true 3D center offset rotated by object's orientation
+    // Compute true 3D center offset rotated by object's orientation, in the
+    // engine's Euler order. IGI-RE `Matrix_SetEuler` (HOOK 0x4B38E0,
+    // src/math/matrix.c:99-110) composes Rz*Ry*Rx; this site used Rz*Rx*Ry, so
+    // "centre on object" targeted the wrong point for any multi-axis object.
+    // See renderer/igi_transform.h.
     glm::vec3 meshCenter = app_->renderer_.GetMeshCenter(obj.modelId, obj.isBuilding);
-    glm::mat4 rotMat(1.0f);
-    rotMat = glm::rotate(rotMat, (float)obj.rot.z, glm::vec3(0.0f, 0.0f, 1.0f));
-    rotMat = glm::rotate(rotMat, (float)obj.rot.x, glm::vec3(1.0f, 0.0f, 0.0f));
-    rotMat = glm::rotate(rotMat, (float)obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f));
+    const glm::mat4 rotMat = igi::IgiEulerRotationMatrix(obj.rot);
     glm::vec3 centerOffset = glm::vec3(rotMat * glm::vec4(meshCenter * kMefToEngine, 1.0f));
 
     double targetX = obj.pos.x + centerOffset.x;

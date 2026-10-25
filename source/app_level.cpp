@@ -4,6 +4,7 @@
  *          Split from app.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include "renderer/igi_transform.h"
 #include "runtime/editor_history.h"
 #include "utils_igi1conv.h"
 #include "renderer/object_lightmap.h"
@@ -751,14 +752,14 @@ void App::FlushAttaProxiesToMef() {
 		glm::vec4 lp = obj.attaInvParentMat * glm::vec4(glm::vec3(obj.pos), 1.0f);
 		glm::vec3 localPos(lp);
 
-		// Rotation: rebuild world rotation matrix from Euler angles (Rz * Rx * Ry),
-		// then convert to local rotation: localRot = parentRotInv * worldRot.
-		// The upper-left 3×3 of attaInvParentMat IS parentRotInv.
-		glm::mat4 wr(1.0f);
-		wr = glm::rotate(wr, (float)obj.rot.z, glm::vec3(0,0,1));
-		wr = glm::rotate(wr, (float)obj.rot.x, glm::vec3(1,0,0));
-		wr = glm::rotate(wr, (float)obj.rot.y, glm::vec3(0,1,0));
-		glm::mat3 worldRot3(wr);
+		// Rotation: rebuild the world rotation matrix from the authored Euler
+		// triple in the engine's order, then convert to local rotation:
+		// localRot = parentRotInv * worldRot. The upper-left 3x3 of
+		// attaInvParentMat IS parentRotInv. IGI-RE `Matrix_SetEuler`
+		// (HOOK 0x4B38E0, src/math/matrix.c:99-110) composes Rz*Ry*Rx; this site
+		// used Rz*Rx*Ry, so a promoted ATTA child on a rotated parent was written
+		// back to the MEF with the wrong local rotation. See renderer/igi_transform.h.
+		const glm::mat3 worldRot3 = igi::IgiEulerRotationMat3(obj.rot);
 		glm::mat3 parentRotInv = glm::mat3(obj.attaInvParentMat);
 		glm::mat3 localRot = parentRotInv * worldRot3;
 

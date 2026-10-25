@@ -4,6 +4,7 @@
  *          Split from renderer_objects.cpp; shares renderer_objects_internal.h.
  *****************************************************************************/
 #include "renderer_objects_internal.h"
+#include "igi_transform.h"
 
 
 void Renderer_Objects::InitPickingFBO(int w, int h) {
@@ -72,20 +73,14 @@ void Renderer_Objects::DrawAttachmentsForPicking(
         if (sit == mesh_cache_.end()) continue;
         const Mesh& subMesh = sit->second;
 
-        // Build ATTA world transform (identical logic to DrawAttachmentsRecursive)
-        glm::mat4 attLocalRot(
-            att.r[0], att.r[1], att.r[2], 0.f,
-            att.r[3], att.r[4], att.r[5], 0.f,
-            att.r[6], att.r[7], att.r[8], 0.f,
-            0.f,      0.f,      0.f,      1.f
-        );
-        glm::vec3 localOff(att.px, att.py, att.pz);
-        glm::vec3 worldPos = glm::vec3(parentWorldMat * glm::vec4(localOff, 1.f));
-        glm::mat4 parentRot = parentWorldMat;
-        parentRot[3] = glm::vec4(0.f, 0.f, 0.f, 1.f);
-        glm::mat4 childWorldMat(1.0f);
-        childWorldMat = glm::translate(childWorldMat, worldPos);
-        childWorldMat = childWorldMat * parentRot * attLocalRot;
+        // Build the ATTA world transform through the shared, IGI-RE-cited helper
+        // rather than a second copy of the maths: this path and
+        // DrawAttachmentsRecursive must agree exactly or a click lands on the
+        // wrong sub-model. See atta_children.h for the oracle
+        // (`src/magicobj/rigidcoll.c:399-450`, `src/shadow/sector.c:545-630`).
+        const float attPos[3] = { att.px, att.py, att.pz };
+        const glm::mat4 childWorldMat = igi::IgiAttaChildWorld(parentWorldMat, attPos, att.r);
+        const glm::vec3 worldPos(childWorldMat[3]);
 
         // Recurse regardless of whether this node has pick-able geometry
         std::string childKey = parentModelId + ">" + att.modelId;
@@ -215,12 +210,11 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
         // Allow collision-only meshes (fromRenderMesh==false) as fallback pick hitboxes
         // so vehicles, cargo, and any model without render vertices are still clickable.
 
-        // Build model matrix (same convention as Draw())
+        // Build model matrix (same convention as Draw(), and the same Euler order
+        // as the game: Rz * Ry * Rx — see renderer/igi_transform.h).
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, glm::vec3(obj.pos));
-        model = glm::rotate(model, (float)obj.rot.z, glm::vec3(0.0f, 0.0f, 1.0f));
-        model = glm::rotate(model, (float)obj.rot.x, glm::vec3(1.0f, 0.0f, 0.0f));
-        model = glm::rotate(model, (float)obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f));
+        model = model * igi::IgiEulerRotationMatrix(obj.rot);
         if (IsWeaponModel(obj.modelId) || obj.type == "GunPickup" || obj.type == "AmmoPickup" || obj.type == "GenericPickup") {
             model = glm::rotate(model, glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
         }
@@ -434,14 +428,7 @@ Renderer_Objects::VisualEvidence Renderer_Objects::CaptureObjectVisualEvidence(
 
     glm::mat4 model(1.0f);
     model = glm::translate(model, glm::vec3(obj.pos));
-    model = glm::rotate(model, static_cast<float>(obj.rot.z), glm::vec3(0.f, 0.f, 1.f));
-    if (IsZyxEulerModel(obj.modelId)) {
-        model = glm::rotate(model, static_cast<float>(obj.rot.y), glm::vec3(0.f, 1.f, 0.f));
-        model = glm::rotate(model, static_cast<float>(obj.rot.x), glm::vec3(1.f, 0.f, 0.f));
-    } else {
-        model = glm::rotate(model, static_cast<float>(obj.rot.x), glm::vec3(1.f, 0.f, 0.f));
-        model = glm::rotate(model, static_cast<float>(obj.rot.y), glm::vec3(0.f, 1.f, 0.f));
-    }
+    model = model * igi::IgiEulerRotationMatrix(obj.rot);
     if (IsWeaponModel(obj.modelId) || obj.type == "GunPickup" || obj.type == "AmmoPickup" || obj.type == "GenericPickup") {
         model = glm::rotate(model, glm::radians(90.0f), glm::vec3(0.f, 0.f, 1.f));
     }

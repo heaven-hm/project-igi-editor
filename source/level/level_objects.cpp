@@ -7,6 +7,17 @@ std::pair<int, int> ResolveSoldierAnimationDefaults(const std::string& type,
     return {declaredHierarchy, declaredStandAnimation};
 }
 
+bool TaskDeclarationHasPositionAt3(const TaskSchemaNS::TaskSchema& schema) {
+    // "Position"/"ObjectPos" is IGI's own name for the world position of a task, and
+    // Task_DeclareParameters places the first declared field at QSC arg 3 (args 0-2 are
+    // id, type, note). Matching on the type name rather than the field name keeps this
+    // robust to the differently-worded position fields some types use.
+    for (const auto& f : schema) {
+        if (f.argOffset == 3 && f.typeName == "ObjectPos") return true;
+    }
+    return false;
+}
+
 void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
     objects_.clear();
     qtasks_.clear();
@@ -15,6 +26,49 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
 
     for (int i = 0; i < qsc_objects->GetRootFuncCount(); ++i) {
         LoadRecursive(qsc_objects, qsc_objects->GetRootFunc(i), -1);
+    }
+
+    // ── Declared-position fallback for task types with no explicit branch ───────────
+    // LoadRecursive only knows the types the editor models explicitly; every other type
+    // used to be left at the world origin, which piled real objects up at (0,0,0) and made
+    // the terrain snap / picker / markers useless for them. The level file is itself the
+    // oracle for their parameter layout: it declares every type it uses in a
+    // Task_DeclareParameters line, and exactly the types that carry a world position
+    // declare ("Position","ObjectPos") as their first parameter. Types that merely happen
+    // to have three numbers at args 3/4/5 (LightmapInfo, Dirlight, FlatSky, PatrolPathCommand,
+    // AddAmmo, Binocular, LODSettings, ...) declare something else there and are reverted.
+    {
+        std::map<std::string, TaskSchemaNS::TaskSchema> declared;
+        for (const auto& obj : objects_) {
+            if (obj.type != "Task_DeclareParameters" || obj.argTokens.size() < 3) continue;
+            std::string typeName = obj.argTokens[0];
+            if (typeName.size() >= 2 && typeName.front() == '"' && typeName.back() == '"')
+                typeName = typeName.substr(1, typeName.size() - 2);
+            declared[typeName] = TaskSchemaNS::ParseDeclaration(obj.argTokens);
+        }
+
+        int placed = 0, reverted = 0;
+        for (auto& obj : objects_) {
+            if (!obj.declaredPositionCandidate) continue;
+            obj.declaredPositionCandidate = false;
+
+            const auto it = declared.find(obj.type);
+            const bool declaresPosition = TaskDeclarationHasPositionAt3(
+                it == declared.end() ? TaskSchemaNS::TaskSchema{} : it->second);
+            if (declaresPosition) {
+                obj.original_pos = obj.pos;
+                ++placed;
+            } else {
+                // Not a position after all — keep the pre-fix behaviour of loading at the
+                // origin rather than inventing coordinates from unrelated parameters.
+                obj.pos = glm::dvec3(0.0);
+                obj.original_pos = glm::dvec3(0.0);
+                ++reverted;
+            }
+        }
+        Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Declared-position fallback: " +
+            std::to_string(placed) + " object(s) placed from Task_DeclareParameters, " +
+            std::to_string(reverted) + " candidate(s) reverted (type declares no Position@3).");
     }
 
     // Fallback: If a Task_New's task note/name is empty, query its child's model name in IGIModels.json
@@ -338,20 +392,35 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 case 9: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
             }
         } else if (isCamera) {
-            switch (arg_idx) {
-                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
-                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
-                case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
-                case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
-                case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
-                case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
-                case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break;
-                case 9: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
-                case 10: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
-                case 11: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.secondaryModelId = Utils::Trim(cur_a->str_); break;
-                case 12: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.lensModelId = Utils::Trim(cur_a->str_); break;
-            }
-        } else if (isFence) {
+            // SCamera layout, from IGI-RE src/scamera/scamera.c:116-131 (HOOK 0x442730,
+            // ParamTable_New(15)) and confirmed by the retail level script's own
+            // declaration in objects.qsc:
+            //   "Holder Position","ObjectPos"          -> args 3,4,5
+            //   "Holder Gamma","Angle"                 -> arg 6   body yaw
+            //   "Holder Model","String16"              -> arg 7   THE TASK'S OWN MODEL
+            //   "Camera Alpha","Angle"                 -> arg 8   lens pitch
+            //   "Camera Gamma","Angle"                 -> arg 9   lens yaw offset
+            //   "Camera Model","String16"              -> arg 10  lens model (child)
+            //   "Camera Destroyed Model","String16"    -> arg 11  broken model
+            //   "Rotate Gamma Right (d)","Int16"       -> arg 12  yaw_min (NOT a model)
+            // Arg 7 is the model the SCamera task itself draws: IGI-RE builds the param
+            // table in declaration order (src/scamera/scamera.c:116-131) and the third
+            // entry is `FIELD(model)`, which SCamera_Create then feeds to
+            // `RigidDynCubeObj_SetModel(c, VirModel_Find(c->model))` (scamera.c:240) and
+            // places with `DynCube_Move(c->o.world, c, &c->place, ...)` (scamera.c:242).
+            // Its hard-coded default is "313_01_1" (scamera.c:181) and the retail
+            // LEVEL1 script authors exactly "313_01_1" at arg 7 — three-way agreement.
+            // Arg 10 is `FIELD(lens_model)` ("313_02_1", scamera.c:184) and belongs to
+            // the separate SCameraLens child task (scameralens.c:204), which the retail
+            // scripts never instantiate; the editor does not model that child, so the
+            // id is kept in lensModelId instead. Arg 11 is `FIELD(broken_model)`.
+            //
+            // The body is placed with Matrix_SetRotZ(yaw) and the lens eye with
+            // Matrix_SetEuler(pitch, 0, lens_yaw + yaw + yaw_offset), so arg 9 is an
+            // additional yaw and the authored tuple has no roll. Previously arg 9 was
+            // read as rot.y (roll), arg 10 as the task model and arg 12 as a model
+            // string — which mis-oriented the camera and corrupted the lens model
+            // (KNOWN_ISSUES "Camera Orientation").
             switch (arg_idx) {
                 case 0: obj.taskId = TaskIdFromArg(cur_a); break;
                 case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
@@ -361,7 +430,37 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
                 case 7: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
                 case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break;
-                case 9: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
+                case 9:
+                    // QSC arguments are positional, so arg 6 (yaw) is always seen before
+                    // arg 9. Keep the authored offset and fold it into the display yaw.
+                    if (cur_a->type_ == QSC::arg_s::type_t::DBL) {
+                        obj.yawOffset = cur_a->dbl_;
+                        obj.rot.z += cur_a->dbl_;
+                        obj.original_rot.z += cur_a->dbl_;
+                    }
+                    break;
+                case 10: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.lensModelId = Utils::Trim(cur_a->str_); break;
+                case 11: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.secondaryModelId = Utils::Trim(cur_a->str_); break;
+            }
+        } else if (isFence) {
+            // IGI-RE `src/props/fence.c:115-119` registers exactly four parameters:
+            //   pos (ObjectPos -> args 3/4/5), angle (Angle -> arg 6, "about z"),
+            //   model (String16 -> arg 7), cond (VarString -> arg 8).
+            // `struct Fence` (`:63-72`) has one float `angle` and no other Euler
+            // component, so arg 8 is the electric-fence condition string, not a
+            // rotation, and arg 9 does not exist. Two cases here used to read
+            // them as rot.x/rot.y; they were dead (arg 8 is a STR and arg 9 is
+            // absent) but described a layout the engine does not have. Arg 8 is
+            // left untouched so it round-trips verbatim; the editor does not
+            // evaluate the expression.
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 2: if (cur_a->type_ == QSC::arg_s::type_t::STR) { obj.name = cur_a->str_; obj.original_name = cur_a->str_; obj.has_original_name = true; } break;
+                case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
+                case 7: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
             }
         } else if (isAmbient) {
             switch (arg_idx) {
@@ -419,8 +518,24 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 case 3: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.weaponEnumId = Utils::Trim(cur_a->str_); break;
             }
         } else {
-            // Default: just try to get taskId from first arg
-            if (arg_idx == 0) obj.taskId = TaskIdFromArg(cur_a);
+            // No explicit branch for this type. IGI's own convention for the task types
+            // the editor does not model individually is "Position"/"ObjectPos" as the
+            // FIRST declared parameter, i.e. QSC args 3/4/5 (TerrainLightMap 813 lines,
+            // EditRigidObj 582, EditCamera 111, StatusMessage 73, Building 57,
+            // ComputerHilight 45, EditVariable 15, AreaActivate 15, TextureModifier 13,
+            // Terminal 6, Smoke 6, LevelTimer 3, HeightMap 2 in the retail scripts).
+            // Read them as a *candidate*: some types put something else there
+            // (LightmapInfo = Texture scale/Passes/Hemicube resolution, Dirlight = bools,
+            // PatrolPathCommand = Command/Int32), so Load() confirms the guess against the
+            // level's own Task_DeclareParameters and reverts it when it does not match.
+            if (arg_idx == 0) {
+                obj.taskId = TaskIdFromArg(cur_a);
+            } else if (arg_idx >= 3 && arg_idx <= 5 && cur_a->type_ == QSC::arg_s::type_t::DBL) {
+                if (arg_idx == 3)      obj.pos.x = cur_a->dbl_;
+                else if (arg_idx == 4) obj.pos.y = cur_a->dbl_;
+                else                   obj.pos.z = cur_a->dbl_;
+                obj.declaredPositionCandidate = true;
+            }
         }
         cur_a = cur_a->next_;
         arg_idx++;
@@ -470,18 +585,23 @@ void LevelObjects::LoadModelNames() {
 
     char jsonPath[1024];
     std::string exeDir = Utils::GetExeDirectory();
-    Str_SPrintf(jsonPath, 1024, "%s\\editor\\tools\\IGIModels.json", exeDir.c_str());
+    // std::snprintf rather than Str_SPrintf and std::ifstream rather than
+    // File_LoadText/File_FreeBuf: those live in common.cpp, which cannot be compiled
+    // by the host-native test lane, and this function is on the level-load path that
+    // the lane needs to exercise. Behaviour is identical (same path, same failure
+    // logging) — only the stdio wrappers changed.
+    std::snprintf(jsonPath, sizeof(jsonPath), "%s\\editor\\tools\\IGIModels.json", exeDir.c_str());
 
     if (!std::filesystem::exists(jsonPath)) {
         Logger::Get().Log(LogLevel::ERR, "[LevelObjects] IGIModels.json not found in executable directory: " + std::string(jsonPath));
     }
 
-    char* buf = nullptr;
-    if (File_LoadText(jsonPath, buf)) {
+    std::ifstream jsonFile(jsonPath, std::ios::binary);
+    if (jsonFile.is_open()) {
         Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Loading model names from: " + std::string(jsonPath));
-        std::string content(buf);
-
-        File_FreeBuf(buf);
+        std::string content((std::istreambuf_iterator<char>(jsonFile)),
+                            std::istreambuf_iterator<char>());
+        jsonFile.close();
 
         size_t pos = 0;
         while ((pos = content.find("{", pos)) != std::string::npos) {
@@ -635,4 +755,42 @@ void LevelObjects::ResolveSoldierWeapon(int soldierIndex) {
     obj.weaponModelId = resolvedModelId;
     Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Weapon attached for soldier task " + obj.taskId +
         ": " + weaponEnumId + " -> " + resolvedModelId);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Wire / interactable parity accessors (GitHub issue #42).
+//
+// These read the authored QSC argument tokens on demand instead of caching a
+// second copy of the values, so an inspector edit of the "End" anchor, the
+// StationaryGun weapon/arc/ammo or the AIStationaryGunHolder detection arc is
+// visible in the viewport immediately. See docs/igi-re-parity/
+// PROPS_WIRE_INTERACTABLES.md for the IGI-RE evidence behind every field.
+// ─────────────────────────────────────────────────────────────────────────────
+
+bool LevelObject::WireAnchors(glm::dvec3& start, glm::dvec3& end) const {
+    if (type != "Wire") return false;
+
+    TaskSchemaNS::Props::Vec3 s, e;
+    // Wire_Open (0x43EFF0, IGI-RE src/props/wire.c:89-113): start ObjectPos at
+    // args 3-5, end ObjectPos at args 6-8.
+    if (!TaskSchemaNS::Props::ParseWireAnchors(argTokens, s, e)) return false;
+
+    // The editor keeps the live start anchor in `pos` (position drags and
+    // UpdateCoordinatesInLine write it back to args 3-5), so prefer it: a wire
+    // dragged in the viewport must keep its authored end anchor. A wire authored
+    // at exactly the origin is not real level data, hence the zero check.
+    const bool haveLivePos = (pos.x != 0.0 || pos.y != 0.0 || pos.z != 0.0);
+    start = haveLivePos ? pos : glm::dvec3(s.x, s.y, s.z);
+    end   = glm::dvec3(e.x, e.y, e.z);
+    return true;
+}
+
+TaskSchemaNS::Props::StationaryGunParams LevelObject::StatGunParams() const {
+    if (type != "StationaryGun") return TaskSchemaNS::Props::StationaryGunParams{};
+    return TaskSchemaNS::Props::ParseStationaryGunArgs(argTokens);
+}
+
+TaskSchemaNS::Props::GunHolderParams LevelObject::GunHolderParams() const {
+    if (type != "AIStationaryGunHolder") return TaskSchemaNS::Props::GunHolderParams{};
+    return TaskSchemaNS::Props::ParseGunHolderArgs(argTokens);
 }

@@ -10,19 +10,23 @@
 SetEventBinding("CameraEnable",                             "<Alt>");
 SetEventBinding("CameraMoveForward",                        "<Alt><Shift>");
 SetEventBinding("CameraMoveBackward",                       "<Alt><Ctrl>");
-SetEventBinding("CameraAdjustRadius",                       "<Alt><Space>");
+// task-11 item 1: CameraAdjustRadius (<Alt><Space>) was removed — the editor has
+// no radius adjuster; the only radius is the object-orbit distance, which
+// BeginObjectOrbit derives and CameraResetRadius resets.
+// task-11 item 2: CameraLookDown (<Ctrl><Home>) was removed — nothing read its
+// config key and the mouse owns camera pitch.
+// task-11 item 3: CameraStrafeFree (<Alt><Space>) was removed — it toggled a flag
+// nothing read and printed "Strafe lock: ON/OFF", a state change that never
+// happened. Strafing is unconditional (source/app_view.cpp:225-236).
 SetEventBinding("CameraResetRadius",                        "<Shift><Home>");
-SetEventBinding("CameraLookDown",                           "<Ctrl><Home>");
-SetEventBinding("CameraCopyPosition",                       "<Ctrl><P>");
-SetEventBinding("CameraCopyPosition",                       "<Ctrl><Shift><P>");
-SetEventBinding("CameraCopyOrientation",                    "<Ctrl><Shift><O>");
 SetEventBinding("CameraSnapToObject",                       "<F11>");
-SetEventBinding("CameraSnapToObjectWithRadius",             "<Shift><F11>");
 SetEventBinding("CameraSnapToGround",                       "<Alt><F11>");
-SetEventBinding("CameraStrafe",                             "<Alt><Shift><Space>");
-SetEventBinding("CameraStrafeFree",                         "<Alt><Space>");
 SetEventBinding("CameraStrafeLeft",                         "<Alt><Left>");
 SetEventBinding("CameraStrafeRight",                        "<Alt><Right>");
+// Removed in #48 (no editor behaviour, no IGI-RE counterpart):
+//   CameraCopyPosition (<Ctrl><P>, <Ctrl><Shift><P>), CameraCopyOrientation
+//   (<Ctrl><Shift><O>), CameraSnapToObjectWithRadius (<Shift><F11>),
+//   CameraStrafe (<Alt><Shift><Space>). See docs/igi-re-parity/KEYBINDINGS.md.
                                                             
 // Tasks                                                    
 SetEventBinding("TaskMoveUp",                               "<Shift><PageUp>");
@@ -47,33 +51,44 @@ SetEventBinding("TaskRebuildTree",                          "<F5>");
 SetEventBinding("TaskMakeTemplate",                         "<Ctrl><M>");
 SetEventBinding("TaskSortChildren",                         "<Shift><F5>");
 
-// Animtask
-SetEventBinding("AnimTaskIncreaseKeyframeInterpolation",    "<F8>");
-SetEventBinding("AnimTaskDecreaseKeyframeInterpolation",    "<Shift><F8>");
-SetEventBinding("AnimTaskToggleCameraRelative",             "<F6>");
-SetEventBinding("AnimTaskGoToCursor",                       "<Ctrl><G>");
-SetEventBinding("AnimTaskToggleWindowHidden",               "<Ctrl><Shift><H>");
-SetEventBinding("AnimTaskStartRecording",                   "<Ctrl><Q>");
-SetEventBinding("AnimTaskGoToTop",                          "<Ctrl><R>");
-SetEventBinding("AnimTaskToggleSyncPlayback",               "<Ctrl><Shift><S>");
-                                                            
-// Timer                                                    
-SetEventBinding("TimerIncreaseSpeed",                       "<F12>");
-SetEventBinding("TimerDecreaseSpeed",                       "<Shift><F12>");
-SetEventBinding("TimerReset",                               "<Ctrl><R>");
-SetEventBinding("TimerStartStop",                           "<Ctrl><T>");
+// Animtask — removed in #48. This editor has no animation-task timeline,
+// keyframe recorder, playback sync or anim camera window, and IGI-RE (which
+// decompiles IGI.exe only, never the QED editor) has no counterpart to define
+// their behaviour, so the bindings were advertised but could never act. Removed:
+//   AnimTaskIncreaseKeyframeInterpolation <F8>, AnimTaskDecreaseKeyframeInterpolation
+//   <Shift><F8>, AnimTaskToggleCameraRelative <F6>, AnimTaskGoToCursor <Ctrl><G>,
+//   AnimTaskToggleWindowHidden <Ctrl><Shift><H>, AnimTaskStartRecording <Ctrl><Q>,
+//   AnimTaskGoToTop <Ctrl><R>, AnimTaskToggleSyncPlayback <Ctrl><Shift><S>.
+// (F6 also collided with ToggleTaskNoteDisplay and <Ctrl><R> with TimerReset.)
+// See docs/igi-re-parity/KEYBINDINGS.md.
 
-// Manipulate object
-SetEventBinding("Manipulate",                               "<LeftMouseButton>");
-SetEventBinding("ManipulatePositionXY",                     "<LeftMouseButton><Shift>");
-SetEventBinding("ManipulatePositionXZ",                     "<LeftMouseButton><Ctrl>");
-SetEventBinding("ManipulatePositionXZ",                     "<LeftMouseButton><Shift><Ctrl>");
+// Timer — removed in #48, same reason as Animtask (no animation playback timer
+// exists in this editor): TimerIncreaseSpeed <F12>, TimerDecreaseSpeed <Shift><F12>,
+// TimerReset <Ctrl><R>, TimerStartStop <Ctrl><T>.
+
+// Manipulate object — the seven "Manipulate*" event names below were removed in
+// #48 because object manipulation is not driven by the event table at all: the
+// gesture reads live modifier state and held keys, so rebinding these names could
+// never change it. The behaviour is implemented and unchanged:
+//   drag the marker with LMB                -> app_input_mouse.cpp:846-852
+//   Shift+LMB  = move in the view plane     -> app_view.cpp:686 (MoveXY)
+//   Ctrl+LMB   = move in the vertical plane -> app_view.cpp:685,687 (MoveXZ)
+//   S / O while dragging = snap ground / on top of the nearest object
+//                                           -> app_input_mouse.cpp:333-336,
+//                                              app_view.cpp:748-780
+//   A / B / G while dragging = rotate alpha/beta/gamma
+//                                           -> app_input_keyboard.cpp:1524-1526,
+//                                              app_view.cpp:688-690,734-746
+//   Space while dragging = reset orientation-> app_input_keyboard.cpp:1543-1545,
+//                                              app_view.cpp:785-788
+// The configurable keys for those are keyRotateAlpha/Beta/Gamma, keySnapGround,
+// keySnapObject and keyResetOri in qedconfig.qsc (source/config.cpp:142-147).
+// Removed: Manipulate, ManipulatePositionXY, ManipulatePositionXZ (2 lines),
+// ManipulateOrientationAlpha/Beta/Gamma, ManipulateOrientationReset.
+// ManipulatePositionSnapToGround/Object are kept: they have real handlers at
+// source/app_input.cpp:399 and :417.
 SetEventBinding("ManipulatePositionSnapToGround",           "<LeftMouseButton><S>");
 SetEventBinding("ManipulatePositionSnapToObject",           "<LeftMouseButton><O>");
-SetEventBinding("ManipulateOrientationAlpha",               "<LeftMouseButton><A>");
-SetEventBinding("ManipulateOrientationBeta",                "<LeftMouseButton><B>");
-SetEventBinding("ManipulateOrientationGamma",               "<LeftMouseButton><G>");
-SetEventBinding("ManipulateOrientationReset",               "<LeftMouseButton><Space>");
 
 // Graph Node
 SetEventBinding("ScaleGraphNode",                           "<LeftMouseButton><Decimal>");
@@ -122,7 +137,10 @@ SetEventBinding("ReloadSettings",                           "<F4>");
 SetEventBinding("ToggleObjects",                            "<Ctrl><Shift><Z>");
 
 // Add a missing model's loose .mef into the level .res (issue 2)
-SetEventBinding("AddModelToRes",                            "<Ctrl><Shift><A>");
+// task-11 item 4: this was <Ctrl><Shift><A>, the same combo as ToggleAutoSave
+// (which keeps it, "A" for AutoSave), so whichever handler ran first swallowed
+// the other. Moved to <Ctrl><Shift>M for "model".
+SetEventBinding("AddModelToRes",                            "<Ctrl><Shift>M");
 
 // Toggle magic-object spheres overlay
 SetEventBinding("TaskMagicObjToggle",                       "<Shift><M>");

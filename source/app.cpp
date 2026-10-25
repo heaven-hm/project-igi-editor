@@ -1,4 +1,6 @@
 #include "app_internal.h"
+#include "renderer/igi_transform.h"
+#include "runtime/door_params.h"
 #include "runtime/camera_preview_policy.h"
 #include "runtime/config_qvm.h"
 #include "runtime/human_player_config.h"
@@ -2247,27 +2249,9 @@ void App::SetupRuntimeDoors() {
 		? runtime_level_objects_->GetObjects()
 		: level_.GetLevelObjects().GetObjects();
 
-	const auto read_token = [](const LevelObject& object, size_t index) {
-		if (index >= object.argTokens.size()) {
-			return std::string();
-		}
-		return App::StripQuotes(object.argTokens[index]);
-	};
-	const auto read_float = [&read_token](const LevelObject& object, size_t index, float fallback) {
-		const std::string token = read_token(object, index);
-		if (token.empty()) {
-			return fallback;
-		}
-		try {
-			return std::stof(token);
-		} catch (...) {
-			return fallback;
-		}
-	};
-	const auto read_bool = [&read_token](const LevelObject& object, size_t index) {
-		const std::string token = read_token(object, index);
-		return token == "1" || token == "TRUE" || token == "true";
-	};
+	// The per-argument readers that used to live here moved into
+	// `igi::ApplyDoorArgumentLayout` (runtime/door_params.h) so the layout can be
+	// tested with real retail task lines; they had no other caller in this function.
 
 	std::vector<igi::RuntimeDoorDefinition> door_definitions;
 	door_definitions.reserve(authored_objects.size());
@@ -2284,19 +2268,16 @@ void App::SetupRuntimeDoors() {
 		definition.task_id = authored_object.taskId;
 		definition.closed_position_units = authored_object.pos;
 		definition.closed_rotation_radians = static_cast<float>(authored_object.rot.z);
-		definition.slide_offset_units = glm::vec3(
-			read_float(authored_object, 6, 0.0f) * igi::PlayerController::WORLD_METER,
-			read_float(authored_object, 7, 0.0f) * igi::PlayerController::WORLD_METER,
-			read_float(authored_object, 8, 0.0f) * igi::PlayerController::WORLD_METER);
-		definition.maximum_angle_degrees = read_float(authored_object, 13, 0.0f);
-		definition.open_time_seconds = read_float(authored_object, 14, 1.0f);
-		definition.pickable = read_bool(authored_object, 15);
-		definition.open_expression = read_token(authored_object, 17);
-		definition.close_expression = read_token(authored_object, 18);
-		definition.locked_expression = read_token(authored_object, 19);
-		definition.open_sound = read_token(authored_object, 20);
-		definition.close_sound = read_token(authored_object, 21);
-		definition.move_sound = read_token(authored_object, 22);
+		// Everything that depends on the engine's argument layout lives in
+		// `runtime/door_params.h`, so the mapping is a pure function that
+		// `tests/test_door_params.cpp` drives with all 33 retail `Door` tasks. See
+		// that header for the IGI-RE citations; in short, `slide` is two components
+		// (`door.h:45`) and the three expression arguments are 17/18/19
+		// (lock/open/close), which this call site previously read one slot early.
+		igi::ApplyDoorArgumentLayout(
+			authored_object.argTokens,
+			igi::PlayerController::WORLD_METER,
+			definition);
 		door_definitions.push_back(std::move(definition));
 	}
 
@@ -2360,21 +2341,23 @@ void App::ApplyRuntimeDoorStates() {
 		}
 
 		LevelObject& object = objects[static_cast<size_t>(snapshot.object_index)];
-		glm::mat4 orientation(1.0f);
-		orientation = glm::rotate(
-			orientation,
-			snapshot.closed_rotation_radians,
-			glm::vec3(0.0f, 0.0f, 1.0f));
-		orientation = glm::rotate(
-			orientation,
-			static_cast<float>(object.rot.x),
-			glm::vec3(1.0f, 0.0f, 0.0f));
-		orientation = glm::rotate(
-			orientation,
-			static_cast<float>(object.rot.y),
-			glm::vec3(0.0f, 1.0f, 0.0f));
-		const glm::vec3 world_slide_offset = glm::vec3(
-			orientation * glm::vec4(snapshot.slide_offset_units, 0.0f));
+		// The slide offset is rotated by the door's CLOSED basis, in the
+		// engine's Euler order. IGI-RE `Door_Place` (HOOK 0x446290,
+		// src/door/door.c:121-138) computes, with `base` the closed matrix
+		// (row-major 3x3) and `m = base.m`:
+		//     u = slide[0]*slidePos*kSlideScale;  v = slide[1]*slidePos*kSlideScale;
+		//     x = m[1]*v + m[0]*u;  y = m[4]*v + m[3]*u;  z = m[7]*v + m[6]*u;
+		// i.e. offset_world = base * (u, v, 0). `base` is the authored orientation
+		// (`Param_Real32x9_Parse` -> `Matrix_SetEuler`, Rz*Ry*Rx; door.c:292 copies
+		// it from the object matrix), and the opening rotation is post-multiplied
+		// on top of it (`Matrix_RotateZ(&d->o.matrix, &d->base, angle)`, door.c:446),
+		// which is why the closed yaw is used here and not `rot.z`.
+		// This site previously composed Rz(closed)*Rx(rot.x)*Ry(rot.y) — X and Y
+		// swapped — so a rotated door slid along the wrong world axis.
+		const glm::dvec3 closed_rot(object.rot.x, object.rot.y,
+			static_cast<double>(snapshot.closed_rotation_radians));
+		const glm::vec3 world_slide_offset =
+			igi::IgiEulerRotationMat3(closed_rot) * snapshot.slide_offset_units;
 
 		object.pos = snapshot.closed_position_units +
 			glm::dvec3(world_slide_offset);
@@ -3123,19 +3106,13 @@ void App::SetupRuntimeLadders() {
             continue;
         }
 
-        glm::mat4 object_rotation(1.0f);
-        object_rotation = glm::rotate(
-            object_rotation,
-            static_cast<float>(object.rot.z),
-            glm::vec3(0.0f, 0.0f, 1.0f));
-        object_rotation = glm::rotate(
-            object_rotation,
-            static_cast<float>(object.rot.x),
-            glm::vec3(1.0f, 0.0f, 0.0f));
-        object_rotation = glm::rotate(
-            object_rotation,
-            static_cast<float>(object.rot.y),
-            glm::vec3(0.0f, 1.0f, 0.0f));
+        // Authored IGI rotation, in the engine's order. IGI-RE `Matrix_SetEuler`
+        // (HOOK 0x4B38E0, src/math/matrix.c:99-110) composes Rz(az)*Ry(ay)*Rx(ax)
+        // and `ParamReal32x9_Parse` (HOOK 0x4EFBA0) feeds the QSC triple straight
+        // into it. This site previously composed Z -> X -> Y (i.e. Rz*Rx*Ry),
+        // which gave attached runtime ladders wrong mount offsets and band axes
+        // whenever the parent object was rotated. See renderer/igi_transform.h.
+        const glm::mat4 object_rotation = igi::IgiEulerRotationMatrix(object.rot);
 
         const glm::mat4 object_world_matrix = glm::translate(
             glm::mat4(1.0f),

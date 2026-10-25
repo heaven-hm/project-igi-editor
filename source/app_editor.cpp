@@ -5,6 +5,7 @@
  *          Split from app.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include "renderer/igi_transform.h"
 #include "runtime/auto_save_policy.h"
 #include "runtime/editor_history.h"
 #include "runtime/lightmap_recalc_policy.h"
@@ -1220,19 +1221,12 @@ void App::PromoteAttaToObject(int entry) {
 	// launches the game, FlushAttaProxiesToMef() converts the proxy's world position
 	// back to local coordinates and patches the bytes directly in the MEF binary.
 	// No renaming, no QSC tasks, no game-engine warnings.
-	// Extract Euler angles (Rz * Rx * Ry order) from the captured world rotation matrix.
-	// GLM column-major: m[col][row]. For Rz*Rx*Ry: sin(rx)=m[1][2], etc.
-	const glm::mat3& m = e.worldRot;
-	float sx = std::max(-1.0f, std::min(1.0f, m[1][2]));
-	float rx = std::asin(sx);
-	float ry, rz;
-	if (std::fabs(std::cos(rx)) > 1e-4f) {
-		ry = std::atan2(-m[0][2], m[2][2]);
-		rz = std::atan2(-m[1][0], m[1][1]);
-	} else {
-		ry = 0.0f;
-		rz = std::atan2(m[0][1], m[0][0]);
-	}
+	// Extract the authored Euler triple from the captured world rotation with the
+	// engine's own decomposition. IGI-RE `Matrix_GetEuler` (HOOK 0x4B3C50,
+	// src/math/matrix.c:181-208) is the inverse of `Matrix_SetEuler`'s Rz*Ry*Rx;
+	// this site used an Rz*Rx*Ry extraction, so a promoted ATTA child inherited
+	// the wrong orientation whenever the parent had more than one authored axis.
+	// See renderer/igi_transform.h.
 
 	LevelObject obj;
 	obj.type        = "EditRigidObj";
@@ -1240,7 +1234,7 @@ void App::PromoteAttaToObject(int entry) {
 	obj.taskId      = "-1";
 	obj.modelId     = e.modelId;
 	obj.pos         = glm::dvec3(e.worldPos);
-	obj.rot         = glm::vec3(rx, ry, rz);
+	obj.rot         = igi::IgiMatrixToEuler(e.worldRot);
 	obj.scale       = (e.scale > 0.f) ? e.scale : 1.0f;
 	obj.isBuilding  = false;
 	obj.deleted     = false;
@@ -1349,18 +1343,24 @@ void App::LaunchGame() {
 
 		// 1. Post WM_CLOSE to every window owned by the game (graceful request)
 		int closedWindows = 0;
-		struct CloseCtx { DWORD pid; int* count; };
-		CloseCtx ctx{ game_process_.pid, &closedWindows };
-		EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
-			DWORD wndPid = 0;
-			GetWindowThreadProcessId(hwnd, &wndPid);
-			auto* c = reinterpret_cast<CloseCtx*>(lp);
-			if (wndPid == c->pid) {
-				PostMessage(hwnd, WM_CLOSE, 0, 0);
-				(*c->count)++;
+		// NOTE(portability): a capture-less lambda converts to a __cdecl function
+		// pointer, which is not convertible to WNDENUMPROC (__stdcall) on GCC/MinGW.
+		// A static member function carrying CALLBACK is equivalent on MSVC and MinGW.
+		struct CloseCtx {
+			DWORD pid; int* count;
+			static BOOL CALLBACK EnumProc(HWND hwnd, LPARAM lp) {
+				DWORD wndPid = 0;
+				GetWindowThreadProcessId(hwnd, &wndPid);
+				auto* c = reinterpret_cast<CloseCtx*>(lp);
+				if (wndPid == c->pid) {
+					PostMessage(hwnd, WM_CLOSE, 0, 0);
+					(*c->count)++;
+				}
+				return TRUE;
 			}
-			return TRUE;
-		}, reinterpret_cast<LPARAM>(&ctx));
+		};
+		CloseCtx ctx{ game_process_.pid, &closedWindows };
+		EnumWindows(&CloseCtx::EnumProc, reinterpret_cast<LPARAM>(&ctx));
 		Logger::Get().Log(LogLevel::INFO, "[ToggleGame] WM_CLOSE posted to " +
 		                  std::to_string(closedWindows) + " window(s)");
 

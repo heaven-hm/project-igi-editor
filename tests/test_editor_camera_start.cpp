@@ -97,23 +97,32 @@ TEST(EditorCameraStartTest, CameraKeyDoesNotSuppressEditorSceneOverlays) {
 TEST(EditorCameraStartTest, F11MeshCenterFollowsEditRigidRotation) {
     const glm::dvec3 offset = F11MeshCenterWorldOffset(
         glm::vec3(1.0f, 0.0f, 0.0f),
-        glm::dvec3(0.0, 0.0, glm::half_pi<double>()), 1.0, false);
+        glm::dvec3(0.0, 0.0, glm::half_pi<double>()), 1.0);
     EXPECT_NEAR(offset.x, 0.0, 0.001);
     EXPECT_NEAR(offset.y, 40.96, 0.001);
     EXPECT_NEAR(offset.z, 0.0, 0.001);
 }
 
-TEST(EditorCameraStartTest, IdentifiesZyxEulerModelsCorrectly) {
-    // 506_ slide up doors use ZYX Euler rotation order
-    EXPECT_TRUE(IsZyxEulerModel("506_01_1"));
-    EXPECT_TRUE(IsZyxEulerModel("506_02_1"));
-    // 615_01_1 missile on rack/carriage in Level 9/13 uses ZYX Euler rotation order
-    EXPECT_TRUE(IsZyxEulerModel("615_01_1"));
+TEST(EditorCameraStartTest, F11MeshCenterUsesGameEulerOrderForMultiAxisRotation) {
+    // The retail game composes Rz * Ry * Rx for every authored object
+    // (`Matrix_SetEuler`, IGI-RE src/math/matrix.c:99). The old editor code had a
+    // per-model whitelist (`IsZyxEulerModel`) for 506_/615_01_1; it is gone, so a
+    // multi-axis rotation must be order-sensitive in the same way for every model.
+    const glm::dvec3 rot(0.3, 0.4, 0.5);
+    const glm::dvec3 offset = F11MeshCenterWorldOffset(glm::vec3(1.0f, 0.0f, 0.0f), rot, 1.0);
+    const glm::dvec3 expected = glm::dvec3(igi::IgiEulerRotationMat3(rot) *
+                                           glm::vec3(40.96f, 0.0f, 0.0f));
+    EXPECT_NEAR(offset.x, expected.x, 1e-4);
+    EXPECT_NEAR(offset.y, expected.y, 1e-4);
+    EXPECT_NEAR(offset.z, expected.z, 1e-4);
 
-    // Standard objects use default ZXY Euler rotation order
-    EXPECT_FALSE(IsZyxEulerModel("615_10_1")); // carriage
-    EXPECT_FALSE(IsZyxEulerModel("205_01_1")); // desk
-    EXPECT_FALSE(IsZyxEulerModel(""));
+    // Z,X,Y (the old default) is measurably different for this rotation.
+    glm::mat4 legacy(1.0f);
+    legacy = glm::rotate(legacy, static_cast<float>(rot.z), glm::vec3(0, 0, 1));
+    legacy = glm::rotate(legacy, static_cast<float>(rot.x), glm::vec3(1, 0, 0));
+    legacy = glm::rotate(legacy, static_cast<float>(rot.y), glm::vec3(0, 1, 0));
+    const glm::dvec3 legacyOffset = glm::dvec3(glm::mat3(legacy) * glm::vec3(40.96f, 0.0f, 0.0f));
+    EXPECT_GT(glm::length(offset - legacyOffset), 1.0);
 }
 
 #include "../source/runtime/editor_cursor_mode.h"

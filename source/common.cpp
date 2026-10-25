@@ -52,7 +52,12 @@ float WORLD_Z_NEAR = 2.8672f / 0.001f;
 # define ALIGNED_FREE(ptr)				_aligned_free(ptr)
 #endif
 
-#if defined(__GNUC__)
+#if defined(__GNUC__) && defined(_WIN32)
+// MinGW-w64 ships no C11 aligned_alloc(); the MSVC-compatible CRT pair is the
+// equivalent, and _aligned_free must pair with _aligned_malloc.
+# define ALIGNED_ALLOC(sz, align)		_aligned_malloc(sz, align)
+# define ALIGNED_FREE(ptr)				_aligned_free(ptr)
+#elif defined(__GNUC__)
 # define ALIGNED_ALLOC(sz, align)		aligned_alloc(static_cast<std::size_t>(align), sz)
 # define ALIGNED_FREE(ptr)				free(ptr)
 #endif

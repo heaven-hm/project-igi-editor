@@ -1421,19 +1421,24 @@ TEST(PlayerLadderTest, ResolvesBottomAndTopActivationGeometry) {
         glm::vec3(0.0f, 0.0f, 0.0f),
         glm::vec3(0.0f, 0.0f, 12288.0f),
         glm::mat3(1.0f));
+    // The default view frame looks along +Y, the side the player mounts from.
+    const ViewFrame view;
 
-    bool at_top = true;
-    EXPECT_TRUE(ladder.CanActivate(
-        glm::vec3(0.0f, -2000.0f, 1000.0f),
-        0.0f,
-        at_top));
-    EXPECT_FALSE(at_top);
+    // Standing at the foot, looking at the ladder: the bottom offer
+    // (IGI-RE src/props/ladder.c:130-162).
+    LadderUseQuery from_bottom;
+    from_bottom.Consider(ladder, glm::vec3(0.0f, -2000.0f, 1000.0f), view, 0);
+    ASSERT_TRUE(from_bottom.HasBest());
+    EXPECT_EQ(from_bottom.GetBestIndex(), 0);
+    EXPECT_FALSE(from_bottom.IsBestAtTop());
 
-    EXPECT_TRUE(ladder.CanActivate(
-        glm::vec3(0.0f, -1000.0f, 9000.0f),
-        0.0f,
-        at_top));
-    EXPECT_TRUE(at_top);
+    // Standing above the activation reference on the far side, looking back at
+    // it: the top offer (IGI-RE src/props/ladder.c:164-173).
+    LadderUseQuery from_top;
+    from_top.Consider(ladder, glm::vec3(0.0f, -1000.0f, 10500.0f), view, 0);
+    ASSERT_TRUE(from_top.HasBest());
+    EXPECT_EQ(from_top.GetBestIndex(), 0);
+    EXPECT_TRUE(from_top.IsBestAtTop());
 }
 
 TEST(PlayerLadderTest, MatchesReferenceTraversalStateTransitions) {

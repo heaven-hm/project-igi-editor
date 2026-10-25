@@ -55,8 +55,10 @@ private:
         glm::dvec3 rot0{0.0};
         glm::dvec3 rot1{0.0};
         bool linear = false;
+        int segments = 20;
         bool operator==(const BentSpanKey& other) const {
-            return linear == other.linear && modelId == other.modelId &&
+            return linear == other.linear && segments == other.segments &&
+                   modelId == other.modelId &&
                    p0 == other.p0 && p1 == other.p1 && rot0 == other.rot0 && rot1 == other.rot1;
         }
     };

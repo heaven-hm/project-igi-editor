@@ -240,12 +240,8 @@ std::string GetLastErrorAsString() {
 	return ss.str();
 }
 
-std::string Trim(const std::string& str) {
-	auto start = str.find_first_not_of(" \t\n\r");
-	if (start == std::string::npos) return "";
-	auto end = str.find_last_not_of(" \t\n\r");
-	return str.substr(start, end - start + 1);
-}
+// Trim() is defined inline in utils.h so the pure-logic parsers can be compiled
+// and linked by the host-native test lane, which does not build this file.
 
 std::vector<std::string> Split(const std::string& str, char delimiter) {
 	std::vector<std::string> tokens;
@@ -346,16 +342,8 @@ bool IsKeyBindingPressedExact(const KeyBinding& kb) {
 	return ModifiersExactMatch(kb, down(VK_CONTROL), down(VK_SHIFT), down(VK_MENU));
 }
 
-std::string GetExeDirectory() {
-	char exePath[MAX_PATH];
-	GetModuleFileNameA(NULL, exePath, MAX_PATH);
-	std::string exeDir(exePath);
-	size_t lastSlash = exeDir.find_last_of("\\/");
-	if (lastSlash != std::string::npos) {
-		exeDir = exeDir.substr(0, lastSlash);
-	}
-	return exeDir;
-}
+// GetExeDirectory() is defined inline in utils.h so the level-load path can be
+// compiled and linked by the host-native test lane, which does not build this file.
 
 std::string GetVersionString() {
 	std::string exeDir = GetExeDirectory();

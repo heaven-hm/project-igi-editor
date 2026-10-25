@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/graph_writer.h"
+#include "renderer/igi_transform.h"
 #include "level/level_objects.h"
 
 #include <glm/glm.hpp>
@@ -29,23 +30,13 @@ struct GraphCameraPose {
 
 inline glm::dvec3 F11MeshCenterWorldOffset(
     const glm::vec3& mesh_center_native, const glm::dvec3& rotation,
-    double object_scale, bool zyx_rotation) {
-    glm::mat4 rotation_matrix(1.0f);
-    rotation_matrix = glm::rotate(rotation_matrix, static_cast<float>(rotation.z),
-                                  glm::vec3(0.0f, 0.0f, 1.0f));
-    if (zyx_rotation) {
-        rotation_matrix = glm::rotate(rotation_matrix, static_cast<float>(rotation.y),
-                                      glm::vec3(0.0f, 1.0f, 0.0f));
-        rotation_matrix = glm::rotate(rotation_matrix, static_cast<float>(rotation.x),
-                                      glm::vec3(1.0f, 0.0f, 0.0f));
-    } else {
-        rotation_matrix = glm::rotate(rotation_matrix, static_cast<float>(rotation.x),
-                                      glm::vec3(1.0f, 0.0f, 0.0f));
-        rotation_matrix = glm::rotate(rotation_matrix, static_cast<float>(rotation.y),
-                                      glm::vec3(0.0f, 1.0f, 0.0f));
-    }
+    double object_scale) {
+    // One Euler order for every model: the game's Rz * Ry * Rx. The previous
+    // `zyx_rotation` flag mirrored the `IsZyxEulerModel` whitelist, which the
+    // retail decompilation does not have (see renderer/igi_transform.h).
+    const glm::mat3 rotation_matrix = igi::IgiEulerRotationMat3(rotation);
     const glm::vec3 local = mesh_center_native * (40.96f * static_cast<float>(object_scale));
-    return glm::dvec3(glm::vec3(rotation_matrix * glm::vec4(local, 1.0f)));
+    return glm::dvec3(glm::vec3(rotation_matrix * local));
 }
 
 // A selected authored object remains the F11 destination while the graph

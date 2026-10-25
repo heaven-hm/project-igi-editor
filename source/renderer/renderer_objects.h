@@ -304,7 +304,6 @@ private:
     float fog_far_ = 1e9f; // huge default = no fog until SetupFog() is called from level.cpp
 	bool fog_enabled_ = true;
 	float elapsed_time_secs_ = 0.0f;      // rotor animation accumulator (Heli main/tail)
-	std::string current_draw_obj_type_; // set before DrawAttachmentsRecursive for Heli rotor spin
 	std::map<std::string, glm::vec3> indoor_ambient_by_task_; // taskId -> LightmapInfo "Indoors ambient light"
     struct BakePose {
         glm::dvec3 pos;

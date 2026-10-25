@@ -287,25 +287,46 @@ std::vector<RenderVertex> ParseRenderVertices(const std::vector<uint8_t>& bytes,
 // DNER/ECAF triangle parsers
 // ---------------------------------------------------------------------------
 
+// Walks the render-group chain exactly the way the game walks it.
+//
+// IGI-RE (oracle) evidence:
+//   bonemesh/d3drender.c:163-183  format 1 (bone/skinned mesh): the walk starts at
+//       r->unk1C (the REND/DNER chunk) and advances
+//       g = (MeshGroup *)((char *)g + sizeof(MeshGroup) + g->next), stopping when
+//       g->next == 0xFFFF.
+//   render/render.c:487-489       format 0: g = (char *)g + g->next + 0x1C
+//   render/render.c:1047,1081,1110-1120  format 3: g = (char *)g + g->next + 0x20
+//   render/rendertypes.h:6-18     MeshGroup: indexCount@12, next@14, texture@16,
+//                                 base@18, vertexCount@20, indices@0x1C
+//   render/render.c:40-54,151     LmGroup (format 3): indexCount@12, next@14,
+//                                 texture@16, lightmap@18, base@20, vertexCount@22,
+//                                 sorted@24, flags@28, alpha@31, indices@0x20
+//
+// The game never uses a record count from the RD3D header; the chain's own `next`
+// links (0xFFFF = last record) are its only terminator. This walk used to be
+// bounded by the unread RD3D field at +8 (types 0/1) / +12 (type 3) and stepped
+// by indexCount*2 instead of `next`.
+//
+// Measured: over all 1578 retail .mef files in the game install this change is a
+// no-op (see docs/igi-re-parity/MEF_DUAL_SET.md) — retail chains always satisfy
+// next == indexCount*2 and RD3D count == chain length. It is a parity alignment
+// with the decompiled walk, not a fix for the reported 001_02_1 symptom.
 std::vector<std::array<uint32_t, 3>> ParsePackedRenderTriangles(
     const std::vector<uint8_t>& bytes,
     const ChunkInfo& chunk,
     uint32_t modelType,
     std::vector<ParsedGeometry::RenderBlock>& outBlocks,
-    size_t& outBlockCount,
-    size_t expectedRecords = 0)
+    size_t& outBlockCount)
 {
     const size_t headerSize = (modelType == 3) ? 32 : 28;
     std::vector<std::array<uint32_t, 3>> triangles;
     size_t cursor    = 0;
     size_t blockCount = 0;
-    const bool bounded = expectedRecords > 0;
 
     while (cursor + headerSize <= chunk.size) {
-        if (bounded && blockCount >= expectedRecords) break;
         const size_t base          = chunk.data + cursor;
         const uint16_t indexCount   = ReadValue<uint16_t>(bytes, base + 12);
-        const int16_t  nextoffs    = ReadValue<int16_t> (bytes, base + 14);
+        const uint16_t next         = ReadValue<uint16_t>(bytes, base + 14);
         const uint16_t rawSlot     = ReadValue<uint16_t>(bytes, base + 16);
         const int materialSlot = (rawSlot == 0xFFFFu) ? -1 : static_cast<int>(rawSlot);
         const uint16_t vertsOffset = (modelType == 3)
@@ -348,12 +369,13 @@ std::vector<std::array<uint32_t, 3>> ParsePackedRenderTriangles(
         }
 
         ++blockCount;
-        cursor += headerSize + indexBytes;
-        // OpenIGI walks the render-header sub-mesh count. The compact +14 field
-        // is not a record terminator when that count is known.
-        if (!bounded && modelType != 3 && nextoffs == -1) {
+        // The chain ends where the game's walk ends: the record whose `next` link
+        // is 0xFFFF. `next` is the distance from the end of this record's indices
+        // to the next record, so it also carries any alignment padding.
+        if (next == 0xFFFF) {
             break;
         }
+        cursor += headerSize + next;
     }
 
     outBlockCount = blockCount;
@@ -671,10 +693,13 @@ ParsedGeometry ParseMefGeometry(const std::vector<uint8_t>& bytes, const std::ve
         }
 
         // OpenIGI reads format-1 visuals from the packed DNER draw records.
-        // XTVC/ECFC are collision data, not an alternate render partition.
+        // IGI-RE confirms XTVC/ECFC/TAMC/HSPC are COLLISION data, not an alternate
+        // render partition: Direct3DRender_LoadModel (bonemesh/d3drender.c:234-261)
+        // reads the HSMC collision chunk and fills exactly two collision parts from
+        // the 1st/2nd XTVC/ECFC/TAMC/HSPC sets. The render partitions are the
+        // REND/DNER group chain, walked by `next` below.
         geometry.triangles = ParsePackedRenderTriangles(
-            bytes, *dner, modelType, geometry.renderBlocks, geometry.renderBlockCount,
-            d3drInfo.valid ? d3drInfo.numMeshes : 0);
+            bytes, *dner, modelType, geometry.renderBlocks, geometry.renderBlockCount);
         geometry.renderLayout = (modelType == 1) ? "type1 packed DNER" : "packed DNER";
 
         geometry.fromRenderMesh = !geometry.vertices.empty() && !geometry.triangles.empty();

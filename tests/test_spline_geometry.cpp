@@ -1,6 +1,9 @@
 #include "../source/renderer/spline_geometry.h"
 
 #include <gtest/gtest.h>
+// glm::half_pi lives in gtc/constants.hpp; the cross build only saw it through
+// the precompiled header, which the host gtest lane does not use.
+#include <glm/gtc/constants.hpp>
 
 #include <cmath>
 #include <limits>

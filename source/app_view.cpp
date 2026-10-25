@@ -4,6 +4,7 @@
  *          Split from app.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include "renderer/igi_transform.h"
 #include "runtime/editor_camera_start.h"
 #include <unordered_set>
 
@@ -455,9 +456,8 @@ bool App::CheckCollision(const glm::vec3& nextPos) {
 
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, glm::vec3(obj.pos.x, obj.pos.y, obj.pos.z));
-        model = glm::rotate(model, (float)obj.rot.z, glm::vec3(0.0f, 0.0f, 1.0f));
-        model = glm::rotate(model, (float)obj.rot.x, glm::vec3(1.0f, 0.0f, 0.0f));
-        model = glm::rotate(model, (float)obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f));
+        // Authored IGI rotation: Rz * Ry * Rx, like the game (renderer/igi_transform.h).
+        model = model * igi::IgiEulerRotationMatrix(obj.rot);
         float s = (obj.scale > 0.0f) ? obj.scale : 1.0f;
         model = glm::scale(model, glm::vec3(BASE_SCALE * s));
         model = glm::rotate(model, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
@@ -699,6 +699,25 @@ void App::UpdateMarkerManipulation() {
 	}
 
 	marker_manip_.mode_ = current_mode;
+
+	// task-11 item 5: a plain LMB drag (no modifier, no manipulation key) is a
+	// deliberate no-op — it selects/keeps the object and moves nothing, and no undo
+	// state is pushed because there is nothing to undo. The message names the mode
+	// that did nothing ("Manipulate (None)") and then lists the modifiers that do
+	// work, so the user is never left with an unexplained dead drag. This branch used
+	// to be silent: the object did not move and nothing on screen said why.
+	// The gesture stays a no-op on purpose rather than inventing a drag plane: the
+	// two planes this editor defines are already taken by Shift (view plane) and
+	// Ctrl (vertical plane), so a default plane would need a design decision.
+	{
+		const bool no_manip_key = !(input_.keys_ & (MK_MANIP_A | MK_MANIP_B | MK_MANIP_G |
+		                                            MK_MANIP_S | MK_MANIP_O | MK_MANIP_SPACE));
+		if (current_mode == ManipulationMode::None && no_manip_key) {
+			status_message_ = "Manipulate (None): drag moves nothing — Shift = view "
+			                  "plane, Ctrl = vertical, A/B/G = rotate, Space = reset "
+			                  "orientation, S/O = snap to ground / nearest object";
+		}
+	}
 
 	// Push undo state once at the start of each new manipulation gesture
 	if (marker_manip_.mode_ != ManipulationMode::None || terrain_edit_enabled_) {

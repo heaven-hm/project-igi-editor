@@ -5,6 +5,10 @@
 
 #pragma once
 
+// This header uses MAKE_FOURCC/pics_s and glm::ivec3, so it must pull in
+// common.h rather than relying on the precompiled header to have done it.
+#include "../common.h"
+
 /*
 ================================================================================
  constants

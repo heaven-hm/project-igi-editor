@@ -495,8 +495,18 @@ TEST_F(McpDomainToolsTest, DerivesTransformAndModelLayoutsFromSchemas) {
     const auto camera = mcp::CallObjectTool(
         *service_, "object_get_schema", mcp::JsonValue::Object{{"type", "SCamera"}}, error);
     ASSERT_TRUE(error.empty()) << error;
-    EXPECT_EQ(camera.at("fields").at("rotation_radians").at("parameter_indices").as_array()[0].as_number(), 6);
-    EXPECT_EQ(camera.at("fields").at("model_id").at("parameter_index").as_number(), 10);
+    // SCamera has no 3-float orientation in retail. IGI-RE src/scamera/scamera.c:116-131
+    // (HOOK 0x442730) and the retail objects.qsc declaration both give:
+    // Holder Gamma (yaw)@6, Holder Model (String16)@7, Camera Alpha (pitch)@8,
+    // Camera Gamma (extra yaw)@9, Camera Model (String16)@10, Camera Destroyed
+    // Model (String16)@11, then Int16/Real32 fields from arg 12 on. Exposing a
+    // Real32x9 rotation at 6 would let object_set_transform write a 3-vector over
+    // arg 7 — the holder-model string — so the schema deliberately declares none.
+    // model_id is arg 7, the model the SCamera task itself draws (`FIELD(model)`,
+    // passed to RigidDynCubeObj_SetModel at scamera.c:240); arg 10 is the separate
+    // SCameraLens child's model.
+    EXPECT_FALSE(camera.at("fields").contains("rotation_radians"));
+    EXPECT_EQ(camera.at("fields").at("model_id").at("parameter_index").as_number(), 7);
 
     for (const std::string type : {"Fence", "Car", "Heli"}) {
         const auto schema = mcp::CallObjectTool(

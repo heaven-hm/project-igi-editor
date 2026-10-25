@@ -4,7 +4,26 @@
  *          Split from app_input.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include "runtime/editor_camera_start.h"
+#include <cstdio>
 #include <fstream>
+
+// ---------------------------------------------------------------------------
+// Editor camera radius (task-8 CameraResetRadius; used by task-11 item 1 notes).
+// EDITOR-ONLY: this value describes the editor's own orbit camera
+// (igi::ObjectOrbitCamera, the only camera radius this editor has). IGI-RE
+// decompiles IGI.exe and contains no QED editor code, so there is no game-side
+// behaviour to match and none is claimed.
+// Units: world units, 4096 wu = 1 m (the editor's 40.96 cm->wu scale convention,
+// see docs/igi-re-parity/PROPS_WIRE_INTERACTABLES.md).
+// ---------------------------------------------------------------------------
+static constexpr float kDefaultOrbitRadius = 40960.0f;   // 10 m
+
+static std::string FormatWorldUnitsAsMetres(float world_units) {
+	char buf[32];
+	std::snprintf(buf, sizeof(buf), "%.3g m", world_units / 4096.0f);
+	return std::string(buf);
+}
 
 // Look up the human-readable Area name for an AIGraph from
 // <exe>\editor\tools\QGraphs\graph_level<N>.json (array of {Graph, Area}).
@@ -35,6 +54,19 @@ static std::string LookupGraphArea(int level, const std::string& graphId) {
     return "";
 }
 
+void App::ApplyOrbitRadius(float radius) {
+	// Re-derive the eye position from the stored orbit target so the camera keeps
+	// looking at the same object (source/runtime/editor_camera_start.h:94-99).
+	igi::ObjectOrbitCamera orbit;
+	orbit.target = orbit_target_pos_;
+	orbit.distance = radius;
+	orbit.yaw_degrees = viewer_.yaw_;
+	orbit.pitch_degrees = viewer_.pitch_;
+	orbit_distance_ = orbit.distance;
+	viewer_.pos_ = igi::ObjectOrbitCameraPosition(orbit);
+	UpdateViewerVectors();
+}
+
 void App::DispatchEventBindings() {
 	// Guard: skip dispatch while any text-input modal is open
 	if (task_picker_open_ || task_editor_open_ || find_open_ ||
@@ -51,6 +83,20 @@ void App::DispatchEventBindings() {
 		return Utils::IsKeyBindingPressedExact(it->second);
 	};
 
+	// Bindings removed for GitHub issue #48 ("implement or remove the 25 stubbed
+	// keybindings"). They are gone from the shipped
+	// assets/editor/qed/qedkeybindings.qsc, but an already-deployed copy of that
+	// file in a user's QED folder can still bind them — so rather than silently
+	// doing nothing, say why. Every name here has a row in
+	// docs/igi-re-parity/KEYBINDINGS.md.
+	auto Removed = [&](const char* name) -> bool {
+		if (!Check(name)) return false;
+		status_message_ = std::string(name) +
+			" was removed (#48): no editor behaviour and no IGI-RE counterpart — "
+			"see docs/igi-re-parity/KEYBINDINGS.md";
+		return true;
+	};
+
 	// ---- Help ----
 	if (Check("ToggleHelp")) {
 		show_help_ = !show_help_;
@@ -63,11 +109,53 @@ void App::DispatchEventBindings() {
 	if (Check("CameraEnable")) { /* handled by existing named binding */ }
 	if (Check("CameraMoveForward")) { /* handled by existing named binding */ }
 	if (Check("CameraMoveBackward")) { /* handled by existing named binding */ }
-	if (Check("CameraAdjustRadius")) { /* handled by existing named binding */ }
-	if (Check("CameraResetRadius")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraResetRadius not implemented"); }
-	if (Check("CameraLookDown")) { /* handled by existing named binding */ }
-	if (Check("CameraCopyPosition")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraCopyPosition not implemented"); }
-	if (Check("CameraCopyOrientation")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraCopyOrientation not implemented"); }
+	if (Check("CameraAdjustRadius")) {
+		// task-11 item 1: REMOVED, not implemented. The editor has no radius
+		// adjuster anywhere (nothing reads the old keyAdjustCameraRadius field, and
+		// the only radius, igi::ObjectOrbitCamera::distance, is derived by
+		// BeginObjectOrbit and only ever reset by CameraResetRadius). Any rate,
+		// direction or preset ladder would have been invented, so the binding is
+		// gone from assets/editor/qed/qedkeybindings.qsc and a stale user config
+		// gets this message instead. Editor-only: IGI-RE decompiles IGI.exe and
+		// contains no QED editor code, so there is no game behaviour to match.
+		if (Removed("CameraAdjustRadius")) return;
+	}
+	if (Check("CameraResetRadius")) {
+		// The editor's only camera radius is the object-orbit distance
+		// (igi::ObjectOrbitCamera::distance, source/runtime/editor_camera_start.h:39-44).
+		// Reset it to the editor's documented default radius and re-derive the eye
+		// position from the stored orbit target, so the camera stays aimed at the
+		// same object. NOTE: the struct's own initialiser is 1.0 world unit, which
+		// BeginObjectOrbit (source/runtime/editor_camera_start.h:64-84) only uses as
+		// a degenerate fallback when the camera is already on top of the target —
+		// 1 wu is 0.24 mm, not a usable viewing distance, so the reset uses
+		// kDefaultOrbitRadius (10 m) instead.
+		// IGI-RE has no counterpart to cite: it decompiles IGI.exe only, and its
+		// editor-camera module attaches the camera to a target with no orbit radius
+		// at all (src/editcam/editcamera.c:212 EditCamera_AttachRotation,
+		// :273 EditCamera_AttachPosition). Editor-only feature; see
+		// docs/igi-re-parity/KEYBINDINGS.md.
+		if (orbit_active_) {
+			ApplyOrbitRadius(kDefaultOrbitRadius);
+			status_message_ = "Camera radius reset to " +
+			                  FormatWorldUnitsAsMetres(kDefaultOrbitRadius);
+		} else {
+			status_message_ = "CameraResetRadius: no orbit target (F11 snaps the camera to an object first)";
+		}
+		return;
+	}
+	if (Check("CameraLookDown")) {
+		// task-11 item 2: REMOVED, not implemented. Nothing in the editor reads the
+		// old keyLookDown field and no camera-look control exists to wire it to
+		// (the mouse owns pitch, source/app_view.cpp:43); any step size or rate
+		// would have been invented, so the binding is gone from
+		// assets/editor/qed/qedkeybindings.qsc and a stale user config gets this
+		// message instead. Editor-only: IGI-RE decompiles IGI.exe and contains no
+		// QED editor code, so there is no game behaviour to match.
+		if (Removed("CameraLookDown")) return;
+	}
+	if (Removed("CameraCopyPosition")) return;
+	if (Removed("CameraCopyOrientation")) return;
 	if (Check("CameraSnapToObject")) {
 		if (selected_object_index_ >= 0) {
 			auto& objects = level_.GetLevelObjects().GetObjects();
@@ -79,7 +167,7 @@ void App::DispatchEventBindings() {
 			}
 		}
 	}
-	if (Check("CameraSnapToObjectWithRadius")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraSnapToObjectWithRadius not implemented"); }
+	if (Removed("CameraSnapToObjectWithRadius")) return;
 	if (Check("CameraSnapToGround")) {
 		if (selected_object_index_ >= 0) {
 			auto& objects = level_.GetLevelObjects().GetObjects();
@@ -98,9 +186,13 @@ void App::DispatchEventBindings() {
 			}
 		}
 	}
-	if (Check("CameraStrafe")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraStrafe not implemented"); }
-	// CameraStrafeFree is handled at the end of this function (one-shot toggle)
+	if (Removed("CameraStrafe")) return;
 	// CameraStrafeLeft/Right are handled in ProcessInput (continuous per-frame movement)
+	// CameraStrafeFree was removed in task-11 item 3: it toggled camera_strafe_free_,
+	// which nothing read, so the status bar announced a state change that never
+	// happened. Strafing itself (source/app_view.cpp:225-236) is unconditional, so
+	// there was no lock for it to release.
+	if (Removed("CameraStrafeFree")) return;
 
 	// ---- Tasks ----
 	if (Check("TaskMoveUp")) {
@@ -200,6 +292,22 @@ void App::DispatchEventBindings() {
 	}
 	if (Check("TaskSendEventRecursive")) {
 		status_message_ = "TaskSendEventRecursive: requires live game connection";
+		return;
+	}
+	if (Check("TaskFind")) {
+		// task-11 (found by the new "every advertised binding does something"
+		// test, not one of the five items): <Ctrl><F> was advertised in
+		// assets/editor/qed/qedkeybindings.qsc:44 with no handler anywhere, so it
+		// was a silent no-op next to its three working siblings below. The find bar
+		// state already exists (find_open_/find_mode_/find_query_, source/app.h:365-369)
+		// and its default mode is FindMode::TaskNameTypeId, so the generic find opens
+		// that mode — the same four lines as its siblings, no new state and no new
+		// behaviour invented. Editor-only: IGI-RE decompiles IGI.exe and has no QED
+		// task-tree find bar, so no game-side claim is made.
+		find_mode_  = FindMode::TaskNameTypeId;
+		find_open_  = true;
+		find_query_.clear();
+		find_result_idx_ = -1;
 		return;
 	}
 	if (Check("TaskFindTextInTask")) {
@@ -338,25 +446,25 @@ void App::DispatchEventBindings() {
 	if (Check("TaskDelete")) { DeleteSelectedTask(); }
 
 	// ---- AnimTask ----
-	if (Check("AnimTaskIncreaseKeyframeInterpolation")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskIncreaseKeyframeInterpolation not implemented"); }
-	if (Check("AnimTaskDecreaseKeyframeInterpolation")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskDecreaseKeyframeInterpolation not implemented"); }
-	if (Check("AnimTaskToggleCameraRelative")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskToggleCameraRelative not implemented"); }
-	if (Check("AnimTaskGoToCursor")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskGoToCursor not implemented"); }
-	if (Check("AnimTaskToggleWindowHidden")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskToggleWindowHidden not implemented"); }
-	if (Check("AnimTaskStartRecording")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskStartRecording not implemented"); }
-	if (Check("AnimTaskGoToTop")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskGoToTop not implemented"); }
-	if (Check("AnimTaskToggleSyncPlayback")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskToggleSyncPlayback not implemented"); }
+	if (Removed("AnimTaskIncreaseKeyframeInterpolation")) return;
+	if (Removed("AnimTaskDecreaseKeyframeInterpolation")) return;
+	if (Removed("AnimTaskToggleCameraRelative")) return;
+	if (Removed("AnimTaskGoToCursor")) return;
+	if (Removed("AnimTaskToggleWindowHidden")) return;
+	if (Removed("AnimTaskStartRecording")) return;
+	if (Removed("AnimTaskGoToTop")) return;
+	if (Removed("AnimTaskToggleSyncPlayback")) return;
 
 	// ---- Timer ----
-	if (Check("TimerIncreaseSpeed")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerIncreaseSpeed not implemented"); }
-	if (Check("TimerDecreaseSpeed")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerDecreaseSpeed not implemented"); }
-	if (Check("TimerReset")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerReset not implemented"); }
-	if (Check("TimerStartStop")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerStartStop not implemented"); }
+	if (Removed("TimerIncreaseSpeed")) return;
+	if (Removed("TimerDecreaseSpeed")) return;
+	if (Removed("TimerReset")) return;
+	if (Removed("TimerStartStop")) return;
 
 	// ---- Manipulate ----
-	if (Check("Manipulate")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] Manipulate not implemented"); }
-	if (Check("ManipulatePositionXY")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulatePositionXY not implemented"); }
-	if (Check("ManipulatePositionXZ")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulatePositionXZ not implemented"); }
+	if (Removed("Manipulate")) return;
+	if (Removed("ManipulatePositionXY")) return;
+	if (Removed("ManipulatePositionXZ")) return;
 	if (Check("ManipulatePositionSnapToGround")) {
 		if (selected_object_index_ >= 0) {
 			auto& objects = level_.GetLevelObjects().GetObjects();
@@ -386,10 +494,10 @@ void App::DispatchEventBindings() {
 			}
 		}
 	}
-	if (Check("ManipulateOrientationAlpha")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateOrientationAlpha not implemented"); }
-	if (Check("ManipulateOrientationBeta")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateOrientationBeta not implemented"); }
-	if (Check("ManipulateOrientationGamma")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateOrientationGamma not implemented"); }
-	if (Check("ManipulateOrientationReset")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateOrientationReset not implemented"); }
+	if (Removed("ManipulateOrientationAlpha")) return;
+	if (Removed("ManipulateOrientationBeta")) return;
+	if (Removed("ManipulateOrientationGamma")) return;
+	if (Removed("ManipulateOrientationReset")) return;
 
 	// ---- GraphNode ----
 	// Graph node edit controls (only while the overlay is shown).
@@ -598,7 +706,23 @@ void App::DispatchEventBindings() {
 	if (Check("Undo")) { Undo(); }
 	if (Check("Redo")) { Redo(); }
 	if (Check("ReloadSettings")) { Config::Init(); LoadAutoCompleteKeywords(); Logger::Get().Log(LogLevel::INFO, "[App] Settings reloaded from QED config"); }
-	if (Check("ToggleObjects")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ToggleObjects not implemented"); }
+	if (Check("ToggleObjects")) {
+		// "Toggle objects in editor": the same three-way object gate the View menu
+		// uses (source/main.cpp:439-450, MENU_SHOW_ALL). Renderer::DRAW_OBJECTS
+		// short-circuits the whole object pass (renderer_objects.cpp:760-766);
+		// BUILDINGS/PROPS are the per-kind fallbacks consulted once it is cleared.
+		// This is an editor viewport option: IGI-RE decompiles IGI.exe only and has
+		// no equivalent, so the evidence is the editor's own draw-part system
+		// (main.cpp:342-346, debug_command_manager.cpp:104).
+		const int kAllObjects = Renderer::DRAW_OBJECTS | Renderer::DRAW_BUILDINGS |
+		                        Renderer::DRAW_PROPS;
+		const bool objects_on = (GetDrawParts() & Renderer::DRAW_OBJECTS) != 0 &&
+		                        (GetDrawParts() & Renderer::DRAW_BUILDINGS) != 0;
+		SetDrawParts(objects_on ? (GetDrawParts() & ~kAllObjects)
+		                        : (GetDrawParts() | kAllObjects));
+		status_message_ = objects_on ? "Objects: OFF" : "Objects: ON";
+		return;
+	}
 	if (Check("TaskMagicObjToggle")) {
 		show_magic_obj_spheres_ = !show_magic_obj_spheres_;
 		status_message_ = show_magic_obj_spheres_ ? "Magic objects: ON" : "Magic objects: OFF";
@@ -625,10 +749,8 @@ void App::DispatchEventBindings() {
 			status_message_ = "Select an object whose model is flagged missing from the .res first.";
 		}
 	}
-	if (Check("CameraStrafeFree")) {
-		camera_strafe_free_ = !camera_strafe_free_;
-		status_message_ = camera_strafe_free_ ? "Strafe lock: ON" : "Strafe lock: OFF";
-	}
+	// CameraStrafeFree removed in task-11 item 3 — see the guard near the Camera
+	// section above; the flag and the status message that announced it are gone.
 	if (terrain_edit_enabled_) {
 		if (Check("TerrainBrushCycle")) {
 			SetEditBrush((edit_brush_ + 1) % 4);

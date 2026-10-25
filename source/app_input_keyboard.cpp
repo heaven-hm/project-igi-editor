@@ -451,7 +451,7 @@ void App::Input_OnSpecial(int key, int x, int y) {
 			const float boundRadius = renderer_.GetMeshRadius(obj.modelId, obj.isBuilding) * 40.96f * obj.scale;
 			const glm::dvec3 meshCenter = F11MeshCenterWorldOffset(
 				renderer_.GetMeshCenter(obj.modelId, obj.isBuilding), obj.rot,
-				obj.scale, IsZyxEulerModel(obj.modelId));
+				obj.scale);
 			const glm::dvec3 cameraTarget = obj.pos + meshCenter;
 
 			// Shift+F11: wider radius framing (CameraSnapToObjectWithRadius)

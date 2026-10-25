@@ -1,6 +1,12 @@
 # Project IGI Editor - Version History
 
-## Current Version: 3.6.9-pre
+> **Source of truth.** The machine-readable version lives in the `version` file at the
+> repository root, and `CMakeLists.txt` reads it (`project(... VERSION ...)`) and generates
+> the Windows resource version from it. This file is the human-readable history and must
+> not disagree with it; before #44 it said 3.6.9-pre while `version` said 3.6.11-pre, the
+> build said 3.0 and `assets/igi-editor.rc` said 3.6.7-pre.
+
+## Current Version: 3.6.11-pre
 
 ---
 
@@ -8,6 +14,8 @@
 
 | Version | Release Date | Status | Major Features |
 |---------|--------------|--------|----------------|
+| **3.6.11-pre** | 2026-10-25 | Pre-release | Live weather controls and OpenIGI precipitation parity, indoor weather shelter suppression, accurately aligned rail tracks and spline spans, F11 rigid-center framing, foreign-model texture resolution (see `RELEASE_NOTES_3.6.11-pre.md`) |
+| **3.6.10-pre** | 2026-08-30 | Pre-release | Game-font fallback and retail-style menu rendering, sniper/AI skinned-model rendering, cross-level model/texture/ATTA provenance, staged RES/DAT/MTP publication (see `RELEASE_NOTES_3.6.10-pre.md`) |
 | **3.6.9-pre** | 2026-08-29 | Pre-release | Reliable editor logging with writable-location fallback and immediate startup flush; shipped editable `qedconfig.qsc`; corrected default mission path to `missions/location0` |
 | **3.6.8-pre** | 2026-08-25 | Pre-release | MCP game-data integration, authenticated loopback HTTP, transactional mutations, and cross-family ATTA dependency fixes |
 | **3.4.1-pre** | 2026-06-21 | Pre-release | Live graph-overlay sync when AIGraph task moves (F7 view follows the task live via property panel / position pad / Z slider / Undo / Redo); exact-match `TaskFindByTaskID` (pixel-perfect IDs, no substring); AI Script editor notepad surface (Ctrl+A/C/X/V/Z/Y + mouse drag selection) scoped to the AI Script text only; local AI Script undo/redo stack (capped at 100); selection highlight rendered on the correct visual lines |

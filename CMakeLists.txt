@@ -2,9 +2,31 @@ cmake_minimum_required(VERSION 3.16)
 # target_precompile_headers
 #   Added in version 3.16
 
+# ---------------------------------------------------------------------------
+# Single source of truth for the version string (issue #44).
+#
+# The `version` file at the repo root is authoritative. It previously disagreed
+# with three other places -- `project(... VERSION 3.0)` here, `assets/igi-editor.rc`
+# (3.6.7-pre) and `versions.md` (3.6.9-pre) -- so the shipped build could report a
+# version that no file in the repo agreed with. The resource script is now
+# generated from this value too, so there is exactly one number to bump.
+# ---------------------------------------------------------------------------
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/version" IGI_EDITOR_VERSION_STRING LIMIT_COUNT 1)
+string(STRIP "${IGI_EDITOR_VERSION_STRING}" IGI_EDITOR_VERSION_STRING)
+if (NOT IGI_EDITOR_VERSION_STRING)
+  message(FATAL_ERROR "The `version` file at the repository root is missing or empty.")
+endif()
+string(REGEX MATCH "^[0-9]+\\.[0-9]+\\.[0-9]+" IGI_EDITOR_VERSION_NUMERIC "${IGI_EDITOR_VERSION_STRING}")
+if (NOT IGI_EDITOR_VERSION_NUMERIC)
+  message(FATAL_ERROR "The `version` file must start with a numeric MAJOR.MINOR.PATCH value; got '${IGI_EDITOR_VERSION_STRING}'.")
+endif()
+
 project (igi_editor
-  VERSION 3.0
+  VERSION ${IGI_EDITOR_VERSION_NUMERIC}
   LANGUAGES C CXX)
+
+# Full string including any pre-release suffix, for display and the .rc.
+set(IGI_EDITOR_VERSION "${IGI_EDITOR_VERSION_STRING}")
 
 if (NOT WIN32)
   message(FATAL_ERROR
@@ -50,9 +72,18 @@ file(GLOB SOURCES_CLI "source/cli/*.*")
 file(GLOB SHADERS_41 "shaders/41/*.*")
 file(GLOB SHADERS_45 "shaders/45/*.*")
 
-# Add Windows icon resource file
+# Windows icon + version resource, generated from `assets/igi-editor.rc.in` so the
+# FILEVERSION/PRODUCTVERSION values come from the `version` file (issue #44) and
+# cannot drift from it. The icon is referenced by absolute path because the
+# generated .rc lives in the build tree.
 if (WIN32)
-  list(APPEND SOURCES "assets/igi-editor.rc")
+  string(REPLACE "." "," IGI_EDITOR_VERSION_COMMA "${IGI_EDITOR_VERSION_NUMERIC}")
+  set(IGI_EDITOR_VERSION_COMMA "${IGI_EDITOR_VERSION_COMMA},0")
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/igi-editor.rc.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/igi-editor.rc"
+    @ONLY)
+  list(APPEND SOURCES "${CMAKE_CURRENT_BINARY_DIR}/generated/igi-editor.rc")
 endif()
 
 source_group("level" FILES ${SOURCES_LEVEL})
@@ -171,19 +202,23 @@ if (WIN32)
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
   )
 
-  # Embed admin manifest
+  # Embed admin manifest (MSVC linker only; MinGW's windres embeds the resource)
   set(MANIFEST_FILE "${PROJECT_SOURCE_DIR}/igi-editor.exe.manifest")
-  if(EXISTS ${MANIFEST_FILE})
+  if(MSVC AND EXISTS ${MANIFEST_FILE})
     set_target_properties(igi-editor PROPERTIES
       LINK_FLAGS "/MANIFEST:EMBED /MANIFESTINPUT:${MANIFEST_FILE} /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\""
     )
   endif()
 
-  # Use Console subsystem for both Debug and Release to support CLI mode
-  set_target_properties(igi-editor PROPERTIES
-    LINK_FLAGS_DEBUG "/SUBSYSTEM:CONSOLE"
-    LINK_FLAGS_RELEASE "/SUBSYSTEM:CONSOLE"
-  )
+  # Use Console subsystem for both Debug and Release to support CLI mode.
+  # MinGW's console subsystem is the default and it does not understand the
+  # MSVC /SUBSYSTEM switch, so this is MSVC-only.
+  if (MSVC)
+    set_target_properties(igi-editor PROPERTIES
+      LINK_FLAGS_DEBUG "/SUBSYSTEM:CONSOLE"
+      LINK_FLAGS_RELEASE "/SUBSYSTEM:CONSOLE"
+    )
+  endif()
 
   # Ensure Release mode entry point is correct for console app
   set_target_properties(igi-editor PROPERTIES
@@ -197,6 +232,16 @@ if (WIN32)
     set(DLL_SRC_DIR "${PROJECT_SOURCE_DIR}/assets/dlls/x86")
   endif()
 
+  # Runtime files copied next to the exe.  assets/dlls/<arch> is not tracked in
+  # this repository, so only copy the DLLs that actually exist.
+  set(IGI_RUNTIME_FILES "${PROJECT_SOURCE_DIR}/version")
+  if(EXISTS "${DLL_SRC_DIR}/freeglut.dll")
+    list(APPEND IGI_RUNTIME_FILES "${DLL_SRC_DIR}/freeglut.dll")
+  endif()
+  if(EXISTS "${DLL_SRC_DIR}/glew32.dll")
+    list(APPEND IGI_RUNTIME_FILES "${DLL_SRC_DIR}/glew32.dll")
+  endif()
+
   add_custom_command(TARGET igi-editor POST_BUILD
     # Copy assets/editor structure directly
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -205,9 +250,7 @@ if (WIN32)
 
     # Copy files to root (DLLs and version)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${DLL_SRC_DIR}/freeglut.dll"
-      "${DLL_SRC_DIR}/glew32.dll"
-      "${PROJECT_SOURCE_DIR}/version"
+      ${IGI_RUNTIME_FILES}
       "$<TARGET_FILE_DIR:igi-editor>"
 
     COMMENT "Copying runtime files to editor/ structure"
@@ -278,7 +321,10 @@ add_executable(igi_tests
     tests/test_fnt_parser.cpp
     tests/test_pickup_resolve.cpp
     tests/test_res_model_set.cpp
+    tests/test_atta_children.cpp
     tests/test_mef_native_lightmap.cpp
+    tests/test_mef_dual_set.cpp
+    tests/test_mef_corpus.cpp
     tests/test_igi1conv_lightmap.cpp
     tests/test_debug_command_parser.cpp
     tests/test_capture_camera.cpp
@@ -294,7 +340,19 @@ add_executable(igi_tests
     tests/test_level_weather.cpp
     tests/test_weather_toggle.cpp
     tests/test_model_texture_resolution.cpp
+    tests/test_character_texture_resolution.cpp
+    tests/test_lod_chain.cpp
     tests/test_spline_geometry.cpp
+    tests/test_placement_splines.cpp
+    tests/test_train_rail.cpp
+    tests/test_igi_transform.cpp
+    tests/test_props_wire_interactables.cpp
+    tests/test_scamera_params.cpp
+    tests/test_door_params.cpp
+    tests/test_ladder_placement.cpp
+    tests/test_ladder_runtime.cpp
+    tests/test_declared_position_fallback.cpp
+    tests/test_keybindings.cpp
 )
 
 # Explicit runtime so igi_tests always matches igi-editor (/MDd Debug, /MD Release).
@@ -433,6 +491,12 @@ set_source_files_properties(
 target_precompile_headers(igi_tests PRIVATE source/pch.h)
 
 include(GoogleTest)
+# Cross-compiling: the test executables are Windows PE images that cannot be
+# executed on the build host.  Defer gtest test discovery to `ctest` time
+# instead of running the binaries during the build.
+if(CMAKE_CROSSCOMPILING AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.18)
+    set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
+endif()
 gtest_discover_tests(igi_tests
     TEST_PREFIX "aggregate."
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})

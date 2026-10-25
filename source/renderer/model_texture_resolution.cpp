@@ -161,6 +161,23 @@ bool IsSharedCommonTextureArchive(const std::string& resPath) {
     return path.find("/common/textures/location0.res") != std::string::npos;
 }
 
+std::vector<ModelSourceArchiveIndex> OrderTextureArchivesByOwner(
+    const std::vector<ModelSourceArchiveIndex>& archives,
+    const std::string& ownerResPath) {
+    if (ownerResPath.empty()) return archives;
+
+    std::vector<ModelSourceArchiveIndex> ordered;
+    ordered.reserve(archives.size());
+    for (const auto& archive : archives) {
+        if (archive.resPath == ownerResPath) ordered.push_back(archive);
+    }
+    if (ordered.empty()) return archives;
+    for (const auto& archive : archives) {
+        if (archive.resPath != ownerResPath) ordered.push_back(archive);
+    }
+    return ordered;
+}
+
 std::vector<uint8_t> FindPreviewTextureEntry(
     const std::vector<ModelSourceArchiveIndex>& archives,
     const std::string& textureId,

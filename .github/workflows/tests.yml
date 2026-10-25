@@ -1,38 +1,79 @@
-name: synthetic-tests
+name: windows-build-and-tests
+
+# Issue #44: there was no CI that could actually pass. The previous version of this
+# file invoked `tools/testing/Invoke-TestLane.ps1` and
+# `tools/testing/Get-RequiredLaneStatus.ps1`, neither of which exists in the
+# repository, and required an unset `GOOGLETEST_SOURCE` environment variable -- so
+# it failed on the first step of every run. This workflow is self-contained: it
+# needs nothing from outside the checkout except the pinned googletest archive that
+# `CMakeLists.txt` already declares.
+#
+# HONESTY NOTE: this workflow is authored but UNVERIFIED. The machine this branch
+# was prepared on has no Windows runtime (no wine, no MSVC) and cannot run GitHub
+# Actions locally, so no run of this file has been observed. Treat the first CI run
+# as the verification of the file itself. The local equivalents that *have* been run
+# are `scripts/build-windows.sh` (i686/x86_64 MinGW cross-build) and
+# `scripts/run-host-tests.sh` (host-native gtest lane); their results are recorded
+# in `docs/igi-re-parity/BUILD_GATE.md`.
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, 'fix/**' ]
   pull_request:
   workflow_dispatch:
 
 jobs:
-  windows-synthetic:
+  build-and-test:
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 45
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Configure and build
+
+      # The editor is 32-bit (third_party/GL/lib/x86 plus the retail engine ABI), so
+      # the build must be configured for Win32, matching the local gate.
+      - name: Configure (Win32)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not $env:GOOGLETEST_SOURCE) { throw 'GOOGLETEST_SOURCE must point to a provisioned GoogleTest source.' }
-          & "$env:GITHUB_WORKSPACE\tools\testing\Invoke-TestLane.ps1" `
-            -Lane registration -GoogleTestSource $env:GOOGLETEST_SOURCE `
-            -BuildRoot "$env:RUNNER_TEMP\igi-build" `
-            -ArtifactsRoot "$env:GITHUB_WORKSPACE\artifacts\registration"
-      - name: Validate required status
-        if: always()
+          cmake -S . -B build -A Win32 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DFETCHCONTENT_FULLY_DISCONNECTED=OFF `
+            -DIGI_TEST_ASAN=OFF
+          if ($LASTEXITCODE -ne 0) { throw "cmake configure failed ($LASTEXITCODE)" }
+
+      - name: Build igi1ed.exe and igi_tests.exe
         shell: pwsh
         run: |
-          $report = "$env:GITHUB_WORKSPACE\artifacts\registration\run.json"
-          if (-not (Test-Path -LiteralPath $report)) { throw 'Required registration report was not produced.' }
-          & "$env:GITHUB_WORKSPACE\tools\testing\Get-RequiredLaneStatus.ps1" -ReportPath $report -OutputPath "$env:GITHUB_WORKSPACE\artifacts\required-status.json"
-      - name: Upload evidence
+          $ErrorActionPreference = 'Stop'
+          cmake --build build --config Release --target igi-editor igi_tests --parallel
+          if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
+          Get-ChildItem build -Recurse -Filter '*.exe' |
+            Select-Object FullName, Length | Format-Table -AutoSize
+
+      # `tests/test_verify_level.cpp` spawns igi1ed.exe --verify-level N, which the
+      # issue calls out as able to hang and lock the build output, so it is excluded.
+      # Everything else either runs on synthetic fixtures or skips cleanly when the
+      # retail corpus / IGI_GAME_PATH is absent (GTEST_SKIP), so the lane is
+      # meaningful without game assets.
+      - name: Run synthetic test suite
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Get-ChildItem build -Recurse -Filter 'igi_tests.exe' |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $exe) { throw 'igi_tests.exe was not produced by the build.' }
+          Write-Host "running $exe"
+          & $exe '--gtest_filter=-*VerifyLevel*' --gtest_color=no
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { throw "igi_tests failed with exit code $code" }
+
+      - name: Upload test output
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-evidence-${{ github.run_id }}
-          path: artifacts/
-          if-no-files-found: error
+          name: igi-tests-output-${{ github.run_id }}
+          path: build/
+          if-no-files-found: ignore
+          retention-days: 7

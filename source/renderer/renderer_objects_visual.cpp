@@ -4,6 +4,7 @@
  *          Split from renderer_objects.cpp; shares renderer_objects_internal.h.
  *****************************************************************************/
 #include "renderer_objects_internal.h"
+#include "igi_transform.h"
 
 void Renderer_Objects::InitSphereMesh() {
     const int LAT = 12;
@@ -57,6 +58,17 @@ void Renderer_Objects::InitSphereMesh() {
 
 // ─── DrawMagicObjSpheres ──────────────────────────────────────────────────────
 // Draws a solid red sphere at each MagicObject ATTA attachment position.
+// Also hosts the ladder placement gizmos of GitHub issue #68 (see
+// DrawLadderGizmoGeometry at the bottom of this file): this overlay is the
+// editor's existing "Magic objects" view toggle (App::show_magic_obj_spheres_,
+// flipped in app_input.cpp), so the ladder previews inherit an on/off switch and
+// normal editing is untouched while it is off.
+static void DrawLadderGizmoGeometry(const glm::mat3& frame, const glm::vec3& origin,
+                                    const glm::vec3& reference, const glm::vec3& foot,
+                                    const glm::vec3& head, const glm::vec3& bottom_mount,
+                                    const glm::vec3& top_mount, int rung_count,
+                                    GLuint ubo_mats, GLuint ubo_binding);
+
 void Renderer_Objects::DrawMagicObjSpheres(const std::vector<LevelObject>& objects, GLuint ubo_mats) {
     EnsureMagicObjIdsLoaded();
     if (magicobj_ids_.empty()) return;
@@ -142,8 +154,56 @@ void Renderer_Objects::DrawMagicObjSpheres(const std::vector<LevelObject>& objec
 
     glBindVertexArray(0);
     glUseProgram(0);
-}
 
+    // ── Ladder placement gizmos (GitHub issue #68) ───────────────────────────
+    // A second pass, after the sphere pass, so the gizmo's own program/VAO can
+    // never disturb the spheres' uniforms. Gated by this overlay plus its own
+    // switch (igi::SetLadderGizmosEnabled).
+    if (!igi::LadderGizmosEnabled()) return;
+    for (const auto& obj : objects) {
+        if (obj.deleted || obj.modelId.empty()) continue;
+        if (!IsLadderMagicObject(obj.modelId)) continue;
+
+        const Mesh& mesh = GetOrLoadMesh(obj.modelId, obj.isBuilding);
+        // Magic points 1, 2 and 3 are the activation reference, the foot and the
+        // head (IGI-RE src/props/ladder.c:86-87,155,164 and
+        // src/weapon/humanplayer.c:300,308); point 0 is unused by the ladder
+        // handlers, which is why the shipped ladder MEFs carry four XTVM points.
+        if (mesh.magicVertices.size() < 4) continue;
+
+        const glm::mat3 frame = igi::IgiEulerRotationMat3(obj.rot);
+        const glm::vec3 origin((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z);
+        // Magic vertices are mesh-local (MEF units / 40.96, renderer/model.cpp:34)
+        // and are drawn through scale(40.96), so the world point of magic point i
+        // is origin + frame * (vertex * 40.96) — the same transform
+        // App::AddRuntimeLadderIfPresent applies to the gameplay placements.
+        auto point = [&](size_t index) {
+            return origin + frame * (mesh.magicVertices[index] * 40.96f);
+        };
+        auto props_vec = [](const glm::vec3& v) {
+            return TaskSchemaNS::Props::Vec3((double)v.x, (double)v.y, (double)v.z);
+        };
+
+        TaskSchemaNS::Props::Basis basis;
+        basis.x = props_vec(frame[0]);
+        basis.y = props_vec(frame[1]);
+        basis.z = props_vec(frame[2]);
+
+        const TaskSchemaNS::Props::LadderPlacement ladder =
+            TaskSchemaNS::Props::ComputeLadderPlacement(
+                props_vec(origin), props_vec(point(1)), props_vec(point(2)),
+                props_vec(point(3)), basis);
+        if (!ladder.valid) continue;
+
+        DrawLadderGizmoGeometry(
+            frame, origin, point(1), point(2), point(3),
+            glm::vec3((float)ladder.bottomMount.x, (float)ladder.bottomMount.y,
+                      (float)ladder.bottomMount.z),
+            glm::vec3((float)ladder.topMount.x, (float)ladder.topMount.y,
+                      (float)ladder.topMount.z),
+            ladder.rungCount, ubo_mats, ubo_binding_point_);
+    }
+}
 
 // METAL_DOOR_SLIDE_UP (model 506_xx) appears in levels 12/13/14 as an EditRigidObj
 // carrying a genuine multi-axis Euler tuple. It bypasses the engine's special door
@@ -632,14 +692,8 @@ void main() {
 
     glm::mat4 model = glm::mat4(1.0f);
     model = glm::translate(model, glm::vec3(obj.pos));
-    model = glm::rotate(model, static_cast<float>(obj.rot.z), glm::vec3(0.0f, 0.0f, 1.0f));
-    if (IsZyxEulerModel(obj.modelId)) {
-        model = glm::rotate(model, static_cast<float>(obj.rot.y), glm::vec3(0.0f, 1.0f, 0.0f));
-        model = glm::rotate(model, static_cast<float>(obj.rot.x), glm::vec3(1.0f, 0.0f, 0.0f));
-    } else {
-        model = glm::rotate(model, static_cast<float>(obj.rot.x), glm::vec3(1.0f, 0.0f, 0.0f));
-        model = glm::rotate(model, static_cast<float>(obj.rot.y), glm::vec3(0.0f, 1.0f, 0.0f));
-    }
+    // Authored IGI rotation: Rz * Ry * Rx, like the game (renderer/igi_transform.h).
+    model = model * igi::IgiEulerRotationMatrix(obj.rot);
 
     bool isWeapon = IsWeaponModel(obj.modelId) || obj.type == "GunPickup" || obj.type == "AmmoPickup" || obj.type == "GenericPickup";
     if (isWeapon)
@@ -657,6 +711,418 @@ void main() {
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glUseProgram(0);
+}
+
+// ─── DrawPropsGizmos ─────────────────────────────────────────────────────────
+// Viewport previews for the interactable props of GitHub issue #42.
+//
+// Deliberately a free function rather than a Renderer_Objects member: the
+// renderer's own header is outside this change's write scope, so the entry point
+// is declared in level_objects.h (which this TU already includes through
+// renderer_objects_internal.h). It is otherwise self-contained — it owns its
+// shader/VAO/VBO in function-local statics and takes the Matrices UBO handles
+// from the caller — so it never reads or writes Renderer_Objects state.
+//
+// Everything drawn here is traceable to IGI-RE; the only presentation choices are
+// the line lengths/radii noted inline (the game has no gizmo, so it defines no
+// such constant).
+namespace {
+
+struct GzVert { float x, y, z; };
+
+// A small unlit line-list batch builder.
+struct GzBatch {
+    std::vector<GzVert> v;
+    void line(const glm::vec3& p, const glm::vec3& q) {
+        v.push_back({p.x, p.y, p.z});
+        v.push_back({q.x, q.y, q.z});
+    }
+    size_t count() const { return v.size(); }
+};
+
+// Lazily built shader + dynamic line VBO. GL state is process-global and this
+// editor uses a single context, so file-local statics are safe here.
+GLuint EnsureGizmoShader() {
+    static GLuint prog = 0;
+    static bool attempted = false;
+    if (attempted) return prog;   // never retry a failed compile per object/frame
+    attempted = true;
+    static const char* vs = R"(
+#version 330 core
+layout(std140) uniform Matrices {
+    mat4 u_unused1;
+    mat4 u_unused2;
+    mat4 u_mvp;
+};
+uniform mat4 u_model;
+layout(location = 0) in vec3 a_pos;
+void main() {
+    gl_Position = u_mvp * u_model * vec4(a_pos, 1.0);
+}
+)";
+    static const char* fs = R"(
+#version 330 core
+uniform vec4 u_color;
+out vec4 fragColor;
+void main() {
+    fragColor = u_color;
+}
+)";
+    GLint ok = 0;
+    GLuint vert = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vert, 1, &vs, nullptr);
+    glCompileShader(vert);
+    glGetShaderiv(vert, GL_COMPILE_STATUS, &ok);
+    if (!ok) { glDeleteShader(vert); return 0; }
+
+    GLuint frag = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(frag, 1, &fs, nullptr);
+    glCompileShader(frag);
+    glGetShaderiv(frag, GL_COMPILE_STATUS, &ok);
+    if (!ok) { glDeleteShader(vert); glDeleteShader(frag); return 0; }
+
+    GLuint p = glCreateProgram();
+    glAttachShader(p, vert);
+    glAttachShader(p, frag);
+    glLinkProgram(p);
+    glDeleteShader(vert);
+    glDeleteShader(frag);
+    glGetProgramiv(p, GL_LINK_STATUS, &ok);
+    if (!ok) { glDeleteProgram(p); return 0; }
+    prog = p;
+    return prog;
+}
+
+// Flush a batch. `geometryEnd` splits it into two coloured passes (span/anchors
+// first, then the derived ride/aim preview) — 0 means "one colour".
+void FlushGizmo(const GzBatch& b, GLuint prog, GLuint ubo_mats, GLuint ubo_binding,
+                size_t geometryEnd, const glm::vec4& c0, const glm::vec4& c1) {
+    static GLuint vao = 0, vbo = 0;
+    if (vao == 0) {
+        glGenVertexArrays(1, &vao);
+        glGenBuffers(1, &vbo);
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(GzVert), (void*)0);
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+
+    glUseProgram(prog);
+    const GLuint blk = glGetUniformBlockIndex(prog, "Matrices");
+    if (blk != GL_INVALID_INDEX) glUniformBlockBinding(prog, blk, ubo_binding);
+    glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding, ubo_mats);
+
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(b.v.size() * sizeof(GzVert)), b.v.data(), GL_STREAM_DRAW);
+
+    const glm::mat4 ident(1.0f);
+    glUniformMatrix4fv(glGetUniformLocation(prog, "u_model"), 1, GL_FALSE, glm::value_ptr(ident));
+
+    const GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
+    if (cull_was_enabled) glDisable(GL_CULL_FACE);
+    // Default line width only: glLineWidth > 1 is not portable (core profile
+    // allows just 1.0), which is why the wire gizmo is a line list rather than a
+    // thick quad strip. See docs/igi-re-parity/PROPS_WIRE_INTERACTABLES.md.
+    if (geometryEnd == 0) {
+        glUniform4fv(glGetUniformLocation(prog, "u_color"), 1, glm::value_ptr(c0));
+        glDrawArrays(GL_LINES, 0, (GLsizei)b.count());
+    } else {
+        glUniform4fv(glGetUniformLocation(prog, "u_color"), 1, glm::value_ptr(c0));
+        glDrawArrays(GL_LINES, 0, (GLsizei)geometryEnd);
+        if (b.count() > geometryEnd) {
+            glUniform4fv(glGetUniformLocation(prog, "u_color"), 1, glm::value_ptr(c1));
+            glDrawArrays(GL_LINES, (GLint)geometryEnd, (GLsizei)(b.count() - geometryEnd));
+        }
+    }
+    glEnable(GL_CULL_FACE);
+    if (!cull_was_enabled) glDisable(GL_CULL_FACE);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glUseProgram(0);
+}
+
+// Draw a planar arc (fan outline) around `origin`, in the plane spanned by the
+// unit vectors `u`/`v`, sweeping `a0`..`a1` radians, at `radius`.
+void Arc(GzBatch& b, const glm::vec3& origin, const glm::vec3& u, const glm::vec3& v,
+         float a0, float a1, float radius, int segments) {
+    glm::vec3 prev = origin + (u * std::cos(a0) + v * std::sin(a0)) * radius;
+    for (int i = 1; i <= segments; ++i) {
+        const float a = a0 + (a1 - a0) * (float)i / (float)segments;
+        const glm::vec3 p = origin + (u * std::cos(a) + v * std::sin(a)) * radius;
+        b.line(prev, p);
+        prev = p;
+    }
+}
+
+// Display-only reference length for the gun gizmos. The game defines no such
+// constant: its fire/detection geometry comes from the weapon model's muzzle
+// point (StationaryGun_Aim 0x474420 via Model_GetPoint, src/statgun/statgun.c:249).
+constexpr float kGizmoRefLen = 4096.0f;   // 1 metre at 4096 units/m (wire.c:320)
+
+}  // namespace
+
+void DrawPropsGizmos(const LevelObject& obj, GLuint ubo_mats, GLuint ubo_binding) {
+    const GLuint prog = EnsureGizmoShader();
+    if (prog == 0) return;
+
+    const glm::vec3 origin((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z);
+    // Authored IGI rotation: Rz * Ry * Rx (IGI-RE src/math/matrix.c:99-110
+    // Matrix_SetEuler, HOOK 0x4B38E0; the QSC Real32x9 block is parsed as three
+    // Euler angles by ParamReal32x9_Parse, HOOK 0x4EFBA0).
+    const glm::mat3 frame = glm::mat3(igi::IgiEulerRotationMatrix(obj.rot));
+    const glm::vec3 ax = frame[0], ay = frame[1], az = frame[2];
+
+    // ── Wire / zipline ───────────────────────────────────────────────────────
+    if (obj.isWire) {
+        glm::dvec3 a, e;
+        if (!obj.WireAnchors(a, e)) return;
+        const TaskSchemaNS::Props::WireSpan span = TaskSchemaNS::Props::ComputeWireSpan(
+            TaskSchemaNS::Props::Vec3(a.x, a.y, a.z), TaskSchemaNS::Props::Vec3(e.x, e.y, e.z));
+        if (!span.valid) return;
+
+        const glm::vec3 A((float)a.x, (float)a.y, (float)a.z);
+        const glm::vec3 B((float)e.x, (float)e.y, (float)e.z);
+        const glm::vec3 dir((float)span.dir.x, (float)span.dir.y, (float)span.dir.z);
+        const float len = (float)span.length;
+
+        // Anchor cross arms: 1/16 of the span, clamped so both a 1 m and a 100 m
+        // wire show a usable marker (presentation choice).
+        const float arm = glm::clamp(len * 0.0625f, 32.0f, 1024.0f);
+        glm::vec3 ref(0.0f, 0.0f, 1.0f);
+        if (std::fabs(glm::dot(ref, dir)) > 0.99f) ref = glm::vec3(1.0f, 0.0f, 0.0f);
+        const glm::vec3 side = glm::normalize(glm::cross(dir, ref));
+        const glm::vec3 norm = glm::normalize(glm::cross(side, dir));
+
+        GzBatch b;
+        for (const glm::vec3& c : {A, B}) {
+            b.line(c - side * arm, c + side * arm);
+            b.line(c - norm * arm, c + norm * arm);
+            b.line(c - dir * arm, c + dir * arm);
+        }
+        b.line(A, B);   // the span Wire_ParamsChanged builds (wire.c:160-191)
+        const size_t geometry = b.count();
+
+        // A sloped Wire is a zipline: Wire_IsSloped (0x43F8A0, wire.c:304-317) is
+        // what HumanPlayer_StartAction case 9 tests to choose ziplineEnter
+        // (IGI-RE src/humanstate/humanstate.c:958-963).
+        if (span.isZipline) {
+            const TaskSchemaNS::Props::Vec3 rd = TaskSchemaNS::Props::ZiplineRideDirection(
+                TaskSchemaNS::Props::Vec3(a.x, a.y, a.z), TaskSchemaNS::Props::Vec3(e.x, e.y, e.z));
+            glm::vec3 d((float)rd.x, (float)rd.y, (float)rd.z);
+            if (glm::length(d) > 0.0f) {
+                d = glm::normalize(d);
+                // The first kWireEnd (0.75 m) of an anchor is not rideable and the
+                // rider hangs kZiplineDown (0.9 m) below the wire
+                // (IGI-RE src/weapon/humanplayer.c:136-138).
+                const glm::vec3 enter = A + d * (float)TaskSchemaNS::Props::kWireEnd;
+                b.line(enter, enter - glm::vec3(0.0f, 0.0f, (float)TaskSchemaNS::Props::kZiplineDown));
+                // Downhill ride arrow (HumanPlayer_UpdateZipline flips d when
+                // d.z > 0, humanplayer.c:562-567).
+                const glm::vec3 mid = (A + B) * 0.5f;
+                const float shaft = std::min(len * 0.25f, 2048.0f);
+                const glm::vec3 tip = mid + d * shaft;
+                glm::vec3 pu(0.0f, 0.0f, 1.0f);
+                if (std::fabs(glm::dot(pu, d)) > 0.99f) pu = glm::vec3(1.0f, 0.0f, 0.0f);
+                const glm::vec3 ps = glm::normalize(glm::cross(d, pu));
+                const float head = shaft * 0.25f;
+                b.line(mid, tip);
+                b.line(tip, tip - d * head + ps * head * 0.5f);
+                b.line(tip, tip - d * head - ps * head * 0.5f);
+            }
+        }
+        FlushGizmo(b, prog, ubo_mats, ubo_binding, geometry,
+                   glm::vec4(0.95f, 0.75f, 0.15f, 1.0f),   // wire + anchors
+                   glm::vec4(0.30f, 0.85f, 1.00f, 1.0f));  // downhill ride preview
+        return;
+    }
+
+    // ── StationaryGun (player-mannable machinegun) ────────────────────────────
+    // basePos args 3-5, baseMatrix args 6-8, maxPitch@11, minPitch@12,
+    // yawRange@13 (IGI-RE src/statgun/statgun.c:142-150).
+    if (obj.type == "StationaryGun") {
+        const TaskSchemaNS::Props::StationaryGunParams gp = obj.StatGunParams();
+        if (!gp.valid) return;
+        constexpr double kDeg = 0.017453292519943295;
+        // Yaw is a rotation about the base's local Z: StationaryGun_Aim does
+        // Matrix_SetRotZ(&o->obj.matrix, o->outYaw) (statgun.c:241), and
+        // StationaryGun_Clamp clamps yaw to +/- yawRange while yawRange < 360 deg
+        // (statgun.c:288-299).
+        const float yaw = (float)(gp.yawRange * kDeg);
+        // Pitch is the X-Euler of the base frame (StationaryGun_Aim composes
+        // Matrix_SetEuler(&e, o->outPitch, 0, PI), statgun.c:255), clamped to
+        // [minPitch, maxPitch] (statgun.c:275-286).
+        const float pMin = (float)(gp.minPitch * kDeg);
+        const float pMax = (float)(gp.maxPitch * kDeg);
+
+        GzBatch b;
+        const float arm = kGizmoRefLen * 0.25f;
+        // Base frame triad.
+        b.line(origin, origin + ax * arm);
+        b.line(origin, origin + ay * arm);
+        b.line(origin, origin + az * arm);
+        const size_t geometry = b.count();
+
+        // Yaw sweep in the base local XY plane (bounded by the yawRange clamp).
+        if (yaw < glm::two_pi<float>()) {
+            Arc(b, origin, ax, ay, -yaw, yaw, kGizmoRefLen, 24);
+            b.line(origin, origin + (ax * std::cos(-yaw) + ay * std::sin(-yaw)) * kGizmoRefLen);
+            b.line(origin, origin + (ax * std::cos(yaw) + ay * std::sin(yaw)) * kGizmoRefLen);
+        } else {
+            Arc(b, origin, ax, ay, 0.0f, glm::two_pi<float>(), kGizmoRefLen, 48);
+        }
+        // Pitch limits: the X-Euler rotates local +Y towards local +Z.
+        b.line(origin, origin + (ay * std::cos(pMin) + az * std::sin(pMin)) * kGizmoRefLen);
+        b.line(origin, origin + (ay * std::cos(pMax) + az * std::sin(pMax)) * kGizmoRefLen);
+
+        FlushGizmo(b, prog, ubo_mats, ubo_binding, geometry,
+                   glm::vec4(0.45f, 0.85f, 0.45f, 1.0f),   // base frame
+                   glm::vec4(0.95f, 0.45f, 0.25f, 1.0f));  // yaw/pitch limits
+        return;
+    }
+
+    // ── AIStationaryGunHolder ────────────────────────────────────────────────
+    // GunHolder_Init maps the authored args straight onto the AI view cone:
+    //   view.maxPitch = angleX * kDegToRad   (arg@10)
+    //   view.maxYaw   = angleY * kDegToRad   (arg@11)
+    //   view.range    = range  * kRangeScale (arg@12, kRangeScale = 4096 units/m)
+    // (IGI-RE src/comprun/gunholder.c:228-230, table at gunholder.c:157-165).
+    if (obj.type == "AIStationaryGunHolder") {
+        const TaskSchemaNS::Props::GunHolderParams gp = obj.GunHolderParams();
+        if (!gp.valid) return;
+        constexpr double kDeg = 0.017453292519943295;
+        const float maxPitch = (float)(gp.angleX * kDeg);
+        const float maxYaw   = (float)(gp.angleY * kDeg);
+        const float range    = (float)(gp.range * 4096.0);   // gunholder.c:102,230
+
+        GzBatch b;
+        const float arm = kGizmoRefLen * 0.25f;
+        b.line(origin, origin + ax * arm);
+        b.line(origin, origin + ay * arm);
+        b.line(origin, origin + az * arm);
+        const size_t geometry = b.count();
+
+        const float yaw = std::min(maxYaw, glm::pi<float>());
+        Arc(b, origin, ax, ay, -yaw, yaw, range, 32);
+        b.line(origin, origin + (ax * std::cos(-yaw) + ay * std::sin(-yaw)) * range);
+        b.line(origin, origin + (ax * std::cos(yaw) + ay * std::sin(yaw)) * range);
+        const float pitch = std::min(maxPitch, glm::half_pi<float>());
+        b.line(origin, origin + (ax * std::cos(pitch) + az * std::sin(pitch)) * range);
+        b.line(origin, origin + (ax * std::cos(pitch) - az * std::sin(pitch)) * range);
+
+        FlushGizmo(b, prog, ubo_mats, ubo_binding, geometry,
+                   glm::vec4(0.45f, 0.85f, 0.45f, 1.0f),   // base frame
+                   glm::vec4(0.85f, 0.45f, 0.95f, 1.0f));  // AI detection cone
+        return;
+    }
+}
+
+namespace igi {
+
+namespace {
+bool g_ladder_gizmos_enabled = true;
+}  // namespace
+
+void SetLadderGizmosEnabled(bool enabled) { g_ladder_gizmos_enabled = enabled; }
+bool LadderGizmosEnabled() { return g_ladder_gizmos_enabled; }
+
+}  // namespace igi
+
+// ─── DrawLadderGizmoGeometry ─────────────────────────────────────────────────
+// Viewport previews for the ladder contract of GitHub issue #68. The game draws
+// nothing of the sort: every line below is geometry that Ladder_Use (HOOK
+// 0x4404C0, IGI-RE src/props/ladder.c:122-175) and HumanPlayer_UpdateLadder
+// (HOOK 0x4113E0, IGI-RE src/weapon/humanplayer.c:273-340) actually act on,
+// resolved by TaskSchemaNS::Props::ComputeLadderPlacement (task_schema.h), which
+// carries the per-constant citations. The caller passes world-space points: the
+// activation reference, foot and head are magic points 1, 2 and 3.
+//
+// A file-local helper rather than a Renderer_Objects member: the renderer header
+// is outside this change's write scope, so the entry point is the existing
+// DrawMagicObjSpheres overlay (see the call site there). Like DrawPropsGizmos it
+// draws only lines, because the game defines no filled volume — the line width
+// stays at GL's default for the same reason.
+static void DrawLadderGizmoGeometry(const glm::mat3& frame, const glm::vec3& origin,
+                                    const glm::vec3& reference, const glm::vec3& foot,
+                                    const glm::vec3& head, const glm::vec3& bottom_mount,
+                                    const glm::vec3& top_mount, int rung_count,
+                                    GLuint ubo_mats, GLuint ubo_binding) {
+    const GLuint prog = EnsureGizmoShader();
+    if (prog == 0) return;
+
+    const glm::vec3 ax = frame[0], ay = frame[1];
+    const float half_width =
+        (float)TaskSchemaNS::Props::kLadderHalfWidthUnits;        // 2867.2
+    const float depth =
+        (float)TaskSchemaNS::Props::kLadderActivateRadiusUnits;   // 8192
+
+    // ── Activation volume ────────────────────────────────────────────────────
+    // { |localX| < 2867.2, |localY| < 8192, origin.z < worldZ < reference.z }
+    // (IGI-RE src/props/ladder.c:133-138,157). The Z gate is a *world* Z test,
+    // not a local one, so the four corners of the local rectangle are extruded
+    // straight up and clipped to that slab.
+    GzBatch volume;
+    {
+        const glm::vec3 corners[4] = {
+            origin + ax * half_width + ay * depth,
+            origin - ax * half_width + ay * depth,
+            origin - ax * half_width - ay * depth,
+            origin + ax * half_width - ay * depth,
+        };
+        const float z0 = origin.z;
+        const float z1 = reference.z;
+        for (int i = 0; i < 4; ++i) {
+            const glm::vec3 lo(corners[i].x, corners[i].y, z0);
+            const glm::vec3 hi(corners[i].x, corners[i].y, z1);
+            const glm::vec3 n = corners[(i + 1) % 4];
+            volume.line(lo, hi);
+            volume.line(lo, glm::vec3(n.x, n.y, z0));
+            volume.line(hi, glm::vec3(n.x, n.y, z1));
+        }
+    }
+
+    // ── Climb line ───────────────────────────────────────────────────────────
+    // The authored foot -> head axis, the mount-to-mount path the player
+    // actually travels (IGI-RE src/weapon/humanplayer.c:304-314), and one tick
+    // per rung at kLadderRungSpacingUnits (src/props/ladder.c:52,86-91).
+    GzBatch climb;
+    climb.line(foot, head);
+    climb.line(bottom_mount, top_mount);
+    {
+        const glm::vec3 axis = head - foot;
+        const int rungs = rung_count;
+        const float tick = half_width * 0.25f;
+        for (int i = 1; i < rungs; ++i) {
+            const glm::vec3 p = foot + axis * ((float)i / (float)rungs);
+            climb.line(p - ax * tick, p + ax * tick);
+        }
+    }
+
+    // ── Markers ──────────────────────────────────────────────────────────────
+    const float arm = kGizmoRefLen * 0.25f;
+    auto cross = [&](GzBatch& b, const glm::vec3& p) {
+        b.line(p - glm::vec3(arm, 0.0f, 0.0f), p + glm::vec3(arm, 0.0f, 0.0f));
+        b.line(p - glm::vec3(0.0f, arm, 0.0f), p + glm::vec3(0.0f, arm, 0.0f));
+        b.line(p - glm::vec3(0.0f, 0.0f, arm), p + glm::vec3(0.0f, 0.0f, arm));
+    };
+    GzBatch mounts;
+    cross(mounts, bottom_mount);
+    cross(mounts, top_mount);
+    GzBatch points;
+    cross(points, foot);
+    cross(points, head);
+    cross(points, reference);
+
+    FlushGizmo(volume, prog, ubo_mats, ubo_binding, 0,
+               glm::vec4(0.20f, 0.75f, 1.00f, 1.0f), glm::vec4(0.0f));
+    FlushGizmo(climb, prog, ubo_mats, ubo_binding, 0,
+               glm::vec4(0.35f, 1.00f, 0.45f, 1.0f), glm::vec4(0.0f));
+    FlushGizmo(mounts, prog, ubo_mats, ubo_binding, 0,
+               glm::vec4(1.00f, 0.35f, 0.35f, 1.0f), glm::vec4(0.0f));
+    FlushGizmo(points, prog, ubo_mats, ubo_binding, 0,
+               glm::vec4(1.00f, 0.85f, 0.20f, 1.0f), glm::vec4(0.0f));
 }
 
 // ─── DrawAttachmentsForSpline ─────────────────────────────────────────────────

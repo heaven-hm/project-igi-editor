@@ -20,6 +20,7 @@
 #include "utils.h"
 #include "../level/level_common.h"
 #include "gl_helper.h"
+#include "atta_children.h"
 #include "mef_native.h"
 #include "model_texture_resolution.h"
 #include "../level/qvm_parser.h"
@@ -56,10 +57,13 @@ inline bool IsWeaponModel(const std::string& modelId) {
     return false;
 }
 
-// Models that use Z -> Y -> X rotation order instead of default Z -> X -> Y.
-// 506_ slide-up doors carry multi-axis Euler angles.
-// 615_01_1 (missile on rack/carriage) uses multi-axis pitch/roll angles.
-inline bool IsZyxEulerModel(const std::string& modelId) {
-    if (modelId.empty()) return false;
-    return modelId.rfind("506_", 0) == 0 || modelId == "615_01_1";
-}
+namespace igi {
+
+// Renderer_Objects::DrawLadderGizmos (renderer_objects_visual.cpp) is opt-out.
+// The editor has no render menu — it is GLUT-based and its overlays are keyboard
+// toggles in app_input_keyboard.cpp — so this is the process-wide switch a UI
+// hook can flip. Default: on. See docs/igi-re-parity/LADDER_PLACEMENT.md.
+void SetLadderGizmosEnabled(bool enabled);
+bool LadderGizmosEnabled();
+
+}  // namespace igi

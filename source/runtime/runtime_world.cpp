@@ -137,6 +137,31 @@ bool WeaponProducesMuzzleFlash(const WeaponDefinition& weapon) {
     }
 }
 
+// The player's view frame. IGI-RE hands the use query the view matrix's columns
+// (src/humanbase/human.c:1284 HumanView_GetMatrix) and reads column 1 as the look
+// direction (src/game/game.c:909,912). The look direction here is the one the
+// runtime already uses for the aim and interaction rays
+// (source/runtime/runtime_world.cpp:2420 and :2496-2499), `right` is the movement
+// basis (source/player_controller.cpp:130-131) and `up` is `right x forward`, the
+// frame order used by the camera builders at :1842-1848.
+ViewFrame BuildPlayerViewFrame(const PlayerController& player) {
+    const float yaw_radians = glm::radians(player.GetYaw());
+    const float pitch_radians = glm::radians(player.GetPitch());
+    const float sine_yaw = std::sin(yaw_radians);
+    const float cosine_yaw = std::cos(yaw_radians);
+    const float sine_pitch = std::sin(pitch_radians);
+    const float cosine_pitch = std::cos(pitch_radians);
+
+    ViewFrame view;
+    view.right = glm::vec3(cosine_yaw, sine_yaw, 0.0f);
+    view.forward = glm::vec3(
+        -sine_yaw * cosine_pitch,
+        cosine_yaw * cosine_pitch,
+        sine_pitch);
+    view.up = glm::cross(view.right, view.forward);
+    return view;
+}
+
 } // namespace
 
 RuntimeWorld::RuntimeWorld()
@@ -1556,45 +1581,39 @@ void RuntimeWorld::SetLadderPlacements(std::vector<LadderPlacement> ladder_place
 }
 
 bool RuntimeWorld::TryMountNearestLadder() {
+    // The name is kept for the existing declaration (source/runtime/runtime_world.h:352),
+    // but the rule is no longer "nearest origin". IGI-RE src/humanbase/human.c:1291-1298
+    // Human_UpdateUse walks the whole task list and lets every ladder's Ladder_Use
+    // (src/props/ladder.c:122-174) update one shared query; the winner is whatever
+    // that query holds afterwards (see igi::LadderUseQuery). The editor's placement
+    // vector plays the task list's role, so the scan order is the editor's own.
     if (!player_.IsAlive() || ladder_placements_.empty()) {
         return false;
     }
 
-    const glm::vec3 activation_position = player_.GetEyePosition();
-    const float player_yaw_degrees = player_.GetYaw();
-    int nearest_ladder_index = -1;
-    float nearest_distance_squared = std::numeric_limits<float>::max();
-    bool nearest_ladder_is_at_top = false;
-
+    const glm::vec3 player_eye = player_.GetEyePosition();
+    const ViewFrame view = BuildPlayerViewFrame(player_);
+    // The default-constructed bounds are the player's kQuarterPi pair
+    // (IGI-RE src/humanbase/human.c:1286).
+    LadderUseQuery query;
     for (size_t ladder_index = 0;
          ladder_index < ladder_placements_.size();
          ++ladder_index) {
-        bool at_top = false;
-        const LadderPlacement& ladder = ladder_placements_[ladder_index];
-        if (!ladder.CanActivate(activation_position, player_yaw_degrees, at_top)) {
-            continue;
-        }
-
-        const glm::vec3 distance = ladder.GetOrigin() - activation_position;
-        const float distance_squared = glm::dot(distance, distance);
-        if (nearest_ladder_index >= 0 &&
-            distance_squared >= nearest_distance_squared) {
-            continue;
-        }
-
-        nearest_ladder_index = static_cast<int>(ladder_index);
-        nearest_distance_squared = distance_squared;
-        nearest_ladder_is_at_top = at_top;
+        query.Consider(
+            ladder_placements_[ladder_index],
+            player_eye,
+            view,
+            static_cast<int>(ladder_index));
     }
 
-    if (nearest_ladder_index < 0) {
+    if (!query.HasBest()) {
         return false;
     }
 
-    active_ladder_index_ = nearest_ladder_index;
+    active_ladder_index_ = query.GetBestIndex();
     ladder_traversal_.Mount(
         ladder_placements_[static_cast<size_t>(active_ladder_index_)],
-        nearest_ladder_is_at_top);
+        query.IsBestAtTop());
     ladder_slide_velocity_ = glm::vec3(0.0f);
 
     player_.SetPosition(ladder_traversal_.GetPosition());

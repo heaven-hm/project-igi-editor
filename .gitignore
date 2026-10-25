@@ -1,83 +1,85 @@
-# Prerequisites
-*.d
+# =============================================================================
+# Project IGI Editor — ignore rules
+#
+# Design rules (see issue #44):
+#   * Build trees are matched by ANCHORED PATH, never by blanket extension, so a
+#     new source or fixture file is never silently dropped from the repo.
+#   * Blanket extension ignores for TEXT SOURCE categories (*.txt, *.py, *.ps1,
+#     *.qsc, *.conf, *.zip, *.rc) were removed. They had silently excluded the
+#     entire Python verification harness (`tools/host-tests/host_test_runner.py`,
+#     `tools/igi-re-parity/tu-check.py`) from git, which would have broken the
+#     build gate on a fresh clone.
+#   * `bin/` is build output only; the old `bin/` … `!bin/` pair contradicted
+#     itself and let generated fixtures show up as untracked files.
+# =============================================================================
 
-# Compiled Object files
-*.slo
-*.lo
+# --- Build trees (anchored at the repository root) ---------------------------
+/bin/
+/build/
+/build-*/
+/scratch/
+/releases/
+/.cache/
+
+# --- Compiled artefacts: never source, wherever they appear -------------------
+*.d
 *.o
 *.obj
-
-# Precompiled Headers
+*.lo
+*.slo
 *.gch
 *.pch
-
-# Compiled Dynamic libraries
+*.a
+*.la
+*.lai
+*.lib
 *.so
 *.dylib
 *.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
 *.exe
-*.out
-*.app
 *.i86
 *.x86_64
-*.conf
-*.ps1
-!tools/e2e/Test-SmartCaptureArtifact.ps1
-!tools/e2e/Test-Level12CableTransition.ps1
-!tools/e2e/Test-ForeignModelTextures.ps1
+*.ilk
+*.pdb
+*.exp
+*.tlog
+*.log
+*.app
 *.zip
-*.rc
-!assets/igi-editor.rc
-bin/*/shaders
-scratch/*
-# CMake
+
+# --- CMake -------------------------------------------------------------------
 CMakeCache.txt
 CMakeFiles/
 CMakeScripts/
-Makefile
 cmake_install.cmake
 install_manifest.txt
 compile_commands.json
 CTestTestfile.cmake
+Testing/
 _deps/
 cmake_test_discovery_*.json
+Makefile
 
-# Visual Studio
+# --- Visual Studio -----------------------------------------------------------
 .vs/
 *.sln
 *.vcxproj
 *.vcxproj.filters
 *.vcxproj.user
 *.suo
-*.db
-*.opendb
-*.ncb
 *.user
 *.userosscache
 *.sln.docstates
+*.opendb
+*.ncb
+*.db
 Debug/
 Release/
 x64/
 x86/
-build/
-build-mcp/
 vcbuild/
-bin/Debug/
-bin/Release/
 
-# VS Code
+# --- VS Code -----------------------------------------------------------------
 .vscode/
 !.vscode/settings.json
 !.vscode/tasks.json
@@ -85,166 +87,30 @@ bin/Release/
 !.vscode/extensions.json
 *.code-workspace
 
-# OS Files
+# --- OS files ----------------------------------------------------------------
 Thumbs.db
 Desktop.ini
 .DS_Store
-*.dll
-bin/
-res/
 
-# Others
-.cache/
-.agent
-.gemini/
-.claude/
-.antigravity
-.antigravitycli
-claude.md
-cursor.md
-agents.md
-*.log
-*.tlog
-.env
-.env.*
-!.env.example
-.agent/
-vcbuild/
-bin/
-x64/
-x86/
-Debug/
-Release/
-*.txt
-*.py
-*.qsc
-models/
-.commandcode
-releases/
-
-# Dont Ignore
-!assets
-!assets/*.png
-!assets/screenshots
-!bin/
-
-# Caches
+# --- Caches ------------------------------------------------------------------
 __pycache__/
 *.pyc
 node_modules/
 .npm/
 .yarn/
 .pnpm-store/
-*.zip
-*.rc
-!assets/igi-editor.rc
-bin/*/shaders
-scratch/*
-# CMake
-CMakeCache.txt
-CMakeFiles/
-CMakeScripts/
-Makefile
-cmake_install.cmake
-install_manifest.txt
-compile_commands.json
-CTestTestfile.cmake
-_deps/
-cmake_test_discovery_*.json
 
-# Visual Studio
-.vs/
-*.sln
-*.vcxproj
-*.vcxproj.filters
-*.vcxproj.user
-*.suo
-*.db
-*.opendb
-*.ncb
-*.user
-*.userosscache
-*.sln.docstates
-Debug/
-Release/
-x64/
-x86/
-build/
-build-mcp/
-vcbuild/
-bin/Debug/
-bin/Release/
-
-# VS Code
-.vscode/
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
-*.code-workspace
-
-# OS Files
-Thumbs.db
-Desktop.ini
-.DS_Store
-*.dll
-bin/
-res/
-
-# Others
-.cache/
+# --- Local/agent scratch (never part of the product) -------------------------
 .agent
+.agent/
 .gemini/
 .claude/
 .antigravity
 .antigravitycli
+.commandcode
 claude.md
 cursor.md
 agents.md
-*.log
-*.tlog
 .env
 .env.*
 !.env.example
-.agent/
-vcbuild/
-bin/
-x64/
-x86/
-Debug/
-Release/
-*.txt
-*.py
-*.qsc
-models/
-.commandcode
-releases/
-
-# Dont Ignore
-!assets
-!assets/*.png
-!assets/screenshots
-!bin/
-
-# Caches
-__pycache__/
-*.pyc
-node_modules/
-.npm/
-.yarn/
-.pnpm-store/
-*.qsc
-!assets/editor/qed/qedconfig.qsc
-*.qas
-*qvm.worktrees
-package.json
-package-lock.json
-!assets/editor/tools/igi1conv/**
-build2/
-build-nmake*/
-artifacts/
-.opencode/
-/*.png
-/*.mp4
-/*.json
-/config.ini

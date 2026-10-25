@@ -9,21 +9,73 @@ namespace igi {
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
-constexpr float kDegreesToRadians = kPi / 180.0f;
 constexpr float kRadiansToDegrees = 180.0f / kPi;
-constexpr float kMinimumDistance = 0.0001f;
+
+// IGI-RE src/file/vec.c:183-187 IsZero: true for 0 and for NaN, exactly like the
+// original's equality tests.
+inline bool IsZero(float value) {
+    return !(value < 0.0f) && !(value > 0.0f);
+}
+
+// IGI-RE src/file/vec.c:189-208 Vec3_Angle (HOOK 0x4B2B30): the angle between two
+// vectors in radians, with the clamped branches returning exactly 0 or pi.
+float AngleBetweenRadians(const glm::vec3& a, const glm::vec3& b) {
+    if (IsZero(a.x) && IsZero(a.y) && IsZero(a.z)) return 0.0f;
+    if (IsZero(b.x) && IsZero(b.y) && IsZero(b.z)) return 0.0f;
+    const float cosine = glm::dot(a, b) / (glm::length(a) * glm::length(b));
+    if (cosine >= 1.0f) return 0.0f;
+    if (!(cosine > -1.0f)) return 3.14159265f;
+    return std::acos(cosine);
+}
+
+// IGI-RE src/game/misc.c:42-56 Vec3d_PitchAngle (HOOK 0x4148F0): the angle of v
+// projected into the y/z plane, measured from +y, negative below.
+float PitchAngleRadians(const glm::vec3& v) {
+    glm::vec3 projected(0.0f, v.y, v.z);
+    if (IsZero(projected.x) && IsZero(projected.y) && IsZero(projected.z)) {
+        return 0.0f;
+    }
+    projected /= glm::length(projected);
+    float angle = std::acos(std::clamp(projected.y, -1.0f, 1.0f));
+    if (!(projected.z >= 0.0f)) angle = -angle;
+    return angle;
+}
+
+// IGI-RE src/game/misc.c:58-72 Vec3d_YawAngle (HOOK 0x414950): the angle of v
+// projected into the x/y plane, measured from +y, negative towards +x.
+float YawAngleRadians(const glm::vec3& v) {
+    glm::vec3 projected(v.x, v.y, 0.0f);
+    if (IsZero(projected.x) && IsZero(projected.y) && IsZero(projected.z)) {
+        return 0.0f;
+    }
+    projected /= glm::length(projected);
+    float angle = std::acos(std::clamp(projected.y, -1.0f, 1.0f));
+    if (projected.x > 0.0f) angle = -angle;
+    return angle;
+}
 
 } // namespace
 
 LadderClimbLine::LadderClimbLine(
     const glm::vec3& bottom,
-    const glm::vec3& top)
+    const glm::vec3& top,
+    const glm::vec3& climb_axis)
     : bottom_(bottom),
       top_(top) {
-    const float height = std::abs(top.z - bottom.z);
+    // IGI-RE src/props/ladder.c:86-91 Ladder_Create (HOOK 0x440280):
+    //   Model_GetLocalPoint(&p2, l, 2); Model_GetLocalPoint(&p3, l, 3);
+    //   h = |p2.z - p3.z|; l->rungs = (int)round_ll(h * kRungScale);
+    // Two things matter here: p2/p3 are MODEL-LOCAL points, so the height is the
+    // difference along the model's own Z axis (a ladder lying on its side still
+    // counts rungs), and round_ll ROUNDS rather than truncates. round_ll is an x87
+    // `fistpll` (src/props/props.h:50-57), i.e. the current rounding mode, which is
+    // round-to-nearest-even by default -- std::nearbyint reproduces that. The caller
+    // passes world points plus the ladder's local +Z column, so the projection
+    // recovers the local difference.
+    const float height = std::abs(glm::dot(top - bottom, climb_axis));
     step_count_ = std::max(
         1,
-        static_cast<int>(height / StepLengthUnits));
+        static_cast<int>(std::nearbyint(height / StepLengthUnits)));
     top_step_ = std::max(0, step_count_ - TopStepMargin);
 }
 
@@ -43,7 +95,7 @@ LadderPlacement::LadderPlacement(
     : origin_(origin),
       activation_top_(activation_top),
       orientation_(orientation),
-      climb_line_(bottom, top) {
+      climb_line_(bottom, top, orientation[2]) {
     const glm::vec3 standoff_axis = orientation_[1];
     const glm::vec3 vertical_axis = orientation_[2];
     bottom_mount_ = bottom +
@@ -61,51 +113,80 @@ LadderPlacement::LadderPlacement(
     player_yaw_degrees_ = -facing_radians * kRadiansToDegrees;
 }
 
-bool LadderPlacement::CanActivate(
-    const glm::vec3& player_position,
-    float player_yaw_degrees,
-    bool& at_top) const {
-    at_top = false;
+void LadderUseQuery::Reset() {
+    best_pitch_ = InitialBestAngleRadians;
+    best_yaw_ = InitialBestAngleRadians;
+    best_index_ = -1;
+    best_at_top_ = false;
+}
 
-    const glm::vec3 from_origin = player_position - origin_;
-    const glm::vec3 across_axis = orientation_[0];
-    const glm::vec3 normal_axis = orientation_[1];
-    const float across = glm::dot(from_origin, across_axis);
-    const float normal_distance = glm::dot(from_origin, normal_axis);
-
-    const float yaw_radians = player_yaw_degrees * kDegreesToRadians;
-    const glm::vec2 forward_direction(std::sin(yaw_radians), std::cos(yaw_radians));
-    const glm::vec2 target_direction = normal_distance > 0.0f
-        ? glm::vec2(-normal_axis.x, -normal_axis.y)
-        : glm::vec2(normal_axis.x, normal_axis.y);
-    const float target_length = glm::length(target_direction);
-    const float facing_dot = target_length > kMinimumDistance
-        ? glm::dot(forward_direction, target_direction) / target_length
-        : -1.0f;
-
-    const bool bottom_candidate =
-        std::abs(normal_distance) < ActivateRadiusUnits &&
-        across > -ActivateHalfWidthUnits &&
-        across < ActivateHalfWidthUnits &&
-        facing_dot > FacingCosine &&
-        player_position.z > origin_.z &&
-        player_position.z < activation_top_.z;
-    const glm::vec3 from_top = player_position - activation_top_;
-    const glm::vec3 to_top = activation_top_ - player_position;
-    const float top_distance = glm::length(to_top);
-    const float top_forward = glm::dot(
-        forward_direction,
-        glm::vec2(to_top.x, to_top.y));
-    const bool top_candidate =
-        glm::dot(from_top, normal_axis) < 0.0f &&
-        top_distance < ActivateRadiusUnits &&
-        top_forward > 0.0f;
-    if (top_candidate) {
-        at_top = true;
-        return true;
+void LadderUseQuery::Consider(const LadderPlacement& ladder,
+                              const glm::vec3& player_eye,
+                              const ViewFrame& view,
+                              int index) {
+    // IGI-RE src/props/ladder.c:130-138. The player's coordinates in the ladder's
+    // frame are built from the row-major matrix's columns, i.e. the local axes.
+    const glm::vec3 from_origin = player_eye - ladder.GetOrigin();
+    const float across = glm::dot(from_origin, ladder.GetAcrossAxis());
+    const float normal_distance = glm::dot(from_origin, ladder.GetNormalAxis());
+    if (std::abs(normal_distance) < LadderPlacement::ActivateRadiusUnits &&
+        across > -LadderPlacement::ActivateHalfWidthUnits &&
+        across < LadderPlacement::ActivateHalfWidthUnits) {
+        // ladder.c:143-157: the view's own column 1 against the ladder's column 1,
+        // flipped to the player's side, then the strict angle gate and the world-Z
+        // span taken from magic point 1.
+        glm::vec3 target = ladder.GetNormalAxis();
+        if (normal_distance > 0.0f) {
+            target = -target;
+        }
+        const float angle = AngleBetweenRadians(view.forward, target);
+        if (angle < LadderPlacement::FacingAngleRadians &&
+            ladder.GetActivationTop().z > player_eye.z &&
+            player_eye.z > ladder.GetOrigin().z) {
+            // ladder.c:158-161: the bottom offer overwrites the winner and zeroes
+            // the angle bounds, which locks out every later top offer.
+            best_index_ = index;
+            best_at_top_ = false;
+            best_pitch_ = 0.0f;
+            best_yaw_ = 0.0f;
+        }
     }
 
-    return bottom_candidate;
+    // IGI-RE src/props/ladder.c:164-173: the top offer runs unconditionally, needs
+    // the eye on the reference point's -Y side, and then goes through
+    // UseQuery_Consider.
+    if (glm::dot(player_eye - ladder.GetActivationTop(),
+                 ladder.GetNormalAxis()) < 0.0f) {
+        ConsiderReferencePoint(ladder.GetActivationTop(), player_eye, view, index);
+    }
+}
+
+void LadderUseQuery::ConsiderReferencePoint(const glm::vec3& reference,
+                                            const glm::vec3& player_eye,
+                                            const ViewFrame& view,
+                                            int index) {
+    // IGI-RE src/game/game.c:903-927 UseQuery_Consider (HOOK 0x416AD0).
+    const glm::vec3 delta = reference - player_eye;
+    if (glm::length(delta) >= LadderPlacement::ActivateRadiusUnits) {
+        return;
+    }
+    // game.c:908-911: the vector in the view matrix's own frame.
+    const glm::vec3 local(glm::dot(delta, view.right),
+                          glm::dot(delta, view.forward),
+                          glm::dot(delta, view.up));
+    if (!(local.y > 0.0f)) {
+        return;
+    }
+    // game.c:914-921: the absolute pitch and yaw deviation from straight ahead.
+    const float pitch = std::abs(PitchAngleRadians(local));
+    const float yaw = std::abs(YawAngleRadians(local));
+    if (pitch >= best_pitch_ || yaw >= best_yaw_) {
+        return;
+    }
+    best_pitch_ = pitch;
+    best_yaw_ = yaw;
+    best_index_ = index;
+    best_at_top_ = true;
 }
 
 void LadderTraversal::Mount(const LadderPlacement& ladder, bool at_top) {

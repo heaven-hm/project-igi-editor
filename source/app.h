@@ -399,8 +399,9 @@ private:
   bool task_picker_insert_first_ = false;
   bool task_new_at_camera_ = false;
 
-  // Camera strafe
-  bool camera_strafe_free_ = false;
+  // (task-11) camera_strafe_free_ was removed: CameraStrafeFree toggled it but
+  // nothing read it, so the status bar announced a state change that never
+  // happened. Strafing itself is unconditional (source/app_view.cpp:225-236).
 
   // File dialog (SaveSubTask, LoadSubTask)
   enum class FileDialogMode {
@@ -470,17 +471,38 @@ private:
 
   bool skip_input_on_motion_once_;
 
-  // Game launch state
+  // Game launch state.
+  //
+  // `HANDLE`/`DWORD`/`HWND` are Win32 types, and this header is included by
+  // host-portable translation units: the host gtest lane compiles without a PCH
+  // and therefore without `windows.h`, which is why 11 of the 13 engine sources
+  // the lane could not compile all failed on this one block (see
+  // `docs/igi-re-parity/BUILD_GATE.md` §5.3). On Windows the members keep their
+  // real Win32 types; elsewhere they are declared as opaque pointers/longs so the
+  // header itself still compiles. This is a type-level portability shim only:
+  // nothing in the host lane launches or monitors a process, and any translation
+  // unit that actually calls the Win32 process API fails on its own call — which
+  // is the honest portability boundary, not a faked gate.
+#if defined(_WIN32)
+  using igi_handle_t = HANDLE;
+  using igi_hwnd_t = HWND;
+  using igi_pid_t = DWORD;
+#else
+  using igi_handle_t = void*;
+  using igi_hwnd_t = void*;
+  using igi_pid_t = unsigned long;
+#endif
+
   struct game_process_s {
-    HANDLE hProcess = NULL;
-    HANDLE hThread = NULL;
-    HANDLE hMonitorThread = NULL;
-    DWORD pid = 0;
+    igi_handle_t hProcess = nullptr;
+    igi_handle_t hThread = nullptr;
+    igi_handle_t hMonitorThread = nullptr;
+    igi_pid_t pid = 0;
     bool running = false;
   } game_process_;
   std::atomic<bool> game_exited_{
       false}; // set by monitor thread when game process exits
-  HWND editor_hwnd_ = NULL;
+  igi_hwnd_t editor_hwnd_ = nullptr;
   bool gameplay_window_close_requested_ = false;
   // True only while an OS repaint is rendering the editor window during an
   // active gameplay session. This keeps the editor surface visible without
@@ -549,6 +571,10 @@ private:
   void UpdateGameplayMapComputerCamera(float delta_seconds);
   void CaptureGameplayRenderSnapshot();
   void DispatchEventBindings();
+  // Sets the object-orbit radius and re-derives the eye position from
+  // orbit_target_pos_ (task-11). Editor-only; used by CameraAdjustRadius and
+  // CameraResetRadius in app_input.cpp.
+  void ApplyOrbitRadius(float radius);
 
   void ProcessInput(float delta_seconds);
   bool CheckCollision(const glm::vec3 &next_pos);

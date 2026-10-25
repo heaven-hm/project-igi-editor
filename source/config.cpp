@@ -350,8 +350,9 @@ void Config::Load(bool configQvmReady) {
                 else if (eventName == "CameraEnable") data_.keyEnableCamera = parsed;
                 else if (eventName == "CameraMoveForward") data_.keyMoveCameraForward = parsed;
                 else if (eventName == "CameraMoveBackward") data_.keyMoveCameraBackward = parsed;
-                else if (eventName == "CameraAdjustRadius") data_.keyAdjustCameraRadius = parsed;
-                else if (eventName == "CameraLookDown") data_.keyLookDown = parsed;
+                // CameraAdjustRadius and CameraLookDown have no named field: their
+                // handlers read the event map directly (source/app_input.cpp), so
+                // mirroring them here only created dead config surface (task-11).
                 else if (eventName == "CameraSnapToObject") data_.keySnapToObject = parsed;
                 else if (eventName == "CameraSnapToGround") data_.keySnapToGround = parsed;
                 else if (eventName == "ToggleDisplay") data_.keyClipMode = parsed;

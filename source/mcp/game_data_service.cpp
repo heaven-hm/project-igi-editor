@@ -454,9 +454,11 @@ JsonValue SnapshotRecordJson(const SnapshotRecord& record) {
                 position = field.argOffset;
             else if (field.name == "Orientation" && field.typeName == "Real32x9" && field.argCount == 3)
                 rotation = field.argOffset;
-            else if (field.name == "Gamma" && field.typeName == "Real32" && field.argCount == 1)
+            else if (field.typeName == "Real32" && field.argCount == 1 &&
+                     (field.name == "Gamma" || field.name == "Holder Gamma"))
                 gamma = field.argOffset;
-            else if (field.name == "Model" && field.argCount == 1 &&
+            else if (field.argCount == 1 &&
+                     (field.name == "Model" || field.name == "Holder Model") &&
                      (field.typeName == "String16" || field.typeName == "String32" ||
                       field.typeName == "String256" || field.typeName == "VarString"))
                 model = field.argOffset;

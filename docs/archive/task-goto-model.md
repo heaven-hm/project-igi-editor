@@ -1,3 +1,8 @@
+> **Archived working note.** This is the original design note for the developer-mode
+> debug command system (`source/debug_command_manager.*`), which shipped. It is kept
+> here for the design rationale, not as current documentation; the behaviour is
+> documented by the code and `docs/` guides. Moved out of the repository root in #44.
+
 # Task: Goto Model & Screenshot Feature
 
 ## Objective

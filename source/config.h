@@ -49,8 +49,11 @@ struct ConfigData {
     KeyBinding keyEnableCamera;
     KeyBinding keyMoveCameraForward;
     KeyBinding keyMoveCameraBackward;
-    KeyBinding keyAdjustCameraRadius;
-    KeyBinding keyLookDown;
+    // NOTE (task-11): CameraAdjustRadius and CameraLookDown are consumed through
+    // the event map (Check() in source/app_input.cpp), so the keyAdjustCameraRadius
+    // and keyLookDown fields that used to mirror them were dead config surface
+    // (0 readers) and have been deleted. The remaining named fields are read by the
+    // camera/movement code in app_view.cpp and app_input_mouse.cpp.
     KeyBinding keySnapToObject;
     KeyBinding keySnapToGround;
     KeyBinding keyClipMode;

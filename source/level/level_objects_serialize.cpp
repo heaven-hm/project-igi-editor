@@ -154,13 +154,22 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(11, obj.rot.z);
             if (obj.argTokens.size() > 12) obj.modelId = unquote(obj.argTokens[12]);
         } else if (obj.type == "SCamera") {
+            // IGI-RE src/scamera/scamera.c:116-131 / retail objects.qsc declaration:
+            // 6 = "Holder Gamma" (yaw), 7 = "Holder Model" (the model THIS task draws:
+            // `FIELD(model)` -> RigidDynCubeObj_SetModel, scamera.c:240), 8 = "Camera
+            // Alpha" (pitch), 9 = "Camera Gamma" (an extra yaw, NOT roll), 10 = "Camera
+            // Model" (the SCameraLens child's model, scamera.c:184/scameralens.c:204),
+            // 11 = "Camera Destroyed Model". Arg 12 is an Int16, not a model.
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);
             readDouble(5, obj.pos.z);
             readDouble(6, obj.rot.z);
             readDouble(8, obj.rot.x);
-            readDouble(9, obj.rot.y);
-            if (obj.argTokens.size() > 10) obj.modelId = unquote(obj.argTokens[10]);
+            readDouble(9, obj.yawOffset);
+            obj.rot.z += obj.yawOffset;   // display yaw = holder gamma + camera gamma
+            if (obj.argTokens.size() > 7) obj.modelId = unquote(obj.argTokens[7]);
+            if (obj.argTokens.size() > 10) obj.lensModelId = unquote(obj.argTokens[10]);
+            if (obj.argTokens.size() > 11) obj.secondaryModelId = unquote(obj.argTokens[11]);
         } else if (obj.type == "Fence") {
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);
@@ -186,6 +195,25 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(8, obj.pos.z);
             if (obj.argTokens.size() > 9) { obj.modelId = unquote(obj.argTokens[9]); if (obj.modelId == "waypoint") obj.modelId = ""; }
             if (obj.argTokens.size() > 10) obj.segmentModelId = unquote(obj.argTokens[10]);
+        } else if (obj.type == "SplineObj") {
+            // SplineObj container. The position is at args 9-11, NOT at 3-5:
+            // IGI-RE SplineObj_Open (HOOK 0x502250, src/editobj/spline.c:204-214)
+            // declares Linear Segments @3, Collision @4, Snap Length @5,
+            // Automatic Orientation @6, Number of Matrices/Segment @7,
+            // Collision LOD @8, Position @9-11, Gamma Orientation @12,
+            // Properties @13-15, Colour 1/2 @16-18 — the same layout the load
+            // path uses (source/level/level_objects.cpp:235-243). Falling through
+            // to the generic branch below would read the three flags as the
+            // container's coordinates and leave them at the map origin.
+            double flag = 0.0;
+            double segCount = 0.0;
+            readDouble(3, flag);
+            obj.linearSegments = (flag != 0.0);
+            readDouble(7, segCount);
+            obj.splineSegmentCount = static_cast<int>(segCount);
+            readDouble(9, obj.pos.x);
+            readDouble(10, obj.pos.y);
+            readDouble(11, obj.pos.z);
         } else if (obj.type == "Switch") {
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);
@@ -293,13 +321,20 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
             setToken(11, FormatQscDouble(obj.rot.z));
             if (!obj.modelId.empty() || obj.argTokens.size() > 12) setStringToken(12, obj.modelId);
         } else if (obj.type == "SCamera") {
+            // Write the authored split back to its own indices so a load/save round-trip
+            // is lossless: arg 6 keeps the holder yaw, arg 9 keeps the camera gamma
+            // (rot.z carries the sum for display), arg 7 the task's own model, arg 10
+            // the lens child's model and arg 11 the destroyed model. Args 12+ (Int16
+            // yaw limits, turn speed, viewcone) keep their original tokens.
             setToken(3, FormatQscDouble(obj.pos.x));
             setToken(4, FormatQscDouble(obj.pos.y));
             setToken(5, FormatQscDouble(saveZ));
-            setToken(6, FormatQscDouble(obj.rot.z));
+            setToken(6, FormatQscDouble(obj.rot.z - obj.yawOffset));
             setToken(8, FormatQscDouble(obj.rot.x));
-            setToken(9, FormatQscDouble(obj.rot.y));
-            if (!obj.modelId.empty() || obj.argTokens.size() > 10) setStringToken(10, obj.modelId);
+            setToken(9, FormatQscDouble(obj.yawOffset));
+            if (!obj.modelId.empty() || obj.argTokens.size() > 7) setStringToken(7, obj.modelId);
+            if (!obj.lensModelId.empty() || obj.argTokens.size() > 10) setStringToken(10, obj.lensModelId);
+            if (!obj.secondaryModelId.empty() || obj.argTokens.size() > 11) setStringToken(11, obj.secondaryModelId);
         } else if (obj.type == "Fence") {
             setToken(3, FormatQscDouble(obj.pos.x));
             setToken(4, FormatQscDouble(obj.pos.y));
@@ -329,6 +364,17 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
             setToken(8, FormatQscDouble(saveZ));
             if (!obj.modelId.empty() || obj.argTokens.size() > 9) setStringToken(9, obj.modelId.empty() ? "waypoint" : obj.modelId);
             if (!obj.segmentModelId.empty() || obj.argTokens.size() > 10) setStringToken(10, obj.segmentModelId);
+        } else if (obj.type == "SplineObj") {
+            // SplineObj container: the position belongs at args 9-11, not 3-5
+            // (IGI-RE SplineObj_Open, HOOK 0x502250, src/editobj/spline.c:204-214;
+            // the load path agrees, source/level/level_objects.cpp:235-243). Args
+            // 3/4/5 are Linear Segments / Collision / Snap Length and are written
+            // back only when their owning properties change, so they are left as
+            // authored here. Without this branch the container's position is never
+            // persisted and every move is dropped on save.
+            setToken(9, FormatQscDouble(obj.pos.x));
+            setToken(10, FormatQscDouble(obj.pos.y));
+            setToken(11, FormatQscDouble(saveZ));
         } else if (obj.type == "Switch") {
             setToken(3, FormatQscDouble(obj.pos.x));
             setToken(4, FormatQscDouble(obj.pos.y));

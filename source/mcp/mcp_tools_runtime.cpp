@@ -374,7 +374,12 @@ bool CapturePng(HWND hwnd, const std::filesystem::path& path) {
     bool saved = false;
     if (encoder >= 0) {
         Gdiplus::Bitmap image(bitmap, nullptr);
-        saved = image.Save(path.wstring().c_str(), &codecs[static_cast<std::size_t>(encoder)].Clsid) == Gdiplus::Ok;
+        // NOTE(portability): MSVC's gdiplus.h defaults the third argument to
+        // NULL; MinGW's gdiplusheaders.h declares no default, so pass it
+        // explicitly (identical behaviour on both toolchains).
+        saved = image.Save(path.wstring().c_str(),
+                           &codecs[static_cast<std::size_t>(encoder)].Clsid,
+                           nullptr) == Gdiplus::Ok;
     }
     Gdiplus::GdiplusShutdown(token);
     DeleteObject(bitmap);

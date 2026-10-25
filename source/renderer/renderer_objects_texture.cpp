@@ -376,8 +376,51 @@ GLuint Renderer_Objects::GetOrLoadTexture(const std::string& textureId) {
     }
 
     // ── 1. Try in-memory .res index (preferred: no disk extraction) ───────────
+    //
+    // IGI-RE resolves a model's textures from the archive of the level that owns
+    // the model file, and from no other archive: ModelFile_Setup loads
+    // "%stextures/%s.res" for that level (src/model/model.c:261, HOOK(0x4CF080)),
+    // ModelFile_LoadTextures turns the MTP_TEXF table of that same resource into
+    // the model's texture table (src/model/model.c:450-461), and the GTT index is
+    // applied straight to it (src/model/model.c:300-306). There is no cross-level
+    // search and no name fallback in the game.
+    //
+    // Retail archives really do carry different images under one id, so the
+    // owning level's archive is indexed and searched FIRST; an unrelated archive
+    // that happens to be indexed earlier (the current level, the always-indexed
+    // shared common archive) must not win. Measured on the retail install:
+    //   001_02_1.tex  level7 = 128x128 (32800 B)   common = 128x32 (8224 B)
+    //   001_05_1.tex  level7 =  8224 B             common = 4128 B
+    //   001_04_1.tex  level7 = 32800 B             common = 4128 B
+    //   018_03_1.tex  level7 = 65568 B             level4 = 4128 B
     {
-        std::vector<uint8_t> bytes = FindTextureData(textureId);
+        EnsureGlobalTextureMapLoaded();
+        auto ownerIt = texture_level_map_.find(textureId);
+        if (ownerIt == texture_level_map_.end()) {
+            const std::string strippedOwner = StripTextureFormatSuffix(textureId);
+            if (strippedOwner != textureId) ownerIt = texture_level_map_.find(strippedOwner);
+        }
+        std::string ownerRes;
+        if (ownerIt != texture_level_map_.end() && ownerIt->second > 0) {
+            if (ownerIt->second != current_level_) {
+                LoadResCache(ownerIt->second, Utils::GetIGIRootPath());
+            }
+            ownerRes = Utils::GetIGIRootPath() + "\\missions\\location0\\level" +
+                       std::to_string(ownerIt->second) + "\\textures\\level" +
+                       std::to_string(ownerIt->second) + ".res";
+        }
+
+        std::vector<ModelSourceArchiveIndex> archives;
+        archives.reserve(res_tex_indexes_.size());
+        for (const auto& index : res_tex_indexes_) {
+            archives.push_back({index.res_path, index.index});
+        }
+        archives = OrderTextureArchivesByOwner(archives, ownerRes);
+
+        std::vector<uint8_t> bytes = FindPreviewTextureEntry(archives, textureId,
+            [](const std::string& resPath, const ResEntryInfo& info) {
+                return RES_ReadEntry(resPath, info);
+            });
         if (!bytes.empty()) {
             pics_s pics{};
             if (Tex_LoadFromMemory(bytes.data(), bytes.size(), pics) && pics.pics_ && pics.num_pic_ > 0) {
@@ -467,6 +510,11 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
     std::vector<std::string> textureIds = GetTextureIdsForModel(modelId);
     bool isDatMiss = textureIds.empty();
 
+    // The model whose DAT entry supplied the list above. Inherited lists belong
+    // to the model they were copied from, and that model's level owns the
+    // archive that must supply the images (see the owner-archive block below).
+    std::string textureSourceModelId = modelId;
+
     // When a sub-model has no DAT entry, IGI ATTA sub-models commonly share material slots with their
     // parent building, so inherit the parent's texture list in that case.
     if (!parentModelId.empty() && isDatMiss) {
@@ -477,6 +525,7 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
                 "[TEX Native] Sub-model '" + modelId + "' has no DAT entry; inheriting " +
                 std::to_string(parentIds.size()) + " texture(s) from parent '" + parentModelId + "'");
             textureIds = parentIds;
+            textureSourceModelId = parentModelId;
             isDatMiss = false;
         }
     }
@@ -493,6 +542,7 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
                     "[TEX Native] Model '" + modelId + "' has no DAT entry; inheriting " +
                     std::to_string(childTexIds.size()) + " texture(s) from child '" + childId + "'");
                 textureIds = childTexIds;
+                textureSourceModelId = childId;
                 isDatMiss = false;
             }
         }
@@ -506,6 +556,31 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
     if (textureIds.empty()) {
         Logger::Get().Log(LogLevel::INFO, "[TEX Native] No textures mapped for modelId=" + modelId);
         return;
+    }
+
+    // Index the archive of the level that owns this model before any lookup.
+    //
+    // IGI-RE: a model's textures come from exactly one archive, the one of the
+    // level the model file belongs to. ModelFile_Setup loads
+    // "%stextures/%s.res" (src/model/model.c:261, HOOK(0x4CF080)), the MTP_TEXF
+    // table read from that same resource is the model's texture table
+    // (src/model/model.c:450-461), and the GTT index is applied directly to it
+    // (src/model/model.c:300-306). There is no cross-level search in the game.
+    //
+    // The editor searches every archive it has indexed, and the shared common
+    // archive is always indexed (LoadResCache). Retail archives really do carry
+    // different images under one id: measured, 001_02_1.tex is 128x32 in
+    // common/textures/location0.res and 128x128 in level7/textures/level7.res,
+    // so a preview of the level-7 model from any other level used to bind the
+    // common strip. Indexing the owning level here makes the level's copy win
+    // (FindPreviewTextureEntry searches non-common archives before common).
+    {
+        EnsureGlobalTextureMapLoaded();
+        auto ownerIt = model_level_map_.find(textureSourceModelId);
+        if (ownerIt != model_level_map_.end() && ownerIt->second > 0 &&
+            ownerIt->second != current_level_) {
+            LoadResCache(ownerIt->second, Utils::GetIGIRootPath());
+        }
     }
 
     // For AI character models (sunglasses-bearing), load the STRIPPED texture id

@@ -1,29 +1,158 @@
 {
-  "schemaVersion": 1,
-  "regressions": [
-    {
-      "id": "IGIED-FNT-RGB565-LUMINANCE-001",
-      "symptom": "RGB565 white glyph pixels were decoded with a dark alpha value.",
-      "sourceAnchors": ["source/renderer/fnt_parser.cpp:FNT_ParseBytes"],
-      "unitOrComponentCases": ["FntParserSyntheticTest.ParsesMinimalRgb565FontAndGlyphMap"],
-      "e2eCases": [],
-      "requiredCapabilities": ["synthetic-fixtures"],
-      "status": "fixed",
-      "fixCommit": null,
-      "evidenceRunIds": [],
-      "mem0Status": "pending-interface"
-    },
-    {
-      "id": "IGIED-SAVE-ACTIVE-EDIT",
-      "symptom": "Configured save must persist the currently edited property.",
-      "sourceAnchors": ["source/app_level.cpp:App::SaveCurrentLevel"],
-      "unitOrComponentCases": [],
-      "e2eCases": ["level12-transform-save-reopen"],
-      "requiredCapabilities": ["interactive-session", "disposable-corpus"],
-      "status": "planned",
-      "fixCommit": null,
-      "evidenceRunIds": [],
-      "mem0Status": "not-a-new-fix"
-    }
-  ]
+    "schemaVersion": 1,
+    "regressions": [
+        {
+            "id": "IGIED-FNT-RGB565-LUMINANCE-001",
+            "symptom": "RGB565 white glyph pixels were decoded with a dark alpha value.",
+            "sourceAnchors": [
+                "source/renderer/fnt_parser.cpp:FNT_ParseBytes"
+            ],
+            "unitOrComponentCases": [
+                "FntParserSyntheticTest.ParsesMinimalRgb565FontAndGlyphMap"
+            ],
+            "e2eCases": [],
+            "requiredCapabilities": [
+                "synthetic-fixtures"
+            ],
+            "status": "fixed",
+            "fixCommit": null,
+            "evidenceRunIds": [],
+            "mem0Status": "pending-interface"
+        },
+        {
+            "id": "IGIED-SAVE-ACTIVE-EDIT",
+            "symptom": "Configured save must persist the currently edited property.",
+            "sourceAnchors": [
+                "source/app_level.cpp:App::SaveCurrentLevel"
+            ],
+            "unitOrComponentCases": [],
+            "e2eCases": [
+                "level12-transform-save-reopen"
+            ],
+            "requiredCapabilities": [
+                "interactive-session",
+                "disposable-corpus"
+            ],
+            "status": "planned",
+            "fixCommit": null,
+            "evidenceRunIds": [],
+            "mem0Status": "not-a-new-fix"
+        },
+        {
+            "id": "IGIED-EULER-ORDER-001",
+            "symptom": "Viewport Euler rotations composed in a different order than the engine, so cameras and objects rendered at wrong angles.",
+            "sourceAnchors": [
+                "source/renderer/igi_transform.h:IgiEulerRotationMatrix"
+            ],
+            "unitOrComponentCases": [
+                "IgiTransform.EulerMatchesGameMatrixSetEulerForMultiAxisRotation",
+                "IgiTransform.EulerMatchesGameMatrixSetEulerOnGrid",
+                "IgiTransform.EulerMatchesGameMatrixSetEulerForYawOnlyAndAuthoredValues",
+                "IgiTransform.ZxyOrderIsWrongSoThisTestWouldCatchTheOldBug",
+                "IgiTransform.ObjectMatrixIsScaleThenRotateThenTranslate"
+            ],
+            "e2eCases": [],
+            "requiredCapabilities": [
+                "synthetic-fixtures"
+            ],
+            "status": "fixed",
+            "fixCommit": null,
+            "evidenceRunIds": [],
+            "mem0Status": "pending-interface"
+        },
+        {
+            "id": "IGIED-SCAMERA-PARAMS-001",
+            "symptom": "SCamera exposed a Real32x9 rotation at arg 6 (clobbering the string model at arg 7), drew arg 10 instead of arg 7, and lost the arg 9 yaw offset on load/save.",
+            "sourceAnchors": [
+                "source/level/level_objects.cpp:LoadRecursive",
+                "source/level/level_objects_serialize.cpp:ParseTaskLine",
+                "source/level/level_objects_serialize.cpp:UpdateCoordinatesInLine"
+            ],
+            "unitOrComponentCases": [
+                "ScameraParamsTest.RetailLevel1LineMatchesTheEngineLayout",
+                "ScameraParamsTest.Arg9IsYawOffsetAndArg12IsNotAModel",
+                "ScameraParamsTest.YawOffsetIsFoldedForDisplayAndPreservedOnSave",
+                "ScameraParamsTest.CorpusScameraLinesMatchTheDeclaredLayout"
+            ],
+            "e2eCases": [],
+            "requiredCapabilities": [
+                "synthetic-fixtures",
+                "retail-corpus"
+            ],
+            "status": "fixed",
+            "fixCommit": null,
+            "evidenceRunIds": [],
+            "mem0Status": "pending-interface"
+        },
+        {
+            "id": "IGIED-DECLARED-POSITION-001",
+            "symptom": "Task types with no dispatch branch in LoadRecursive loaded at (0,0,0); SnapObjectsToTerrain then snapped them to the terrain height at the origin and saved them there.",
+            "sourceAnchors": [
+                "source/level/level_objects.cpp:Load",
+                "source/level/level_objects.cpp:TaskDeclarationHasPositionAt3"
+            ],
+            "unitOrComponentCases": [
+                "DeclaredPositionFallbackTest.PositionalTypesAreRecognised",
+                "DeclaredPositionFallbackTest.NonPositionalTypesAreRejected",
+                "DeclaredPositionFallbackTest.UndeclaredTypesAreNotGuessedAt",
+                "DeclaredPositionFallbackTest.AnyPositionFieldNameWithObjectPosTypeCounts",
+                "DeclaredPositionFallbackTest.PositionNotAtArg3DoesNotCount"
+            ],
+            "e2eCases": [],
+            "requiredCapabilities": [
+                "synthetic-fixtures",
+                "retail-corpus"
+            ],
+            "status": "fixed",
+            "fixCommit": null,
+            "evidenceRunIds": [],
+            "mem0Status": "pending-interface"
+        },
+        {
+            "id": "IGIED-EULER-ORDER-002",
+            "symptom": "Four non-render sites composed or decomposed an authored Euler triple in the pre-fix Rz*Rx*Ry order: the runtime ladder-parent orientation and the door slide offset (app.cpp), the promoted-ATTA MEF write-back (app_level.cpp), the centre-on-object mesh-centre offset (debug_command_manager.cpp), and the ATTA-proxy Euler extraction (app_editor.cpp).",
+            "sourceAnchors": [
+                "source/renderer/igi_transform.h:IgiMatrixToEuler",
+                "source/app.cpp:App::ApplyRuntimeDoorSnapshots",
+                "source/app.cpp:App::CollectAttachedRuntimeLadders",
+                "source/app_level.cpp:App::FlushAttaProxiesToMef",
+                "source/debug_command_manager.cpp",
+                "source/app_editor.cpp"
+            ],
+            "unitOrComponentCases": [
+                "IgiTransform.MatrixToEulerMatchesGameMatrixGetEuler",
+                "IgiTransform.MatrixToEulerRoundTripsTheAuthorsTriple",
+                "IgiTransform.LegacyZxyExtractionIsWrongSoThisTestWouldCatchTheOldBug"
+            ],
+            "e2eCases": [],
+            "requiredCapabilities": [
+                "synthetic-fixtures"
+            ],
+            "status": "fixed",
+            "fixCommit": null,
+            "evidenceRunIds": [],
+            "mem0Status": "pending-interface"
+        },
+        {
+            "id": "IGIED-DOOR-PARAMS-001",
+            "symptom": "Door lock/open/close expressions were read one argument early, and the slide offset gained a Z component the engine does not have.",
+            "sourceAnchors": [
+                "source/runtime/door_params.h:ApplyDoorArgumentLayout",
+                "source/app.cpp:App::SetupRuntimeDoors"
+            ],
+            "unitOrComponentCases": [
+                "DoorParamsTest.ExpressionsAreLockOpenCloseInThatOrder",
+                "DoorParamsTest.SlideHasNoZComponentAndArgumentEightIsNotAnOffset",
+                "DoorParamsTest.EveryRetailDoorTaskKeepsItsSoundsAndSlideInTheDocumentedSlots"
+            ],
+            "e2eCases": [],
+            "requiredCapabilities": [
+                "game-corpus"
+            ],
+            "status": "fixed",
+            "fixCommit": null,
+            "evidenceRunIds": [],
+            "mem0Status": "pending-interface"
+        }
+    ]
 }

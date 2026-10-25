@@ -5,6 +5,39 @@
  *          Split from renderer_objects.cpp; shares renderer_objects_internal.h.
  *****************************************************************************/
 #include "renderer_objects_internal.h"
+#include "../runtime/magic_object_registry.h"
+
+// ─── Rotor attachment classification (TASKTYPE_ROTOR) ────────────────────────
+// Every ATTA record name is a magic-object name: the game walks a model's ATTA
+// records, looks each name up in the DefineMagicObj table and creates a task of
+// that definition's type (IGI-RE `src/magicobj/rigidcoll.c:385-434`,
+// `src/shadow/sector.c:540-560`). The retail MAGICOBJ.QVM defines exactly six
+// names as TASKTYPE_ROTOR — 700_02_1, 700_03_1, 700_04_1, 711_01_1, 711_02_1
+// and 712_01_1 (verified against the shipped file; `DefineMagicObj` itself is
+// `src/magicobj/magicobj.c:189-220`). Nothing gates this on the parent's type,
+// so the editor must not either.
+static const std::set<std::string>& RotorAttachmentIds() {
+    static std::string loadedFrom;
+    static std::set<std::string> ids;
+    const std::string qvmPath = Utils::GetIGIRootPath() + "\\magicobj\\magicobj.qvm";
+    if (loadedFrom == qvmPath) return ids;
+    loadedFrom = qvmPath;
+    ids.clear();
+    if (!std::filesystem::exists(qvmPath)) return ids;
+
+    QVMFile qvm = QVM_Parse(qvmPath);
+    if (!qvm.valid) return ids;
+
+    igi::MagicObjectRegistry registry;
+    if (!registry.LoadDecompiledSource(QVM_DecompileToString(qvm))) return ids;
+
+    for (const igi::MagicObjectDefinition& def : registry.GetDefinitions()) {
+        if (def.task_type_name == "TASKTYPE_ROTOR") ids.insert(def.attachment_name);
+    }
+    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Loaded " +
+        std::to_string(ids.size()) + " TASKTYPE_ROTOR attachment names from magicobj.qvm");
+    return ids;
+}
 
 std::string Renderer_Objects::AttaOccupancyKey(const std::string& modelId, const glm::vec3& worldPos) {
     char buf[160];
@@ -1164,89 +1197,33 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         EnsureDeathZoneIdsLoaded();
         if (deathzone_ids_.count(att.modelId)) continue;
 
-        // Build the ATTA local rotation matrix (DirectX row-major → GLM column-major)
-        glm::mat4 attLocalRot(
-            att.r[0], att.r[1], att.r[2], 0.f,
-            att.r[3], att.r[4], att.r[5], 0.f,
-            att.r[6], att.r[7], att.r[8], 0.f,
-            0.f,      0.f,      0.f,      1.f
-        );
+        // Child world transform: child_world = parent_world * child_local, with the
+        // child's world position = parent_pos + parent_rot * ATTA pos. See
+        // renderer/atta_children.h (IGI-RE src/magicobj/rigidcoll.c:399-450).
+        // ATTA px/py/pz are raw floats in the same raw game units as obj.pos, and
+        // parentWorldMat is unscaled (translate + rotate), so no conversion is needed.
+        const float attPos[3] = {att.px, att.py, att.pz};
+        const float attMat[9] = {att.r[0], att.r[1], att.r[2],
+                                 att.r[3], att.r[4], att.r[5],
+                                 att.r[6], att.r[7], att.r[8]};
+        const glm::mat4 childWorldMat = igi::IgiAttaChildWorld(parentWorldMat, attPos, attMat);
 
-        // ATTA px/py/pz are raw floats from the MEF file, in the same coordinate
-        // space as obj.pos (raw game units). parentWorldMat is also in raw game units
-        // (translate=obj.pos, no scale), so no conversion needed.
-        glm::vec3 localOff(att.px, att.py, att.pz);
-        glm::vec3 worldPos = glm::vec3(parentWorldMat * glm::vec4(localOff, 1.f));
-
-        // Extract parent rotation (upper-left 3x3 of the unscaled parent mat)
-        glm::mat4 parentRot = parentWorldMat;
-        parentRot[3] = glm::vec4(0.f, 0.f, 0.f, 1.f); // zero out translation
-
-        // Unscaled world matrix for this attachment (used by children)
-        glm::mat4 childWorldMat(1.0f);
-        childWorldMat = glm::translate(childWorldMat, worldPos);
-        childWorldMat = childWorldMat * parentRot * attLocalRot;
-
-		// Helicopter rotor spin preview: rotor ATTA children of Heli objects spin
-		// continuously so the viewport reads as alive (the game itself animates
-		// rotors via runtime; we only preview in the editor). The main rotor is
-		// the child at the highest local Z (top of fuselage); the tail rotor is
-		// at the most-negative local Y (far tail). modelType-3 ATTA children are
-		// typically the rotor blades; fall through for any other children.
-		if (current_draw_obj_type_ == "Heli") {
-			float maxZ = att.pz, minY = att.py;
-			for (const auto& sib : attsR) {
-				if (sib.pz > maxZ) maxZ = sib.pz;
-				if (sib.py < minY) minY = sib.py;
-			}
-			const bool isMainRotor = (att.pz >= maxZ - 1.0f);
-			const bool isTailRotor = (!isMainRotor && att.py <= minY + 1.0f);
-
-			// Rebuild the placed transform from static ATTA data every frame.
-			// Hub is locked. Yaw constant, pitch animates for main rotor (2 orientation axes fixed by locking shaft column, 1 moving).
-			// Spin is applied in the placed attachment frame (post-multiply) so blades rotate 360 on their shaft with no orbit/translation.
-			glm::vec3 hub = worldPos;
-			glm::mat3 base;
-			base[0] = glm::vec3(childWorldMat[0]);
-			base[1] = glm::vec3(childWorldMat[1]);
-			base[2] = glm::vec3(childWorldMat[2]);
-
-			if (isMainRotor) {
-				// Spin around placed column 0 (maps to pitch per IGI Yaw(Z)-Pitch(X)-Roll(Y) order).
-				// Post-multiply rotates geometry in attachment local; lock column 0 so disk tilt (yaw/roll of plane) stays fixed.
-				glm::vec3 n = base[0];
-				if (glm::length(n) > 0.0001f) n = glm::normalize(n); else n = glm::vec3(1,0,0);
-
-				float angle = elapsed_time_secs_ * 15.0f;  // positive; flip if blades spin opposite to expected
-				glm::mat4 Rloc = glm::rotate(glm::mat4(1.0f), angle, glm::vec3(1,0,0)); // local X (pitch)
-				glm::mat3 spun = base * glm::mat3(Rloc);
-				spun[0] = n;  // keep shaft axis fixed (yaw constant, disk plane tilt fixed)
-
-				childWorldMat[0] = glm::vec4(spun[0], 0.0f);
-				childWorldMat[1] = glm::vec4(spun[1], 0.0f);
-				childWorldMat[2] = glm::vec4(spun[2], 0.0f);
-				childWorldMat[3] = glm::vec4(hub, 1.0f);
-			} else if (isTailRotor) {
-				// Tail rotor spins around its own placed lateral axis.
-				int best = 0;
-				float bestAbs = glm::abs(base[0].x);
-				for (int c = 1; c < 3; ++c) {
-					if (glm::abs(base[c].x) > bestAbs) { bestAbs = glm::abs(base[c].x); best = c; }
-				}
-				glm::vec3 n = glm::normalize(base[best]);
-
-				float angle = -elapsed_time_secs_ * 25.0f;
-				glm::mat4 R = glm::rotate(glm::mat4(1.0f), angle, n);
-
-				glm::mat3 spun = glm::mat3(R) * base;
-				spun[best] = n;
-
-				childWorldMat[0] = glm::vec4(spun[0], 0.0f);
-				childWorldMat[1] = glm::vec4(spun[1], 0.0f);
-				childWorldMat[2] = glm::vec4(spun[2], 0.0f);
-				childWorldMat[3] = glm::vec4(hub, 1.0f);
-			}
-		}
+        // Rotor preview (TASKTYPE_ROTOR attachments). The retail game spins a
+        // Rotor magic object about its own local X axis, post-multiplied, and only
+        // for the DRAWING copy — the frame its children inherit stays unspun. See
+        // renderer/atta_children.h (IGI-RE src/rotor/rotor.c:139-152, :180-181).
+        // Classification comes from MAGICOBJ.QVM, not from the parent object's
+        // type (IGI-RE src/magicobj/rigidcoll.c:385-434).
+        glm::mat4 drawWorldMat = childWorldMat;
+        if (RotorAttachmentIds().count(att.modelId) > 0) {
+            // Preview rate only: the retail rate is `dir * speed * car speed`, with
+            // dir/speed read from the rotor's DefinePhysicsObjType entry; the editor
+            // has no vehicle speed. Axis, sign and composition order are the game's.
+            constexpr float kRotorPreviewRadPerSec = 15.0f;
+            drawWorldMat = igi::IgiRotorSpinMatrix(
+                childWorldMat, elapsed_time_secs_ * kRotorPreviewRadPerSec);
+        }
+        const glm::vec3 worldPos(childWorldMat[3]);
 
         // If this ATTA has a proxy object editing it, skip rendering it here —
         // the proxy renders it — but still recurse into children.
@@ -1305,7 +1282,8 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         }
 
         // Scaled model matrix: X uses leafScale.x (intervalLen for splines, 40.96 for buildings)
-        glm::mat4 attModel = glm::scale(childWorldMat, leafScale);
+        // Rotor attachments draw with the spun frame; every other child draws unspun.
+        glm::mat4 attModel = glm::scale(drawWorldMat, leafScale);
 
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(attModel));
 

@@ -136,3 +136,22 @@ std::vector<uint8_t> FindModelSourceEntry(
     bool isTexture,
     const std::function<std::vector<uint8_t>(const std::string& resPath,
                                               const ResEntryInfo& info)>& readEntry);
+
+// Search order for a texture lookup whose owning archive is known: that archive
+// first, every other archive after it in its existing order.
+//
+// IGI-RE: the game resolves a model's textures from exactly one archive, the one
+// of the level the model file belongs to. ModelFile_Setup loads
+// "%stextures/%s.res" for that level (src/model/model.c:261, HOOK(0x4CF080)),
+// ModelFile_LoadTextures turns the MTP_TEXF table of that resource into the
+// model's texture table (src/model/model.c:450-461), and the GTT index is applied
+// straight to it (src/model/model.c:300-306). There is no cross-level search, so
+// an archive indexed earlier in the session must not win.
+//
+// Position matters because retail archives carry different images under one id:
+// 001_02_1.tex is 128x128 in level7/textures/level7.res and 128x32 in
+// common/textures/location0.res. FindPreviewTextureEntry still searches the
+// shared common archive last as a group, so hoisting the owner here is enough.
+std::vector<ModelSourceArchiveIndex> OrderTextureArchivesByOwner(
+    const std::vector<ModelSourceArchiveIndex>& archives,
+    const std::string& ownerResPath);

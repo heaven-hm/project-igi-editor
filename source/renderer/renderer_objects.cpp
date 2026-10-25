@@ -1,4 +1,5 @@
 #include "renderer_objects_internal.h"
+#include "igi_transform.h"
 #include "object_lightmap.h"
 #include "../capture_camera.h"
 
@@ -462,8 +463,15 @@ std::vector<uint8_t> Renderer_Objects::FindTextureDataFromLevel(
         }
         return true;
     };
-    // bundle[0] is the selected level archive, bundle[1] is common. Texture
-    // lookups search common first so polluted same-name level copies lose.
+    // bundle[0] is the selected level archive, bundle[1] is common, and the
+    // search walks them in that order: the level archive wins. That is the
+    // oracle-correct precedence — the game resolves a model's textures from the
+    // single archive of the level that owns the model file, with no cross-level
+    // search (`IGI-RE src/model/model.c:261,450-461,300-306`; measured on the
+    // retail install, `001_02_1.tex` is a 128x32 strip in common and the
+    // 128x128 sheet in level7). An earlier version of this comment claimed the
+    // opposite order; the code was always right.
+    // See docs/igi-re-parity/CHARACTER_TEXTURE_RESOLUTION.md.
     std::array<ModelSourceArchiveIndex, 2> bundle;
     for (size_t slot = 0; slot < 2; ++slot) {
         bundle[slot].resPath = bundleRes[slot];
@@ -817,21 +825,15 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         // so we use it directly without adding zOffset again.
         model = glm::translate(model, glm::vec3(obj.pos.x, obj.pos.y, obj.pos.z));
 
-        // 2. Apply IGI rotations (Yaw, Pitch, Roll)
-        // IGI rotation order: Yaw (Z), then Pitch (X), then Roll (Y)
-        if (IsZyxEulerModel(obj.modelId)) {
-            // Slide-up metal doors (506_) and vehicle missile attachments (615_01_1)
-            // carry genuine multi-axis Euler tuples and seat correctly with Z->Y->X order.
-            // Yaw-only objects are order-invariant, so scoping this regresses nothing else.
-            // FALLBACK if still wrong: try order X->Y->Z, or append a +/-90° spin about Z.
-            model = glm::rotate(model, (float)obj.rot.z, glm::vec3(0.0f, 0.0f, 1.0f)); // Yaw
-            model = glm::rotate(model, (float)obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f)); // Roll
-            model = glm::rotate(model, (float)obj.rot.x, glm::vec3(1.0f, 0.0f, 0.0f)); // Pitch
-        } else {
-            model = glm::rotate(model, (float)obj.rot.z, glm::vec3(0.0f, 0.0f, 1.0f)); // Yaw
-            model = glm::rotate(model, (float)obj.rot.x, glm::vec3(1.0f, 0.0f, 0.0f)); // Pitch
-            model = glm::rotate(model, (float)obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f)); // Roll
-        }
+        // 2. Apply the authored IGI rotation.
+        // IGI-RE `Matrix_SetEuler` (HOOK 0x4B38E0, src/math/matrix.c) composes
+        // Rz(az) * Ry(ay) * Rx(ax) for EVERY authored object — there is no
+        // per-model rotation order in the game (`ParamReal32x9_Parse`,
+        // HOOK 0x4EFBA0, feeds the QSC triple straight into it). See
+        // renderer/igi_transform.h for the full evidence. The previous
+        // Z->X->Y default plus the `IsZyxEulerModel` whitelist was the
+        // mis-orientation reported in issue #37.
+        model = model * igi::IgiEulerRotationMatrix(obj.rot);
 
         // RotatingObject preview: radar dishes etc. spin continuously in-game via
         // runtime; we preview the same motion in-editor by adding a live yaw spin
@@ -848,7 +850,43 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         }
 
         // 3. Scale
-        model = glm::scale(model, glm::vec3(total_scale));
+        // Wire props are stretched between their two authored anchors by the game
+        // itself: Wire_ParamsChanged (0x43F3D0, IGI-RE src/props/wire.c:160-191)
+        // puts the object at the anchor midpoint, points its local +Y axis along
+        // end - start, and sets obj.scale[1] = |end-start| * kWireScale (1/4096).
+        // Only Y is scaled; X/Z keep the authored thickness. Without this the
+        // editor drew every wire as an unstretched stub at its start anchor — the
+        // "Wire Width" symptom in docs/KNOWN_ISSUES.md.
+        bool wire_placed = false;
+        if (obj.isWire) {
+            glm::dvec3 wa, wb;
+            if (obj.WireAnchors(wa, wb)) {
+                const TaskSchemaNS::Props::WireSpan span = TaskSchemaNS::Props::ComputeWireSpan(
+                    TaskSchemaNS::Props::Vec3(wa.x, wa.y, wa.z),
+                    TaskSchemaNS::Props::Vec3(wb.x, wb.y, wb.z));
+                if (span.valid) {
+                    const TaskSchemaNS::Props::Basis basis =
+                        TaskSchemaNS::Props::YAxisBasis(span.dir);
+                    const glm::mat3 frame(
+                        glm::vec3((float)basis.x.x, (float)basis.x.y, (float)basis.x.z),
+                        glm::vec3((float)basis.y.x, (float)basis.y.y, (float)basis.y.z),
+                        glm::vec3((float)basis.z.x, (float)basis.z.y, (float)basis.z.z));
+                    model = glm::translate(glm::mat4(1.0f),
+                        glm::vec3((float)span.mid.x, (float)span.mid.y, (float)span.mid.z));
+                    model = model * glm::mat4(frame);
+                    // Y = length in metres (length * kWireScale) through the same
+                    // 40.96 * scale convention as every other object, so
+                    // obj.scale keeps its 1:1 meaning: 40.96 * length/4096 = length/100.
+                    model = glm::scale(model, glm::vec3(
+                        total_scale,
+                        (float)(span.length * TaskSchemaNS::Props::kWireScale) * base_scale,
+                        total_scale));
+                    wire_placed = true;
+                }
+            }
+        }
+        if (!wire_placed)
+            model = glm::scale(model, glm::vec3(total_scale));
 
         // Native MEF geometry is already authored in the game's coordinate space.
         // Do not apply the legacy OBJ Y-up -> Z-up correction here or buildings/AI
@@ -856,6 +894,9 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
         // Upload model matrix
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
+
+        // Wire/zipline + machinegun interactable previews (GitHub issue #42).
+        DrawPropsGizmos(obj, ubo_mats, ubo_binding_point_);
 
         // ── Lighting and Color ────────────────────────────────────────────────
         // Compute a hash-based fallback color for models/submeshes without textures.
@@ -973,11 +1014,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 auto blockScale = [&](const glm::vec3& nLocal) -> glm::vec3 {
                     if (!haveBakePose) return glm::vec3(1.0f);
                     auto eul = [](const glm::dvec3& e) {
-                        glm::mat4 m(1.0f);
-                        m = glm::rotate(m, (float)e.z, glm::vec3(0,0,1));
-                        m = glm::rotate(m, (float)e.x, glm::vec3(1,0,0));
-                        m = glm::rotate(m, (float)e.y, glm::vec3(0,1,0));
-                        return glm::mat3(m);
+                        return igi::IgiEulerRotationMat3(e);
                     };
                     glm::vec3 nO = glm::normalize(eul(bakedRot) * nLocal);
                     glm::vec3 nN = glm::normalize(eul(obj.rot)  * nLocal);
@@ -1138,17 +1175,14 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 glEnable(GL_POLYGON_OFFSET_FILL);
                 glPolygonOffset(-2.0f, -2.0f); // Prevent z-fighting with hull walls
 
-                // Build the root object's unscaled world matrix (translate + rotate)
-                glm::mat4 parentRot(1.0f);
-                parentRot = glm::rotate(parentRot, (float)obj.rot.z, glm::vec3(0,0,1));
-                parentRot = glm::rotate(parentRot, (float)obj.rot.x, glm::vec3(1,0,0));
-                parentRot = glm::rotate(parentRot, (float)obj.rot.y, glm::vec3(0,1,0));
+                // Build the root object's unscaled world matrix (translate + rotate).
+                // Rotation order is the game's Rz * Ry * Rx (see renderer/igi_transform.h).
+                const glm::mat4 parentRot = igi::IgiEulerRotationMatrix(obj.rot);
 
                 glm::mat4 rootWorldMat(1.0f);
                 rootWorldMat = glm::translate(rootWorldMat, glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z));
                 rootWorldMat = rootWorldMat * parentRot;
 
-                current_draw_obj_type_ = obj.type;  // tells DrawAttachmentsRecursive if parent is Heli (rotor spin)
                 std::unordered_set<std::string> drawn;
                 DrawAttachmentsRecursive(obj.modelId, obj.modelId, obj.isBuilding, rootWorldMat, isTransparentPass,
                                           loc_model, loc_dirlight, loc_ambient,

@@ -30,6 +30,7 @@ size_t Renderer_Splines::BentSpanKeyHash::operator()(const BentSpanKey& key) con
     mix(key.rot0.x); mix(key.rot0.y); mix(key.rot0.z);
     mix(key.rot1.x); mix(key.rot1.y); mix(key.rot1.z);
     h ^= static_cast<size_t>(key.linear) + 0x9e3779b9u + (h << 6) + (h >> 2);
+    h ^= static_cast<size_t>(key.segments) + 0x9e3779b9u + (h << 6) + (h >> 2);
     return h;
 }
 
@@ -193,30 +194,47 @@ void Renderer_Splines::DrawSplineSegment(
     bent_lookup_key_.rot0 = start.rot;
     bent_lookup_key_.rot1 = end.rot;
     bent_lookup_key_.linear = parent.linearSegments;
+    bent_lookup_key_.segments = std::clamp(parent.splineSegmentCount, 2, 20);
     auto cacheIt = bent_gpu_cache_.find(bent_lookup_key_);
     if (cacheIt == bent_gpu_cache_.end()) {
         const std::string modelId(segModelId);
         const ParsedGeometry* geometry = obj_renderer_.GetOrLoadParsedGeometry(modelId, false);
         if (!geometry) return;
 
-        const glm::dvec3 tan0 = spline_geometry::MakeWaypointTangent(start.rot, intervalLen);
-        const glm::dvec3 tan1 = spline_geometry::MakeWaypointTangent(end.rot, intervalLen);
-        const spline_geometry::SplineSegment segment{p0, p1, tan0, tan1, parent.linearSegments};
-        const auto bent = spline_geometry::BendSegmentMesh(*geometry, segment);
-        if (!bent.has_value()) return;
+        // IGI-RE SplineObjSegment_Setup (HOOK 0x4E4530, src/sound/segsetup.c:256-366)
+        // takes the two waypoint frames, the container's "Number of
+        // Matrices/Segment" (maxSegments, src/editobj/spline.c:204-214) and the
+        // container's "Linear Segments" flag. SplineObjWaypoint_Changed
+        // (HOOK 0x500EF0, src/tagitem/spline.c:759-846) clamps the per-waypoint
+        // count to the container's and to 20.
+        const int segments = std::clamp(parent.splineSegmentCount, 2, 20);
+        const spline_geometry::SplineSpan span{
+            p0, p1,
+            spline_geometry::EngineEulerMatrix(start.rot),
+            spline_geometry::EngineEulerMatrix(end.rot),
+            segments,
+            parent.linearSegments,
+            false};
+        const spline_geometry::BentSegmentMesh bent =
+            spline_geometry::BendSegmentMesh(*geometry, span);
+        if (bent.interleaved.empty()) return;
 
         const Mesh& sourceMesh = obj_renderer_.GetOrLoadMesh(modelId, false);
         if (sourceMesh.vertexCount == 0) return;
 
         CachedBentSpanGpu cached;
-        cached.subMeshes = UploadBentSegmentMesh(*bent, sourceMesh);
+        cached.subMeshes = UploadBentSegmentMesh(bent, sourceMesh);
         if (cached.subMeshes.empty()) return;
         cacheIt = bent_gpu_cache_.emplace(bent_lookup_key_, std::move(cached)).first;
     }
 
-    const glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(static_cast<float>(p0.x),
-                                                                      static_cast<float>(p0.y),
-                                                                      static_cast<float>(p0.z)))
+    // BendSegmentMesh returns offsets relative to the span's mid point, which is
+    // the origin the engine's joints are stored against (SplineObjSegment.pos is
+    // set to the mid point in SplineObjSegment_Setup).
+    const glm::dvec3 origin = (p0 + p1) * 0.5;
+    const glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(static_cast<float>(origin.x),
+                                                                      static_cast<float>(origin.y),
+                                                                      static_cast<float>(origin.z)))
                           * glm::scale(glm::mat4(1.0f), glm::vec3(40.96f));
     glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
 

@@ -1,13 +1,35 @@
 #pragma once
-#include "../pch.h"
-#include "level_common.h"
-#include <vector>
-#include <string>
+// This header must NOT include ../pch.h. pch.h pulls in level.h, and level.h
+// includes this header back (it holds a LevelObjects by value), so including
+// pch.h here makes the pair order-dependent: when level_objects.h is the entry
+// point, the cycle is cut by `#pragma once` and level.h:53 fails with
+// "unknown type name 'LevelObjects'". The Windows build never noticed because
+// CMake force-includes the PCH ahead of every translation unit — but that same
+// dependency is what kept every level_objects-based suite out of the host-native
+// test lane (tools/host-tests/host_test_runner.py compiles without a PCH).
+// Include exactly what this header needs instead.
+#include <cstdint>
+#include <cstdio>
 #include <map>
+#include <string>
+#include <utility>
+#include <vector>
+#include <glew.h>
+#include <glm/glm.hpp>
+#include "level_common.h"
+#include "task_schema.h"
 
 std::pair<int, int> ResolveSoldierAnimationDefaults(const std::string& type,
                                                      int declaredHierarchy,
                                                      int declaredStandAnimation);
+
+// True when a task's Task_DeclareParameters layout puts a world position at QSC args
+// 3/4/5, i.e. its first declared parameter is ("Position","ObjectPos"). Used by the
+// declared-position fallback in LevelObjects::Load() to decide whether args 3/4/5 of a
+// task type the editor has no explicit branch for really are a position. Exactly the
+// types that carry a world position declare it that way; types that merely have three
+// numbers there (LightmapInfo, Dirlight, FlatSky, PatrolPathCommand, AddAmmo, ...) do not.
+bool TaskDeclarationHasPositionAt3(const TaskSchemaNS::TaskSchema& schema);
 
 struct LevelObject {
     std::string name;
@@ -32,6 +54,13 @@ struct LevelObject {
     std::string weaponModelId; // HumanSoldier: resolved real model id for its weapon child, held in hand (empty = no weapon / excluded)
     glm::dvec3 pos = glm::dvec3(0.0);
     glm::dvec3 original_pos = glm::dvec3(0.0);  // Original position from QSC for fallback matching
+    // Set by LoadRecursive for task types it has no explicit branch for, after reading
+    // args 3/4/5 as a *candidate* position. LevelObjects::Load() then validates the
+    // candidate against the level's own Task_DeclareParameters and reverts it unless the
+    // type declares ("Position","ObjectPos") as its first parameter — see the position
+    // fallback pass in Load(). Without this, ~1000 real objects (TerrainLightMap,
+    // EditRigidObj, EditCamera, Building, StatusMessage, ...) loaded at the world origin.
+    bool declaredPositionCandidate = false;
     glm::dvec3 rot = glm::dvec3(0.0);
     glm::dvec3 original_rot = glm::dvec3(0.0);  // Original rotation from QSC for change detection
     bool isBuilding = false;
@@ -59,8 +88,21 @@ struct LevelObject {
     bool isSplineWaypoint = false;
     bool isWire = false;
     std::string segmentModelId;    // The model repeated along the path (e.g. 368_01_1)
-    std::string secondaryModelId;  // For SCamera (Camera body)
-    std::string lensModelId;       // For SCamera (Lens)
+    std::string secondaryModelId;  // SCamera arg 11: "Camera Destroyed Model" (the broken model)
+    std::string lensModelId;       // SCamera arg 10: "Camera Model" — the SCameraLens child's model
+    // SCamera arg 7 ("Holder Model") is the model THIS task draws, so it is stored in
+    // modelId: IGI-RE src/scamera/scamera.c:116-131 declares it third in the param
+    // table and SCamera_Create hands `c->model` to RigidDynCubeObj_SetModel
+    // (scamera.c:240) before placing it at the authored spot (scamera.c:242). Arg 10
+    // is `FIELD(lens_model)` and belongs to the separate SCameraLens child task
+    // (scameralens.c:204), which the retail scripts never instantiate.
+    // SCamera "Camera Gamma" (QSC arg 9): an extra yaw added to the lens direction.
+    // IGI-RE src/scamera/scameralens.c:204 builds the camera eye with
+    //   Matrix_SetEuler(&l->o.matrix, l->pitch, 0, l->yaw + c->yaw + c->yaw_offset)
+    // i.e. arg 9 is a YAW offset, never roll. The editor keeps the authored value
+    // separately so the QSC round-trip stays lossless, and folds it into rot.z for
+    // display (the renderer only ever sees rot).
+    double yawOffset = 0.0;
     std::string splineTaskId;      // For Train (RailroadQTaskID)
     bool linearSegments = false;   // If true, straight lines; if false, curved
     int splineSegmentCount = 20;   // Number of sub-segments per waypoint segment
@@ -76,7 +118,32 @@ struct LevelObject {
     bool isNested = false; // True if this is a sub-call (like LightmapInfo inside Building)
     bool preserveTaskId = false; // Keep Task_New arg[0] as an integer token
     int modelIdArgIdx = -1; // Index of the modelId argument in argTokens
+
+    // ── Wire / zipline (IGI-RE src/props/wire.c, GitHub issue #42) ────────────
+    // A "Wire" task owns two ObjectPos anchors: start at args 3-5 (mirrored by the
+    // live `pos`) and end at args 6-8. The end anchor is read straight from
+    // argTokens so an inspector edit of the "End" field previews immediately.
+    // Returns false when this is not a Wire, or the end anchor is absent/not
+    // numeric (in which case start/end are left untouched).
+    bool WireAnchors(glm::dvec3& start, glm::dvec3& end) const;
+
+    // Resolved fire arc / ammo of a StationaryGun (args 10-14, IGI-RE
+    // src/statgun/statgun.c:142-150). `valid` is false for any other task type.
+    TaskSchemaNS::Props::StationaryGunParams StatGunParams() const;
+
+    // Resolved detection arc / range / expressions of an AIStationaryGunHolder
+    // (args 10-14, IGI-RE src/comprun/gunholder.c:157-165).
+    TaskSchemaNS::Props::GunHolderParams GunHolderParams() const;
 };
+
+// Viewport gizmos for the props above (GitHub issue #42), implemented in
+// renderer/renderer_objects_visual.cpp. Declared here — rather than in
+// renderer_objects.h, which is outside this change's write scope — and called
+// once per object from the object draw loop in renderer_objects.cpp. `ubo_mats`
+// is the renderer's "Matrices" uniform buffer (std140: u_mvp at offset 32) and
+// `ubo_binding` is the binding point it is bound to
+// (Renderer_Objects::ubo_binding_point_); the gizmo is a no-op for other types.
+void DrawPropsGizmos(const LevelObject& obj, GLuint ubo_mats, GLuint ubo_binding);
 
 // Stable per-placement key for a lightmap binding. Most objects use their unique
 // Task_New id. Nested / ATTA tasks all share the literal taskId "-1" (not unique),
