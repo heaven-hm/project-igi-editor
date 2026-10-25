@@ -76,14 +76,44 @@ file(GLOB SHADERS_45 "shaders/45/*.*")
 # FILEVERSION/PRODUCTVERSION values come from the `version` file (issue #44) and
 # cannot drift from it. The icon is referenced by absolute path because the
 # generated .rc lives in the build tree.
+#
+# The .rc is produced by a build-time `cmake -P` driver rather than by
+# `configure_file` directly. A `configure_file` output is written only while CMake
+# configures and carries no ninja rule, so deleting it -- a partial
+# `rm -rf build/generated`, or a restored CI build cache that dropped it -- fails the
+# build with
+#
+#     ninja: error: '.../generated/igi-editor.rc', needed by
+#     '.../igi-editor.rc.res', missing and no known rule to make it
+#
+# which no build command can fix; only `--reconfigure` recovers. This was observed,
+# not theorised. A build-time rule keeps the single source of truth and makes the
+# file self-healing.
 if (WIN32)
   string(REPLACE "." "," IGI_EDITOR_VERSION_COMMA "${IGI_EDITOR_VERSION_NUMERIC}")
   set(IGI_EDITOR_VERSION_COMMA "${IGI_EDITOR_VERSION_COMMA},0")
+  set(IGI_EDITOR_RC_IN "${CMAKE_CURRENT_SOURCE_DIR}/assets/igi-editor.rc.in")
+  set(IGI_EDITOR_RC_OUT "${CMAKE_CURRENT_BINARY_DIR}/generated/igi-editor.rc")
+  set(IGI_EDITOR_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/igi-editor.ico")
+  set(IGI_EDITOR_RC_DRIVER "${CMAKE_CURRENT_BINARY_DIR}/generated/GenerateWindowsResource.cmake")
   configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/assets/igi-editor.rc.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/igi-editor.rc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateWindowsResource.cmake.in"
+    "${IGI_EDITOR_RC_DRIVER}"
     @ONLY)
-  list(APPEND SOURCES "${CMAKE_CURRENT_BINARY_DIR}/generated/igi-editor.rc")
+  add_custom_command(
+    OUTPUT "${IGI_EDITOR_RC_OUT}"
+    COMMAND "${CMAKE_COMMAND}" -P "${IGI_EDITOR_RC_DRIVER}"
+    DEPENDS "${IGI_EDITOR_RC_IN}" "${IGI_EDITOR_RC_DRIVER}" "${IGI_EDITOR_ICON}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/version"
+    COMMENT "Generating Windows resource (version ${IGI_EDITOR_VERSION})"
+    VERBATIM)
+  list(APPEND SOURCES "${IGI_EDITOR_RC_OUT}")
+  # `version` and the template are read during configure, so a change to either must
+  # trigger a re-configure; otherwise the driver would keep the old version string.
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/version"
+    "${IGI_EDITOR_RC_IN}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateWindowsResource.cmake.in")
 endif()
 
 source_group("level" FILES ${SOURCES_LEVEL})
