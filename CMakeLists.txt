@@ -64,13 +64,26 @@ if (WIN32)
   add_definitions(-DUNICODE -D_UNICODE)
 endif()
 
-file(GLOB SOURCES "source/*.h" "source/*.cpp")
-file(GLOB SOURCES_LEVEL "source/level/*.*")
-file(GLOB SOURCES_RUNTIME "source/runtime/*.*")
-file(GLOB SOURCES_RENDERER "source/renderer/*.*")
-file(GLOB SOURCES_CLI "source/cli/*.*")
-file(GLOB SHADERS_41 "shaders/41/*.*")
-file(GLOB SHADERS_45 "shaders/45/*.*")
+# CONFIGURE_DEPENDS on every source glob: a bare file(GLOB) is evaluated only while
+# CMake configures, so a source file added afterwards is silently NOT compiled --
+# ninja has no rule for it, the build still succeeds, and the omission is invisible
+# in a green gate.  That happened for real: `source/menu/menu_ui_draw.cpp` existed,
+# was listed by `source/menu/*.*`, and was absent from build-mingw's
+# compile_commands.json until that tree was reconfigured.  CONFIGURE_DEPENDS makes
+# the build re-glob and re-run CMake when the set of matching files changes, so the
+# file is picked up without anyone remembering to reconfigure.
+file(GLOB SOURCES CONFIGURE_DEPENDS "source/*.h" "source/*.cpp")
+file(GLOB SOURCES_LEVEL CONFIGURE_DEPENDS "source/level/*.*")
+file(GLOB SOURCES_RUNTIME CONFIGURE_DEPENDS "source/runtime/*.*")
+file(GLOB SOURCES_RENDERER CONFIGURE_DEPENDS "source/renderer/*.*")
+file(GLOB SOURCES_CLI CONFIGURE_DEPENDS "source/cli/*.*")
+# The retail menu reader (`qvm_image.*`) and the menu presentation/navigation
+# model (`menu_ui.*`, `menu_ui_draw.*`) live in source/menu/, which the
+# source/*.cpp glob above does not reach.  `source/app_menu.cpp` is covered by
+# that glob.
+file(GLOB SOURCES_MENU CONFIGURE_DEPENDS "source/menu/*.*")
+file(GLOB SHADERS_41 CONFIGURE_DEPENDS "shaders/41/*.*")
+file(GLOB SHADERS_45 CONFIGURE_DEPENDS "shaders/45/*.*")
 
 # Windows icon + version resource, generated from `assets/igi-editor.rc.in` so the
 # FILEVERSION/PRODUCTVERSION values come from the `version` file (issue #44) and
@@ -120,10 +133,11 @@ source_group("level" FILES ${SOURCES_LEVEL})
 source_group("runtime" FILES ${SOURCES_RUNTIME})
 source_group("renderer" FILES ${SOURCES_RENDERER})
 source_group("cli" FILES ${SOURCES_CLI})
+source_group("menu" FILES ${SOURCES_MENU})
 source_group("shaders/41" FILES ${SHADERS_41})
 source_group("shaders/45" FILES ${SHADERS_45})
 
-add_executable(igi-editor ${SOURCES} ${SOURCES_LEVEL} ${SOURCES_RUNTIME} ${SOURCES_RENDERER} ${SOURCES_CLI} ${SHADERS_41} ${SHADERS_45})
+add_executable(igi-editor ${SOURCES} ${SOURCES_LEVEL} ${SOURCES_RUNTIME} ${SOURCES_RENDERER} ${SOURCES_CLI} ${SOURCES_MENU} ${SHADERS_41} ${SHADERS_45})
 
 if (WIN32)
   set_target_properties(igi-editor PROPERTIES
@@ -383,6 +397,8 @@ add_executable(igi_tests
     tests/test_ladder_runtime.cpp
     tests/test_declared_position_fallback.cpp
     tests/test_keybindings.cpp
+    tests/test_menu_qvm.cpp
+    tests/test_menu_ui.cpp
 )
 
 # Explicit runtime so igi_tests always matches igi-editor (/MDd Debug, /MD Release).
@@ -505,6 +521,9 @@ target_sources(igi_tests PRIVATE
     source/runtime/map_computer_projection.cpp
     source/runtime/level_weather.cpp
     source/runtime/weather_mode.cpp
+    source/menu/qvm_image.cpp
+    source/menu/menu_ui.cpp
+    source/app_menu.cpp
 )
 
 set_source_files_properties(

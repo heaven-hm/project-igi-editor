@@ -1,143 +1,126 @@
 #pragma once
 
-// Reader for the game's compiled script containers ("LOOP" files, `.qvm`), and the
-// menu model the retail menu system is built from.
+// The retail menu system as data: the menu the game's own compiled menu scripts
+// declare, recovered from the "LOOP" containers in `menusystem/`.
 //
-// The oracle is IGI-RE: `src/qvm/qvmtypes.h` (the header layout and the loaded
-// `Qvm` struct), `src/qvm/qvm.h` (the opcode list), `src/qvm/qvm.c` (the run
-// handlers and `Qvm_PushString`/`Qvm_Pop`, which define the stack encoding) and
-// `src/menu/menumanager.c` (how a menu script is turned into a live menu:
-// `MenuManager_New`, HOOK 0x418B00, loads the script, calls `ScriptInit` and
-// `Script_SetSymbolContext("Task_New", parent)`, then runs it -- so the menu tree
-// is exactly the `Task_New`/`Task_DeclareParameters` calls the script makes).
+// CONTAINER PARSING IS NOT DUPLICATED HERE. `source/level/qvm_parser.h` already
+// parses the format (`QVM_Parse`) and is the idiom used across this codebase --
+// `source/runtime/config_qvm.cpp:112`, `source/runtime/magic_object_registry.cpp:75`,
+// `source/renderer/renderer_objects_metadata.cpp:19,208,244`,
+// `source/renderer/renderer_objects_atta.cpp:28` and
+// `source/runtime/runtime_world.cpp:1042` all do `QVM_Parse(path)` and then work
+// with the resulting `QVMFile`. This header only turns that into a menu model.
 //
-// Nothing here executes script code. The decoder recognises the push opcodes that
-// build literal arguments and the call opcode that consumes them, which is enough
-// to recover the declared menu structure; anything it cannot account for is
-// reported rather than guessed at.
+// ORACLE: IGI-RE, a verified C decompilation of retail IGI.exe.
+//   * `src/qvm/qvmtypes.h` -- the container header and the loaded `Qvm` struct.
+//   * `src/qvm/qvm.c:641-689` `Qvm_OpCall` (HOOK 0x4BD880) -- the call encoding:
+//     the callee name is pushed first, then `code[pc] == OP_CALL`, then
+//     `argc = *(int32*)(code+pc+1)` and `argc` int32 code offsets, one per
+//     argument, each pointing at the code that pushes that argument; the next
+//     instruction is at `pc + argc*4 + 5`. `QVM_Parse` implements exactly this
+//     (see `source/level/qvm_parser.cpp:210-227`).
+//   * `src/level/level.c:182-239` `Level_NewTask` (HOOK 0x4F0780) -- the runtime
+//     rule that makes the tree: after the declared parameters are parsed the task
+//     becomes the `Task_New` symbol context and the REMAINING arguments are
+//     consumed as children, so a widget's children are the `Task_New` calls in its
+//     argument positions. During parameter parsing `gLevelTaskNewEnabled` is 0, so
+//     a nested `Task_New` cannot appear in a parameter position.
+//   * `src/menu/menumanager.c:713-800` `MenuManager_New` (HOOK 0x418B00) -- how the
+//     engine turns such a script into a live menu: load, `ScriptInit`,
+//     `Script_SetSymbolContext("Task_New", parent)`, run.
+//
+// Nothing here executes script code.
 
-#include <cstdint>
 #include <string>
 #include <vector>
 
+#include "level/qvm_parser.h"
+
 namespace igi {
 
-// IGI-RE `QvmHeader`, `src/qvm/qvmtypes.h`. Field names are the oracle's.
-struct QvmHeaderInfo {
-    std::string magic;         // "LOOP"
-    int version = 0;           // 8 in every retail file
-    int unk08 = 0;             // 5; older files are refused by the loader
-    int sym_offsets = 0;
-    int sym_text = 0;
-    int sym_table_size = 0;    // bytes of int32 offsets
-    int sym_text_size = 0;
-    int str_offsets = 0;
-    int str_text = 0;
-    int str_table_size = 0;    // bytes of int32 offsets
-    int str_text_size = 0;
-    int code = 0;
-    int code_size = 0;
-    int stack_size = 0;
-    int type_stack_size = 0;
-};
-
-// One decoded argument of a script call.
-enum class QvmValueKind {
+// One argument value of a declared widget parameter.
+enum class MenuValueKind {
     Integer,
     Real,
-    String,   // a literal from the string table
-    Name,     // a symbol/identifier reference
-    Boolean,  // TRUE / FALSE, which are symbols in the retail files
+    String,   // a literal from the container's string table
+    Name,     // an identifier reference
+    Boolean,  // TRUE / FALSE, which are identifiers in the retail files
+    Call,     // the argument's code is itself a call; `text` is the callee symbol
 };
 
-struct QvmValue {
-    QvmValueKind kind = QvmValueKind::Integer;
+struct MenuValue {
+    MenuValueKind kind = MenuValueKind::Integer;
     long long integer = 0;
     double real = 0.0;
-    std::string text;  // String/Name payload, or the symbol name for Boolean
+    std::string text;
 
     bool IsNumber() const {
-        return kind == QvmValueKind::Integer || kind == QvmValueKind::Real ||
-               kind == QvmValueKind::Boolean;
+        return kind == MenuValueKind::Integer || kind == MenuValueKind::Real ||
+               kind == MenuValueKind::Boolean;
     }
-    double AsNumber() const {
-        if (kind == QvmValueKind::Real) {
-            return real;
-        }
-        if (kind == QvmValueKind::Boolean) {
-            return text == "TRUE" ? 1.0 : 0.0;
-        }
-        return static_cast<double>(integer);
-    }
+    // Numeric view: integer as-is, real as-is, TRUE as 1 and FALSE as 0.
+    double AsNumber() const;
+    // Textual view: `text` for String/Name/Boolean/Call, decimal for Integer.
     std::string AsText() const;
 };
 
-// A decoded call in the script's top-level body.
-struct QvmCall {
-    std::string symbol;            // e.g. "Task_New", "Task_DeclareParameters"
-    std::vector<QvmValue> args;
-    int pc = 0;                    // byte offset of the call opcode, for diagnostics
-};
-
-// The decoded form of one `.qvm` file.
-struct QvmImage {
-    bool ok = false;
-    std::string error;             // human-readable reason when ok == false
-    QvmHeaderInfo header;
-    std::vector<std::string> symbols;   // the file's name table
-    std::vector<std::string> strings;   // the file's string table
-    std::vector<unsigned char> code;
-    std::vector<QvmCall> calls;         // decoded top-level calls, in file order
-
-    // Convenience: the first call whose symbol matches, or nullptr.
-    const QvmCall* FindCall(const std::string& symbol) const;
-
-    // Parses a "LOOP" container. `data`/`size` is the whole file.
-    static QvmImage Parse(const unsigned char* data, size_t size);
-    static QvmImage ParseFile(const std::string& path);
-};
-
-// A declared widget parameter, in declaration order. `name`/`type` come from the
-// script's own `Task_DeclareParameters` strings, so the editor does not invent a
-// schema: it reproduces the retail one.
+// A declared widget parameter, in declaration order. `name` and `type` come from
+// the script's own `Task_DeclareParameters` strings, so the editor reproduces the
+// retail schema rather than inventing one.
 struct MenuField {
     std::string name;
-    std::string type;              // "Int32", "String256", "bool8", ...
-    std::vector<QvmValue> values;  // one entry per value the call supplied
+    std::string type;  // "Int32", "String256", "bool8", ...
+    std::vector<MenuValue> values;
 };
 
-// One widget instance. Retail menus are a flat sequence of `Task_New` calls whose
-// parent is the most recent widget of a containing type, so `children` is built by
-// nesting: a `MenuFrame`/`MenuScreen` collects the items declared after it until
-// the next widget of the same or a shallower level.
+// One widget instance.
 struct MenuWidget {
-    std::string type;              // "MenuManager", "MenuScreen", "MenuFrame", ...
-    std::string name;              // the widget's own name, when it has one
+    // The task id: `Task_New`'s first argument. Retail menu scripts address
+    // screens by this id (a popup screen is activated by number), and
+    // `Level_NewTask` (`src/level/level.c:200-205`) treats -1 as "no level id".
+    int id = -1;
+    std::string type;  // "MenuManager", "MenuScreen", "MenuFrame", ...
+    std::string name;
     std::vector<MenuField> fields;
+    // Children, in declaration order: the `Task_New` calls in this widget's
+    // argument positions (see the `Level_NewTask` note above).
     std::vector<MenuWidget> children;
 
     // The first field with this name, or nullptr.
     const MenuField* FindField(const std::string& field_name) const;
-    // Text of the first field with this name, or an empty string.
+    // The first value of the first field with this name, or nullptr.
+    const MenuValue* FindValue(const std::string& field_name) const;
+    // Text of the first value of the first field with this name, or "".
     std::string FieldText(const std::string& field_name) const;
+    // Numeric value of the first value of the first field with this name, or
+    // `fallback` when the field is absent or not numeric.
+    double FieldNumber(const std::string& field_name, double fallback = 0.0) const;
 };
 
-// The whole menu a `.qvm` describes.
+// The whole menu a container describes.
 struct MenuDefinition {
     bool ok = false;
-    std::string error;
-    std::vector<MenuField> manager_fields;  // the MenuManager's own parameters
-    MenuWidget root;                        // type == "MenuManager" when ok
-    int widget_count = 0;                   // every widget, including nested
+    std::string error;   // human-readable reason when ok == false
+    std::string source;  // the path this was read from, when known
+    MenuWidget root;     // type == "MenuManager" when ok
+    int widget_count = 0;  // every widget, including nested
 
-    // Builds the definition from a decoded image: reads the widget type
-    // declarations, then turns each `Task_New` into a `MenuWidget`.
-    static MenuDefinition FromImage(const QvmImage& image);
-    static MenuDefinition FromFile(const std::string& path);
+    // Parses a "LOOP" container with `QVM_Parse`, then builds the definition.
+    static MenuDefinition FromQvmFile(const std::string& path);
+    // Builds from an already-parsed container.
+    static MenuDefinition FromQvm(const QVMFile& qvm);
+    // Builds from decompiled QSC source (`QVM_DecompileToString`), for callers
+    // that already hold the text.
+    static MenuDefinition FromDecompiledSource(const std::string& source);
 
-    // Every widget, depth-first, as type/name pairs; useful for tests and for the
-    // editor's menu listing.
+    // Every widget, depth-first, including nested ones.
     std::vector<const MenuWidget*> Flatten() const;
+    // Depth-first widget ids, in `Flatten()` order.
+    std::vector<int> Ids() const;
+    // The widget with this id, or nullptr.
+    const MenuWidget* FindById(int id) const;
+    // The first widget of this type, depth-first, or nullptr.
+    const MenuWidget* FindByType(const std::string& type) const;
 };
 
 }  // namespace igi
