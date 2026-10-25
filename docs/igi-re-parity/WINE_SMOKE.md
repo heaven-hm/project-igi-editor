@@ -16,7 +16,7 @@ fixed here (task-15 forbids source edits).
 |---|---|---|
 | i686 link (`cmake --build build-mingw --target igi-editor`) | **exit 0** | `logs/i686-build.log` |
 | tier `help` (`--help` under Wine) | **PASS, exit 0** | `logs/tier-help.log` |
-| tier `tests` (`--run-tests`, retail data) | exit 1 — 67/72 assertions | `logs/tier-tests.log` |
+| tier `tests` (`--run-tests`, retail data) | **PASS, exit 0 — 278/278** (was exit 1, 67/72; see §4a) | `logs/tier-tests.log` |
 | tier `gui` (real GLUT/OpenGL editor) | **exit 2** — window created, GL 2.1, `#version 410` rejected | `logs/tier-gui.log` |
 | GL context probe | legacy → 2.1 (fixed-function OK); core 3.2/4.1 → 4.1 (all fixed-function `GL_INVALID_OPERATION`); compatibility 3.2/4.1 → **creation refused** | `scratch/wine-smoke/glprobe/` |
 
@@ -40,7 +40,9 @@ $ bash scripts/run-wine-smoke.sh
 
 (`exit 1` is the script correctly refusing to call this a pass.) The very first
 cold build of the target compiled and linked all 105 steps; later runs relink
-only. Full transcript: `scratch/wine-smoke/logs/full-run.out`.
+only. Full transcript: `scratch/wine-smoke/logs/full-run.out`. The `tests` row
+above is that original run; the five failures it reported were test bugs and are
+now fixed — the tier passes 278/278 (see §4a).
 
 ---
 
@@ -179,18 +181,30 @@ behaviour.
 
 ---
 
-## 4. Tier `tests` — exit 1, 67/72
+## 4. Tier `tests` — PASS, 278/278
 
 `--run-tests` runs the editor's own native parser tests **inside the Windows
 binary**, against the retail data. This is the strongest runtime evidence in
 this document: it is real Windows code, under Wine, reading the real game
 archives.
 
+Current state (after the fixes in §4a):
+
 ```
-$ … bash scripts/run-wine-smoke.sh --no-build
+$ bash scripts/run-wine-smoke.sh --tiers tests
 ==> 6b. TIER tests — launcher with --run-tests (native parser tests, GL-free)
-   exit=1  elapsed=3s  (limit 600s)
+   exit=0  elapsed=5s  (limit 600s)
    | [CONFIG] Loaded dynamic IGIGamePath: Z:\…\scratch\wine-smoke\run
+   |   Total Assertions Checked: 278
+   |   Passed Assertions       : 278
+   |   Failed Assertions       : 0
+   |   [RESULT] ALL PASSED SUCCESSFULLY!
+```
+
+The first run of this tier, before those fixes, was:
+
+```
+   exit=1  elapsed=3s  (limit 600s)
    |   Total Assertions Checked: 72
    |   Passed Assertions       : 67
    |   Failed Assertions       : 5
@@ -218,14 +232,13 @@ Passing, verbatim highlights (`logs/tier-tests.log`):
 [ExtractLevel] Level 1: models=415 textures=393 terrain=8
 ```
 
-### The five failures, with causes
+### The five failures — all fixed (see §4a)
 
-**Three are a test/implementation mismatch, not a runtime problem.**
+**Three were a test/implementation mismatch, not a runtime problem.**
 `--extract-level` writes into `<outdir>\models\level<N>\` and
-`<outdir>\textures\level<N>\` (`source/cli/cli_handler.cpp:155-157,183,205`),
-while the test counts only the *immediate children* of `<outdir>\models` and
-`<outdir>\textures` (`source/cli/cli_tests.cpp:359,369`). It therefore counts
-the single `level1` subdirectory:
+`<outdir>\textures\level<N>\` (`source/cli/cli_handler.cpp:154-158`), while the
+test counted only the *immediate children* of `<outdir>\models` and
+`<outdir>\textures`, so it counted the single `level1` subdirectory:
 
 ```
   [FAIL] Extracted more than 100 models (Assertion 'modelCount > 100' failed at …/cli_tests.cpp:374)
@@ -241,28 +254,55 @@ textures/level1 : 393 files
 terrain         : TERRAIN.BIT .CMD .CTR .HMP .LMP .QVM .TEX + terrain.qsc
 ```
 
-**Two are caused by the working directory.** The FNT suite opens
+The nesting is **deliberate, not a product bug**: `cli_handler.cpp:182` says the
+output goes "to levelN subdir so FindModelFile's per-level search finds it", and
+the renderer looks for models in exactly that shape
+(`renderer_objects_atta.cpp:363`: `exeDir + "\editor\models\level" + lvl`, plus
+`Utils::GetIGIModelsPath(level)`). No consumer expects a flat `models\*.mef`
+dump, so the test was counting the wrong thing.
+
+**Two were caused by the working directory.** The FNT suite opened
 `assets\editor\qed\editor.fnt` and `assets\editor\qed\editorsm.fnt`
 (`source/cli/cli_tests.cpp:447`) relative to the process CWD. The launcher
 `cd`s to the executable's directory, which in any deployment contains
 `editor/`, not `assets/editor/`. The renderer itself loads the very same font
 from the *deployment* path — `Utils::GetExeDirectory() +
 "\\editor\\qed\\editor.fnt"` (`source/renderer/renderer_draw.cpp:170`) — which
-is what makes the test's path the wrong one, not the staging layout:
+is what made the test's path the wrong one, not the staging layout:
 
 ```
   [FAIL] editor: file exists (assets\editor\qed\editor.fnt) (Assertion 'fs::exists(path)' failed at …/cli_tests.cpp:447)
   [FAIL] editorsm: file exists (assets\editor\qed\editorsm.fnt) (Assertion 'fs::exists(path)' failed at …/cli_tests.cpp:447)
 ```
 
-**Differential experiment** (`IGI_WINE_EXTRA_LINKS="assets=$PWD/assets"` adds
-an `assets` symlink to the stage dir, nothing else changes):
+**Differential experiment** (`IGI_WINE_EXTRA_LINKS="assets=$PWD/assets"` added
+an `assets` symlink to the stage dir, nothing else changed):
 
 ```
 Total Assertions Checked: 268      (was 72 — the suite only runs its deeper
 Passed Assertions       : 263       assertions once the files are found)
 Failed Assertions       : 5
 ```
+
+**That 72 → 268 jump was the alarming part — and the pre-fix result was
+misleading, not merely failing.** The suite was not running a smaller version of
+itself: it was *silently skipping 196 of its own assertions*. Each font
+contributes 98 assertions once it loads (93 per-glyph UV checks + 5
+metric/coverage checks); because both fonts failed to open, the FNT suite
+asserted once per font and returned early. So a single CWD-relative path hid 73%
+of the test suite.
+
+The distinction matters and is the lesson worth carrying: "67/72 passed" read as
+a suite that was 93% healthy and had five unrelated failures. It was in fact a
+suite that had **run barely a quarter of itself and reported green on that
+quarter**. A gate that quietly reports success for the fraction it managed to
+execute is more dangerous than one that fails, because it looks like evidence.
+The five failures were the only reason anyone looked; had the two FNT paths
+happened to resolve, this suite would have reported "ALL PASSED" while never
+loading a single font. The fix removes the early return entirely — the FNT suite
+now resolves its inputs the way the product does, so it cannot skip silently
+again.
+
 
 The two "file exists" failures disappear, which confirms they were layout-only.
 Three "extracted N" failures remain (as above), and the now-reachable FNT
@@ -273,12 +313,162 @@ assertions surface a **new, genuine** failure:
   [FAIL] editorsm: all advances within [width, width+4] (85 out of band) (Assertion 'badAdvance == 0' failed at …/cli_tests.cpp:475)
 ```
 
-84 of the editor font's glyphs and 85 of `editorsm`'s have an advance outside
-`[width, width+4]`. **Whether the assertion or the FNT parser is wrong is not
-determined here** — this is recorded as an observation for whoever owns
-`source/renderer/fnt_*`/`cli_tests.cpp`, not as a finding of this task. It is
-the only thing in this document that looks like a real product defect, and it
-was only reachable because of the differential staging.
+84 of the editor font's glyphs and 85 of `editorsm`'s were reported out of band.
+This was the one genuinely interesting failure, and it is resolved below: **the
+assertion was wrong, the parser is right.**
+
+---
+
+## 4a. The five failures fixed, and the FNT advance verdict
+
+Fixed in `source/cli/cli_tests.cpp` (test code only; no product source touched).
+Re-run: `bash scripts/run-wine-smoke.sh --tiers tests`
+
+| | before | after |
+|---|---|---|
+| `Total Assertions Checked` | 72 | **278** |
+| `Passed Assertions` | 67 | **278** |
+| `Failed Assertions` | 5 | **0** |
+| `[RESULT]` | FAILED | **ALL PASSED SUCCESSFULLY!** |
+| tier exit code | 1 | **0** |
+
+```
+==> 6b. TIER tests — launcher with --run-tests (native parser tests, GL-free)
+   exit=0  elapsed=5s  (limit 600s)
+   |   Total Assertions Checked: 278
+   |   Passed Assertions       : 278
+   |   Failed Assertions       : 0
+   |   [RESULT] ALL PASSED SUCCESSFULLY!
+```
+
+**278 is the true full count.** The arithmetic closes exactly: 268 (the
+differential run, where both fonts loaded but the extractor test still counted
+flat) + 6 (two extra assertions per font: fixed-pitch, cell-matches-FNTH and
+cell-fit, replacing the single wrong `badAdvance` check) + 4 (four extra
+extractor assertions: two per-level layout checks, the terrain directory, and
+"every extracted model file is a .mef") = 278. Nothing is skipped any more —
+the FNT suite can no longer return early, because it now resolves its inputs the
+way the product does.
+
+**What changed:**
+
+1. *Extractor test* — counts `models\` and `textures\` **recursively**, and
+   additionally asserts the per-level layout (`models\level1`,
+   `textures\level1`) and the `terrain\` directory, so the deliberate nesting is
+   now pinned by the test instead of contradicted by it. The assertions were
+   not weakened: `> 100` became `> 100` with the real count printed
+   (`415`, `393`), plus a new stronger check that every extracted model file is
+   a `.mef`.
+
+2. *FNT paths* — resolved via `Utils::GetExeDirectory() + "\editor\qed"`, the
+   same expression the renderer uses (`renderer_draw.cpp:170`), so the suite
+   passes from any working directory. The assertions were kept, not deleted.
+
+3. *Advance check* — replaced with the fixed-pitch cell model (below).
+
+### Which side was wrong: the assertion
+
+The retail FNT layout, from the oracle (`IGI-RE/src/res/sprite.c:94-101`):
+
+```c
+typedef struct FontFrame {
+    int flags;                     /* +0  */
+    float uv[4];                   /* +4  */
+    short texture, w, h, advance;  /* +20 tex, +22 w, +24 h, +26 advance */
+    short unk1C[3];                /* +28 */
+    short x, y;                    /* +34 x, +36 y */
+    short unk26;                   /* +38 */
+} FontFrame;
+```
+
+The editor's parser reads exactly those offsets — `width` at `+22`, `height` at
+`+24`, `advance_x` at `+26`, `offsetX` at `+34`, `offsetY` at `+36`
+(`source/renderer/fnt_parser.cpp:213-226`) — and the header fields
+`proportional`/`nframes`/`advance`/`w`/`h` at `+0/+4/+12/+16/+20`
+(`fnt_parser.cpp:98-104`). Retail then uses the per-frame field directly when it
+measures a text run:
+
+```c
+/* IGI-RE src/res/sprite.c:318-324 */
+int advance = Sprite_Advance(s);
+...
+w += c ? s->frames[c - 1].advance : advance;
+```
+
+So the field is real, per-frame, and authoritative. Now the actual bytes of the
+two shipped fonts, dumped independently of the editor:
+
+```
+assets/editor/qed/editor.fnt:   FH.proportional(+0)=0  nframes=104  advance(+12)=8
+   all 104 ANMF entries: advance(+26) == 8   (distinct values: {8})
+   widths range 3..13 (9 distinct widths)
+assets/editor/qed/editorsm.fnt: FH.proportional(+0)=0  nframes=104  advance(+12)=5
+   all 104 ANMF entries: advance(+26) == 5   (distinct values: {5})
+   widths range 3..10 (7 distinct widths)
+```
+
+Three facts settle it:
+
+* **`proportional(+0) == 0` in both fonts.** That is what makes the retail
+  loader pass `FRAME_FIXED` (`sprite.c:192`:
+  `fh->proportional ? 0 : FRAME_FIXED`). These are *fixed-pitch* fonts by
+  declaration.
+* **Every glyph stores the same advance, equal to the font-wide
+  `FNTH.advance`.** A constant advance is the designed behaviour of a
+  fixed-pitch font, not the "excessive spacing" bug the old comment feared.
+* **The renderer's cell model matches**: it advances `pen_x` by `advance` and
+  places the bitmap with the x bearing (`renderer_draw.cpp:239-247`,
+  `:296-307`, `:351-361`). A proportional `width+1` advance would double-count
+  that bearing and drift.
+
+The assertion was written 2026-05-31 (commit `b594d701`) against the parser
+*as it was then* — the comment even says "Advance is derived as a tight,
+proportional width+1 (see fnt_parser)". The next day, commit `679a94e0`
+("fix: use stored advance_x for FNT spacing") changed the parser to read the
+stored field, and the test was never updated. Because widths vary (3..13) and
+the advance does not, `advance == width + 1` could only hold for a single width
+— 7 in `editor.fnt` (9 glyphs) and 4 in `editorsm` — which is exactly the
+84/85 out of band reported. The assertion's own message was wrong too: it said
+"[width, width+4]" while the code tested exact equality, and the real data
+reaches `width - 2`.
+
+The check now asserts what the format defines, for the ASCII range:
+
+```
+  [PASS] editor: every coded glyph has a positive advance
+  [PASS] editor: fixed-pitch cell advance (all glyphs share one advance)
+  [PASS] editor: cell advance matches FNTH default (8 vs 8)
+  [PASS] editor: glyphs fit their cell (0 overhang more than 2px)
+  [INFO] editor metrics (char: w/h/adv): A:8/9/8 W:9/9/8 M:9/9/8 i:6/8/8 l:6/9/8 g:8/7/8
+  [PASS] editorsm: cell advance matches FNTH default (5 vs 5)
+  [INFO] editorsm metrics (char: w/h/adv): A:5/9/5 W:6/9/5 M:6/9/5 i:5/9/5 l:5/9/5 g:5/9/5
+```
+
+Note the `[INFO]` line: `W:9/9/8` — a 9px-wide glyph in an 8px cell, with
+`A:8/9/8` beside it. Constant advance with varying widths is visible in the
+product's own output, which is precisely why `width + 1` was never the contract.
+
+### Scope of the new check: it asserts fixed-pitch, on purpose
+
+The `all glyphs share one advance` check is deliberately **font-class-specific**.
+It asserts fixed-pitch, which is what both shipped fonts are
+(`FNTH.proportional == 0`). A **proportional** FNT asset
+(`proportional != 0`) would legitimately carry per-glyph advances and would
+fail this check.
+
+That is the intended behaviour, not a latent bug: if such a font is ever added,
+it needs a **proportional variant** of the check. Do not relax this one to
+accommodate it, and do not read a failure here on a proportional font as a
+regression — it is the check correctly reporting that the font is a different
+class than the one it was written for. The same statement is in the test source
+(`source/cli/cli_tests.cpp`, the SCOPE note above the assertion) and in the
+assertion's own failure message, so a contributor adding a proportional font
+gets a clear signal from the failing test itself rather than having to find this
+document.
+
+**No product defect, so no diff was requested from the Lead.** The FNT parser
+matches the retail struct field-for-field and the retail loader's own use of the
+field; the only wrong thing was the test's expectation.
 
 ---
 
@@ -477,9 +667,9 @@ context.
 
 | # | Symptom | Cause | Status |
 |---|---|---|---|
-| 1 | `--run-tests`: 3 × "Extracted more than N" | Test counts direct children of `models/`; extractor nests `models/level1/` (`cli_handler.cpp:155-157,183,205` vs `cli_tests.cpp:359,369`). Files really are there (415/393). | diagnosed, not fixed (test bug) |
-| 2 | `--run-tests`: 2 × `assets\editor\qed\*.fnt` missing | Paths are CWD-relative; the launcher `cd`s to the exe dir which has `editor/`, not `assets/editor/`. Proven by the `assets`-symlink differential. | diagnosed, not fixed (test bug) |
-| 3 | FNT `badAdvance` 84/85 out of band | Only reachable after #2 is worked around. Advance outside `[width, width+4]` (`cli_tests.cpp:475`). Parser or assertion is wrong; undetermined. | **open observation** |
+| 1 | `--run-tests`: 3 × "Extracted more than N" | Test counted direct children of `models/`; extractor deliberately nests `models/level1/` (`cli_handler.cpp:154-158,182`) for `FindModelFile`'s per-level search. Files really are there (415/393). | **FIXED** — test counts recursively + asserts the per-level layout |
+| 2 | `--run-tests`: 2 × `assets\editor\qed\*.fnt` missing | CWD-relative path; the launcher `cd`s to the exe dir which has `editor/`, not `assets/editor/`. Silently skipped 196 of the suite's own assertions. | **FIXED** — resolved via `Utils::GetExeDirectory()`, as `renderer_draw.cpp:170` does |
+| 3 | FNT `badAdvance` 84/85 out of band | Assertion demanded `advance == width + 1` (the parser's pre-`679a94e0` behaviour); the retail fonts are fixed-pitch (`proportional == 0`) and store a constant advance equal to `FNTH.advance`. Parser and oracle agree. | **FIXED** — assertion rewritten to the fixed-pitch cell model; no product defect |
 | 4 | GUI: silent death, exit 2, no log | `QEDLogs(FALSE)` in the shipped `qedconfig.qsc`; renderer init failure is logged at INFO-gated level. | diagnosed; `--diag-log` works around it |
 | 5 | GUI: shader `version '410' is not supported` | Editor gets a legacy GL 2.1 context; shaders need 4.1. A 4.1 *core* context is obtainable but rejects all 208 fixed-function calls; a *compatibility* context cannot be created at all. No usable context exists here. | **root cause; no fix available on this host (see §5)** |
 | 6 | i686 link overwrites the x64 artifact | `CMakeLists.txt:227,254-256` pin both architectures to `bin/Release/igi1ed.exe`. | handled by backup/restore in the script |
@@ -515,8 +705,10 @@ context.
   none exists.
 * Anything about Windows with a real GPU driver. Everything here is
   Wine-on-macOS-on-Apple-Silicon.
-* That the three non-GL assertion failures (§6 #1, #2, #3) reproduce on
-  Windows; #1 and #2 are CWD/layout-dependent, #3 is unexamined.
+* That the three previously failing assertion groups reproduce on Windows —
+  they were test bugs and are fixed (§4a); the extractor's per-level nesting and
+  the fixed-pitch FNT advance are both confirmed correct against the retail
+  files and the oracle.
 
 ---
 
@@ -528,6 +720,7 @@ scratch/wine-smoke/artifacts/i686-igi1ed.exe  the smoke-tested binary
                                               sha256 7365d8c0…99b59
 scratch/wine-smoke/logs/wine-smoke.log        combined transcript of the last run
 scratch/wine-smoke/logs/full-run.out          full run, build + help,tests,gui
+scratch/wine-smoke/logs/tests-tier-after.out  `--tiers tests` after the §4a fixes (278/278)
 scratch/wine-smoke/logs/canonical-run.out     tiers-only run (earlier artifact)
 scratch/wine-smoke/logs/diag-run.out          diagnostic run (gui, --diag-log)
 scratch/wine-smoke/logs/tier-help.log         tier 1 verbatim

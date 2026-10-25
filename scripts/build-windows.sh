@@ -5,19 +5,25 @@
 # Two independent gates, run from a macOS/Linux host with MinGW-w64:
 #
 #   1. x64 full link gate   — build-mingw-x64/ (x86_64-w64-mingw32)
-#      configure + build of `igi-editor` and `igi_tests`.  x86_64 is the only
-#      architecture this repository can actually LINK for: the committed GL
+#      configure + build of `igi-editor` and `igi_tests`.  The committed GL
 #      import libraries (third_party/GL/lib/x64/{freeglut,glew32}.lib) are
-#      MSVC x64 import libs and MinGW-w64 consumes them directly.  This gate
-#      must exit 0.
+#      MSVC x64 import libs and MinGW-w64 consumes them directly, so this is the
+#      architecture a fresh checkout can always LINK for.  This gate must exit 0.
+#      (x64 links but does not RUN: no x64 freeglut/glew runtime DLLs exist, see
+#      docs/igi-re-parity/WINE_SMOKE.md.  The runnable target is i686.)
 #
 #   2. i686 compile-only gate — build-mingw/ (i686-w64-mingw32)
 #      The shipping target is Win32, and tools/igi-re-parity/tu-check.py replays
 #      the 32-bit compile commands from build-mingw/compile_commands.json, so
-#      this tree stays i686.  The x86 GL import libraries do not exist in the
-#      repository, so no link is attempted: every object target of
-#      `igi-editor` / `igi_tests` / `igi_mcp` is built explicitly, which still
-#      fails the gate on any 32-bit compile error.
+#      this tree stays i686.  The x86 GL import libraries
+#      (third_party/GL/lib/x86/{libfreeglut,libglew32}.a) are NOT tracked -- the
+#      original repository's .gitignore has a blanket `x86/` rule -- so this gate
+#      does not assume a link is possible and does not attempt one: every object
+#      target of `igi-editor` / `igi_tests` / `igi_mcp` is built explicitly, which
+#      still fails the gate on any 32-bit compile error.  When those two archives
+#      are present, scripts/run-wine-smoke.sh links this same tree into a runnable
+#      igi1ed.exe; the gate stays compile-only on purpose, so it passes on a
+#      machine that has only the tracked files.
 #
 # Usage:
 #   bash scripts/build-windows.sh                 # both gates

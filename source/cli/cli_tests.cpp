@@ -349,31 +349,45 @@ static void TestExtractLevel() {
 
     std::string modelsDir = outDir + "\\models";
     std::string texturesDir = outDir + "\\textures";
+    // --extract-level nests its output per level: models\levelN\ and
+    // textures\levelN\ (cli_handler.cpp:154-158). The nesting is deliberate,
+    // not an accident: cli_handler.cpp:182 says the levelN subdir exists "so
+    // FindModelFile's per-level search finds it", matching the renderer's own
+    // per-level family dirs (renderer_objects_atta.cpp:363). Count the tree the
+    // extractor actually writes instead of assuming a flat dump.
+    const std::string modelsLevelDir = modelsDir + "\\level1";
+    const std::string texturesLevelDir = texturesDir + "\\level1";
+    const std::string terrainDir = outDir + "\\terrain";
 
     ASSERT_TRUE(fs::exists(modelsDir), "Extracted models directory exists");
     ASSERT_TRUE(fs::exists(texturesDir), "Extracted textures directory exists");
+    ASSERT_TRUE(fs::exists(modelsLevelDir), "Models are nested per level (models\\level1)");
+    ASSERT_TRUE(fs::exists(texturesLevelDir), "Textures are nested per level (textures\\level1)");
+    ASSERT_TRUE(fs::exists(terrainDir), "Extracted terrain directory exists");
 
     int modelCount = 0;
     int mefCount = 0;
     if (fs::exists(modelsDir)) {
-        for (const auto& entry : fs::directory_iterator(modelsDir)) {
-            modelCount++;
+        for (const auto& entry : fs::recursive_directory_iterator(modelsDir)) {
+            if (!entry.is_regular_file()) continue;
+            ++modelCount;
             if (entry.path().extension() == ".mef") {
-                mefCount++;
+                ++mefCount;
             }
         }
     }
 
     int textureCount = 0;
     if (fs::exists(texturesDir)) {
-        for (const auto& entry : fs::directory_iterator(texturesDir)) {
-            textureCount++;
+        for (const auto& entry : fs::recursive_directory_iterator(texturesDir)) {
+            if (entry.is_regular_file()) ++textureCount;
         }
     }
 
-    ASSERT_TRUE(modelCount > 100, "Extracted more than 100 models");
-    ASSERT_TRUE(mefCount > 0, "Extracted at least one MEF model file");
-    ASSERT_TRUE(textureCount > 100, "Extracted more than 100 textures");
+    ASSERT_TRUE(modelCount > 100, "Extracted more than 100 models (" + std::to_string(modelCount) + ")");
+    ASSERT_TRUE(mefCount > 0, "Extracted at least one MEF model file (" + std::to_string(mefCount) + ")");
+    ASSERT_TRUE(mefCount == modelCount, "Every extracted model file is a .mef");
+    ASSERT_TRUE(textureCount > 100, "Extracted more than 100 textures (" + std::to_string(textureCount) + ")");
 }
 
 // Write an RGBA buffer to an uncompressed 32-bit TGA (top-down).
@@ -455,25 +469,65 @@ static void TestOneFNT(const std::string& path, const std::string& tag) {
     ASSERT_TRUE(font.texWidth > 0 && font.texHeight > 0, tag + ": non-empty atlas");
 
     // Printable ASCII coverage and metric sanity.
-    int covered = 0, badAdvance = 0;
+    //
+    // These retail fonts are FIXED-pitch. FNTH.proportional (+0) is 0 in both
+    // editor.fnt and editorsm.fnt, which is exactly what makes the retail
+    // loader pass FRAME_FIXED (IGI-RE src/res/sprite.c:192), and retail
+    // accumulates a text run's width from the per-frame advance field,
+    // s->frames[c - 1].advance (sprite.c:318-324). In the shipped files all 104
+    // ANMF entries store the same advance -- 8 for editor.fnt, 5 for
+    // editorsm.fnt -- equal to FNTH.advance (+12), while the inked widths vary
+    // over 3..13 and 3..10 respectively. A constant advance is therefore the
+    // format's design, not the "excessive spacing" bug: the renderer advances
+    // pen_x by it and positions the bitmap inside the cell with the x bearing
+    // (renderer_draw.cpp:239-247). The previous check demanded
+    // advance == width + 1, which is the behaviour the parser had BEFORE commit
+    // 679a94e0 switched to the stored field; since widths vary and the advance
+    // does not, it could only hold by accident for a single width. Assert the
+    // fixed-pitch cell model the format actually defines.
+    //
+    // SCOPE -- this check asserts FIXED-pitch specifically, and that is
+    // deliberate. FNTH.proportional (+0) is 0 in both shipped fonts, so they
+    // are fixed-pitch by declaration. A proportional FNT asset
+    // (proportional != 0) would legitimately carry per-glyph advances and would
+    // fail the "all glyphs share one advance" check below. If such a font is
+    // ever added, give it a proportional variant of this check -- do not relax
+    // this one, and do not read its failure on a proportional font as a
+    // regression.
+    int covered = 0, badAdvance = 0, badCell = 0;
+    int minAdvance = 0, maxAdvance = 0;
+    bool haveAdvance = false;
     for (int c = 0x20; c <= 0x7e; ++c) {
         auto it = font.glyphs.find(c);
         if (it == font.glyphs.end()) continue;
         ++covered;
         const FntGlyph& g = it->second;
-        // Advance is derived as a tight, proportional width+1 (see fnt_parser).
-        // A constant advance across glyphs of differing widths is the "excessive
-        // spacing" bug; this band enforces proportional spacing.
         if (c != 0x20 && g.width > 0) {
-            if (g.advance != g.width + 1) ++badAdvance;
+            if (g.advance <= 0) {
+                ++badAdvance;
+            } else {
+                if (!haveAdvance) { minAdvance = maxAdvance = g.advance; haveAdvance = true; }
+                minAdvance = std::min(minAdvance, g.advance);
+                maxAdvance = std::max(maxAdvance, g.advance);
+            }
+            // A glyph may overhang its cell slightly for kerning; the widest
+            // ASCII glyphs in the shipped fonts overhang by at most 2px.
+            if (g.width > g.advance + 2) ++badCell;
         }
         // UVs in range.
         ASSERT_TRUE(g.u0 >= 0.0f && g.u1 <= 1.001f && g.v0 >= 0.0f && g.v1 <= 1.001f,
                     tag + ": glyph '" + std::string(1, (char)c) + "' UVs in range");
     }
     ASSERT_TRUE(covered >= 90, tag + ": covers printable ASCII (" + std::to_string(covered) + "/95)");
-    ASSERT_TRUE(badAdvance == 0, tag + ": all advances within [width, width+4] (" +
-                std::to_string(badAdvance) + " out of band)");
+    ASSERT_TRUE(badAdvance == 0, tag + ": every coded glyph has a positive advance");
+    ASSERT_TRUE(haveAdvance && minAdvance == maxAdvance,
+                tag + ": fixed-pitch cell advance (all glyphs share one advance; "
+                      "a proportional FNT needs its own variant)");
+    ASSERT_TRUE(haveAdvance && minAdvance == font.defaultAdvance,
+                tag + ": cell advance matches FNTH default (" + std::to_string(minAdvance) +
+                " vs " + std::to_string(font.defaultAdvance) + ")");
+    ASSERT_TRUE(badCell == 0, tag + ": glyphs fit their cell (" + std::to_string(badCell) +
+                " overhang more than 2px)");
 
     // Dump a few representative glyph metrics for eyeballing.
     std::cout << "  [INFO] " << tag << " metrics (char: w/h/adv):";
@@ -495,8 +549,16 @@ static void TestOneFNT(const std::string& path, const std::string& tag) {
 }
 
 static void TestFNT() {
-    TestOneFNT("assets\\editor\\qed\\editor.fnt", "editor");
-    TestOneFNT("assets\\editor\\qed\\editorsm.fnt", "editorsm");
+    // Resolve the shipped fonts the way the product does: relative to the
+    // executable, not to the process CWD (renderer_draw.cpp:170 loads
+    // Utils::GetExeDirectory() + "\\editor\\qed\\editor.fnt"). The old
+    // CWD-relative "assets\\editor\\qed\\..." path only resolved when the suite
+    // happened to be run from the repo root, so in any deployed or staged
+    // layout both fonts failed to load and ~196 assertions were silently
+    // skipped (see docs/igi-re-parity/WINE_SMOKE.md).
+    const std::string qedDir = Utils::GetExeDirectory() + "\\editor\\qed";
+    TestOneFNT(qedDir + "\\editor.fnt", "editor");
+    TestOneFNT(qedDir + "\\editorsm.fnt", "editorsm");
 
     FntFont missing = FNT_Parse("scratch\\cpp_tests\\nope.fnt");
     ASSERT_FALSE(missing.valid, "Nonexistent FNT file should be invalid");

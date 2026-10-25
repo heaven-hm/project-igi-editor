@@ -91,3 +91,32 @@ and the drawn-LOD decision itself is **not** part of this rule: it comes from
 model file is dead data with no reader, and `0x2000` is `ModelFile_Setup`'s
 cross-bundle reference scheme (`src/model/model.c:250`, `:281-282`, `:302-309`),
 not an LOD rule — both are easy to implement wrongly from the issue text alone.
+
+---
+
+## Latent defects in shared code, recorded rather than patched
+
+Both were found while building the retail menu reader (`source/menu/qvm_image.cpp`)
+and neither is patched, deliberately: in each case the affected input does not occur
+in the retail corpus, so a change would have no test that can fail and would alter
+shared code used by five other call sites. They are recorded here so they are not
+rediscovered as surprises.
+
+### `QVM_OperandSize` disagrees with the interpreter for `BLK` and `JSR`
+
+`source/level/qvm_parser.cpp:8-31` gives `BLK` and `JSR` a one-byte operand, while the
+interpreter reads `BLK` as `pc += 5 + read32(pc+1)` (`src/qvm/qvm.c:340`). The parser
+matches the *assembler*, which emits one byte (`src/qasm/asm.c:44-61`), so this is an
+assembler-versus-interpreter divergence rather than a parser bug per se. Measured: no
+`PUSHA`, `BLK` or `JSR` instruction occurs in any of the **1043** retail `.qvm` files,
+so none of the five existing `QVM_Parse` call sites can observe it.
+
+### `EscapeQSCString` does not escape a backslash
+
+`source/level/qvm_decompiler.cpp:36-44` escapes `\n` and `"` but not `\`, so a string
+containing a backslash cannot round-trip through `QVM_DecompileToString`: the emitted
+text is ambiguous and anything that inverts the escaping — including the repository's
+own QSC lexer — misreads it. Measured: neither menu file contains a backslash (0 of
+139 strings in `ingamemenu.qvm`, 0 of 249 in `MAINMENU.QVM`; 14 and 28 respectively do
+contain a newline, which is escaped correctly). Latent, not reachable from the retail
+menu data.
