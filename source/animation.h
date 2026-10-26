@@ -218,10 +218,10 @@ inline bool ShouldUseSkinnedReplacement(const AnimPlayback& playback,
 //
 //   1. The BEF text's key times are engine TICKS (4800/second), NOT
 //      milliseconds - `AnimationClip::time_ms` and `AnimationClip::length_ms`
-//      are misnomers. `AnimPlayer` consumes ticks; `AnimPlayback::Update`
-//      consumes milliseconds. Never feed one clock's value to the other.
-//      (`AnimPlayback::Update` therefore runs the editor's preview 4.8x slow;
-//      the engine path does not.)
+//      are misnomers. `AnimPlayer` consumes ticks; `AnimPlayback::Update` takes
+//      real elapsed MILLISECONDS and converts to ticks (`kTicksPerMs`, from
+//      kTicksPerSecond at src/boneobj/anim.c:9), so `currentTimeMs` holds ticks
+//      despite its name. Never feed one clock's value to the other.
 //   2. `AnimPlayer::Step()` is ONE engine frame (gTicksPerFrame = 160 ticks at
 //      the game's 30 fps), which is what the retail game loop does.
 //      `AdvanceSeconds` is the editor-side accumulator that calls it.

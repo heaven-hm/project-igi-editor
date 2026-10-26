@@ -121,7 +121,14 @@ int FindAiScriptPatrolPathId(const std::string& qvmPath) {
 
 void AnimPlayback::Update(float dtMs) {
     if (!clip || !playing) return;
-    currentTimeMs += dtMs * speed;
+    // The engine's animation clock counts TICKS at 4800 a second
+    // (`static const float kTicksPerSecond = 4800.0f`, src/boneobj/anim.c:9; the
+    // header comment at anim.c:1 and BoneObj::length, src/boneobj/boneobjtypes.h:45,
+    // both say "in ticks, 4800 per second").  AnimationClip::duration_ms() and the
+    // key times are those same tick values, so advancing the counter by elapsed
+    // MILLISECONDS ran every preview 4.8x slow.  Convert, then scale by `speed`.
+    constexpr float kTicksPerMs = 4800.0f / 1000.0f;
+    currentTimeMs += dtMs * kTicksPerMs * speed;
     int dur = clip->duration_ms();
     if (dur > 0) {
         if (clip->loop() || forceLoop) {
