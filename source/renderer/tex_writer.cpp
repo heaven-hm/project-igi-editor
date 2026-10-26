@@ -1,14 +1,29 @@
 /******************************************************************************
- * @file    tex_parser.cpp
- * @brief   TEX (LOOP) texture parser — reimplemented from Python reference
- *          tools/dconv/format/tex.py  +  tools/dconv/plugins/tex/convert.py
+ * @file    tex_writer.cpp
+ * @brief   LOOP texture parser (engine Texture_LoadFile) and TGA export.
  *
- * Key design points (matching the Python):
- *   • Raw pixel bytes are stored as-is; no channel conversion.
- *   • TGA PixelDepth = DEPTH[mode] * 8  (16 for RGB565, 32 for ARGB8888).
- *   • TGA ImageDescriptor = ALPHA[mode] | 0x10 | 0x20
- *       mirrorX(0x10) = left-to-right, mirrorY(0x20) = top-to-bottom.
- *   • TGA 2.0 footer ("TRUEVISION-XFILE.\0") is written.
+ * Every field offset, size and pixel-format rule below is transcribed from
+ * IGI-RE, the decompiled retail IGI.exe:
+ *
+ *   Texture_LoadFile            0x4B24C0  src/file/texture.c:231-252
+ *     LoopHeader2  (v2)                   src/file/texture.c:11-21
+ *     LoopHeader11 (v11)                  src/file/texture.c:24-36
+ *   D3DTex_DownloadTexture      0x50AD10  src/sysmisc/d3dtex.c:411-432
+ *     format switch + FMT_MIPMAPS mip walk (FMT_MIPMAPS 0x40 at :78)
+ *   Pixel_1555To32              0x517C90  src/terrdraw/pixel.c:59-81
+ *   Pixel_565To32               0x517DD0  src/terrdraw/pixel.c:83-105
+ *   Pixel_Copy32                0x517F00  src/terrdraw/pixel.c:112-125
+ *   Pixel_8To32                 0x517FD0  src/terrdraw/pixel.c:127-155
+ *
+ * There is no fallback for a version or format the engine does not accept: the
+ * engine reports "Unsupported texture format" / "'%s' is not a valid Texture
+ * file." and halts (src/sysmisc/d3dtex.c:429-431, src/file/texture.c:244-247).
+ * The editor reports the same condition as a failed parse.
+ *
+ * The TGA writer is the editor's own export path (no engine equivalent); it
+ * writes the engine's decoded levels and uses the engine's channel layout
+ * (ARGB8888 little-endian = B,G,R,A byte order, alpha from bit 15 for 1555 and
+ * 0xFF for 565).
  *****************************************************************************/
 
 #include "tex_writer.h"
@@ -19,25 +34,39 @@
 #include <filesystem>
 
 // ---------------------------------------------------------------------------
-// Constants (match Python DEPTH / ALPHA dicts)
+// Format table — D3DTex_DownloadTexture 0x50AD10, src/sysmisc/d3dtex.c:411-432
 // ---------------------------------------------------------------------------
 
 namespace {
 
+// FMT_MIPMAPS — src/sysmisc/d3dtex.c:78
+constexpr uint32_t kFmtMipmaps = 0x40;
+
+// Bytes per pixel of the level buffer, per the engine's format switch.
+// 0 means the engine has no conversion for that format.
 uint32_t DepthForMode(uint32_t mode) {
     switch (mode) {
-        case  2: return 2;   // RGB565
-        case  3: return 4;   // ARGB8888
-        case 67: return 4;   // ARGB8888
-        default: return 0;
+        case  1: return 1;   // Pixel_8To32   (palettised)
+        case  2: return 2;   // Pixel_1555To32
+        case  3: return 4;   // Pixel_Copy32
+        case  4: return 4;   // Pixel_Copy32
+        case  5: return 2;   // Pixel_565To32
+        case 0x43: return 4; // Pixel_Copy32
+        default: return 0;   // "Unsupported texture format"
     }
 }
 
+// Alpha bits of the format, for the TGA image descriptor: the engine's
+// converters produce A = (p & 0x8000) ? 0xFF : 0 for 1555, A = 0xFF for 565,
+// A = index ? 0xFF : 0 for the 8bpp path, and a copied alpha byte for 8888.
 uint32_t AlphaForMode(uint32_t mode) {
     switch (mode) {
+        case  1: return 1;
         case  2: return 1;
         case  3: return 8;
-        case 67: return 8;
+        case  4: return 8;
+        case  5: return 0;
+        case 0x43: return 8;
         default: return 0;
     }
 }
@@ -55,14 +84,19 @@ bool RdBytes(std::ifstream& f, void* dst, std::size_t n) {
     return static_cast<bool>(f.read(reinterpret_cast<char*>(dst), static_cast<std::streamsize>(n)));
 }
 
-// ---------------------------------------------------------------------------
-// Loop06 skip helper
+uint32_t RdU32LE(const uint8_t* p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+uint16_t RdU16LE(const uint8_t* p) {
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+// Loop06 skip helper — used by the sprite (v7/v9) path only.
 // Loop06 header layout ('4s1I4H2I' = 24 bytes):
 //   signature(4)  version(4)  _0(2) _1(2) _2(2) _3(2)  count_x(4)  count_y(4)
 // Followed by count_x * count_y * Item06 (16 bytes each).
-// ---------------------------------------------------------------------------
 void SkipLoop06(std::ifstream& f) {
-    // skip sig(4) + version(4) + four shorts(8) = 16 bytes to reach counts
     f.seekg(16, std::ios::cur);
     uint32_t count_x = 0, count_y = 0;
     if (!Rd(f, count_x) || !Rd(f, count_y)) return;
@@ -70,33 +104,34 @@ void SkipLoop06(std::ifstream& f) {
 }
 
 // ---------------------------------------------------------------------------
-// Version parsers
+// v2 — Texture_LoadFile 0x4B24C0, src/file/texture.c:237-239
+//   LoopHeader2: magic(0) version(4) unk08(H@8) pad0A(H@10) unk0C(I@12)
+//                pitch(H@16) width(H@18) height(H@20) format(H@22)
+//   Texture_Create(tex, a2, h2->pitch, h2->width, h2->height, h2->format,
+//                  h2->unk08, 0, p + 0x18)
 // ---------------------------------------------------------------------------
-
-// Loop02 header ('4s3I4H' = 24 bytes):
-//   signature(4)  version(4)  _1(4)  _2(4)
-//   width_line(2)  width(2)  height(2)  mode(2)
-// Bitmap: width * height * DEPTH[mode] raw bytes.
 bool ParseV2(std::ifstream& f, TEXFile& tex) {
     f.seekg(0, std::ios::beg);
 
-    uint8_t hdr[24];
-    if (!RdBytes(f, hdr, 24)) { tex.error = "v2: short header"; return false; }
+    uint8_t hdr[0x18];
+    if (!RdBytes(f, hdr, sizeof(hdr))) { tex.error = "v2: short header"; return false; }
 
-    // width_line is at offset 16 — ignored.  width is at 18, height at 20, mode at 22.
-    uint16_t width, height, mode;
-    std::memcpy(&width,  hdr + 18, 2);
-    std::memcpy(&height, hdr + 20, 2);
-    std::memcpy(&mode,   hdr + 22, 2);
+    const uint16_t pitch  = RdU16LE(hdr + 16);
+    const uint16_t width  = RdU16LE(hdr + 18);
+    const uint16_t height = RdU16LE(hdr + 20);
+    const uint16_t format = RdU16LE(hdr + 22);
 
-    const uint32_t depth = DepthForMode(mode);
-    if (depth == 0) { tex.error = "v2: unsupported mode " + std::to_string(mode); return false; }
+    const uint32_t depth = DepthForMode(format);
+    if (depth == 0) { tex.error = "v2: unsupported texture format " + std::to_string(format); return false; }
 
-    const std::size_t sz = static_cast<std::size_t>(width) * height * depth;
+    // The engine passes the file's own pitch to the device and downloads
+    // pitch * height bytes for the base level (d3dtex.c:406, :424-432).
+    const std::size_t sz = static_cast<std::size_t>(pitch) * height;
     TEXImage img;
     img.width  = width;
     img.height = height;
-    img.mode   = mode;
+    img.mode   = format;
+    img.pitch  = pitch;
     img.pixels.resize(sz);
     if (!RdBytes(f, img.pixels.data(), sz)) { tex.error = "v2: short bitmap"; return false; }
 
@@ -105,131 +140,122 @@ bool ParseV2(std::ifstream& f, TEXFile& tex) {
     return true;
 }
 
-// Loop07 / Loop09 outer header ('4s12I' = 52 bytes):
-//   signature(4)  version  _0 _1 _2 _3 _4  offset  count  _5  width  height  mode
-//   (all uint32)
-// Then: count * Item07(40 B) or Item09(32 B)  [skipped]
-// Then: count * (width * height * DEPTH[mode])  raw bitmaps
-// Then: Loop06  [skipped]
+// ---------------------------------------------------------------------------
+// v7/v9 sprites — Sprite_Load 0x4B6720, src/res/sprite.c:221-248.
+// The editor uses this parser for .spr/.pic cursors; the pixel source is the
+// per-frame record and the format is the header's `format` field when no
+// palette is referenced. Item tables are skipped as the engine does not read
+// them here.
+// ---------------------------------------------------------------------------
 bool ParseV7or9(std::ifstream& f, uint32_t ver, TEXFile& tex) {
     f.seekg(0, std::ios::beg);
 
     uint8_t hdr[52];
-    if (!RdBytes(f, hdr, 52)) {
+    if (!RdBytes(f, hdr, sizeof(hdr))) {
         tex.error = "v" + std::to_string(ver) + ": short header"; return false;
     }
 
-    // Offsets within the 52-byte header (all uint32 LE):
-    //   [0-3]  sig     [4-7]  version  [8-11] _0  [12-15] _1  [16-19] _2
-    //  [20-23] _3     [24-27] _4      [28-31] offset  [32-35] count
-    //  [36-39] _5     [40-43] width   [44-47] height  [48-51] mode
-    uint32_t count, width, height, mode;
-    std::memcpy(&count,  hdr + 32, 4);
-    std::memcpy(&width,  hdr + 40, 4);
-    std::memcpy(&height, hdr + 44, 4);
-    std::memcpy(&mode,   hdr + 48, 4);
+    // LoopHeader (src/res/sprite.c:113-127): nframes(I@32) w(I@40) h(I@44)
+    // format(I@48).
+    const uint32_t count  = RdU32LE(hdr + 32);
+    const uint32_t width  = RdU32LE(hdr + 40);
+    const uint32_t height = RdU32LE(hdr + 44);
+    const uint32_t mode   = RdU32LE(hdr + 48);
 
-    if (count == 0 || count > 4096) {
-        tex.error = "v" + std::to_string(ver) + ": bad count=" + std::to_string(count);
+    if (count == 0) {
+        tex.error = "v" + std::to_string(ver) + ": bad count=0";
         return false;
     }
     const uint32_t depth = DepthForMode(mode);
     if (depth == 0) {
-        tex.error = "v" + std::to_string(ver) + ": unsupported mode=" + std::to_string(mode);
+        tex.error = "v" + std::to_string(ver) + ": unsupported texture format " + std::to_string(mode);
         return false;
     }
 
-    // Skip item table: Item07=40 B, Item09=32 B
-    const std::size_t itemBytes = count * (ver == 7 ? 40u : 32u);
+    // Skip the frame table: Item07 = 40 bytes, Item09 = 32 bytes.
+    const std::size_t itemBytes = static_cast<std::size_t>(count) * (ver == 7 ? 40u : 32u);
     f.seekg(static_cast<std::streamoff>(itemBytes), std::ios::cur);
 
-    // Read raw bitmaps
-    const std::size_t bmpSz = static_cast<std::size_t>(width) * height * depth;
+    const std::size_t pitch   = static_cast<std::size_t>(width) * depth;
+    const std::size_t bmpSize = pitch * height;
     tex.version = ver;
     for (uint32_t i = 0; i < count; ++i) {
         TEXImage img;
         img.width  = width;
         img.height = height;
         img.mode   = mode;
-        img.pixels.resize(bmpSz);
-        if (!RdBytes(f, img.pixels.data(), bmpSz)) {
+        img.pitch  = static_cast<uint32_t>(pitch);
+        img.pixels.resize(bmpSize);
+        if (!RdBytes(f, img.pixels.data(), bmpSize)) {
             tex.error = "v" + std::to_string(ver) + ": short bitmap " + std::to_string(i);
             return false;
         }
         tex.images.push_back(std::move(img));
     }
 
-    SkipLoop06(f); // trailing Loop06 — non-fatal
+    SkipLoop06(f);  // trailing Loop06 — not read by this path
     return true;
 }
 
-// Loop11 header ('4s4I6H' = 32 bytes):
-//   signature(4)  version(I)  mode(I)  multi(I)  _0(I)
-//   _1(H)  _2(H)  _3(H)  width(H)  height(H)  depth(H)
-// Followed by up to 10 mipmap bitmaps; each level i:
-//   size = (width >> i) * (height >> i) * DEPTH[mode]
-//   stop when read returns 0 bytes.
+// ---------------------------------------------------------------------------
+// v11 — Texture_LoadFile 0x4B24C0, src/file/texture.c:240-243
+//   LoopHeader11: magic(0) version(4) format(I@8) unk0C(I@12) unk10(I@16)
+//                 unk14(H@20) width(H@22) height(H@24) unk1A(H@26)
+//                 unk1C(H@28) bytesPerPixel(H@30)
+//   Texture_Create(tex, a2, h11->bytesPerPixel * h11->unk1A, h11->width,
+//                  h11->height, h11->format, h11->unk14, h11->unk0C, p + 0x20)
+//   Mip chain: D3DTex_DownloadTexture 0x50AD10, src/sysmisc/d3dtex.c:432
+//     do { ... data += h * pitch; w >>= 1; h >>= 1; pitch >>= 1; }
+//     while ((format & FMT_MIPMAPS) && w > 0 && h > 0);
+// ---------------------------------------------------------------------------
 bool ParseV11(std::ifstream& f, TEXFile& tex) {
     f.seekg(0, std::ios::beg);
 
-    uint8_t hdr[32];
-    if (!RdBytes(f, hdr, 32)) { tex.error = "v11: short header"; return false; }
+    uint8_t hdr[0x20];
+    if (!RdBytes(f, hdr, sizeof(hdr))) { tex.error = "v11: short header"; return false; }
 
-    // mode at [8-11] (uint32), width at [26-27] (uint16), height at [28-29] (uint16)
-    // Wait — let me recount '4s4I6H':
-    //  [0-3]  sig(4s)
-    //  [4-7]  version(I)
-    //  [8-11] mode(I)
-    // [12-15] multi(I)
-    // [16-19] _0(I)
-    // [20-21] _1(H)
-    // [22-23] _2(H)
-    // [24-25] _3(H)
-    // [26-27] width(H)   ← NOTE: Python slots say _3,width,height,depth as last 4 of 6H
-    // Wait: 6H gives 6 shorts.  After 4 ints we have: _1(H) _2(H) _3(H) width(H) height(H) depth(H)
-    // That's only 5 named fields for 6 values; re-check Python slots:
-    //   _0, _1, _2, _3 belong to the INTS? No: slots = sig,version,mode,multi,_0,_1,_2,_3,width,height,depth
-    //   '4s4I6H' → 1+4+6=11 values → sig,version,mode,multi,_0 from 4s+4I, then _1,_2,_3,width,height,depth from 6H
-    // Byte offsets:
-    //  [0-3]  sig      [4-7] version   [8-11] mode   [12-15] multi   [16-19] _0
-    //  [20-21] _1      [22-23] _2      [24-25] _3    [26-27] width   [28-29] height  [30-31] depth(H)
+    const uint32_t format  = RdU32LE(hdr + 8);
+    const uint16_t width   = RdU16LE(hdr + 22);
+    const uint16_t height  = RdU16LE(hdr + 24);
+    const uint16_t unk1A   = RdU16LE(hdr + 26);
+    const uint16_t bpp     = RdU16LE(hdr + 30);
 
-    uint32_t mode;
-    uint16_t width, height;
-    std::memcpy(&mode,   hdr +  8, 4);
-    std::memcpy(&width,  hdr + 26, 2);
-    std::memcpy(&height, hdr + 28, 2);
+    const uint32_t depth = DepthForMode(format);
+    if (depth == 0) { tex.error = "v11: unsupported texture format " + std::to_string(format); return false; }
 
-    const uint32_t depth = DepthForMode(mode);
-    if (depth == 0) { tex.error = "v11: unsupported mode=" + std::to_string(mode); return false; }
+    // pitch = bytesPerPixel * unk1A (src/file/texture.c:242)
+    uint32_t pitch = static_cast<uint32_t>(bpp) * unk1A;
+    if (pitch == 0) { tex.error = "v11: zero pitch"; return false; }
 
     tex.version = 11;
-    for (int i = 0; i < 10; ++i) {
-        const uint32_t mw = static_cast<uint32_t>(width)  >> i;
-        const uint32_t mh = static_cast<uint32_t>(height) >> i;
-        if (mw == 0 || mh == 0) break;
 
-        const std::size_t sz = static_cast<std::size_t>(mw) * mh * depth;
+    uint32_t w = width;
+    uint32_t h = height;
+    do {
+        if (w == 0 || h == 0) break;
+        const std::size_t sz = static_cast<std::size_t>(pitch) * h;
         TEXImage img;
-        img.width  = mw;
-        img.height = mh;
-        img.mode   = mode;
+        img.width  = w;
+        img.height = h;
+        img.mode   = format;
+        img.pitch  = pitch;
         img.pixels.resize(sz);
-
-        const std::streamsize got =
-            f.read(reinterpret_cast<char*>(img.pixels.data()),
-                   static_cast<std::streamsize>(sz)).gcount();
-        if (got == 0) break;                    // Python: "if len(d) == 0: break"
-
-        img.pixels.resize(static_cast<std::size_t>(got));
+        if (!f.read(reinterpret_cast<char*>(img.pixels.data()),
+                    static_cast<std::streamsize>(sz))) {
+            tex.error = "v11: short level " + std::to_string(tex.images.size());
+            return false;
+        }
         tex.images.push_back(std::move(img));
-    }
+        w >>= 1;
+        h >>= 1;
+        pitch >>= 1;
+    } while ((format & kFmtMipmaps) && w > 0 && h > 0);
 
     return !tex.images.empty();
 }
 
 // ---------------------------------------------------------------------------
-// TGA writer (matches Python tga.py / convert.py)
+// TGA writer — the editor's own export path.
 // ---------------------------------------------------------------------------
 
 bool WriteTGA(const std::string& path, const TEXImage& img) {
@@ -239,13 +265,21 @@ bool WriteTGA(const std::string& path, const TEXImage& img) {
     const uint32_t depth = DepthForMode(img.mode);
     const uint32_t alpha = AlphaForMode(img.mode);
     if (depth == 0) return false;
+    // The 8bpp path needs the palette the engine passes to Texture_Create
+    // (d3dtex.c:412-414 dereferences d->palette); this parser has no palette.
+    if (img.mode == 1) return false;
+
+    const uint32_t rowBytes = img.width * depth;
+    // Rows are pitch-strided in the engine's buffer; a pitch narrower than a
+    // row cannot describe an image.
+    if (img.pitch < rowBytes || img.pixels.size() < static_cast<std::size_t>(img.pitch) * img.height) {
+        return false;
+    }
 
     const uint8_t pixDepth = static_cast<uint8_t>(depth * 8);
     // ImageDescriptor: alpha-bits | mirrorX(0x10) | mirrorY(0x20)
-    //   → matches Python setImageDescriptor(True, True, ALPHA[mode])
     const uint8_t imgDesc = static_cast<uint8_t>(alpha | 0x10 | 0x20);
 
-    // 18-byte TGA header (ImageType=2: uncompressed true-color)
     uint8_t hdr[18] = {};
     hdr[2]  = 2;
     hdr[12] = static_cast<uint8_t>(img.width  & 0xFF);
@@ -254,15 +288,15 @@ bool WriteTGA(const std::string& path, const TEXImage& img) {
     hdr[15] = static_cast<uint8_t>((img.height >> 8) & 0xFF);
     hdr[16] = pixDepth;
     hdr[17] = imgDesc;
-
     f.write(reinterpret_cast<const char*>(hdr), 18);
 
-    // Raw pixel data — no conversion (Python passes bitmaps[i] directly)
-    f.write(reinterpret_cast<const char*>(img.pixels.data()),
-            static_cast<std::streamsize>(img.pixels.size()));
+    // Row by row, using the engine's pitch.
+    for (uint32_t y = 0; y < img.height; ++y) {
+        f.write(reinterpret_cast<const char*>(img.pixels.data() + static_cast<std::size_t>(y) * img.pitch),
+                static_cast<std::streamsize>(rowBytes));
+    }
 
     // TGA 2.0 footer: ExtOffset(4) + DevOffset(4) + "TRUEVISION-XFILE.\0"(18) = 26 bytes
-    // Matches Python: fp.write(struct.pack('=2I18B', 0, 0, *b'TRUEVISION-XFILE.\x00'))
     const uint32_t zero = 0;
     f.write(reinterpret_cast<const char*>(&zero), 4);
     f.write(reinterpret_cast<const char*>(&zero), 4);
@@ -296,6 +330,10 @@ TEXFile TEX_Parse(const std::string& filepath) {
         result.error = "Not a LOOP file (bad signature)";
         return result;
     }
+    // Texture_LoadFile accepts v2 and v11 only (src/file/texture.c:237-247);
+    // v7/v9 are the sprite layout of Sprite_Load 0x4B6720 and are accepted
+    // here because the editor also parses .spr/.pic cursors with this entry
+    // point.
     if (version != 2 && version != 7 && version != 9 && version != 11) {
         result.error = "Unsupported LOOP version " + std::to_string(version);
         return result;

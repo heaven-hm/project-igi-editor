@@ -1,17 +1,30 @@
 /******************************************************************************
  * @file    tex_parser.h
- * @brief   TEX (LOOP) texture parser for IGI-1 .tex / .spr / .pic files
+ * @brief   LOOP texture parser for IGI-1 .tex files (Texture_LoadFile).
  *
- * Supported versions:
- *   2  - single bitmap, 24-byte header (Loop02)
- *   7  - multi-image, 52-byte header + Item07 entries + nested Loop06
- *   9  - multi-image, 52-byte header + Item09 entries + nested Loop06
- *  11  - mipmap chain, 32-byte header
+ * .tex files are read by the engine's Texture_LoadFile 0x4B24C0
+ * (IGI-RE src/file/texture.c:231-252). That function accepts exactly two
+ * versions and rejects everything else as a fatal error:
  *
- * Pixel modes:
- *   2  = RGB565   (2 bytes/pixel)
- *   3  = ARGB8888 (4 bytes/pixel)
- *  67  = ARGB8888 (4 bytes/pixel)
+ *   v2   LoopHeader2  (24 bytes): magic, version, unk08(H), pad0A(H),
+ *        unk0C(I), pitch(H), width(H), height(H), format(H)
+ *        pixels at +0x18, pitch = the file's own pitch field
+ *   v11  LoopHeader11 (32 bytes): magic, version, format(I), unk0C(I),
+ *        unk10(I), unk14(H), width(H), height(H), unk1A(H), unk1C(H),
+ *        bytesPerPixel(H)
+ *        pixels at +0x20, pitch = bytesPerPixel * unk1A
+ *
+ * Texture format codes and their pixel conversion come from the device's
+ * download path D3DTex_DownloadTexture 0x50AD10 (src/sysmisc/d3dtex.c:411-432):
+ *   1 = 8bpp palettised (needs d->palette), 2 = ARGB1555, 3/4 = ARGB8888,
+ *   5 = RGB565, 0x43 = ARGB8888 | FMT_MIPMAPS (0x40).
+ * A format with FMT_MIPMAPS set carries a halved mip chain after the base
+ * level (w >>= 1, h >>= 1, pitch >>= 1 while w > 0 && h > 0).
+ *
+ * The .spr/.pic sprite versions 7 and 9 are also accepted here because the
+ * editor uses this parser for cursor sprites; those belong to the engine's
+ * Sprite_Load 0x4B6720 (src/res/sprite.c:221-248) and use the sprite frame
+ * layout, not Texture_LoadFile's.
  *****************************************************************************/
 
 #pragma once
@@ -22,13 +35,14 @@
 struct TEXImage {
     uint32_t width  = 0;
     uint32_t height = 0;
-    uint32_t mode   = 2;         // 2=RGB565, 3=ARGB8888, 67=ARGB8888
-    std::vector<uint8_t> pixels; // raw bytes from file (mode 2 = 2 B/px, mode 3/67 = 4 B/px)
+    uint32_t mode   = 2;         // the file's format word (see above)
+    uint32_t pitch  = 0;         // bytes per row, as the engine computes it
+    std::vector<uint8_t> pixels; // pitch * height bytes for this level
 };
 
 struct TEXFile {
     uint32_t version = 0;
-    std::vector<TEXImage> images; // 1 for v2, N for v7/v9, levels for v11
+    std::vector<TEXImage> images; // 1 for v2, N for v7/v9, mip chain for v11
     bool valid = false;
     std::string error;
 };

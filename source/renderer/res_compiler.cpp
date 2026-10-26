@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "res_compiler.h"
+#include "res_chunks.h"
 #include "../logger.h"
 #include "../level/qsc_lexer.h"
 #include "../level/qsc_parser.h"
@@ -330,19 +331,14 @@ bool RES_StreamMerge(const std::string& srcResPath,
         return false;
     }
 
+    // Resource identity, not a file name: Resource_Create 0x4B59F0 stores the
+    // name upper-cased with '\' folded to '/' (src/res/resource.c:65-104) and
+    // Resource_IsLoaded 0x4B5B90 compares that full string (src/res/resource.c:
+    // 136-138). Comparing basenames would treat "LOCAL:textures/x.tex" and
+    // "x.tex" as the same resource, which is what let a merge replace the wrong
+    // member and make a model bind another texture.
     auto equalsResourceCI = [](const std::string& a, const std::string& b) {
-        const auto leaf = [](const std::string& value) {
-            const size_t slash = value.find_last_of("\\/");
-            return slash == std::string::npos ? value : value.substr(slash + 1);
-        };
-        const std::string aLeaf = leaf(a);
-        const std::string bLeaf = leaf(b);
-        if (aLeaf.size() != bLeaf.size()) return false;
-        for (size_t i = 0; i < aLeaf.size(); ++i) {
-            if (std::tolower(static_cast<unsigned char>(aLeaf[i])) !=
-                std::tolower(static_cast<unsigned char>(bLeaf[i]))) return false;
-        }
-        return true;
+        return igi_res::ResourceNamesEqual(a, b);
     };
 
     std::vector<bool> present(entries.size(), false);
@@ -456,4 +452,99 @@ bool RES_StreamMerge(const std::string& srcResPath,
         return false;
     }
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Engine texture resolution — see the block comment in res_compiler.h
+// ---------------------------------------------------------------------------
+
+std::string RES_ModelTextureArchiveName(const std::string& modelDir,
+                                        const std::string& modelName) {
+    // ModelFile_Setup 0x4CF080, src/model/model.c:261:
+    //   crt_sprintf(path, "%stextures/%s.res", gModelDir, name);
+    return modelDir + "textures/" + modelName + ".res";
+}
+
+std::string RES_LevelModelDir(int levelNo) {
+    // LevelStart 0x415B10's create handler, src/game/game.c:416:
+    //   crt_sprintf(path2, "LOCAL:%s/", mission + 0x344);
+    // The retail mission table's +0x344 field is "missions/location0/level<N>".
+    return "LOCAL:missions/location0/level" + std::to_string(levelNo) + "/";
+}
+
+std::string RES_LevelModelName(int levelNo) {
+    // LevelStart, src/game/game.c:418: ModelFile_Load(mission + 0x464) with the
+    // directory above, and ModelFile_Load builds "%s%s.mtp"
+    // (src/model/model.c:233). The retail level model file is level<N>.mtp.
+    return "level" + std::to_string(levelNo);
+}
+
+std::string RES_CommonModelDir() {
+    // LevelStart, src/game/game.c:411:
+    //   crt_sprintf(path, "LOCAL:%s/", mission + 0x244);
+    // The retail mission table's +0x244 field is "missions/location0/common".
+    return "LOCAL:missions/location0/common/";
+}
+
+std::string RES_CommonModelName() {
+    // LevelStart, src/game/game.c:414: ModelFile_Load(mission + 0x444). The
+    // retail common model file is location0.mtp.
+    return "location0";
+}
+
+std::string RES_LocalPathToDisk(const std::string& igiRoot,
+                                const std::string& localPath) {
+    // LocalDevice_Open 0x50A370 (src/sysmisc/localdev.c:162-205) hands the path
+    // it is given to crt_fopen unchanged; the "LOCAL:" prefix is consumed by the
+    // device dispatch (Device_Find 0x4B11A0, src/core/file.c:73-85), not by the
+    // device itself. So the host path is the remainder of the name, with the
+    // engine's '/' separators turned into the host's.
+    std::string rest = localPath;
+    const std::string prefix = "LOCAL:";
+    if (rest.size() >= prefix.size()) {
+        bool matches = true;
+        for (size_t i = 0; i < prefix.size(); ++i) {
+            const unsigned char a = static_cast<unsigned char>(rest[i]);
+            const unsigned char b = static_cast<unsigned char>(prefix[i]);
+            if (std::toupper(a) != std::toupper(b)) { matches = false; break; }
+        }
+        if (matches) rest = rest.substr(prefix.size());
+    }
+    for (char& c : rest) if (c == '/') c = '\\';
+
+    if (rest.empty()) return igiRoot;
+    if (rest[0] == '\\' || (rest.size() > 1 && rest[1] == ':')) return rest;
+
+    std::string root = igiRoot;
+    if (!root.empty() && root.back() != '\\' && root.back() != '/') root += '\\';
+    return root + rest;
+}
+
+RESModelTextureTarget RES_ResolveModelTextureTarget(const std::string& igiRoot,
+                                                    const std::string& modelDir,
+                                                    const std::string& modelName,
+                                                    const std::string& textureId) {
+    RESModelTextureTarget target;
+    // ModelFile_Setup 0x4CF080, src/model/model.c:261.
+    target.archivePath =
+        RES_LocalPathToDisk(igiRoot, RES_ModelTextureArchiveName(modelDir, modelName));
+    // ModelFile_LoadTextures 0x4CF790, src/model/model.c:467:
+    //   crt_sprintf(gModelPath, "LOCAL:textures/%s.tex", s);
+    // The name is used verbatim: no suffix is appended to or stripped from it,
+    // and the engine knows nothing about pixel-format suffixes.
+    target.memberName = "LOCAL:textures/" + textureId + ".tex";
+    return target;
+}
+
+RESModelTextureTarget RES_ResolveLevelModelTextureTarget(const std::string& igiRoot,
+                                                         int levelNo,
+                                                         const std::string& textureId) {
+    return RES_ResolveModelTextureTarget(igiRoot, RES_LevelModelDir(levelNo),
+                                         RES_LevelModelName(levelNo), textureId);
+}
+
+RESModelTextureTarget RES_ResolveCommonModelTextureTarget(const std::string& igiRoot,
+                                                          const std::string& textureId) {
+    return RES_ResolveModelTextureTarget(igiRoot, RES_CommonModelDir(),
+                                         RES_CommonModelName(), textureId);
 }
