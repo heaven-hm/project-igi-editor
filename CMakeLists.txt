@@ -386,6 +386,7 @@ add_executable(igi_tests
     tests/test_model_texture_resolution.cpp
     tests/test_character_texture_resolution.cpp
     tests/test_lod_chain.cpp
+    tests/test_lightmap_ref_index.cpp
     tests/test_spline_geometry.cpp
     tests/test_placement_splines.cpp
     tests/test_train_rail.cpp
