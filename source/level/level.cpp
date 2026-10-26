@@ -728,19 +728,20 @@ dyn_cube_s* Level::GetDynCube(const double pos[3], int cube_lod_level, glm::ivec
 
 	dyn_cube_s* dyn_cube = root_dyn_cube_;
 
-	// round to nearest integer
+	// Terrain_Round (src/terrain/terrain.h:16-22) is the x87 `fistpll` in the
+	// current rounding mode: round to nearest, ties to even. Every engine
+	// placement into the dynamic cube tree uses it with the terrain origin --
+	// DynCube_Add -> DynCube_Move (src/terrain/dyncube.c:141-147):
+	//     x = Terrain_Round(pos->x) + t->offset[0];
+	//     y = Terrain_Round(pos->y) + t->offset[1];
+	//     z = Terrain_Round(pos->z) + t->offset[2];
+	// This used to floor (truncate towards -inf) instead, which selects the
+	// neighbouring cube for a negative fractional coordinate. The editor has no
+	// Terrain.offset[]; the engine only ever reads it (no assignment exists in
+	// the reference), so only the rounding is transcribed.
 	glm::ivec3 rounded_pos;
-
 	for (int i = 0; i < 3; ++i) {
-		rounded_pos[i] = (int)pos[i];
-		if (pos[i] < 0.0 && (double)rounded_pos[i] != pos[i]) {
-			
-			// pos[i] is negative and has decimal part
-			// (int)pos[i] is the ceil
-			// rounded_pos[i]-- is the floor
-
-			rounded_pos[i]--;
-		}
+		rounded_pos[i] = (int)std::nearbyint(pos[i]);
 	}
 
 	int lod_level = 0;

@@ -53,23 +53,21 @@ bool Terrain::Load(load_params_s & params) {
 	}
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] terrain.qsc loaded successfully");
 
-	LoadMaterialInfo(qsc_terrain.get());
-	LoadTileMapInfo(qsc_terrain.get());
-	// qsc_terrain freed automatically when it goes out of scope (RAII).
-
-	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading CMD file...");
-	if (!LoadCMDFile(params)) {
-		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: LoadCMDFile failed");
-		return false;
-	}
-	Logger::Get().Log(LogLevel::INFO, "[Terrain] CMD file loaded");
-
-	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading CTR file...");
-	if (!LoadCTRFile(params)) {
-		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: LoadCTRFile failed");
-		return false;
-	}
-	Logger::Get().Log(LogLevel::INFO, "[Terrain] CTR file loaded");
+	// File order is the engine's, not ours.
+	//
+	// LevelStart 0x415B30 (src/game/game.c:405-407) runs
+	//     crt_sprintf(terrain, "%sterrain/terrain", gMissionPath);
+	//     World_LoadTextures(gGame->world, terrain);
+	//     Terrain_Load(gGame->world, terrain);
+	// so World_LoadTextures 0x4C5F00 (src/magicobj/world.c:295-343) runs BEFORE
+	// Terrain_Load 0x4C6240 (src/terrain/terrain.c:70-153):
+	//   World_LoadTextures: <path>.tex (TexSet_Load, :305-308), then <path>.lmp
+	//     (:317-322) whose full name is kept for the later Terrain_LoadLightmaps
+	//     pass 0x4C6160 (src/terrain/terrain.c:36-67).
+	//   Terrain_Load: .bit (:80-98), .hmp (:100-122), .cmd (:124-126),
+	//     .ctr (:128-130), then <path>.qsc (:132-140) whose run invokes
+	//     CreateTerrainMaterial / CreateTerrainTileMap.
+	// Net file order: tex, lmp, bit, hmp, cmd, ctr, qsc.
 
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading TEX file...");
 	if (!LoadTEXFile(params)) {
@@ -98,6 +96,33 @@ bool Terrain::Load(load_params_s & params) {
 		return false;
 	}
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] HMP file loaded");
+
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading CMD file...");
+	if (!LoadCMDFile(params)) {
+		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: LoadCMDFile failed");
+		return false;
+	}
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] CMD file loaded");
+
+	// LoadCTRFile also applies the engine's leaf fixup
+	// (Terrain_Load 0x4C6240, src/terrain/terrain.c:142-143:
+	//  t->ctr[i].leaf = (const short *)((const char *)t->ctr[i].leaf + (uintptr_t)t->cmd)).
+	// The engine does that after the qsc run below; the two qsc callbacks only
+	// write gTerrainMaterials / gTerrainTileMaps (src/terrain/terrain.c:165-195)
+	// and never touch the ctr, so the position of the fixup is immaterial.
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading CTR file...");
+	if (!LoadCTRFile(params)) {
+		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: LoadCTRFile failed");
+		return false;
+	}
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] CTR file loaded");
+
+	// The engine's .qsc pass: Terrain_Load 0x4C6240 (src/terrain/terrain.c:132-140)
+	// registers CreateTerrainMaterial/CreateTerrainTileMap, runs the script,
+	// frees it and unregisters. The two passes below are that run.
+	LoadMaterialInfo(qsc_terrain.get());
+	LoadTileMapInfo(qsc_terrain.get());
+	// qsc_terrain freed automatically when it goes out of scope (RAII).
 
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading texture modifiers...");
 	LoadTextureModifier(params.level_dyn_cube_, params.qsc_objects_);
@@ -394,6 +419,23 @@ bool Terrain::LoadBITFile(load_params_s & params) {
 		return false;
 	}
 
+	// Terrain_Load 0x4C6240 (src/terrain/terrain.c:82-98). A .bit shorter than
+	// the 0x100-entry header (0x100 * sizeof(bit_item_s) = 0xC00) is replaced by
+	// a zeroed 0xC00 header and every slot is left non-resident: the engine sets
+	// gBitResident[i] = 0 for all 0x100 entries and links no item data.
+	if (bit_sz < 0xC00) {
+		File_FreeBuf(bit_);
+		bit_ = MEM_ALLOC(0xC00);
+		if (!bit_) {
+			return false;
+		}
+		memset(bit_, 0, 0xC00);
+		for (int i = 0; i < MAX_TEX_MOD; ++i) {
+			bitmap_items_[i] = nullptr;
+		}
+		return true;
+	}
+
 	bit_item_s* head = (bit_item_s*)bit_;
 
 	uint8_t* body = (uint8_t*)(head + MAX_TEX_MOD);
@@ -425,7 +467,14 @@ bool Terrain::LoadHMPFile(load_params_s & params) {
 		"%s/terrain.hmp",
 		terrainDir.c_str());
 
+	// Terrain_Load 0x4C6240 (src/terrain/terrain.c:100-104): the .hmp is optional,
+	// and a missing one leaves t->hmp == NULL with no height map items linked.
 	if (!File_Exists(filename)) {
+		hmp_ = nullptr;
+		hmp_sz_ = 0;
+		for (int i = 0; i < MAX_HMP; ++i) {
+			height_map_items_[i] = nullptr;
+		}
 		return true;	// not an error, hmp file can be omitted
 	}
 
@@ -434,6 +483,24 @@ bool Terrain::LoadHMPFile(load_params_s & params) {
 		return false;
 	}
 	hmp_sz_ = hmp_sz;
+
+	// Terrain_Load 0x4C6240 (src/terrain/terrain.c:106-121). A .hmp shorter than
+	// the 0x100-entry header (0xC00) is replaced by a zeroed 0xC00 header and
+	// every slot is left non-resident (gHmpResident[i] = 0 for all 0x100).
+	if (hmp_sz < 0xC00) {
+		File_FreeBuf(hmp_);
+		hmp_ = MEM_ALLOC(0xC00);
+		if (!hmp_) {
+			hmp_sz_ = 0;
+			return false;
+		}
+		memset(hmp_, 0, 0xC00);
+		hmp_sz_ = 0xC00;
+		for (int i = 0; i < MAX_HMP; ++i) {
+			height_map_items_[i] = nullptr;
+		}
+		return true;
+	}
 
 	hmp_item_s* head = (hmp_item_s*)hmp_;
 
@@ -742,6 +809,18 @@ void Terrain::LoadHeightMapInfo(ILevelDynCube* level_dyn_cube, const QSC* qsc_ob
 			if (arg_idx > 11) {
 				break;
 			}
+		}
+
+		// HeightMap_Enter 0x506F00 (src/editcam/heightmap.c:126-137) only makes a
+		// height map take effect when its .hmp slot actually carries data:
+		//     if (hm->hmpIndex >= 0 && hm->world->hmp[hm->hmpIndex].data) { shown = 1; ... }
+		//     else { hm->shown = 0; }
+		// Terrain_Load 0x4C6240 leaves the data pointer unset for every .hmp slot
+		// whose header size is 0 (src/terrain/terrain.c:112-120), so an absent
+		// slot means no bump is applied. Skip the entry entirely, as the engine
+		// never enters it.
+		if (!height_map_items_[qtask_height_map->height_map_id_]) {
+			continue;
 		}
 
 #ifdef _DEBUG
