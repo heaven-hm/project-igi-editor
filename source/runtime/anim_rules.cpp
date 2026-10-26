@@ -10,6 +10,7 @@
 #include "runtime/anim_rules.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 
@@ -297,43 +298,51 @@ bool SamplePosTrack(const PosTrack& track, float time_ticks, bool smooth,
                 const long double s = 1.0f - (kt - tm) / dt;
                 const long double s2 = s * s;
                 const long double s3 = s2 * s;
-                // s2f/s3f are the float truncations the engine takes before
-                // mixing them back into long double expressions.
+                // boneobj.c:823 declares `float s2f, s3f, h1, h2, h3, h4, o0,
+                // o1, o2, i0, i1;` and only `s2`, `s3`, `h`, `dt` and `in2` stay
+                // long double. Every one of h1..h4, o0..o2, i0 and i1 is ROUNDED
+                // TO FLOAT by its store (boneobj.c:829-837), and the three
+                // component expressions at :839-841 are therefore evaluated
+                // entirely in float. Reproduce the rounding, not the wider
+                // arithmetic the expressions suggest.
                 const float s2f = static_cast<float>(s2);
                 const float s3f = static_cast<float>(s3);
                 const long double h = (s3 + s3) - s2f * 3.0f;
-                const long double h1 = h + 1.0f;
-                const long double h2 = -h;
-                const long double h3 = (s - (s2f + s2f)) + s3f;
+                const float h1 = static_cast<float>(h + 1.0f);
+                const float h2 = static_cast<float>(-h);
+                const float h3 = static_cast<float>((s - (s2f + s2f)) + s3f);
                 const float h4 = s2f - s3f;  // a FLOAT subtraction
-                const long double o0 = pk->out[0] * dt;
-                const long double o1 = pk->out[1] * dt;
-                const long double o2 = pk->out[2] * dt;
-                const long double i0 = k->in[0] * dt;
-                const long double i1 = k->in[1] * dt;
+                const float o0 = static_cast<float>(pk->out[0] * dt);
+                const float o1 = static_cast<float>(pk->out[1] * dt);
+                const float o2 = static_cast<float>(pk->out[2] * dt);
+                const float i0 = static_cast<float>(k->in[0] * dt);
+                const float i1 = static_cast<float>(k->in[1] * dt);
                 const long double i2 = dt * k->in[2];
 
                 // The three components do NOT share a term order in the
                 // original (boneobj.c:839-841); floating-point addition is not
-                // associative, so each is reproduced as written.
-                p[0] = static_cast<float>(((k->pos[0] * h2 + i0 * h4) + pk->pos[0] * h1) + o0 * h3);
-                p[1] = static_cast<float>(((k->pos[1] * h2 + pk->pos[1] * h1) + i1 * h4) + o1 * h3);
-                p[2] = static_cast<float>(((k->pos[2] * h2 + pk->pos[2] * h1) + i2 * h4) + o2 * h3);
+                // associative, so each is reproduced as written. Every operand
+                // is float, so the whole expression is float.
+                p[0] = ((k->pos[0] * h2 + i0 * h4) + pk->pos[0] * h1) + o0 * h3;
+                p[1] = ((k->pos[1] * h2 + pk->pos[1] * h1) + i1 * h4) + o1 * h3;
+                p[2] = ((k->pos[2] * h2 + pk->pos[2] * h1) + i2 * h4) + o2 * h3;
             } else {
                 // boneobj.c:842-855, the linear branch. Note the mixed
-                // precision: d0 and e0/e2 stay long double while d1 is stored
-                // back into a float, so the x component and the y component are
-                // rounded differently.
+                // precision: d0 and e2 stay long double, while e0 and d1 are
+                // stored back into a float (boneobj.c:847 `float e0 = d0 * f;`),
+                // so the x component and the y component are rounded differently
+                // - and the x component is rounded too, which the expression
+                // `e0 + k->pos[0]` alone does not show.
                 const long double f = (kt - tm) / (kt - pk->time);
                 const long double d0 = pk->pos[0] - k->pos[0];
                 float d1 = pk->pos[1] - k->pos[1];
                 float d2 = pk->pos[2] - k->pos[2];
-                const long double e0 = d0 * f;
+                const float e0 = static_cast<float>(d0 * f);
                 long double e2;
 
                 d1 = static_cast<float>(d1 * f);
                 e2 = f * d2;
-                p[0] = static_cast<float>(e0 + k->pos[0]);
+                p[0] = e0 + k->pos[0];  // float + float
                 p[1] = d1 + k->pos[1];  // float + float
                 p[2] = static_cast<float>(e2 + k->pos[2]);
             }
@@ -768,6 +777,1096 @@ void SkinAccumulatePosition(const SkinTransformInput& in, const BoneTransform& b
     base.position[0] = accumulated.position[0];
     base.position[1] = accumulated.position[1];
     base.position[2] = accumulated.position[2];
+}
+
+// ===========================================================================
+// PART TWO - the pose pipeline
+// ===========================================================================
+//
+// The x87 instructions the engine uses (math/x87.h) have no portable
+// equivalent, so the port uses the C library's long-double entry points:
+//   fsqrt -> std::sqrt(long double)      (both correctly rounded; identical)
+//   fsin  -> std::sin(long double)       (may differ by one ulp in the last
+//                                         bit for some arguments - NAMED
+//                                         DIVERGENCE, see the header)
+//   facos -> std::acos(double)           via Math_ACosF's clamp (file/vec.c:36)
+// fsin and facos are only reached on a rotation track with > 1 key and a
+// non-looping or interpolated sample, i.e. on the great majority of real frames,
+// so this is the one place where the port's pose can differ from retail by a
+// last-bit rounding. It is reported, not hidden.
+
+namespace {
+
+constexpr float kTwoPiPose = 0x1.921fb6p+2f;   // boneobj.c:32, haze/anim.c:13
+constexpr float kSlerpMinPose = 0.001f;        // boneobj.c:33
+constexpr float kSlerpMaxPose = 0.999f;        // boneobj.c:34
+constexpr float kSmallAnglePose = 0.01f;       // boneobj.c:35
+
+inline long double X87Sqrt(long double x) { return std::sqrt(x); }
+inline long double X87Sin(long double x) { return std::sin(x); }
+
+// Math_ACosF HOOK 0x4B2760 (file/vec.c:36-46). Note the guard is `!(d >= -1.0)`,
+// which is TRUE for NaN, so a NaN input returns acos(-1) = PI rather than NaN.
+// And the clamp is one-sided: a value below -1 returns PI, a value above 1 is
+// clamped to 1 and returns 0.
+long double MathACosF(float x) {
+    double d = x;
+    if (!(d >= -1.0)) return std::acos(-1.0);
+    if (d > 1.0) d = 1.0;
+    return std::acos(d);
+}
+
+// Quat_Dot HOOK 0x4B4570 (math/quat.c:33-37). The order is w, z, y, x.
+long double QuatDot(const EngineQuat& a, const EngineQuat& b) {
+    return static_cast<long double>(a.w) * b.w + static_cast<long double>(a.z) * b.z +
+           static_cast<long double>(a.y) * b.y + static_cast<long double>(a.x) * b.x;
+}
+
+// inv_len (boneobj.c:72-75).
+inline long double InvLen(long double sum) { return 1.0 / X87Sqrt(sum); }
+
+// The float-bit reinterpretation the engine performs with
+// `*(int *)&ka->time` (boneobj.c:1146) and with `memcpy` of a whole Quat
+// (20 bytes) from a 16-byte `float[4]` field (boneobj.c:1044-1048, 1056).
+int FloatBits(float f) {
+    int out;
+    std::memcpy(&out, &f, sizeof(out));
+    return out;
+}
+
+// slerp_weights (boneobj.c:1067-1078).
+void SlerpWeights(long double angle, float r, float invSin, long double& s0, long double& s1) {
+    if (angle < kSmallAnglePose) {
+        s0 = 1.0f - r;
+        s1 = r;
+    } else {
+        const float t = static_cast<float>(angle * r);
+        s0 = X87Sin(angle - t) * invSin;
+        s1 = X87Sin(t) * invSin;
+    }
+}
+
+// slerp_keys (boneobj.c:1042-1049). `count` is NOT a key count: it is the raw
+// INTEGER BITS of a key time, passed in by the caller (boneobj.c:1146,1153).
+void SlerpKeys(EngineQuat& out, const float* c0, const EngineQuat& c, long double s0, long double s1,
+               int count) {
+    out.x = s1 * c.x + s0 * c0[0];
+    out.y = s1 * c.y + s0 * c0[1];
+    out.z = s1 * c.z + s0 * c0[2];
+    out.w = s1 * c.w + s0 * c0[3];
+    out.unk10 = count + c.unk10 + 1;
+}
+
+// slerp_angle (boneobj.c:1052-1065). The engine's `memcpy(c, key, sizeof(*c))`
+// copies 20 bytes out of a 16-byte quaternion field, so `c->unk10` becomes the
+// bits of whatever follows that field. Two call sites (boneobj.c:1141,1157) read
+// `kb->q`, where the following 4 bytes are `kb->time` - reproduced exactly. The
+// third (boneobj.c:1148) reads `kb->b`, the LAST field of RotKey, where the
+// following 4 bytes are past the key (the next key's q[0], or past the array on
+// the final key); the port reports 0 there instead of reading out of bounds -
+// NAMED DIVERGENCE, and it only reaches the >1000 renormalisation counter.
+long double SlerpAngle(EngineQuat& c, const float* key, const SlerpInfo& sl, bool readsPastKey) {
+    long double angle = sl.angle;
+    c.x = key[0];
+    c.y = key[1];
+    c.z = key[2];
+    c.w = key[3];
+    c.unk10 = readsPastKey ? 0 : FloatBits(key[4]);
+    if (!(sl.angle < kTwoPiPose)) {
+        angle = angle - kTwoPiPose;
+        c.x = -c.x;
+        c.y = -c.y;
+        c.z = -c.z;
+        c.w = -c.w;
+    }
+    return angle;
+}
+
+}  // namespace
+
+void QuatMul(long double out[4], const float* A, const float* B, int round) {
+    long double a = (A[2] - A[1]) * (B[1] - B[2]);
+    long double b = (A[3] - A[0]) * (B[2] + B[1]);
+    long double c = (B[3] - B[0]) * (A[2] + A[1]);
+    long double d = (A[2] + A[0]) * (B[0] + B[1]);
+    long double e = (A[3] + A[1]) * (B[3] - B[2]);
+    long double f = (A[3] - A[1]) * (B[2] + B[3]);
+    long double s;
+    float t;
+
+    if (round & kQuatRoundA) a = static_cast<float>(a);
+    if (round & kQuatRoundB) b = static_cast<float>(b);
+    if (round & kQuatRoundC) c = static_cast<float>(c);
+    if (round & kQuatRoundD) d = static_cast<float>(d);
+    if (round & kQuatRoundE) e = static_cast<float>(e);
+    if (round & kQuatRoundF) f = static_cast<float>(f);
+    s = (f + e) + d;
+    t = static_cast<float>(((A[2] - A[0]) * (B[0] - B[1]) + s) * 0.5f);
+    out[0] = ((A[3] + A[0]) * (B[0] + B[3]) + t) - s;
+    out[1] = (b + t) - f;
+    out[2] = (t + c) - e;
+    out[3] = (a + t) - d;
+}
+
+void QuatSlerpPrepare(int& flip, float& angle, float& invSin, const EngineQuat& a, const EngineQuat& b) {
+    // math/quat.c:8-31.
+    flip = 0;
+    const long double dot = QuatDot(a, b);
+    float d = static_cast<float>(dot);
+    if (dot < 0.0f) {
+        if (d < -1e-8f) {
+            d = -d;
+            flip = 1;
+        } else {
+            d = 0.0f;
+        }
+    }
+    const long double ang = MathACosF(d);
+    angle = static_cast<float>(ang);
+    if (ang != 0.0f)
+        invSin = static_cast<float>(1.0f / X87Sin(ang));
+    else
+        invSin = 1.0f;
+}
+
+void SlerpPrepare(SlerpInfo& out, const float* a, const float* b) {
+    // haze/anim.c:19-37. The two quaternions are built with unk10 = 0, so the
+    // angle and invSin do not carry the depth counter.
+    EngineQuat qa;
+    EngineQuat qb;
+    int flip = 0;
+
+    qa.x = a[0];
+    qa.y = a[1];
+    qa.z = a[2];
+    qa.w = a[3];
+    qa.unk10 = 0;
+    qb.x = b[0];
+    qb.y = b[1];
+    qb.z = b[2];
+    qb.w = b[3];
+    qb.unk10 = 0;
+    QuatSlerpPrepare(flip, out.angle, out.invSin, qa, qb);
+    if (flip) out.angle = out.angle + kTwoPiPose;
+}
+
+bool AnimPrepareSlerps(const EngineClip& clip, int bone_count, bool smooth, SlerpInfo* out_slerp,
+                       SlerpInfo* out_slerp2, const int* key_offsets, int* key_counts) {
+    // haze/anim.c:40-84. `bones <= 0 || set->count <= 0` guards the whole walk;
+    // here that is an empty skeleton or a clip with no rotation tracks.
+    if (bone_count <= 0 || clip.rot == nullptr) return false;
+    if (out_slerp == nullptr || key_offsets == nullptr) return false;
+
+    for (int b = 0; b < bone_count; ++b) {
+        const RotTrack& t = clip.rot[b];
+        const int keys = t.count;
+        if (key_counts != nullptr) key_counts[b] = keys;
+        // haze/anim.c:60 `if (keys <= 1 || t->slerp) continue;` - a table is
+        // built once and never rebuilt, and a single-key track never gets one
+        // (the sampler's n == 1 branch returns before reading it).
+        if (keys <= 1) continue;
+        SlerpInfo* dst = out_slerp + key_offsets[b];
+        SlerpInfo* dst2 = (smooth && out_slerp2 != nullptr) ? out_slerp2 + key_offsets[b] : nullptr;
+        for (int k = 0; k < keys; ++k) {
+            const int next = (k + 1) % keys;
+
+            // haze/anim.c:68-76: the wrap entry of a NON-looping clip is left
+            // {0, 0}, which the sampler reads as "no slerp, use the key"
+            // (boneobj.c:1142,1149 `if (angle == 0.0f)`).
+            if (next == 0 && !(clip.flags & kAnimDescLoops)) {
+                dst[k].angle = 0.0f;
+                dst[k].invSin = 0.0f;
+                if (dst2 != nullptr) {
+                    dst2[k].angle = 0.0f;
+                    dst2[k].invSin = 0.0f;
+                }
+                continue;
+            }
+            SlerpPrepare(dst[k], t.keys[k].q, t.keys[next].q);
+            if (dst2 != nullptr) SlerpPrepare(dst2[k], t.keys[k].a, t.keys[next].b);
+        }
+    }
+    return true;
+}
+
+void BoneObjBuild(BonePoseState& state, const int* parents, const float* offsets, int count) {
+    // lod/boneobj.c:100-129 (the allocation and its zeroing) plus
+    // lod/boneobj.c:153-188 (the tree).
+    state.bones.clear();
+    if (count <= 0) return;
+    state.bones.assign(static_cast<std::size_t>(count), EngineBone{});
+
+    // BoneObj_Build's index scan. `parents[i] == -1` are the roots and are
+    // appended to a synthetic parent at depth 0; BoneObj_Create then clears
+    // their `parent` to NULL (lod/boneobj.c:126-127), which is what the port's
+    // parent == -1 means.
+    //
+    // Bone_Init PREPENDS (`b->next = parent->child; parent->child = b;`), so
+    // each parent's child list is in DESCENDING index order. The scan is done
+    // once per parent index, exactly as the engine recurses.
+    for (int i = 0; i < count; ++i) {
+        EngineBone& b = state.bones[static_cast<std::size_t>(i)];
+        b.index = i;
+        b.flags = 0;
+        b.parent = -1;
+        b.child = -1;
+        b.next = -1;
+        b.blend = -1;
+        b.matrix_count = 0;
+        b.world = EngineQuat{};
+        b.local = EngineQuat{};
+        if (offsets != nullptr) {
+            b.offset[0] = offsets[i * 3 + 0];
+            b.offset[1] = offsets[i * 3 + 1];
+            b.offset[2] = offsets[i * 3 + 2];
+        }
+        // lod/boneobj.c:168-169.
+        b.length = static_cast<float>(
+            X87Sqrt(static_cast<long double>(b.offset[0]) * b.offset[0] +
+                    static_cast<long double>(b.offset[1]) * b.offset[1] +
+                    static_cast<long double>(b.offset[2]) * b.offset[2]));
+    }
+
+    // Attach. BoneObj_Build recurses depth-first, but every bone is attached to
+    // exactly one parent and Bone_Init prepends, so the resulting child lists
+    // are the same as this flat scan: for each parent index in ascending order
+    // (with -1 first, the engine's synthetic root), prepend every bone whose
+    // PLST entry is that index.
+    for (int parentIndex = -1; parentIndex < count; ++parentIndex) {
+        for (int i = 0; i < count; ++i) {
+            if (parents[i] != parentIndex) continue;
+            EngineBone& b = state.bones[static_cast<std::size_t>(i)];
+            b.parent = parentIndex;
+            if (parentIndex >= 0) {
+                EngineBone& p = state.bones[static_cast<std::size_t>(parentIndex)];
+                b.next = p.child;
+                p.child = i;
+            }
+        }
+    }
+}
+
+int BoneObjAnimOrientationCB(EngineQuat& out, BonePoseState& state, int boneIndex, AnimInst& inst,
+                             const EngineClip& clip) {
+    // boneobj.c:1080-1173.
+    const int id = state.bones[static_cast<std::size_t>(boneIndex)].index;
+    // boneobj.c:1089-1090: the bone that OWNS the instance is marked animated,
+    // and that mark is what `BoneObj_UpdateBone` uses to hand the blend node down
+    // to its descendants (boneobj.c:520-521). Every other bone in the tree is
+    // sampled through the inherited node but stays unmarked, which is why a whole
+    // skeleton follows one animation played on track 0.
+    if (inst.bone == id) state.bones[static_cast<std::size_t>(boneIndex)].flags |= kBoneAnimated;
+    if (clip.rot == nullptr) return 0;
+    const RotTrack& tr = clip.rot[id];
+    const RotKey* keys = tr.keys;
+    const int n = tr.count;
+
+    if (n == 1) {
+        out.x = keys[0].q[0];
+        out.y = keys[0].q[1];
+        out.z = keys[0].q[2];
+        out.w = keys[0].q[3];
+        out.unk10 = 0;
+        return 0;
+    }
+    if (n <= 0 || keys == nullptr) {
+        // The engine reads keys[-1] here; the port refuses.
+        out.unk10 = 0;
+        return 0;
+    }
+
+    const float tm = inst.time;
+    int i = 0;
+    float kt = 0.0f;
+    int a = 0;
+    int b = 0;
+    const bool has = inst.has_cache;
+    // boneobj.c:1102-1103: the cache is only used when the instance's time has
+    // not gone BACKWARDS since the cache was written (`!(tm - cache->time < 0)`).
+    if (has && !(tm - inst.cache_time < 0.0f)) i = inst.cache_bones[static_cast<std::size_t>(id)];
+
+    for (; i < n; i++) {
+        kt = keys[i].time;
+        if (!(kt < tm)) break;
+    }
+
+    float r;
+    if (tm == kt) {
+        // boneobj.c:1109-1114: exactly on a key.
+        out.x = keys[i].q[0];
+        out.y = keys[i].q[1];
+        out.z = keys[i].q[2];
+        out.w = keys[i].q[3];
+        out.unk10 = 0;
+        a = i;
+        goto done;
+    }
+    a = i - 1;
+    if (i == n) {
+        // boneobj.c:1116-1124: past the last key.
+        if (clip.flags & kAnimDescLoops) {
+            r = (tm - kt) / (clip.length - kt);
+            b = 0;
+            goto interp;
+        }
+        out.x = keys[n - 1].q[0];
+        out.y = keys[n - 1].q[1];
+        out.z = keys[n - 1].q[2];
+        out.w = keys[n - 1].q[3];
+        goto zero;
+    }
+    if (a < 0) {
+        // boneobj.c:1125-1129: before the first key.
+        out.x = keys[0].q[0];
+        out.y = keys[0].q[1];
+        out.z = keys[0].q[2];
+        out.w = keys[0].q[3];
+        out.unk10 = 0;
+        goto done;
+    }
+    r = 1.0f - (kt - tm) / (kt - keys[i - 1].time);
+    b = i;
+
+interp:
+    if (tr.slerp != nullptr) {
+        const RotKey& ka = keys[a];
+        const RotKey& kb = keys[b];
+        long double angle;
+        long double s0;
+        long double s1;
+        EngineQuat c;
+
+        if (inst.smooth_anims) {
+            EngineQuat q1;
+            EngineQuat q2;
+
+            // boneobj.c:1141-1147.
+            angle = SlerpAngle(c, kb.q, tr.slerp[a], false);
+            if (angle == 0.0f) {
+                q1.x = ka.q[0];
+                q1.y = ka.q[1];
+                q1.z = ka.q[2];
+                q1.w = ka.q[3];
+                q1.unk10 = FloatBits(ka.time);   // memcpy of 20 bytes from q
+            } else {
+                SlerpWeights(angle, r, tr.slerp[a].invSin, s0, s1);
+                SlerpKeys(q1, ka.q, c, s0, s1, FloatBits(ka.time));
+            }
+            // boneobj.c:1148-1154.
+            angle = SlerpAngle(c, kb.b, tr.slerp2[a], true);
+            if (angle == 0.0f) {
+                q2.x = ka.a[0];
+                q2.y = ka.a[1];
+                q2.z = ka.a[2];
+                q2.w = ka.a[3];
+                q2.unk10 = FloatBits(ka.b[0]);   // memcpy of 20 bytes from a
+            } else {
+                SlerpWeights(angle, r, tr.slerp2[a].invSin, s0, s1);
+                SlerpKeys(q2, ka.a, c, s0, s1, FloatBits(ka.b[0]));
+            }
+            // boneobj.c:1155: the Hermite weight `1 - ((1-r)*r + (1-r)*r)`.
+            BoneObjSlerp(out, q1, q2, 1.0f - ((1.0f - r) * r + (1.0f - r) * r));
+        } else {
+            // boneobj.c:1157-1163.
+            angle = SlerpAngle(c, kb.q, tr.slerp[a], false);
+            if (angle == 0.0f) {
+                out.x = ka.q[0];
+                out.y = ka.q[1];
+                out.z = ka.q[2];
+                out.w = ka.q[3];
+                out.unk10 = FloatBits(ka.time);
+            } else {
+                SlerpWeights(angle, r, tr.slerp[a].invSin, s0, s1);
+                SlerpKeys(out, ka.q, c, s0, s1, FloatBits(ka.time));
+            }
+        }
+    }
+zero:
+    out.unk10 = 0;
+done:
+    if (has) inst.cache_bones[static_cast<std::size_t>(id)] = a;
+    return 0;
+}
+
+int BoneObjAnimPositionCB(const EngineClip& clip, AnimInst& inst, bool smooth) {
+    // boneobj.c:788-868. `SamplePosTrack` is the same arithmetic; this wrapper
+    // adds the instance state (the search's `inst->time`, the previous `pos` for
+    // the delta, and the copy back into `inst->pos`).
+    const PosTrack* track = clip.pos;
+    float sampled[3] = {inst.pos[0], inst.pos[1], inst.pos[2]};
+    float delta[3] = {0.0f, 0.0f, 0.0f};
+
+    if (track == nullptr) return 0;
+    if (!SamplePosTrack(*track, inst.time, smooth, inst.pos, sampled, delta)) return 0;
+    inst.pos[0] = sampled[0];
+    inst.pos[1] = sampled[1];
+    inst.pos[2] = sampled[2];
+    inst.delta[0] = delta[0];
+    inst.delta[1] = delta[1];
+    inst.delta[2] = delta[2];
+    return 1;
+}
+
+int BoneObjAnimCollectEvents(std::vector<EngineBoneEvent>& out, int n, int boneIndex, const AnimInst& inst,
+                             const EngineClip& clip, float from, float to) {
+    // boneobj.c:944-980.
+    if (clip.events == nullptr) return n;
+    const EventTrack& et = *clip.events;
+    const EventKey* k = et.keys;
+    const int count = et.count;
+    const bool back = to < from;
+    const float lo = from < to ? from : to;
+    const float hi = from > to ? from : to;
+
+    for (int i = 0; i < count; ++i, ++k) {
+        int add;
+
+        // boneobj.c:962-963: the keys are time-ordered, so the walk stops at the
+        // first key past the window.
+        if (k->time > hi) break;
+        if (lo == hi && k->time == lo)
+            add = 1;
+        else if (back)
+            add = !(k->time < lo) && k->time < hi;
+        else
+            add = k->time > lo;
+        if (add) {
+            EngineBoneEvent ev;
+            ev.bone = boneIndex;
+            ev.id = k->id;
+            ev.anim = inst.id;
+            // boneobj.c:974 `memcpy(&ev[n].time, &k->time, 4 * sizeof(float));`
+            // - FOUR floats from the key's time, so the event's time AND its
+            // three position components all come from the key.
+            ev.time = k->time;
+            ev.pos[0] = k->pos[0];
+            ev.pos[1] = k->pos[1];
+            ev.pos[2] = k->pos[2];
+            if (static_cast<std::size_t>(n) < out.size())
+                out[static_cast<std::size_t>(n)] = ev;
+            else
+                out.push_back(ev);
+            n++;
+        }
+    }
+    return n;
+}
+
+int BoneObjAnimEventsCB(std::vector<EngineBoneEvent>& events, int n, BonePoseState& state, int boneIndex,
+                        AnimInst& inst, const EngineClip& clip, bool smooth) {
+    // boneobj.c:873-941, the full form.
+    float old;
+    float now;
+    bool has = false;
+
+    if (inst.has_cache) inst.cache_time = inst.time;
+    inst.flags &= ~kBoneEventsDone;
+    state.bones[static_cast<std::size_t>(boneIndex)].flags &= ~kBoneEventsDone;
+    old = inst.time;
+    now = inst.speed + inst.time;
+    inst.time = now;
+    if (clip.events != nullptr && clip.events->count > 0) {
+        has = true;
+        // boneobj.c:888-889: on the FIRST tick the window is empty, so the
+        // event exactly at `old` is emitted.
+        if ((inst.flags & kAnimFirst) && old != now)
+            n = BoneObjAnimCollectEvents(events, n, boneIndex, inst, clip, old, old);
+        n = BoneObjAnimCollectEvents(events, n, boneIndex, inst, clip, old, inst.time);
+    }
+    const float length = clip.length;
+    const bool reverse = (inst.flags & kAnimReverse) != 0;
+
+    if ((!(inst.time < length) && !reverse) || (!(inst.time > 0.0f) && reverse)) {
+        inst.flags |= kBoneEventsDone;
+        state.bones[static_cast<std::size_t>(boneIndex)].flags |= kBoneEventsDone;
+        if (inst.flags & kAnimLoop) {
+            float from;
+
+            if (reverse) {
+                inst.time = length + inst.time;
+                from = length + 1.0f;
+            } else {
+                inst.time = inst.time - length;
+                from = -1.0f;
+            }
+            if (has) n = BoneObjAnimCollectEvents(events, n, boneIndex, inst, clip, from, inst.time);
+            if (state.bones[static_cast<std::size_t>(boneIndex)].index == 0 &&
+                !(inst.flags & kAnimFirst)) {
+                const PosTrack* tr = clip.pos;
+                const float saved = inst.time;
+
+                if (tr != nullptr && tr->keys != nullptr && tr->count > 0) {
+                    const PosKey* k;
+                    if (reverse) {
+                        inst.time = 0.0f;
+                        BoneObjAnimPositionCB(clip, inst, smooth);
+                        k = &tr->keys[tr->count - 1];
+                    } else {
+                        inst.time = length;
+                        BoneObjAnimPositionCB(clip, inst, smooth);
+                        k = &tr->keys[0];
+                    }
+                    inst.pos[0] = k->pos[0] - inst.delta[0];
+                    inst.pos[1] = k->pos[1] - inst.delta[1];
+                    inst.pos[2] = k->pos[2] - inst.delta[2];
+                }
+                inst.flags &= ~kAnimFirst;
+                inst.time = saved;
+                return n;
+            }
+        } else {
+            if (reverse) {
+                inst.time = 0.0f;
+                inst.flags &= ~kAnimFirst;
+                return n;
+            }
+            inst.time = length;
+        }
+    }
+    inst.flags &= ~kAnimFirst;
+    return n;
+}
+
+void BoneObjSlerp(EngineQuat& out, const EngineQuat& a, const EngineQuat& b, float t) {
+    // boneobj.c:658-702.
+    int flip = 0;
+    float angle;
+    float invSin;
+    EngineQuat c;
+    long double s0;
+    long double s1;
+
+    if (!(t > kSlerpMinPose)) {
+        out = b;
+        return;
+    }
+    if (!(t < kSlerpMaxPose)) {
+        out = a;
+        return;
+    }
+    QuatSlerpPrepare(flip, angle, invSin, a, b);
+    if (flip) {
+        c.x = -b.x;
+        c.y = -b.y;
+        c.z = -b.z;
+        c.w = -b.w;
+        c.unk10 = b.unk10;
+    } else {
+        c = b;
+    }
+    float u = 1.0f - t;
+    if (angle == 0.0f) {
+        out = a;
+        return;
+    }
+    if (angle < kSmallAnglePose) {
+        s0 = 1.0f - u;
+        s1 = u;
+    } else {
+        u = u * angle;
+        s0 = X87Sin(angle - u) * invSin;
+        s1 = X87Sin(u) * invSin;
+    }
+    out.x = static_cast<float>(s0 * a.x + s1 * c.x);
+    out.y = static_cast<float>(s0 * a.y + s1 * c.y);
+    out.z = static_cast<float>(s0 * a.z + s1 * c.z);
+    out.w = static_cast<float>(s0 * a.w + s1 * c.w);
+    out.unk10 = a.unk10 + c.unk10 + 1;
+}
+
+int BoneObjBlendOrientations(EngineQuat& out, int t0, const EngineQuat& q0, int t1, const EngineQuat& q1,
+                             float w) {
+    // boneobj.c:597-655.
+    long double o[4];
+    long double inv;
+
+    if (t0 == -1) {
+        if (t1 != -1) {
+            out = q1;
+            return t1;
+        }
+        return -1;
+    }
+    if (t1 == -1) {
+        out = q0;
+        return t0;
+    }
+    if (t0 == 0) {
+        if (t1 == 0) {
+            BoneObjSlerp(out, q0, q1, w);
+            return 0;
+        }
+        // boneobj.c:617-631: an ABSOLUTE orientation combined with a relative
+        // one. Note the term order and the term order inside inv_len.
+        QuatMul(o, &q1.x, &q0.x, kQuatRoundC | kQuatRoundD | kQuatRoundE);
+        out.x = static_cast<float>(o[0]);
+        out.y = static_cast<float>(o[1]);
+        out.z = static_cast<float>(o[2]);
+        out.w = static_cast<float>(o[3]);
+        out.unk10 = q0.unk10 + q1.unk10 + 1;
+        if (out.unk10 > 1000) {
+            out.unk10 = 0;
+            inv = InvLen(((static_cast<long double>(out.x) * out.x + o[3] * o[3]) +
+                          static_cast<long double>(out.z) * out.z) +
+                         static_cast<long double>(out.y) * out.y);
+            out.x = static_cast<float>(out.x * inv);
+            out.y = static_cast<float>(out.y * inv);
+            out.z = static_cast<float>(out.z * inv);
+            out.w = static_cast<float>(o[3] * inv);
+        }
+        return 1;
+    }
+    if (t1 == 1) {
+        BoneObjSlerp(out, q0, q1, w);
+        return 1;
+    }
+    // boneobj.c:638-653: two absolute orientations.
+    QuatMul(o, &q0.x, &q1.x, kQuatRoundC | kQuatRoundD | kQuatRoundE);
+    out.x = static_cast<float>(o[0]);
+    out.y = static_cast<float>(o[1]);
+    out.z = static_cast<float>(o[2]);
+    out.w = static_cast<float>(o[3]);
+    out.unk10 = q0.unk10 + q1.unk10 + 1;
+    if (out.unk10 > 1000) {
+        out.unk10 = 0;
+        inv = InvLen(((o[3] * o[3] + static_cast<long double>(out.z) * out.z) +
+                      static_cast<long double>(out.y) * out.y) +
+                     static_cast<long double>(out.x) * out.x);
+        out.x = static_cast<float>(out.x * inv);
+        out.y = static_cast<float>(out.y * inv);
+        out.z = static_cast<float>(out.z * inv);
+        out.w = static_cast<float>(o[3] * inv);
+    }
+    return 1;
+}
+
+int BoneObjGetBranchOrientation(EngineQuat& out, BonePoseState& state, int boneIndex, int type,
+                                int sourceIndex, int nodeIndex) {
+    // boneobj.c:704-716.
+    if (type == kBranchSource) {
+        if (sourceIndex < 0 || static_cast<std::size_t>(sourceIndex) >= state.sources.size()) return -1;
+        // The engine's animation source always has a getOrientation
+        // (BoneObj_NewAnimSource, boneobj.c:782-783), so this is
+        // BoneObj_AnimOrientationCB. (The orientation source and the parent
+        // source are the two kinds the port does not model; see the header.)
+        BlendSourceAnim& source = state.sources[static_cast<std::size_t>(sourceIndex)];
+        if (source.clip == nullptr) return -1;
+        return BoneObjAnimOrientationCB(out, state, boneIndex, source.inst, *source.clip);
+    }
+    if (type == kBranchNode) {
+        if (nodeIndex < 0) return -1;
+        return BoneObjGetNodeOrientation(out, state, boneIndex, nodeIndex);
+    }
+    return -1;
+}
+
+int BoneObjGetNodeOrientation(EngineQuat& out, BonePoseState& state, int boneIndex, int nodeIndex) {
+    // boneobj.c:531-585.
+    EngineQuat qa;
+    EngineQuat qb;
+    int r0;
+    int r1;
+    int r;
+    float w;
+
+    if (nodeIndex < 0 || static_cast<std::size_t>(nodeIndex) >= state.nodes.size()) return -1;
+    const BlendNodeState& node = state.nodes[static_cast<std::size_t>(nodeIndex)];
+    r0 = BoneObjGetBranchOrientation(qa, state, boneIndex, node.branchType[0], node.branchSource[0],
+                                     node.branchNode[0]);
+    r1 = BoneObjGetBranchOrientation(qb, state, boneIndex, node.branchType[1], node.branchSource[1],
+                                     node.branchNode[1]);
+    // The engine's node weight/select functions belong to the fade machinery;
+    // with the immediate Anim_Play path they are NULL, so w is 0 and the default
+    // blend runs (boneobj.c:539-546).
+    w = 0.0f;
+    r = BoneObjBlendOrientations(out, r0, qa, r1, qb, w);
+    if (r == 1) {
+        // boneobj.c:547-582: convert an absolute orientation to parent-relative.
+        const EngineQuat* p;
+        float nq[4];
+        long double o[4];
+
+        if (state.bones[static_cast<std::size_t>(boneIndex)].parent >= 0) {
+            p = &state.bones[static_cast<std::size_t>(
+                     state.bones[static_cast<std::size_t>(boneIndex)].parent)]
+                     .world;
+        } else {
+            if (!state.hasRoot) return -1;
+            p = &state.rootQuat;
+        }
+        nq[0] = -p->x;
+        nq[1] = -p->y;
+        nq[2] = -p->z;
+        nq[3] = p->w;
+        QuatMul(o, nq, &out.x, kQuatRoundA | kQuatRoundC | kQuatRoundD | kQuatRoundE);
+        out.x = static_cast<float>(o[0]);
+        out.y = static_cast<float>(o[1]);
+        out.z = static_cast<float>(o[2]);
+        out.unk10 = out.unk10 + (p->unk10 + 1);
+        out.w = static_cast<float>(o[3]);
+        if (out.unk10 > 1000) {
+            long double inv;
+
+            out.unk10 = 0;
+            inv = InvLen(((o[3] * o[3] + o[2] * o[2]) + static_cast<long double>(out.x) * out.x) +
+                         static_cast<long double>(out.y) * out.y);
+            out.x = static_cast<float>(out.x * inv);
+            out.y = static_cast<float>(out.y * inv);
+            out.z = static_cast<float>(o[2] * inv);
+            out.w = static_cast<float>(o[3] * inv);
+        }
+        return 0;
+    }
+    return r;
+}
+
+bool BoneObjUpdateBone(BonePoseState& state, int boneIndex, const float* parentMatrix,
+                       const EngineQuat& parentQuat, const float* parentPos, int inherited) {
+    // boneobj.c:423-525.
+    if (boneIndex < 0 || static_cast<std::size_t>(boneIndex) >= state.bones.size()) return false;
+    EngineBone& b = state.bones[static_cast<std::size_t>(boneIndex)];
+    const float* e = parentMatrix;
+    const int eff = b.blend >= 0 ? b.blend : inherited;
+    EngineQuat q;
+    int r;
+
+    b.flags &= ~(kBoneAnimated | kBoneOriented);
+
+    // boneobj.c:434-439: the position comes from the REST offset, rotated by the
+    // parent's matrix. x stays long double until the store; y and z are float.
+    const long double x = (e[2] * b.offset[2] + e[1] * b.offset[1]) + b.offset[0] * e[0];
+    const float y = (e[5] * b.offset[2] + e[3] * b.offset[0]) + e[4] * b.offset[1];
+    const float z = (e[8] * b.offset[2] + e[6] * b.offset[0]) + e[7] * b.offset[1];
+    b.pos[0] = static_cast<float>(x + parentPos[0]);
+    b.pos[1] = y + parentPos[1];
+    b.pos[2] = z + parentPos[2];
+
+    // boneobj.c:440-446. A NULL node is an access violation in retail; the port
+    // reports it.
+    if (eff < 0) return false;
+    r = BoneObjGetNodeOrientation(q, state, boneIndex, eff);
+    if (r == -1) {
+        const unsigned int saved = b.flags;
+
+        if (inherited < 0) return false;
+        r = BoneObjGetNodeOrientation(q, state, boneIndex, inherited);
+        b.flags = saved;
+    }
+
+    if (r == 0) {
+        // boneobj.c:447-467: the orientation is relative to the parent, so the
+        // bone's world is parentWorld * local.
+        long double o[4];
+
+        b.local = q;
+        QuatMul(o, &parentQuat.x, &q.x, kQuatRoundD);
+        q.x = static_cast<float>(o[0]);
+        q.y = static_cast<float>(o[1]);
+        q.z = static_cast<float>(o[2]);
+        q.w = static_cast<float>(o[3]);
+        q.unk10 = q.unk10 + parentQuat.unk10 + 1;
+        if (q.unk10 > 1000) {
+            long double inv;
+
+            q.unk10 = 0;
+            inv = InvLen(((static_cast<long double>(q.x) * q.x + static_cast<long double>(q.w) * q.w) +
+                          static_cast<long double>(q.z) * q.z) +
+                         static_cast<long double>(q.y) * q.y);
+            q.x = static_cast<float>(q.x * inv);
+            q.y = static_cast<float>(q.y * inv);
+            q.z = static_cast<float>(q.z * inv);
+            q.w = static_cast<float>(q.w * inv);
+        }
+    } else {
+        // boneobj.c:468-491: the orientation is absolute, so the bone's LOCAL is
+        // the inverse of the parent times it, and the world is the value itself.
+        const float n[4] = {-parentQuat.x, -parentQuat.y, -parentQuat.z, parentQuat.w};
+        long double o[4];
+        float r0;
+        float r2;
+
+        QuatMul(o, n, &q.x, kQuatRoundD | kQuatRoundE);
+        r0 = static_cast<float>(o[0]);
+        b.local.x = r0;
+        b.local.y = static_cast<float>(o[1]);
+        r2 = static_cast<float>(o[2]);
+        b.local.z = r2;
+        b.local.w = static_cast<float>(o[3]);
+        b.local.unk10 = parentQuat.unk10 + q.unk10 + 1;
+        if (b.local.unk10 > 1000) {
+            long double inv;
+
+            b.local.unk10 = 0;
+            inv = InvLen(((o[3] * o[3] + static_cast<long double>(r2) * r2) +
+                          static_cast<long double>(o[1]) * o[1]) +
+                         static_cast<long double>(r0) * r0);
+            b.local.x = static_cast<float>(r0 * inv);
+            b.local.y = static_cast<float>(o[1] * inv);
+            b.local.z = static_cast<float>(r2 * inv);
+            b.local.w = static_cast<float>(o[3] * inv);
+        }
+    }
+
+    b.matrix_count = q.unk10;
+    b.world = q;
+    {
+        // boneobj.c:494-519. Note the mixed precision: xx, xy, zw and u stay
+        // long double while xz, xw, yy, yz, yw and zz are FLOAT, so the nine
+        // matrix entries are three different mixes.
+        long double xx = static_cast<long double>(q.x) * q.x;
+        long double xy = static_cast<long double>(q.x) * q.y;
+        long double zw;
+        float xz;
+        float xw;
+        float yy;
+        float yz;
+        float yw;
+        float zz;
+        long double u;
+
+        xx = xx + xx;
+        xy = xy + xy;
+        xz = static_cast<float>(static_cast<long double>(q.x) * q.z * 2);
+        xw = static_cast<float>(static_cast<long double>(q.x) * q.w * 2);
+        yy = static_cast<float>(static_cast<long double>(q.y) * q.y * 2);
+        yz = static_cast<float>(static_cast<long double>(q.z) * q.y * 2);
+        yw = static_cast<float>(static_cast<long double>(q.w) * q.y * 2);
+        zz = static_cast<float>(static_cast<long double>(q.z) * q.z * 2);
+        zw = static_cast<long double>(q.w) * q.z;
+        zw = zw + zw;
+        b.matrix[0] = (1.0f - yy) - zz;
+        b.matrix[1] = static_cast<float>(xy - zw);
+        b.matrix[2] = yw + xz;
+        b.matrix[3] = zw + xy;
+        u = 1.0f - xx;
+        b.matrix[4] = static_cast<float>(u - zz);
+        b.matrix[5] = yz - xw;
+        b.matrix[6] = xz - yw;
+        b.matrix[7] = yz + xw;
+        b.matrix[8] = static_cast<float>(u - yy);
+    }
+
+    // boneobj.c:520-521: only a bone that ended up ANIMATED hands its node down.
+    int childInherited = inherited;
+    if (b.flags & kBoneAnimated) childInherited = eff;
+
+    for (int c = b.child; c >= 0; c = state.bones[static_cast<std::size_t>(c)].next) {
+        if (!BoneObjUpdateBone(state, c, b.matrix, q, b.pos, childInherited)) return false;
+    }
+    return true;
+}
+
+bool BoneObjUpdate(BonePoseState& state, const float m[9], int m_count) {
+    // boneobj.c:371-419.
+    static const int kNext[3] = {1, 2, 0};
+    float mm[9];
+    int count = m_count;
+    float pos[3] = {0.0f, 0.0f, 0.0f};
+    EngineQuat q;
+    float* qa = &q.x;
+
+    if (state.bones.empty()) return false;
+    for (int i = 0; i < 9; ++i) mm[i] = m[i];
+    const float* e = mm;
+
+    // boneobj.c:379-407: the trace-based matrix -> quaternion conversion.
+    const long double t = (e[8] + e[4]) + e[0];
+    if (t > 0.0f) {
+        long double s = X87Sqrt(t + 1.0f);
+
+        q.w = static_cast<float>(s * 0.5f);
+        s = 0.5f / s;
+        q.x = static_cast<float>(-((e[5] - e[7]) * s));
+        q.y = static_cast<float>(-((e[6] - e[2]) * s));
+        q.z = static_cast<float>(-((e[1] - e[3]) * s));
+    } else {
+        int i = 0;
+        int j;
+        int k;
+        long double s;
+
+        if (e[4] > e[0]) i = 1;
+        if (e[8] > e[i * 4]) i = 2;
+        j = kNext[i];
+        k = kNext[j];
+        s = X87Sqrt(((e[i * 4] - e[j * 4]) - e[k * 4]) + 1.0f);
+        qa[i] = static_cast<float>(s * 0.5f);
+        if (s != 0.0f) s = 0.5f / s;
+        qa[j] = static_cast<float>((e[j * 3 + i] + e[i * 3 + j]) * s);
+        qa[k] = static_cast<float>((e[k * 3 + i] + e[i * 3 + k]) * s);
+        q.w = static_cast<float>(-((e[j * 3 + k] - e[k * 3 + j]) * s));
+    }
+    q.unk10 = count;
+
+    // BoneObj_SetRoot(&mm, &q) - the file-static gRootMatrix/gRootQuat.
+    for (int i = 0; i < 9; ++i) state.rootMatrix.m[i] = mm[i];
+    state.rootMatrix.count = count;
+    state.rootQuat = q;
+    state.hasRoot = true;
+
+    const bool ok = BoneObjUpdateBone(state, 0, mm, q, pos, -1);
+
+    // boneobj.c:412-416: the root bone's own local orientation is discarded.
+    state.bones[0].local.x = 0.0f;
+    state.bones[0].local.y = 0.0f;
+    state.bones[0].local.z = 0.0f;
+    state.bones[0].local.w = 1.0f;
+    state.bones[0].local.unk10 = 0;
+
+    // BoneObj_SetRoot(NULL, NULL).
+    state.hasRoot = false;
+    return ok;
+}
+
+bool BoneObjGetRootMotion(const BonePoseState& state, float outPos[3], float outRot[3]) {
+    // lod/boneobj.c:202-211 + BoneBlend_GetMotion 0x4D3020
+    // (lod/boneobj.c:220-247). With a single animation source exactly one
+    // branch answers, so `a && b` is false and the value is copied, not lerped.
+    if (outPos != nullptr) {
+        outPos[0] = 0.0f;
+        outPos[1] = 0.0f;
+        outPos[2] = 0.0f;
+    }
+    if (outRot != nullptr) {
+        outRot[0] = 0.0f;
+        outRot[1] = 0.0f;
+        outRot[2] = 0.0f;
+    }
+    if (state.bones.empty()) return false;
+    const EngineBone& root = state.bones[0];
+    if (root.blend < 0 || static_cast<std::size_t>(root.blend) >= state.nodes.size()) return false;
+    const BlendNodeState& node = state.nodes[static_cast<std::size_t>(root.blend)];
+    if (node.branchType[0] != kBranchSource || node.branchSource[0] < 0) return false;
+    const AnimInst& inst = state.sources[static_cast<std::size_t>(node.branchSource[0])].inst;
+    // The source's getPosition writes pos AND rot; the animation position
+    // callback only ever writes pos and leaves the rotation untouched, so the
+    // rotation half stays as the caller's zeroes (boneobj.c:788-868 writes
+    // `pos` and `delta` only).
+    if (outPos != nullptr) {
+        outPos[0] = inst.pos[0];
+        outPos[1] = inst.pos[1];
+        outPos[2] = inst.pos[2];
+    }
+    return true;
+}
+
+bool InitAnimInstFromClip(AnimInst& inst, const EngineClip& clip, int bone, int id, uint32_t flags,
+                          float ticks_per_frame, int cache_bone_count, bool smooth) {
+    // boneobj.c:988-1021. `BoneObj_NewAnimSource` has already dereferenced
+    // `gAnimSets[skel].byId[id]` by this point (boneobj.c:778) and
+    // `BoneObj_InitAnimInst` dereferences `desc->pos->keys[...]`, so a clip with
+    // no position track is an access violation in retail. The port reports it.
+    if (clip.pos == nullptr || clip.pos->keys == nullptr || clip.pos->count <= 0) return false;
+
+    // boneobj.c:992-1005: the KeyCache, only when the set has caches.
+    if (cache_bone_count > 0) {
+        inst.cache_bones.assign(static_cast<std::size_t>(cache_bone_count), 0);
+        inst.cache_time = 0.0f;
+        inst.has_cache = true;
+    } else {
+        inst.cache_bones.clear();
+        inst.cache_time = 0.0f;
+        inst.has_cache = false;
+    }
+    inst.bone = bone;
+    inst.id = id;
+    inst.desc_index = id;
+    inst.delta[0] = 0.0f;
+    inst.delta[1] = 0.0f;
+    inst.delta[2] = 0.0f;
+    inst.flags = flags;
+    inst.smooth_anims = smooth;
+
+    // boneobj.c:1013-1021. Both branches are BIT copies in the original
+    // (`memcpy(&inst->time, &desc->length, 4)` and
+    // `memcpy(&inst->speed, &gTicksPerFrame, 4)`), so the reverse case starts
+    // exactly AT the length and the first advance immediately satisfies
+    // `!(time > 0)`.
+    if (flags & kAnimReverse) {
+        const PosKey& last = clip.pos->keys[clip.pos->count - 1];
+        inst.pos[0] = last.pos[0];
+        inst.pos[1] = last.pos[1];
+        inst.pos[2] = last.pos[2];
+        inst.speed = -ticks_per_frame;
+        inst.time = clip.length;
+    } else {
+        const PosKey& first = clip.pos->keys[0];
+        inst.pos[0] = first.pos[0];
+        inst.pos[1] = first.pos[1];
+        inst.pos[2] = first.pos[2];
+        inst.time = 0.0f;
+        inst.speed = ticks_per_frame;
+    }
+    return true;
+}
+
+int BoneObjGetEvents(std::vector<EngineBoneEvent>& events, BonePoseState& state, const EngineClip& clip,
+                     bool smooth) {
+    // boneobj.c:112-129. With a single source per bone the node walk is the
+    // branch-0 source, so this is one AnimEventsCB call per blended bone.
+    int n = 0;
+    for (int i = 0; i < state.boneCount(); ++i) {
+        EngineBone& b = state.bones[static_cast<std::size_t>(i)];
+
+        if (b.blend < 0) continue;
+        b.flags &= ~kBoneFading;
+        const BlendNodeState& node = state.nodes[static_cast<std::size_t>(b.blend)];
+        for (int br = 0; br < 2; ++br) {
+            if (node.branchType[br] != kBranchSource) continue;
+            const int si = node.branchSource[br];
+            if (si < 0 || static_cast<std::size_t>(si) >= state.sources.size()) continue;
+            n = BoneObjAnimEventsCB(events, n, state, i, state.sources[static_cast<std::size_t>(si)].inst,
+                                    clip, smooth);
+        }
+    }
+    return n;
+}
+
+bool BoneMeshSkin(const SkinTransformInput* vertices, int baseVertexCount, int extraInfluenceCount,
+                  const BoneTransform* bones, int boneCount, bool rigid,
+                  std::vector<SkinTransformOutput>& out) {
+    // d3drender.c:226-313.
+    if (baseVertexCount > 4000) return false;   // d3drender.c:234-238
+    if (baseVertexCount < 0) return false;
+    out.assign(static_cast<std::size_t>(baseVertexCount), SkinTransformOutput{});
+    if (baseVertexCount == 0) return true;
+    if (vertices == nullptr) return false;
+
+    const auto boneAt = [&](int index) -> BoneTransform {
+        if (bones == nullptr || index < 0 || index >= boneCount) return BoneTransform{};
+        return bones[index];
+    };
+
+    if (!rigid) {
+        // d3drender.c:254-274: the base pass. The position is the skinned one
+        // TIMES the vertex weight (the engine does not blend it with anything),
+        // and the normal is the rotated one.
+        for (int i = 0; i < baseVertexCount; ++i) {
+            const SkinTransformInput& v = vertices[i];
+            const BoneTransform b = boneAt(v.bone);
+            out[static_cast<std::size_t>(i)] =
+                SkinTransformVertex(v, b, false, nullptr);
+        }
+        // d3drender.c:275-290: the extra influences, accumulated into
+        // `out[v->target]`. The target's normal and UV are left alone.
+        for (int i = 0; i < extraInfluenceCount; ++i) {
+            const SkinTransformInput& v = vertices[baseVertexCount + i];
+            if (v.target < 0 || v.target >= baseVertexCount) continue;
+            const BoneTransform b = boneAt(v.bone);
+            SkinTransformOutput& base = out[static_cast<std::size_t>(v.target)];
+            SkinAccumulatePosition(v, b, base);
+        }
+        return true;
+    }
+
+    // d3drender.c:291-309: the rigid path writes the base vertices with NO
+    // weight and never reads the extra influences.
+    for (int i = 0; i < baseVertexCount; ++i) {
+        const SkinTransformInput& v = vertices[i];
+        const BoneTransform b = boneAt(v.bone);
+        out[static_cast<std::size_t>(i)] = SkinTransformVertex(v, b, true, nullptr);
+    }
+    return true;
 }
 
 }  // namespace igi
