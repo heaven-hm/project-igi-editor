@@ -6,6 +6,11 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+// `igi::AnimPlayer` lives in source/runtime/anim_player.h, which needs this
+// header for `AnimationClip`. Only a forward declaration can live here; a
+// caller that uses the returned player includes "runtime/anim_player.h".
+namespace igi { class AnimPlayer; }
+
 // ── Animation data structures (editor-side, read-only) ─────────────────────
 // These are populated by parsing the .BEF text files produced by igi1conv.exe.
 // NO converter code is duplicated — we only parse the text format.
@@ -183,3 +188,48 @@ inline bool ShouldUseSkinnedReplacement(const AnimPlayback& playback,
            object_index >= 0 && static_cast<size_t>(object_index) < object_count &&
            !object_deleted && has_skin_geometry;
 }
+
+// ── The engine's own playback path (#73) ─────────────────────────────────────
+//
+// Everything above this line is the editor's own reconstruction from the BEF
+// text: `Evaluate`/`EvaluateWorld` slerp with glm and place each bone from a
+// local translation, and `AnimPlayback::Update` counts MILLISECONDS.
+//
+// `igi::AnimPlayer` (source/runtime/anim_player.{h,cpp}, on top of the pure
+// translation in source/runtime/anim_rules.{h,cpp}) is the ENGINE's path
+// instead: it builds the engine's own records from the same clip and then runs
+// the engine's own functions on them -
+//
+//   Anim_Play            0x4D61D0  src/boneobj/anim.c:38-58
+//   BoneObj_InitAnimInst 0x4D4F60  src/boneobj/boneobj.c:988-1021
+//   BoneObj_Update       0x4D38C0  src/boneobj/boneobj.c:371-419
+//   BoneObj_UpdateBone   0x4D3A90  src/boneobj/boneobj.c:423-525
+//   BoneObj_GetEvents    0x4D3210  src/boneobj/boneobj.c:112-129
+//   Anim_PrepareSlerps   0x4D6D40  src/haze/anim.c:40-84
+//   BoneMesh_Skin        0x49B700  src/dxinit/d3drender.c:226-313
+//
+// `AnimPlayer::PoseModelLocal()` is a drop-in for the `boneWorldTransforms`
+// argument of `Renderer::DrawSkinnedMesh` and `Renderer::DrawAnimSkeleton`:
+// one glm matrix per engine bone, in METRES and in the model's own frame.
+// `AnimPlayer::Skin` is `BoneMesh_Skin` itself, over the engine's vertex
+// records.
+//
+// TWO THINGS A CALLER MUST NOT MIX, both measured against the shipped data:
+//
+//   1. The BEF text's key times are engine TICKS (4800/second), NOT
+//      milliseconds - `AnimationClip::time_ms` and `AnimationClip::length_ms`
+//      are misnomers. `AnimPlayer` consumes ticks; `AnimPlayback::Update`
+//      consumes milliseconds. Never feed one clock's value to the other.
+//      (`AnimPlayback::Update` therefore runs the editor's preview 4.8x slow;
+//      the engine path does not.)
+//   2. `AnimPlayer::Step()` is ONE engine frame (gTicksPerFrame = 160 ticks at
+//      the game's 30 fps), which is what the retail game loop does.
+//      `AdvanceSeconds` is the editor-side accumulator that calls it.
+//
+// Build one player per playing clip; it owns the engine records for that clip.
+
+// Builds the engine-exact player for `clip`. Returns a player whose `valid()`
+// is false when the clip has no bones or no rotation keys - the engine has no
+// guard for either and would fault (src/boneobj/boneobj.c:1091).
+// The returned type is complete only where "runtime/anim_player.h" is included.
+igi::AnimPlayer MakeEngineAnimPlayer(const AnimationClip& clip);
