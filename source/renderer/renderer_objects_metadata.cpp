@@ -4,6 +4,8 @@
  *          Split from renderer_objects.cpp; shares renderer_objects_internal.h.
  *****************************************************************************/
 #include "renderer_objects_internal.h"
+#include "../lod/lod_qvm_table.h"
+#include "../lod/lod_settings.h"
 #include "../runtime/magic_object_registry.h"
 
 void Renderer_Objects::EnsurePortalDistancesLoaded() {
@@ -25,48 +27,30 @@ void Renderer_Objects::EnsurePortalDistancesLoaded() {
     std::string decompiled = QVM_DecompileToString(qvm);
     if (decompiled.empty()) return;
 
-    std::stringstream ss(decompiled);
-    std::string line;
-    while (std::getline(ss, line)) {
-        // Look for: Task_New(-1, "ModelLODSettings", "300_01_1", "300_01_1", 70.0, 170.0, 300.0, 350.0, 500.0);
-        if (line.find("Task_New") == std::string::npos) continue;
-        if (line.find("\"ModelLODSettings\"") == std::string::npos) continue;
+    // Task_New(-1, "ModelLODSettings", "300_01_1", "300_01_1", 70.0, 170.0, 300.0, 350.0, 500.0);
+    // Three leading args then the five distances (gModelLODSettingsParams,
+    // IGI-RE src/animtrig/lodsettings.c:95,104-109). The tokenizer lives in
+    // source/lod/lod_qvm_table.h so it is host-testable and single-sourced.
+    for (const igi::lod::AuthoredLodEntry& entry : igi::lod::ParseAuthoredLodEntries(decompiled)) {
+        // Portal/attachment culling distance, in metres: the authored "Distance
+        // to cutoff" (tokens[8]), or the largest distance when it is not
+        // positive. Unchanged behaviour from the previous inline parse.
+        portal_distances_[entry.model] = igi::lod::AuthoredCutoffDistance(entry);
 
-        size_t start = line.find('(');
-        size_t end = line.rfind(')');
-        if (start == std::string::npos || end == std::string::npos) continue;
-
-        std::string args = line.substr(start + 1, end - start - 1);
-        
-        std::vector<std::string> tokens;
-        std::stringstream argStream(args);
-        std::string token;
-        while (std::getline(argStream, token, ',')) {
-            token.erase(0, token.find_first_not_of(" \t\r\n"));
-            token.erase(token.find_last_not_of(" \t\r\n") + 1);
-            tokens.push_back(token);
-        }
-
-        if (tokens.size() >= 9) {
-            std::string modelId = tokens[2];
-            if (modelId.size() >= 2 && modelId.front() == '"' && modelId.back() == '"') {
-                modelId = modelId.substr(1, modelId.size() - 2);
-            }
-            try {
-                // tokens[8] is the authored "Distance to cutoff" (tokens[4..7] are LOD 1..4 distances).
-                // Using tokens[4] truncated visibility to the LOD 1 distance (e.g. 1m for WinchHouse 463_01_1).
-                float portalDist = std::stof(tokens[8]);
-                if (portalDist <= 0.0f) {
-                    for (size_t ti = 4; ti < tokens.size(); ++ti) {
-                        portalDist = std::max(portalDist, std::stof(tokens[ti]));
-                    }
-                }
-                portal_distances_[modelId] = portalDist;
-            } catch (...) {}
-        }
+        // The engine's copy of the table: non-decreasing clamp, then x4096
+        // (ModelLODSettings_Changed, IGI-RE src/animtrig/lodsettings.c:157-171).
+        // This is VirModel.unk28, the input to lod_select's authored branch.
+        float raw[5];
+        for (int i = 0; i < 5; ++i) raw[i] = entry.distance[static_cast<size_t>(i)];
+        igi::lod::MonotonizeDistances(raw);
+        std::array<float, 5> scaled{};
+        igi::lod::ScaleDistancesToWorldUnits(raw, scaled.data());
+        authored_lod_distances_[entry.model] = scaled;
     }
-    
-    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Loaded " + std::to_string(portal_distances_.size()) + " LOD distances from lod.qvm");
+
+    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Loaded " + std::to_string(portal_distances_.size()) +
+        " LOD distances from lod.qvm (" + std::to_string(authored_lod_distances_.size()) +
+        " authored distance tables)");
 }
 
 

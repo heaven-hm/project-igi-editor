@@ -9,12 +9,11 @@ Oracle: `/Users/haseeb-mir/Documents/Code/IGI-RE`, the faithful C decompilation 
 `HOOK(0x4CED50, VirModel_InitLods)`. The function body is `src/model/model.c:145-163`.
 
 **Verdict, in one line.** The engine's rule is a character-arithmetic name increment with a
-first-miss terminator and a 5-level cap; the editor implements **no chain at all** (one
-`<name>.mef` per object), so there is nothing to correct in existing resolution code — the
-rule is now landed as a tested primitive (`source/lod/lod_chain.h`) and the wiring into the
-loader, the lightmap page indexing and the viewport is the remaining feature work, named in
-§6. Measured: **60.3 % of the 6605 retail model names have a chain longer than one level**,
-so the missing chain is not an edge case.
+first-miss terminator and a 5-level cap; the editor now resolves that chain in its mesh lookup
+path under the engine's exact-name semantics and exposes it (`source/lod/lod_chain.h`,
+`Renderer_Objects::GetLodChain`), but still **draws one `<name>.mef` per object** — the
+per-frame distance switch is the remaining feature item, named in §6. Measured: **60.3 % of the
+6605 retail model names have a chain longer than one level**, so the chain is not an edge case.
 
 ---
 
@@ -221,64 +220,91 @@ Measured on the retail `lightmaps.res` of all 14 levels:
   a specific `objNNNNN` set back to a specific object is not possible from the shipped data,
   so **"holes == non-format-3 LOD refs" is inferred, not independently proven** (§7).
 
-## 5. What the editor does today
+**Editor applicability:** none of the ref bookkeeping above is reachable in the editor
+today. §5.1 gives the reason and the evidence for why the per-LOD ref count has no
+consumer in this architecture.
 
-| Behaviour | Editor location | Consequence |
+## 5. What the editor does now
+
+The chain half of #62 is wired: `Renderer_Objects` resolves a model's chain under
+the engine's rule and exposes it to the draw path. The mesh that is *drawn* is
+still the object's own name, which is the one remaining feature item (§6 item 1).
+
+| Behaviour | Editor location | Notes |
 | --- | --- | --- |
-| Loads exactly one `<modelId>.mef` per object; no chain, no `lod_count`, no distance switch | `Renderer_Objects::FindMeshData`, `source/renderer/renderer_objects.cpp:484-488` | a `_2.._5` variant is only ever drawn if something names it explicitly |
-| No chain: no `VirModel`/`lod_count` equivalent, no `lods[]`, no per-LOD geometry, no distance switch | `grep -rniE "\blod\b\|lods\|lod_count\|detail level"` over `source/renderer/` and `source/level/level_objects*.cpp` matches only terrain LOD (`source/level/terrain_lod.cpp`), the texture-table fallback below, the ATTA family notes, and the `lod.qvm` metadata reader | the "chain length" input the lightmap indexing needs is simply absent |
-| **Does** parse the authored LOD distances from `lod.qvm` (`ModelLODSettings` tasks, 5 distances per model) | `source/renderer/renderer_objects_metadata.cpp:13-57` | matches the engine's `gModelLODSettingsParams` layout (§2.1) — a verified positive, and the correct data source for requirement 3 |
-| Nearest existing *resolution* logic is a **texture-table** fallback `NNN_VV_N -> NNN_VV_1` (e.g. `001_02_2 -> 001_02_1`), i.e. borrow the primary's texture list | `source/renderer/renderer_objects_texture.cpp:155-177` | a different rule, opposite direction to the engine's chain, and it does not create LOD levels |
-| Lightmap manager discovers the real retail `.olm` names and keys them by bare name | `ObjectLightmapManager::LoadForLevel`, `source/renderer/object_lightmap.cpp:76-118` | discovery is correct |
-| `GetLightmapTexture(object_name, draw_record_index)` formats `"%s_%05d.olm"` | `source/renderer/object_lightmap.cpp:125-137` | **no callers** — nothing binds an object to a lightmap page yet, and the index it would need is the per-set ref index, which counts `lod_count` refs per object |
-| `.olm` header parsing offsets (`count`@44, `pixel_start = 60 + count*44`, w@+40/h@+42) | `source/renderer/object_lightmap.cpp:79-99` | **matches IGI-RE's ABI** (`sizeof(Lightmaps)==0x3C`, `sizeof(LightmapTex)==0x2C`, `width`/`height` at +40/+42) — a verified positive |
+| Resolves the LOD chain for a model it loads: exact-name existence, last-character increment, first-miss terminator, 5-level cap | `Renderer_Objects::GetLodChain`, `MeshNameResolves` — `source/renderer/renderer_objects_mesh.cpp:16-92`; rule in `source/lod/lod_chain.h` | called from `GetOrLoadMesh` (`renderer_objects_mesh.cpp:110-115`) so every model the editor loads carries its chain; cached per level and dropped whenever the loaded `.res` set changes (`renderer_objects.cpp:367-379`, `:435`) |
+| Existence is an EXACT `<name>.mef` key — the indexed level/common `.res` archives first, then an exact on-disk `<name>.mef` | `MeshNameResolves`, `renderer_objects_mesh.cpp:16-49` | `FindModelFile`'s fuzzy pass is deliberately not used: it would resolve `435_01_6` to `435_01_1` and invent a level the engine's `strcmp` never sees |
+| Exposes the chain (`count`, `names[]`, `distance[]`) and the authored-branch LOD selection | `GetLodChain`, `GetLodMeshName`, `GetAuthoredLodDistances`, `SelectLodForDistance` — `renderer_objects_mesh.cpp:51-92`, declared `renderer_objects.h:169-213` | `SelectLodForDistance` delegates to `igi::lod::SelectAuthoredLod` and returns -1 when the model has no chain or no authored entry (the complexity branch is deliberately not ported: the editor always has `lod.qvm`) |
+| Parses the authored `ModelLODSettings` tables out of `lod.qvm` and keeps the engine's copy (non-decreasing clamp, then x4096) | `EnsurePortalDistancesLoaded`, `source/renderer/renderer_objects_metadata.cpp:9-56`; tokenizer in `source/lod/lod_qvm_table.h` | same 6-parameter layout as `gModelLODSettingsParams`; the tokenizer is now a single host-tested implementation instead of an inline loop |
+| Still loads and draws exactly one `<modelId>.mef` per object | `GetOrLoadMesh`, `renderer_objects_mesh.cpp:110-239` | the per-frame distance switch in `Draw` is not enabled — §6 item 1 |
+| Lightmap binding is **task-keyed**, not the engine's per-set ref index | `App::ResolveAndApplyLightmap` `source/app_editor.cpp:341-399` -> `SetLightmapForTask`; the draw reads `GetLightmapForTask` (`renderer_objects.cpp:990`) and binds `(*lightmaps)[si]` per submesh (`:1096-1102`) | resolves `.olm` paths through `igi1conv lightmap resolve` keyed by model + task id (or authored position), `source/utils_igi1conv.cpp:177-190` |
+| `ObjectLightmapManager::GetLightmapTexture` still has **zero callers** | `source/renderer/object_lightmap.cpp:125-137` | genuinely dead in this architecture — see §6 item 2, not merely unwired |
 
-Editor-side data check: `LEVEL7/MODELS/LEVEL7.RES` holds **619 `.mef` entries for 619 bundle
-names**, one per name, and the last-digit distribution (1:222, 2:152, 3:134, 4:72, 5:38)
-matches the chain histogram of §3 for LEVEL7 (223/152/134/72/38) — the single difference is
-`waypoint`, which is chain-1 but does not end in a digit. So every chain member is already
-present in the editor's own archives; only the walk is missing.
+### 5.1 Why the per-LOD lightmap ref count is not needed here
+
+The engine's `lod_count` reaches the lightmap system through
+`SectorObject_CountMagicLods` / `SectorObject_CountRigidLods` / `fill_refs`
+(`src/sector/sector.c:508-563`), which reserve one `LightmapRef` per LOD, and
+those refs are consumed by the **bake** renderer `Hemicube_DrawLightmapSet`
+(`src/litmap/hemirender.c:78-86` — it picks, per ref, the mesh at the requested
+LOD, with "the coarsest LOD stands in for higher ones") and by
+`Lightmap_BuildLod`'s `<name>_<refIndex>.olm` path (`src/dirlight/lightmapbuild.c:59`).
+Both belong to a `LightmapSet` built by `SectorObject_LoadLightmaps`
+(`src/sector/sector.c:641-680`, `HOOK(0x4DC3D0)`) walking the engine's task tree.
+
+The editor has no `LightmapSet`, no hemicube bake renderer and no per-object ref
+cursor. Its bakes come from `igi1conv`, and the per-object `.olm` group is already
+named by that binding, so the ref index adds nothing. Reproducing it would require
+(a) the engine's sector-object walk order (`SectorObject_FillMagicRefs`,
+`sector.c:565-575`) over a task tree the editor's flat `LevelObject` list does not
+model, and (b) `LightmapInfo_MakeName`'s first-free `obj%05d` slot allocation over
+the lightmap folder *and* the live `LightmapInfo` pool
+(`src/litmap/lightmap.c:231-252`, `HOOK(0x5235A0)`). `source/renderer/lightmap_ref_index.h`
+and `tests/test_lightmap_ref_index.cpp` therefore stay a documented, tested rule
+with no consumer until a per-frame LOD switch exists to need them (§6 item 1).
+This is an editor-architecture determination, not an IGI-RE claim.
 
 ## 6. What landed, and what remains
 
-**Landed** (task-10, minimal and additive):
+**Landed this pass** (issue requirement 1 — the chain in the model loader):
 
-* `source/lod/lod_chain.h` — the rule of §1 as a dependency-free, header-only primitive:
-  `kVirModelLods`, `LodDistance(level)`, `IncrementLodName(name)` (character arithmetic,
-  empty-name safe) and `BuildLodChain(modelName, exists)` returning `count`, `names[]`,
-  `distance[]`. The resolver is an injected predicate, i.e. the equivalent of
-  `ModelLod_Find` returning non-NULL; no file I/O, no globals. Every step carries its
-  `src/model/model.c` line.
-* `tests/test_lod_chain.cpp` — 12 tests, registered at `CMakeLists.txt:313`. Eleven are
-  pure-logic (increment on digit and non-digit endings, empty name, numeric suffixes never
-  invented, distances, the 5-level cap, first-miss terminator, gaps not skipped, absent own
-  name, chain started at a variant, the issue's `435_01_1` example). The twelfth parses all
-  14 retail `LEVEL*.MTP` VNAM tables and asserts the §3 numbers, so the corpus measurement is
-  a re-runnable test rather than a claim in a document.
+1. `Renderer_Objects::MeshNameResolves` — exact-name existence over the editor's
+   loaded model set (indexed `.res` archives + exact on-disk `.mef`), the
+   equivalent of `ModelLod_Find`'s `strcmp` (`src/model/model.c:165-178`).
+2. `Renderer_Objects::GetLodChain` / `GetLodMeshName` — the chain itself
+   (`BuildLodChain`, `source/lod/lod_chain.h`), cached per level and consulted by
+   `GetOrLoadMesh`, i.e. by the mesh lookup path.
+3. `Renderer_Objects::GetAuthoredLodDistances` / `SelectLodForDistance` — the
+   authored table in world units and `lod_select`'s authored branch, so a draw
+   path can pick a mesh name without inventing a rule.
+4. `source/lod/lod_qvm_table.h` — the `lod.qvm` `ModelLODSettings` tokenizer as a
+   single host-testable primitive; `EnsurePortalDistancesLoaded` now also keeps
+   the engine's clamped, x4096 table (`VirModel.unk28`) instead of only the
+   culling cutoff.
+5. Two corpus tests in `tests/test_lod_chain.cpp` (§7) — the archive name set
+   resolves the engine's VNAM chain exactly, and the retail authored tables select
+   inside their chains.
 
-**Not landed, and why** (the feature port of issue #62; each item names its blocking file):
+**Not landed, and why:**
 
-1. *Chain in the model loader* (issue requirement 1) — the loader is
-   `Renderer_Objects::FindMeshData` / the `GetModelData` path in
-   `source/renderer/renderer_objects.cpp` and `renderer_objects_mesh.cpp`, which the Lead owns
-   and has just edited (removal of `current_draw_obj_type_`). Building a chain also means
-   deciding whether lower LODs are lazily extracted from the level archive; that is a
-   design decision for the owner of those files, not a drive-by edit.
-2. *Lightmap page indexing* (requirement 2) — needs the per-set ref index, which requires the
-   chain (item 1) plus a mapping from a level object to its `objNNNNN` `LightmapInfo` slot.
-   The slot allocation rule (`lightmap.c:231-252`) is a first-free-index search over the
-   lightmap folder *and* the live `LightmapInfo` pool, so reproducing it needs the level's
-   object iteration order, not just the archive.
-3. *Viewport LOD override / distance switch* (requirement 3) — UI + render-state work in the
-   Lead's files. The distance *data* is already parsed (`renderer_objects_metadata.cpp:13-57`),
-   so this item is the override control and the per-LOD draw selection, not the metadata.
-4. Requirement 4 (document the rule in code comments citing `0x4CED50`) is satisfied by
-   `source/lod/lod_chain.h` and this document.
-
-This is the negative-result half of the task, stated plainly: **for the resolution rule there
-is no existing editor behaviour to correct**, because the editor never implemented it. The
-rule is now available, cited and tested; wiring it in is a feature, and its blocking files
-are outside this task's write scope.
+1. *The per-frame LOD switch in `Draw`* (requirement 3, the override/selection
+   control). The rule and the data are now exposed, but turning the drawn mesh
+   into a lower LOD changes the submesh set, and the editor's lightmap binding is
+   a per-task texture vector indexed by submesh of the **LOD 0** mesh
+   (`source/renderer/model.cpp:241-250`: one submesh per render block "so
+   `renderer_objects.cpp`'s `lightmaps[si]` lookup lines up exactly with
+   `obj00000_000NN.olm`"). Drawing LOD *n* without its own bake would bind the
+   wrong atlas page or none. Deciding that is a design step in files this pass
+   does not own, and it is what would give `lightmap_ref_index.h` a consumer.
+2. *Per-LOD lightmap ref counts* (requirement 2) — non-applicable to this
+   architecture: §5.1. `ObjectLightmapManager::GetLightmapTexture`
+   (`object_lightmap.cpp:125-137`) is genuinely dead and is **not** force-wired;
+   the editor binds retail lightmaps by task key through `igi1conv`, and the
+   ref index cannot be computed without the engine's sector-object walk and
+   `LightmapInfo` slot allocation.
+3. Requirement 4 (document the rule in code comments citing `0x4CED50`) is
+   satisfied by `source/lod/lod_chain.h`, `source/lod/lod_settings.h`,
+   `source/lod/lod_qvm_table.h` and this document.
 
 ## 7. Verified / unverified
 
@@ -292,34 +318,47 @@ are outside this task's write scope.
 | No gap-hidden variants in retail | **Verified** | corpus test asserts `gaps == 0` |
 | The issue's `435_01_1` example is a 5-level chain | **Verified** | printed chain, §3 |
 | One `.olm` per (object, LOD) ref; pages = `mesh->texCount` | **Verified (oracle)** | `src/sector/sector.c:546-562`, `src/dirlight/lightmapbuild.c:59,85` |
+| The refs are consumed by the hemicube **bake** renderer, per requested LOD | **Verified (oracle)** | `src/litmap/hemirender.c:78-86`; `LightmapSet` built at `src/sector/sector.c:641-680` |
 | Retail `.olm` files are `Lightmaps` structs | **Verified** | 864/864 LEVEL7 entries carry `magic 0x3DF5C28F`, 0 malformed |
 | Retail `.olm` pages are 1 per LOD in practice | **Verified** | LEVEL7 `count` histogram 1:863, 3:1 |
 | `LightmapInfo.name` is an opaque `obj%05d` slot, not a model name | **Verified** | `src/litmap/lightmap.c:231-252` + the observed retail names |
 | `lod_dist[]` (`100/(i*i)`) is dead data; the switch uses authored distances or complexity ratios | **Verified** | `grep -rn "lod_dist" src/` matches only `model.c:154` + `modeltypes.h:57`; `src/lod/mesh3d.c:160-208` |
-| The authored per-model distances come from `lod.qsc` `ModelLODSettings` and land in `VirModel.unk24/unk28` (×4096, non-decreasing clamped) | **Verified** | `src/animtrig/lodsettings.c:1-29,37-40,95,104-109` + `ModelLODSettings_Changed` `HOOK(0x4EDB60)` |
-| The editor already reads those distances from `lod.qvm` | **Verified** | `source/renderer/renderer_objects_metadata.cpp:13-57` |
-| The editor implements no LOD chain | **Verified** | `renderer_objects.cpp:484-488`; no `lod_count`/`lods[]` equivalent in `source/` |
-| The editor's `.olm` parse matches IGI-RE's ABI | **Verified** | `object_lightmap.cpp:79-99` vs `sizeof(Lightmaps)==0x3C`, `sizeof(LightmapTex)==0x2C` |
+| The authored per-model distances come from `lod.qsc` `ModelLODSettings` and land in `VirModel.unk24/unk28` (x4096, non-decreasing clamped) | **Verified** | `src/animtrig/lodsettings.c:1-29,37-40,95,104-109` + `ModelLODSettings_Changed` `HOOK(0x4EDB60)` |
+| The editor reads those distances from `lod.qvm` and now keeps the clamped, x4096 table | **Verified** | `renderer_objects_metadata.cpp:9-54`, `source/lod/lod_qvm_table.h` |
+| **The editor resolves the LOD chain for a model it loads, with exact-name existence** | **Verified (host)** | `renderer_objects_mesh.cpp:16-92`; corpus test `ThePackedModelArchiveResolvesTheEngineVnamChainExactly` |
+| The packed model archive's `.mef` stem set equals the engine's VNAM set in all 14 levels, and every name's chain is identical under both | **Verified (host, measured)** | `[lod-res] levels=14 resMefNames=6605 vnamNames=6605 onlyVnam=0 onlyRes=0 differingChains=0` |
+| The retail authored tables select inside their chain and are culled past the authored cutoff | **Verified (host, measured)** | `[lod-qvm] markerLines=462 authoredEntries=462 distinctModels=450 trailing_1=462 resolvedInBundles=431 commonArchiveNames=189 monotonizeChanged=0 selected=431 culled=431` |
+| Authored entry count of `LOD.QVM` | **Corrected by measurement**: 462 `ModelLODSettings` lines covering 450 distinct model names (all ending `_1`), not 449 | the `[lod-qvm]` line above; the tokenizer is the renderer's previous inline loop, moved verbatim |
+| 31 authored entries name models no shipped bundle contains; the engine would write them onto the `"missing"` fallback model | **Verified (oracle + measured)** | `VirModel_Find` substitutes `"missing"`, `src/model/model.c:107-116`, called by `ModelLODSettings_Changed` `src/animtrig/lodsettings.c:161-171`; unresolved examples printed by the test |
+| `source/renderer/lightmap_ref_index.h` has no consumer because no LOD switch exists | **Verified (editor architecture)** | `GetLightmapForTask`/`SetLightmapForTask` path above; `GetLightmapTexture` zero callers |
+| The changed translation units compile with the project's cross-compiler flags | **Verified** | `tu-check.py` over `renderer_objects.cpp`, `renderer_objects_mesh.cpp`, `renderer_objects_metadata.cpp`, `renderer_draw.cpp`: `checked 4 translation unit(s), 0 failed` |
 | Holes in the LEVEL12-14 ref index spaces are non-format-3 LOD refs | **Inferred, not proven** | mechanism cited at `lightmapbuild.c:45-46`; `objNNNNN` sets cannot be mapped back to objects from the shipped data |
-| A per-object prediction of a level's `.olm` count from its `objects.qsc` | **Not attempted** | needs the level object list + the `LightmapInfo` allocation order |
-| The chain wired into the renderer / viewport | **Not done** | §6 items 1-3 |
-| `source/lod/lod_chain.h` and `tests/test_lod_chain.cpp` compile with the project's cross-compiler flags | **Verified** | `tu-check.py` over the changed TUs: `checked 6 translation unit(s), 0 failed`; the new TU also replayed by hand with the DB's exact `i686-w64-mingw32-g++` command → exit 0 |
-| The new TU links into the x64 `igi_tests` aggregate | **Pending build-gate** | header-only and dependency-free, so no link impact expected |
+| The chain wired into the renderer / viewport | **Partly done** — chain resolution and exposure are in the mesh lookup path; the per-frame switch is not enabled (§6 item 1) | §5, §6 |
+| Any rendered LOD or lightmap is correct | **Unverified** — the editor needs GL 4.1+ compatibility and this host offers GL 2.1, so no GUI run is possible | — |
 
 ## 8. Reproduction
 
 ```bash
-# Pure logic + corpus assertion (corpus runs via the runner's IGI_GAME_PATH)
+# Narrowest: the rule, the corpus histogram, the archive-set equivalence and the
+# authored-table pipeline (corpus via the runner's IGI_GAME_PATH).
 IGI_HOST_NO_CACHE=1 IGI_HOST_TESTS="tests/test_lod_chain.cpp" bash scripts/run-host-tests.sh
 
-# Cross-compiler syntax check (needs a configure to have registered the file first)
-python3 tools/igi-re-parity/tu-check.py tests/test_lod_chain.cpp
+# Full host lane (regression).
+IGI_HOST_NO_CACHE=1 bash scripts/run-host-tests.sh
+
+# Cross-compiler syntax check of the wired translation units.
+python3 tools/igi-re-parity/tu-check.py source/renderer/renderer_objects.cpp \
+    source/renderer/renderer_objects_mesh.cpp source/renderer/renderer_objects_metadata.cpp
 ```
 
-The §3 and §4 tables come from scratch tools (deliberately not committed: they duplicate the
-committed corpus test or read live game data):
+The §3 and §4 tables come from scratch tools (deliberately not committed: they
+duplicate the committed corpus tests or read live game data):
 
-* an MTP VNAM reader that walks `FORM` + BE size + `MTP `, then `fourcc` + BE size chunks,
-  decoding `VNAM` as `u32 count`, `count` u32 offsets, packed names;
-* `RES_BuildIndex` + `RES_ReadEntry` over each level's `lightmaps/lightmaps.res`, grouping
-  `objNNNNN_%05d.olm` entries by prefix and reading `count` at offset 0x2C.
+* an MTP VNAM reader that walks `FORM` + BE size + `MTP `, then `fourcc` + BE size
+  chunks, decoding `VNAM` as `u32 count`, `count` u32 offsets, packed names;
+* `RES_BuildIndex` + `RES_ReadEntry` over each level's `lightmaps/lightmaps.res`,
+  grouping `objNNNNN_%05d.olm` entries by prefix and reading `count` at offset 0x2C.
+
+The §5-§7 measurements are produced by the two corpus tests, which print their
+numbers (`[lod-res]`, `[lod-qvm]`) so the figures can be re-read without a
+scratch tool.

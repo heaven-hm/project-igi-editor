@@ -404,6 +404,11 @@ add_executable(igi_tests
     tests/test_menu_ui.cpp
     tests/test_magic_object_expand.cpp
     tests/test_mission_fog.cpp
+    tests/test_smoke_rules.cpp
+    tests/test_alarm_light_rules.cpp
+    tests/test_rain_rules.cpp
+    tests/test_pickup_rules.cpp
+    tests/test_sound_rules.cpp
 )
 
 # Explicit runtime so igi_tests always matches igi-editor (/MDd Debug, /MD Release).
@@ -527,6 +532,11 @@ target_sources(igi_tests PRIVATE
     source/runtime/map_computer_projection.cpp
     source/runtime/level_weather.cpp
     source/runtime/mission_fog.cpp
+    source/runtime/smoke.cpp
+    source/runtime/alarm_light.cpp
+    source/runtime/pickup_rules.cpp
+    source/runtime/rain_rules.cpp
+    source/runtime/sound_emitter.cpp
     source/runtime/weather_mode.cpp
     source/menu/qvm_image.cpp
     source/menu/menu_text_res.cpp

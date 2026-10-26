@@ -1,7 +1,10 @@
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <string>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <regex>
 #include <cstdio>
@@ -24,8 +27,41 @@ namespace {
 
 // Returns path to a file in the fixtures/ directory next to the exe.
 // Fixtures are copied there by CMake post-build so tests work from any CWD.
+//
+// Two candidate directories, because the two lanes lay the tree out
+// differently.  On Windows CMake copies `tests/fixtures` next to igi_tests.exe
+// (CMakeLists.txt:655-660), so `<exeDir>/fixtures` is the answer.  The
+// host-native lane runs the binary with `GetExeDirectory()` == the repository
+// root, where the fixtures are at `tests/fixtures`; before this search the
+// suite built a literal `\fixtures\<name>` path there, which is one filename on
+// POSIX, so every fixture-backed test failed.  The scratch files the round-trip
+// tests write land in whichever directory is chosen, so this picks a directory
+// (not an existing file) and falls back to the Windows layout.
 std::string FixturePath(const std::string& name) {
-    return Utils::GetExeDirectory() + "\\fixtures\\" + name;
+    const std::filesystem::path exeDir(Utils::GetExeDirectory());
+    const std::filesystem::path dirs[] = {
+        exeDir / "fixtures",
+        exeDir / "tests" / "fixtures",
+    };
+    for (const std::filesystem::path& dir : dirs) {
+        if (std::filesystem::is_directory(dir)) return (dir / name).string();
+    }
+    return (dirs[0] / name).string();
+}
+
+// The installed retail game tree.  Mirrors `Utils::GetIGIRootPath()`
+// (source/utils.cpp:501-537) without linking it: `IGI_GAME_PATH` when set,
+// otherwise the executable directory.  source/utils.cpp is not host-portable,
+// so the test-local copy is what lets this suite build and run natively.
+std::string CorpusRootString() {
+    if (const char* env = std::getenv("IGI_GAME_PATH"); env != nullptr && *env != '\0') {
+        return std::string(env);
+    }
+    // The lane's documented default (scripts/run-host-tests.sh), for a direct
+    // run of the test binary without the environment set.
+    const std::string kDefault = "/Users/haseeb-mir/Downloads/IGI";
+    if (std::filesystem::is_directory(kDefault)) return kDefault;
+    return Utils::GetExeDirectory();
 }
 
 std::string ReadFile(const std::string& path) {
@@ -70,6 +106,85 @@ std::vector<uint8_t> BuildMinimalQvm(const std::vector<uint8_t>& code) {
 
     std::copy(code.begin(), code.end(), binary.begin() + 60);
     return binary;
+}
+
+// Same container, but with a one-entry string pool ("stable"/"svalue") so a
+// PUSHSI/PUSHII operand can reference it.  Layout follows QVM_Parse's header
+// reads (source/level/qvm_parser.cpp): of_svalue at 0x20, sz_svalue at 0x28,
+// of_ctable at 0x2C, sz_ctable at 0x30.
+std::vector<uint8_t> BuildQvmWithStringPool(const std::vector<uint8_t>& code,
+                                            const std::string& pooledString) {
+    std::string pool = pooledString;
+    pool.push_back('\0');
+
+    std::vector<uint8_t> binary(60U + pool.size() + code.size(), 0U);
+    binary[0] = 'L'; binary[1] = 'O'; binary[2] = 'O'; binary[3] = 'P';
+
+    auto write_u32 = [&binary](size_t offset, uint32_t value) {
+        binary[offset + 0] = static_cast<uint8_t>(value & 0xFFU);
+        binary[offset + 1] = static_cast<uint8_t>((value >> 8U) & 0xFFU);
+        binary[offset + 2] = static_cast<uint8_t>((value >> 16U) & 0xFFU);
+        binary[offset + 3] = static_cast<uint8_t>((value >> 24U) & 0xFFU);
+    };
+
+    write_u32(0x04, 8U);
+    write_u32(0x08, 5U);
+    write_u32(0x0C, 60U);
+    write_u32(0x10, 60U);
+    write_u32(0x14, 0U);
+    write_u32(0x18, 0U);
+    write_u32(0x1C, 60U);
+    write_u32(0x20, 60U);
+    write_u32(0x24, 0U);
+    write_u32(0x28, static_cast<uint32_t>(pool.size()));
+    write_u32(0x2C, static_cast<uint32_t>(60U + pool.size()));
+    write_u32(0x30, static_cast<uint32_t>(code.size()));
+
+    std::copy(pool.begin(), pool.end(), binary.begin() + 60);
+    std::copy(code.begin(), code.end(), binary.begin() + 60 + pool.size());
+    return binary;
+}
+
+// Writes `bytes` to a scratch path, parses it, deletes it.
+QVMFile ParseSyntheticQvm(const std::vector<uint8_t>& bytes,
+                          const std::string& scratchName) {
+    const std::string path = FixturePath(scratchName);
+    {
+        std::ofstream out(path, std::ios::binary);
+        if (!out.is_open()) return QVMFile{};
+        out.write(reinterpret_cast<const char*>(bytes.data()),
+                  static_cast<std::streamsize>(bytes.size()));
+    }
+    QVMFile qvm = QVM_Parse(path);
+    std::remove(path.c_str());
+    return qvm;
+}
+
+// Encodes `value` as a QSC double-quoted literal, following the lexer's
+// contract (source/level/qsc_lexer.cpp:141-150) -- i.e. the direction a script
+// AUTHOR writes, not the direction the decompiler prints.
+std::string QscQuote(const std::string& value) {
+    std::string out = "\"";
+    for (char c : value) {
+        if (c == '\\') out += "\\\\";
+        else if (c == '"') out += "\\\"";
+        else if (c == '\n') out += "\\n";
+        else out += c;
+    }
+    out += "\"";
+    return out;
+}
+
+// The single StringLit token of `source`, or "" if the source did not lex to
+// exactly one string statement.
+std::string SoleStringLiteral(const std::string& source, std::string* error) {
+    const qsc::LexResult lr = qsc::Lex(source);
+    if (!lr.ok) { if (error) *error = "lex: " + lr.error; return {}; }
+    for (const qsc::Token& t : lr.tokens) {
+        if (t.kind == qsc::TokKind::StringLit) return t.lexeme;
+    }
+    if (error) *error = "no string literal in: " + source;
+    return {};
 }
 
 // Full compile→write→parse→decompile pipeline.
@@ -418,13 +533,20 @@ class QvmGameRoundTripTest : public ::testing::TestWithParam<int> {};
 
 TEST_P(QvmGameRoundTripTest, ObjectsQvmDecompilesAndReparses) {
     int level = GetParam();
-    std::string qvmPath = Utils::GetIGIRootPath() +
-        "\\missions\\location0\\level" + std::to_string(level) + "\\objects.qvm";
+    // `std::filesystem::path` + `GetExeDirectory()` instead of
+    // `Utils::GetIGIRootPath() + "\\missions\\..."`: `GetIGIRootPath` lives in
+    // source/utils.cpp, which the host-native lane cannot build, so the whole
+    // suite failed to link there ("unresolved symbol Utils::GetIGIRootPath()").
+    // `GetExeDirectory()` is inline in source/utils.h (host-portable), and
+    // `GetIGIRootPath` returns the same `IGI_GAME_PATH` when it is set.
+    const std::filesystem::path qvmPath =
+        std::filesystem::path(CorpusRootString()) / "missions" / "location0" /
+        ("level" + std::to_string(level)) / "objects.qvm";
 
     if (!std::filesystem::exists(qvmPath))
         GTEST_SKIP() << "objects.qvm missing for level " << level << ": " << qvmPath;
 
-    QVMFile qvm = QVM_Parse(qvmPath);
+    QVMFile qvm = QVM_Parse(qvmPath.string());
     ASSERT_TRUE(qvm.valid) << "QVM_Parse failed for level " << level << ": " << qvm.error;
 
     std::string decompiled = QVM_DecompileToString(qvm);
@@ -445,3 +567,276 @@ INSTANTIATE_TEST_SUITE_P(
         return "Level" + std::to_string(info.param);
     }
 );
+
+// ============================================================
+//  Defect 1 — `EscapeQSCString` must escape the backslash
+//
+//  Recorded in docs/igi-re-parity/TRIAGE_REMAINING_ISSUES.md as latent
+//  ("a change would have no test that can fail") because no retail string
+//  contains a backslash.  The input is synthetic, not unreachable: a QVM whose
+//  string pool holds a single backslash is a two-byte pool entry plus a
+//  six-byte code section, and before the fix the value did not survive the
+//  printed form.  The ambiguous case is a
+//  backslash immediately before a quote: the value `\"` printed as `"\\""`,
+//  which the lexer reads as one backslash and then a closed literal, so the
+//  value was destroyed and the remainder of the line became a stray literal.
+//
+//  The contract is the reader, not the printer: `qsc::Lex`
+//  (source/level/qsc_lexer.cpp:141-150) decodes `\\` -> '\', `\"` -> '"',
+//  `\n` -> LF, and `igi::MenuDefinition::FromDecompiledSource`
+//  (source/menu/qvm_image.cpp:480-489) inverts `\\` and `\n`.  Both already
+//  accepted `\\`; only the printer was wrong.
+// ============================================================
+
+namespace {
+
+// PUSHSI <pool index 0> ; BRK
+const std::vector<uint8_t> kPushPooledStringThenBrk = {0x08, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+void ExpectPooledStringSurvivesPrinting(const std::string& value, const std::string& scratch) {
+    const QVMFile qvm =
+        ParseSyntheticQvm(BuildQvmWithStringPool(kPushPooledStringThenBrk, value), scratch);
+    ASSERT_TRUE(qvm.valid) << qvm.error;
+    ASSERT_EQ(qvm.strings.size(), 1u) << "pool entry count";
+    EXPECT_EQ(qvm.strings[0], value) << "the pool must hold the value verbatim";
+
+    const std::string text = QVM_DecompileToString(qvm);
+    ASSERT_FALSE(text.empty());
+    std::string err;
+    EXPECT_EQ(SoleStringLiteral(text, &err), value)
+        << err << "\n  value  : " << value << "\n  printed: " << text;
+}
+
+} // namespace
+
+TEST(QvmStringEscapeTest, PooledStringWithBackslashSurvivesPrinting) {
+    ExpectPooledStringSurvivesPrinting("\\", "_rt_esc_1.qvm");
+    ExpectPooledStringSurvivesPrinting("C:\\IGI\\missions\\location0", "_rt_esc_2.qvm");
+    ExpectPooledStringSurvivesPrinting("\"", "_rt_esc_3.qvm");
+    ExpectPooledStringSurvivesPrinting("line1\nline2", "_rt_esc_4.qvm");
+    // The ambiguous case: a backslash immediately before a quote.
+    ExpectPooledStringSurvivesPrinting("\\\"", "_rt_esc_5.qvm");
+    // Backslash, quote, newline and a backslash directly before the quote.
+    ExpectPooledStringSurvivesPrinting("a\\b\"c\nd\\\"e", "_rt_esc_6.qvm");
+}
+
+TEST(QvmStringEscapeTest, BackslashBeforeQuotePrintsUnambiguously) {
+    const QVMFile qvm =
+        ParseSyntheticQvm(BuildQvmWithStringPool(kPushPooledStringThenBrk, "\\\""),
+                          "_rt_esc_exact.qvm");
+    ASSERT_TRUE(qvm.valid) << qvm.error;
+
+    // value        = '\' '"'
+    // escaped      = "\\" "\""      (4 characters)
+    // printed form = '"' "\\" "\"" '"' ';' LF
+    const std::string expected = std::string("\"") + "\\\\" + "\\\"" + "\"" + ";\n";
+    EXPECT_EQ(QVM_DecompileToString(qvm), expected);
+
+    // And it is exactly what the lexer reads back as the original value.
+    std::string err;
+    EXPECT_EQ(SoleStringLiteral(expected, &err), "\\\"") << err;
+}
+
+TEST(QvmStringEscapeTest, InlinePushStringEscapesBackslashToo) {
+    // PUSHS "a\"b" (inline, NUL-terminated) ; BRK
+    const std::vector<uint8_t> code = {0x07, 'a', '\\', '"', 'b', 0x00, 0x00};
+    const QVMFile qvm = ParseSyntheticQvm(BuildMinimalQvm(code), "_rt_esc_inline.qvm");
+    ASSERT_TRUE(qvm.valid) << qvm.error;
+    ASSERT_EQ(qvm.instructions.size(), 2u);
+    EXPECT_EQ(qvm.instructions[0].inline_text, "a\\\"b");
+
+    const std::string text = QVM_DecompileToString(qvm);
+    std::string err;
+    EXPECT_EQ(SoleStringLiteral(text, &err), "a\\\"b") << err << "\n  printed: " << text;
+}
+
+// End-to-end: QSC source -> Lex -> Parse -> Compile -> QVM bytes -> QVM_Parse
+// -> QVM_DecompileToString -> Lex.  `QscQuote` encodes the value the way a
+// script author writes it (the lexer's contract), so the assertion is not
+// circular with respect to the printer under test.
+TEST(QvmStringEscapeTest, CompileDecompilePipelinePreservesEscapedStrings) {
+    const std::vector<std::string> values = {
+        "\\",
+        "C:\\IGI\\missions\\location0",
+        "\"",
+        "line1\nline2",
+        "\\\"",
+        "a\\b\"c\nd\\\"e",
+    };
+
+    for (const std::string& value : values) {
+        const std::string src = "SetName(" + QscQuote(value) + ");";
+        std::string err;
+        const std::string printed = RoundTrip(src, &err, FixturePath("_rt_esc_pipe.qvm"));
+        ASSERT_TRUE(err.empty()) << err << " for value " << value;
+        ASSERT_FALSE(printed.empty());
+
+        std::string lexErr;
+        EXPECT_EQ(SoleStringLiteral(printed, &lexErr), value)
+            << lexErr << "\n  source : " << src << "\n  printed: " << printed;
+
+        // The printed text must also still be a well-formed QSC program.
+        const qsc::LexResult lr = qsc::Lex(printed);
+        EXPECT_TRUE(lr.ok) << lr.error << "\n  printed: " << printed;
+        if (lr.ok) {
+            const qsc::ParseResult pr = qsc::Parse(lr.tokens);
+            EXPECT_TRUE(pr.ok) << pr.error << "\n  printed: " << printed;
+        }
+    }
+}
+
+// ============================================================
+//  Defect 2 — operand layout for PUSHA / BLK / JSR
+//
+//  Recorded in docs/igi-re-parity/TRIAGE_REMAINING_ISSUES.md.  The retail
+//  toolchain contradicts itself, so a reader has to pick a side and say which:
+//
+//    BLK  (47)  interpreter `Qvm_OpBlk` (HOOK 0x4BE980, src/qsc/qvmop.c:338-342)
+//               does `vm->pc += 5 + Read32(vm->code + vm->pc + 1)` -- a 4-byte
+//               skip count, 5 bytes plus the skipped block.
+//               assembler `QvmAsm_OpPlain` (HOOK 0x4C0F50, src/qasm/asm.c:170-176)
+//               writes ONE byte; the disassembler steps one byte
+//               (src/qasm/dis.c:66-68).  THIS PARSER FOLLOWS THE ASSEMBLER.
+//    JSR  (23)  interpreter registers `Qvm_OpError` = `Qvm_OpIllegal`
+//               (src/qvm/qvm.c:545; HOOK 0x4BEC90, src/qsc/qvmop.c:491-496):
+//               it sets the error and returns WITHOUT advancing pc, and
+//               `Qvm_Execute` (src/qvm/qvm.c:326-337) stops on the first error.
+//               assembler writes ONE byte.  THIS PARSER FOLLOWS THE ASSEMBLER.
+//    PUSHA (6)  interpreter registers `Qvm_OpPush` (src/qvm/qvm.c:538;
+//               HOOK 0x4BE8F0, src/qsc/qvmop.c:311-327): 4-byte operand,
+//               `vm->pc += 5`.  assembler writes ONE byte (PUSHA is absent from
+//               the `QvmAsm_OpPush` registrations, src/qasm/asm.c:46-57).
+//               THIS PARSER FOLLOWS THE INTERPRETER.
+//
+//  Why the assembler wins for BLK/JSR: a `.qvm` is an assembler artefact, and a
+//  linear walk must follow the bytes the producer wrote or it desynchronises.
+//  The interpreter's reading of BLK is a latent retail defect (any 1-byte BLK
+//  makes it consume the next four bytes as a skip count), which is exactly why
+//  no working script contains one.  Nothing is changed here: the divergence is
+//  unobservable in the corpus (0 occurrences of all three across 1043 files,
+//  enforced by QvmCorpusLayoutTest below) and `QVM_Parse` is shared by five
+//  call sites, so the layouts are pinned rather than altered.
+// ============================================================
+
+TEST(QvmOperandLayoutTest, BlkAndJsrAreOneByteAndPushaIsFiveBytes) {
+    // BLK, JSR, BRK — all three one byte in an assembler-produced stream.
+    {
+        const std::vector<uint8_t> code = {0x2F /*BLK*/, 0x17 /*JSR*/, 0x00 /*BRK*/};
+        const QVMFile qvm = ParseSyntheticQvm(BuildMinimalQvm(code), "_rt_layout_1.qvm");
+        ASSERT_TRUE(qvm.valid) << qvm.error;
+        ASSERT_EQ(qvm.instructions.size(), 3u);
+        EXPECT_EQ(qvm.instructions[0].type, QVMOpType::BLK);
+        EXPECT_EQ(qvm.instructions[0].size, 1u);   // assembler: QvmAsm_OpPlain
+        EXPECT_EQ(qvm.instructions[1].type, QVMOpType::JSR);
+        EXPECT_EQ(qvm.instructions[1].size, 1u);   // assembler: QvmAsm_OpPlain
+        EXPECT_EQ(qvm.instructions[2].type, QVMOpType::BRK);
+        EXPECT_EQ(qvm.instructions[2].size, 1u);
+    }
+
+    // PUSHA with a 4-byte operand, then BRK — the interpreter's 5-byte form.
+    {
+        const std::vector<uint8_t> code = {0x06, 0x10, 0x00, 0x00, 0x00, 0x00 /*BRK*/};
+        const QVMFile qvm = ParseSyntheticQvm(BuildMinimalQvm(code), "_rt_layout_2.qvm");
+        ASSERT_TRUE(qvm.valid) << qvm.error;
+        ASSERT_EQ(qvm.instructions.size(), 2u);
+        EXPECT_EQ(qvm.instructions[0].type, QVMOpType::PUSHA);
+        EXPECT_EQ(qvm.instructions[0].size, 5u);          // interpreter: Qvm_OpPush
+        EXPECT_EQ(qvm.instructions[0].operand, 0x10u);    // the 4-byte code offset
+        EXPECT_EQ(qvm.instructions[1].type, QVMOpType::BRK);
+    }
+}
+
+// ============================================================
+//  Corpus measurements backing both triage claims
+// ============================================================
+
+namespace {
+
+std::filesystem::path QvmCorpusRoot() {
+    return std::filesystem::path(CorpusRootString());
+}
+
+} // namespace
+
+TEST(QvmCorpusLayoutTest, NoRetailQvmDecodesPushaBlkOrJsr) {
+    const std::filesystem::path root = QvmCorpusRoot();
+    if (!std::filesystem::is_directory(root)) {
+        GTEST_SKIP() << "no corpus at " << root;
+    }
+
+    size_t files = 0, parsed = 0, rejected = 0;
+    size_t pusha = 0, blk = 0, jsr = 0;
+    std::vector<std::string> rejections;
+
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
+        if (!entry.is_regular_file()) continue;
+        std::string ext = entry.path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (ext != ".qvm") continue;
+        ++files;
+
+        const QVMFile qvm = QVM_Parse(entry.path().string());
+        if (!qvm.valid) {
+            ++rejected;
+            if (rejections.size() < 5) {
+                rejections.push_back(entry.path().string() + ": " + qvm.error);
+            }
+            continue;
+        }
+        ++parsed;
+        for (const QVMInstruction& in : qvm.instructions) {
+            if (in.type == QVMOpType::PUSHA) ++pusha;
+            else if (in.type == QVMOpType::BLK) ++blk;
+            else if (in.type == QVMOpType::JSR) ++jsr;
+        }
+    }
+
+    std::cout << "[corpus] .qvm files=" << files << " parsed=" << parsed
+              << " rejected=" << rejected << " PUSHA=" << pusha << " BLK=" << blk
+              << " JSR=" << jsr << "\n";
+
+    EXPECT_GT(files, 1000u) << "the corpus scan found suspiciously few .qvm files";
+    for (const std::string& r : rejections) ADD_FAILURE() << "unparseable: " << r;
+    EXPECT_EQ(rejected, 0u);
+    EXPECT_EQ(pusha, 0u);
+    EXPECT_EQ(blk, 0u);
+    EXPECT_EQ(jsr, 0u);
+}
+
+TEST(QvmCorpusLayoutTest, RetailMenuStringsContainNoBackslash) {
+    const std::filesystem::path root = QvmCorpusRoot();
+    if (!std::filesystem::is_directory(root / "menusystem")) {
+        GTEST_SKIP() << "no menu corpus under " << root;
+    }
+
+    struct Expectation {
+        const char* name;
+        uint32_t strings;
+        size_t newlines;
+    };
+    const Expectation expectations[] = {
+        {"ingamemenu.qvm", 139u, 14u},
+        {"MAINMENU.QVM", 249u, 28u},
+    };
+
+    for (const Expectation& e : expectations) {
+        const std::filesystem::path path = root / "menusystem" / e.name;
+        ASSERT_TRUE(std::filesystem::exists(path)) << path;
+        const QVMFile qvm = QVM_Parse(path.string());
+        ASSERT_TRUE(qvm.valid) << path << ": " << qvm.error;
+
+        size_t backslashes = 0, stringsWithNewline = 0;
+        for (const std::string& s : qvm.strings) {
+            if (s.find('\\') != std::string::npos) ++backslashes;
+            if (s.find('\n') != std::string::npos) ++stringsWithNewline;
+        }
+        std::cout << "[corpus] " << e.name << ": " << qvm.stringCount() << " strings, "
+                  << backslashes << " with a backslash, " << stringsWithNewline
+                  << " with a newline\n";
+
+        EXPECT_EQ(qvm.stringCount(), e.strings) << e.name;
+        EXPECT_EQ(backslashes, 0u) << e.name;
+        EXPECT_EQ(stringsWithNewline, e.newlines) << e.name;
+    }
+}

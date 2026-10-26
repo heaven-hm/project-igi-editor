@@ -1,8 +1,13 @@
 #include <gtest/gtest.h>
 
 #include "lod/lod_chain.h"
+#include "lod/lod_qvm_table.h"
 #include "lod/lod_settings.h"
+#include "renderer/res_writer.h"
+#include "level/qvm_parser.h"
+#include "level/qvm_decompiler.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -10,7 +15,9 @@
 #include <fstream>
 #include <map>
 #include <set>
+#include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // Unit tests for the engine's LOD virtual-model chain rule.
@@ -441,6 +448,224 @@ TEST(LodSelectTest, RadiusIsSubtractedBeforeTheFovAndKScale) {
 TEST(LodSelectTest, NoChainIsNeverDrawn) {
     const float dists[5] = {0.0f, 20.0f, 30.0f, 40.0f, 100.0f};
     EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 0, 1.0f, 5.0f, 0.0f, 1.0f), -1);
+}
+
+// --------------------------------------------------------------------------
+// The editor's loaded model set is a faithful ModelLod_Find set
+// --------------------------------------------------------------------------
+//
+// The renderer's chain resolver asks whether an exact `<name>.mef` exists in the
+// loaded .res model archives (Renderer_Objects::MeshNameResolves,
+// source/renderer/renderer_objects_mesh.cpp) -- the editor's equivalent of the
+// engine's strcmp over every LOD of every loaded ModelFile
+// (ModelLod_Find, src/model/model.c:165-178). These tests prove that this set
+// resolves the SAME chain as the engine's VNAM-derived ModelLod.name set on the
+// retail corpus, so the wiring cannot invent or drop a level.
+
+// Exact `.mef` stems of a packed level model archive.
+std::set<std::string> ResMefStems(const std::string& resPath) {
+    std::set<std::string> stems;
+    std::unordered_map<std::string, ResEntryInfo> index;
+    std::string error;
+    if (!RES_BuildIndex(resPath, index, error)) return stems;
+    for (const auto& kv : index) {
+        const std::string& entry = kv.first;
+        const size_t slash = entry.find_last_of("\\/");
+        std::string base = (slash == std::string::npos) ? entry : entry.substr(slash + 1);
+        if (base.size() < 4) continue;
+        std::string ext = base.substr(base.size() - 4);
+        for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (ext != ".mef") continue;
+        stems.insert(base.substr(0, base.size() - 4));
+    }
+    return stems;
+}
+
+std::map<int, int> ChainHistogram(const std::set<std::string>& names) {
+    std::map<int, int> hist;
+    for (const std::string& name : names) {
+        hist[BuildLodChain(name, [&names](const std::string& n) {
+            return names.count(n) > 0;
+        }).count]++;
+    }
+    return hist;
+}
+
+TEST(LodChainCorpusTest, ThePackedModelArchiveResolvesTheEngineVnamChainExactly) {
+    const std::string root = InstallRoot();
+    if (root.empty()) {
+        GTEST_SKIP() << "set IGI_GAME_PATH (or IGI_LOD_ROOT) to an IGI install to enable";
+    }
+
+    int levels = 0, resTotal = 0, vnamTotal = 0, onlyVnam = 0, onlyRes = 0, differingChains = 0;
+    for (int level = 1; level <= 14; ++level) {
+        const std::string resPath = root + "/missions/location0/level" + std::to_string(level) +
+                                    "/models/level" + std::to_string(level) + ".res";
+        const std::string mtpPath = root + "/MISSIONS/location0/LEVEL" + std::to_string(level) +
+                                    "/LEVEL" + std::to_string(level) + ".MTP";
+        if (!std::filesystem::exists(resPath) || !std::filesystem::exists(mtpPath)) continue;
+        levels++;
+
+        const std::set<std::string> resNames = ResMefStems(resPath);
+        MtpNames mtp;
+        ASSERT_TRUE(ReadMtp(mtpPath, mtp)) << "failed to read " << mtpPath;
+        const std::set<std::string> vnamNames(mtp.vnam.begin(), mtp.vnam.end());
+        ASSERT_FALSE(resNames.empty()) << resPath;
+        resTotal += static_cast<int>(resNames.size());
+        vnamTotal += static_cast<int>(vnamNames.size());
+
+        for (const std::string& n : vnamNames) if (!resNames.count(n)) onlyVnam++;
+        for (const std::string& n : resNames) if (!vnamNames.count(n)) onlyRes++;
+
+        // The strong claim: every name the engine can resolve produces the same
+        // chain under the editor's archive lookup as under the VNAM set.
+        for (const std::string& n : vnamNames) {
+            const LodChain overRes = BuildLodChain(n, [&resNames](const std::string& q) {
+                return resNames.count(q) > 0;
+            });
+            const LodChain overVnam = BuildLodChain(n, [&vnamNames](const std::string& q) {
+                return vnamNames.count(q) > 0;
+            });
+            if (overRes.count != overVnam.count) { differingChains++; continue; }
+            for (int i = 0; i < overRes.count; ++i) {
+                if (overRes.names[i] != overVnam.names[i]) { differingChains++; break; }
+            }
+        }
+        EXPECT_EQ(ChainHistogram(resNames), ChainHistogram(vnamNames))
+            << "level " << level << " chain histogram differs";
+    }
+
+    ASSERT_EQ(levels, 14) << "expected all 14 retail level bundles";
+    EXPECT_EQ(differingChains, 0)
+        << "the archive name set must resolve the engine's chain exactly";
+    std::printf("[lod-res] levels=%d resMefNames=%d vnamNames=%d onlyVnam=%d onlyRes=%d differingChains=%d\n",
+                levels, resTotal, vnamTotal, onlyVnam, onlyRes, differingChains);
+}
+
+// --------------------------------------------------------------------------
+// The authored table from the retail lod.qvm feeds the chain
+// --------------------------------------------------------------------------
+//
+// The renderer parses the level's `ModelLODSettings` tasks out of lod.qvm
+// (source/renderer/renderer_objects_metadata.cpp -> igi::lod::ParseAuthoredLodEntries),
+// monotonizes and scales each table exactly as ModelLODSettings_Changed does
+// (IGI-RE src/animtrig/lodsettings.c:157-171), and hands it to lod_select's
+// authored branch (IGI-RE src/lod/mesh3d.c:172-184). This test runs that whole
+// pipeline on the shipped data.
+
+TEST(LodChainCorpusTest, AuthoredLodTablesFromRetailLodQvmSelectInsideTheResolvedChain) {
+    const std::string root = InstallRoot();
+    if (root.empty()) {
+        GTEST_SKIP() << "set IGI_GAME_PATH (or IGI_LOD_ROOT) to an IGI install to enable";
+    }
+    const std::string qvmPath = root + "/LOD.QVM";
+    if (!std::filesystem::exists(qvmPath)) {
+        GTEST_SKIP() << "lod.qvm not present at " << qvmPath;
+    }
+
+    QVMFile qvm = QVM_Parse(qvmPath);
+    ASSERT_TRUE(qvm.valid) << "failed to parse " << qvmPath;
+    const std::string decompiled = QVM_DecompileToString(qvm);
+    ASSERT_FALSE(decompiled.empty());
+
+    const std::vector<igi::lod::AuthoredLodEntry> entries =
+        igi::lod::ParseAuthoredLodEntries(decompiled);
+    ASSERT_FALSE(entries.empty()) << "no ModelLODSettings entries in " << qvmPath;
+
+    // Every decompiled line carrying both markers, to show the parser drops none
+    // of them (a dropped line would silently lose an authored table).
+    int markerLines = 0;
+    {
+        std::istringstream lines(decompiled);
+        std::string line;
+        while (std::getline(lines, line)) {
+            if (line.find("Task_New") != std::string::npos &&
+                line.find("\"ModelLODSettings\"") != std::string::npos) markerLines++;
+        }
+    }
+    EXPECT_EQ(markerLines, static_cast<int>(entries.size()));
+
+    // Index every level's packed model names once. The editor's loaded set is
+    // the level's own model archive PLUS the shared common archive
+    // (Renderer_Objects::LoadResCache indexes both).
+    std::set<std::string> commonStems = ResMefStems(
+        root + "/missions/location0/common/models/location0.res");
+    std::vector<std::set<std::string>> perLevel(15);
+    for (int level = 1; level <= 14; ++level) {
+        const std::string resPath = root + "/missions/location0/level" + std::to_string(level) +
+                                    "/models/level" + std::to_string(level) + ".res";
+        if (std::filesystem::exists(resPath)) perLevel[level] = ResMefStems(resPath);
+        perLevel[level].insert(commonStems.begin(), commonStems.end());
+    }
+
+    int trailingOne = 0, resolved = 0, monotonizeChanged = 0, selected = 0, culled = 0;
+    std::set<std::string> distinctModels;
+    std::vector<std::string> unresolvedExamples;
+    for (const igi::lod::AuthoredLodEntry& e : entries) {
+        if (e.model.size() >= 2 && e.model.compare(e.model.size() - 2, 2, "_1") == 0) trailingOne++;
+        distinctModels.insert(e.model);
+
+        // ModelLODSettings_Changed: clamp non-decreasing, then x4096.
+        float raw[5];
+        for (int i = 0; i < 5; ++i) raw[i] = e.distance[static_cast<size_t>(i)];
+        float before[5];
+        for (int i = 0; i < 5; ++i) before[i] = raw[i];
+        igi::lod::MonotonizeDistances(raw);
+        for (int i = 0; i < 5; ++i) {
+            if (raw[i] != before[i]) { monotonizeChanged++; break; }
+        }
+        float scaled[5];
+        igi::lod::ScaleDistancesToWorldUnits(raw, scaled);
+
+        // The chain comes from the same exact archive lookup the renderer wires.
+        int level = 0;
+        for (int l = 1; l <= 14 && !level; ++l) {
+            if (perLevel[l].count(e.model)) level = l;
+        }
+        if (!level) {  // authored entry for a model not in a retail bundle
+            if (unresolvedExamples.size() < 8) unresolvedExamples.push_back(e.model);
+            continue;
+        }
+        resolved++;
+        const LodChain chain = BuildLodChain(e.model, [&perLevel, level](const std::string& n) {
+            return perLevel[level].count(n) > 0;
+        });
+        ASSERT_GT(chain.count, 0) << "authored model " << e.model << " has no chain";
+        // Probe inside the table: one world unit above the first bucket, clamped
+        // to the authored cutoff (a fully flat table has dists[0] == dists[4],
+        // and lod_select culls only on `d > dists[4]`).
+        const float insideDist = std::min(scaled[0] + 1.0f, scaled[4]);
+        const int inside = igi::lod::SelectAuthoredLod(scaled, chain.count, 1.0f,
+                                                       insideDist, 0.0f, 1.0f);
+        EXPECT_GE(inside, 0) << e.model << " dist=" << insideDist << " cutoff=" << scaled[4];
+        EXPECT_LT(inside, chain.count) << e.model;
+        selected++;
+        const int past = igi::lod::SelectAuthoredLod(scaled, chain.count, 1.0f,
+                                                     scaled[4] + 1.0f, 0.0f, 1.0f);
+        EXPECT_EQ(past, -1) << e.model << " must be culled past its authored cutoff";
+        if (past == -1) culled++;
+    }
+
+    EXPECT_EQ(entries.size(), 462u) << "retail LOD.QVM authored ModelLODSettings entries";
+    EXPECT_EQ(distinctModels.size(), 450u) << "authored entries cover 450 distinct models";
+    EXPECT_EQ(trailingOne, static_cast<int>(entries.size()))
+        << "every authored entry is named with a trailing _1";
+    EXPECT_EQ(resolved, 431) << "authored models present in a level+common bundle";
+    EXPECT_EQ(culled, selected);
+    // 31 authored entries name a model no shipped bundle contains. The engine
+    // hands those to the "missing" fallback model (ModelLODSettings_Changed
+    // calls VirModel_Find, src/animtrig/lodsettings.c:161-171, and VirModel_Find
+    // substitutes "missing", src/model/model.c:107-116); the editor has no
+    // substitute, so such a name simply has no chain and is never LOD-selected.
+    std::printf("[lod-qvm] markerLines=%d authoredEntries=%zu distinctModels=%zu trailing_1=%d "
+                "resolvedInBundles=%d commonArchiveNames=%zu monotonizeChanged=%d selected=%d culled=%d\n",
+                markerLines, entries.size(), distinctModels.size(), trailingOne, resolved,
+                commonStems.size(), monotonizeChanged, selected, culled);
+    if (!unresolvedExamples.empty()) {
+        std::printf("[lod-qvm] unresolved example(s):");
+        for (const std::string& n : unresolvedExamples) std::printf(" %s", n.c_str());
+        std::printf("\n");
+    }
 }
 
 } // namespace

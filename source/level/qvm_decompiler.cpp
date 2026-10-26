@@ -32,11 +32,31 @@ static std::string FloatStr(float v) {
     return s;
 }
 
-// String escaping helper matching Python string replacement exactly
+// String escaping helper matching Python string replacement exactly.
+//
+// The escape set is not a free choice: it is the exact inverse of every reader
+// that consumes `QVM_DecompileToString` text.
+//   * `qsc::Lex` -- source/level/qsc_lexer.cpp:141-150.  Decodes `\n` -> LF,
+//     `\t` -> TAB, `\r` -> CR, `\"` -> '"', `\\` -> '\'.  This is the reader the
+//     editor's own runtime uses on decompiled text (source/app_level.cpp:816,
+//     source/config.cpp:46, source/level/level.cpp:239).
+//   * `igi::MenuDefinition::FromDecompiledSource` --
+//     source/menu/qvm_image.cpp:480-489.  Inverts `\n` and `\\`.
+// Both already accept `\\`, so escaping the backslash is what makes the printer
+// consistent with them; before that, a value containing a backslash emitted a
+// bare `\` which the reader then consumed as the start of an escape sequence
+// (e.g. the value `\"` printed as `"\\""` -- `\\` decoded to one backslash and
+// the following `"` closed the literal early, so the value did not survive).
+// A fourth reader, the retail-style raw parser `QSC::Load`
+// (source/level/level_common.cpp:483, :768-785), performs no unescaping at all,
+// so it has never round-tripped `\n` either; it is not the contract this
+// function is written against.
 static std::string EscapeQSCString(const std::string& s) {
     std::string result;
+    result.reserve(s.size());
     for (char c : s) {
-        if (c == '\n') result += "\\n";
+        if (c == '\\') result += "\\\\";
+        else if (c == '\n') result += "\\n";
         else if (c == '"') result += "\\\"";
         else result += c;
     }

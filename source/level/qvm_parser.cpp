@@ -5,13 +5,85 @@
 
 // Operand sizes for each opcode (in bytes following the opcode byte).
 // -1 means special handling (CALL).
+//
+// ============================================================================
+// RECORDED DIVERGENCE: the retail toolchain disagrees with itself about the
+// layout of PUSHA, BLK and JSR.  This table currently takes the ASSEMBLER's
+// one-byte layout for BLK and JSR and the INTERPRETER's five-byte layout for
+// PUSHA -- a mixed choice, recorded here rather than changed silently.
+//
+// The rule a reader of retail data should follow is the ASSEMBLER's, because a
+// `.qvm` is an assembler artefact and a linear instruction walk must follow the
+// bytes the producer actually wrote.  PUSHA is the one place this table departs
+// from that rule; it is left as it is rather than changed blindly, for the
+// reasons at the end of this comment.
+//
+// The three opcodes and what each side does with them (IGI-RE, the verified C
+// decompilation of retail IGI.exe):
+//
+//   PUSHA (opcode 6)
+//     * interpreter -- src/qvm/qvm.c:538 registers `Qvm_OpPush` (HOOK
+//       0x4BE8F0) for it; src/qsc/qvmop.c:311-327 reads a 4-byte operand
+//       (`Read32(p + 1)`) and advances `vm->pc += 5`.  THIS PARSER FOLLOWS
+//       THIS: 4 operand bytes, 5-byte instruction.
+//     * assembler -- src/qasm/asm.c:44-61 registers `QvmAsm_OpPlain` for it
+//       (PUSHA is absent from the QvmAsm_OpPush list at :46-57), and
+//       src/qasm/asm.c:170-176 (HOOK 0x4C0F50) writes one byte, size 1.  The
+//       disassembler agrees: src/qasm/dis.c:66-68, `d->pc++`.
+//     * so the parser here does NOT follow the assembler for PUSHA; it is the
+//       one opcode of the three where it follows the interpreter.  Recorded,
+//       not changed: no consumer can observe it (see the measurement below)
+//       and `tests/test_qvm_roundtrip.cpp` pins the current 5-byte reading.
+//
+//   BLK (opcode 47)
+//     * interpreter -- src/qvm/qvm.c:556 registers `Qvm_OpBlk` (HOOK
+//       0x4BE980); src/qsc/qvmop.c:338-342 is `vm->pc += 5 + Read32(vm->code +
+//       vm->pc + 1)`, i.e. a 4-byte skip count that is NOT part of the
+//       instruction: 5 bytes plus that many skipped bytes.
+//     * assembler -- src/qasm/asm.c:170-176 writes one byte, size 1;
+//       disassembler src/qasm/dis.c:66-68 steps one byte.  THIS PARSER FOLLOWS
+//       THIS: 0 operand bytes, 1-byte instruction, and the bytes after it are
+//       decoded as instructions (which is what the assembler emitted them as).
+//
+//   JSR (opcode 23)
+//     * interpreter -- src/qvm/qvm.c:545 registers `Qvm_OpError`, i.e.
+//       `Qvm_OpIllegal` (src/qsc/qvmop.c:491-496, HOOK 0x4BEC90): it sets
+//       `vm->error` and returns WITHOUT advancing `vm->pc`, and
+//       `Qvm_Execute` (src/qvm/qvm.c:326-337) stops on the first error.  JSR
+//       therefore has no operand and no defined successor.
+//     * assembler -- one byte, size 1, same `QvmAsm_OpPlain` path.  THIS
+//       PARSER FOLLOWS THIS: 1-byte instruction.  There is nothing for the
+//       interpreter's reading to contribute, since execution never resumes
+//       after JSR.
+//
+// WHY NOT CHANGE IT: every one of the three is unreachable from retail data.
+// Measured over the whole installed corpus (1043 `.qvm` files under
+// $IGI_GAME_PATH, all of which parse): PUSHA 0 occurrences, BLK 0, JSR 0.  The
+// reason is structural, not luck:
+//   * The retail script compiler never names them.  `src/qvm/qscgen.c` turns
+//     parsed QSC into assembler text through `QscGen_WriteOpcode` (HOOK
+//     0x4BBF40, src/qvm/qscgen.c:180-183, which writes the opcode's NAME, not a
+//     byte) and only ever writes OP_BRK (:134), OP_BRA (:216, :229, :252, :346,
+//     :373), OP_PUSH (:308), OP_PUSHS (:313), OP_PUSHF (:318), OP_PUSHI (:324)
+//     and OP_CALL (:331).  PUSHA, BLK and JSR are never generated.
+//   * Even hand-written assembly that did name them would not run: a 1-byte BLK
+//     makes `Qvm_OpBlk` read the next four bytes as a skip count, and JSR aborts
+//     the script outright.  So the divergence cannot be exercised by a working
+//     retail file, and no `.qvm` in the corpus contains one.
+// With no producer and no consumer for the divergent encoding, changing this
+// table would be a blind change to shared code used by every `QVM_Parse` caller
+// (17 source files, plus `tools/ai_dump`).  The measurement is enforced by
+// `QvmCorpusLayoutTest` in tests/test_qvm_roundtrip.cpp, and the chosen layout
+// is pinned by `QvmOperandLayoutTest` there.
+// ============================================================================
 static int QVM_OperandSize(QVMOpType op) {
     switch (op) {
     case QVMOpType::PUSH:    return 4;
     case QVMOpType::PUSHB:   return 1;
     case QVMOpType::PUSHW:   return 2;
     case QVMOpType::PUSHF:   return 4;
-    case QVMOpType::PUSHA:   return 4;  // push address (4-byte code offset)
+    case QVMOpType::PUSHA:   return 4;  // interpreter layout: Qvm_OpPush 0x4BE8F0 reads 4
+                                        // (the assembler's QvmAsm_OpPlain writes 1 -- see above)
     case QVMOpType::PUSHS:   return -2; // inline NUL-terminated string
     case QVMOpType::PUSHSI:  return 4;
     case QVMOpType::PUSHSIB: return 1;
@@ -23,9 +95,11 @@ static int QVM_OperandSize(QVMOpType op) {
     case QVMOpType::BRA:     return 4;
     case QVMOpType::BF:      return 4;
     case QVMOpType::BT:      return 4;
-    case QVMOpType::JSR:     return 0;  // illegal/reserved in the retail interpreter
+    case QVMOpType::JSR:     return 0;  // assembler layout: 1 byte.  The interpreter
+                                        // aborts on it (Qvm_OpIllegal 0x4BEC90) -- see above
     case QVMOpType::CALL:    return -1; // special: count + targets
-    default:                 return 0;
+    default:                 return 0;  // incl. BLK: assembler layout, 1 byte; the
+                                        // interpreter would skip 5 + read32 (0x4BE980)
     }
 }
 

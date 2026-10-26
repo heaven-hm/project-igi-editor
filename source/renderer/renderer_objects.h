@@ -3,9 +3,11 @@
 #include "model.h"
 #include "mef_native.h"
 #include "../level/level_objects.h"
+#include "../lod/lod_chain.h"
 #include "dat_writer.h"
 #include "res_writer.h"
 #include "model_texture_resolution.h"
+#include <array>
 #include <map>
 #include <string>
 #include <vector>
@@ -163,6 +165,53 @@ public:
                                       const glm::vec3& cameraPos);
     float GetMeshZOffset(const std::string& modelId, bool isBuilding);
     const Mesh& GetOrLoadMesh(const std::string& modelId, bool isBuilding);
+
+    // ── LOD virtual-model chains (issue #62) ─────────────────────────────────
+    // The engine resolves a model's detail levels by walking its name: LOD 1 is
+    // the requested name, LOD i+1 is the previous name with its LAST CHARACTER
+    // incremented, stopping at the first name that does not resolve and at five
+    // levels (VirModel_InitLods, IGI-RE src/model/model.c:145-163, HOOK 0x4CED50;
+    // ported in source/lod/lod_chain.h). Resolution is an exact strcmp against
+    // every LOD of every loaded model file (ModelLod_Find, IGI-RE
+    // src/model/model.c:165-178, HOOK 0x4CEE30).
+
+    // True when `modelId` resolves in the editor's loaded model set by EXACT
+    // name: a `<modelId>.mef` entry in the indexed level/common .res archives,
+    // or an exact on-disk `<modelId>.mef`. Deliberately never fuzzy —
+    // FindModelFile's fuzzy pass would resolve `435_01_6` to `435_01_1` and
+    // invent chain levels the engine's strcmp never sees.
+    bool MeshNameResolves(const std::string& modelId) const;
+
+    // The model's chain under that rule, cached per level. `count == 0` means the
+    // model's own name did not resolve, which VirModel_Get reports as not-found
+    // (IGI-RE src/model/model.c:118-139); `count == 1` is a model with no
+    // lower-detail sibling. `names[i]` is LOD i+1, `distance[i]` is
+    // VirModel.lod_dist (written but never read by the engine).
+    const igi::lod::LodChain& GetLodChain(const std::string& modelId, bool isBuilding);
+
+    // The mesh name of LOD `level` (0-based) in that chain, or "" when out of
+    // range. level 0 is always the requested model name.
+    std::string GetLodMeshName(const std::string& modelId, bool isBuilding, int level);
+
+    // The authored ModelLODSettings table for `modelId` in raw world units
+    // (metres x 4096): monotonized and scaled exactly as
+    // ModelLODSettings_Changed does (IGI-RE src/animtrig/lodsettings.c:157-171,
+    // HOOK 0x4EDB60). False when the model has no authored entry, in which case
+    // VirModel.unk24 stays 0 and the engine would take lod_select's complexity
+    // branch — which this port does not implement, because the editor always has
+    // lod.qvm.
+    bool GetAuthoredLodDistances(const std::string& modelId, float out[5]);
+
+    // The LOD to draw for a mesh at view depth `dist` with bounding radius
+    // `radius`, by lod_select's authored branch (IGI-RE src/lod/mesh3d.c:172-184,
+    // ported as igi::lod::SelectAuthoredLod). `fov` and `k` are the engine's
+    // gTransContext.fov and gLodScale (src/lod/mesh3d.c:224); dist/radius are in
+    // raw world units, the same units as GetAuthoredLodDistances' output.
+    // Returns -1 for "too far to draw", and also when the model has no chain or
+    // no authored table (the complexity branch is not ported).
+    int SelectLodForDistance(const std::string& modelId, bool isBuilding,
+                             float fov, float dist, float radius, float k);
+
     std::vector<AttachInfo> GetModelAttachments(const std::string& modelId, bool isBuilding);
     std::vector<glm::vec3> GetModelMagicVertices(const std::string& modelId, bool isBuilding);
     bool IsLadderMagicObject(const std::string& modelId);
@@ -356,6 +405,16 @@ private:
 
     std::map<std::string, float> portal_distances_;
     bool portal_distances_loaded_ = false;
+
+    // LOD chains (issue #62), keyed by "<level>:<modelId>" — existence does not
+    // depend on isBuilding, so the two kinds share one chain. Cleared whenever
+    // the loaded .res model set changes (LoadResCache / ClearResCache), because
+    // a chain is built over that set.
+    std::map<std::string, igi::lod::LodChain> lod_chain_cache_;
+    // Authored ModelLODSettings tables from lod.qvm, in world units (metres x
+    // 4096), monotonized exactly as ModelLODSettings_Changed leaves
+    // VirModel.unk28. Level-independent, like portal_distances_.
+    std::map<std::string, std::array<float, 5>> authored_lod_distances_;
 
     std::unordered_set<std::string> deathzone_ids_;
     bool deathzone_ids_loaded_ = false;

@@ -4,7 +4,92 @@
  *          Split from renderer_objects.cpp; shares renderer_objects_internal.h.
  *****************************************************************************/
 #include "renderer_objects_internal.h"
+#include "../lod/lod_settings.h"
 #include "../runtime/weather_visibility.h"
+
+// ─── LOD virtual-model chains (issue #62) ────────────────────────────────────
+// See the header for the oracle citations. The three pieces are: an exact-name
+// existence predicate over the editor's loaded model set (ModelLod_Find's
+// semantics), the chain itself (VirModel_InitLods' rule), and the authored-table
+// selection (lod_select's authored branch).
+
+bool Renderer_Objects::MeshNameResolves(const std::string& modelId) const {
+    if (modelId.empty()) return false;
+    const std::string fname = modelId + ".mef";
+
+    // 1. The in-memory .res indexes — the same exact key FindMeshData reads, and
+    //    the editor's equivalent of the engine's loaded ModelFile LOD lists.
+    for (const auto& ri : res_model_indexes_) {
+        if (ri.index.find(fname) != ri.index.end()) return true;
+    }
+
+    // 2. Exact on-disk `<name>.mef`, mirroring FindModelFile's EXACT search
+    //    order only (level local, level IGI, other levels, common, flat).
+    //    FindModelFile's fuzzy pass is deliberately not used here: it would
+    //    resolve a name the engine's strcmp cannot.
+    auto existsExact = [&](const std::string& dirStr) {
+        if (dirStr.empty()) return false;
+        std::error_code ec;
+        return std::filesystem::exists(std::filesystem::path(dirStr) / fname, ec);
+    };
+
+    if (existsExact(Utils::GetExeDirectory() + "\\editor\\models\\level" +
+                    std::to_string(current_level_))) return true;
+    if (existsExact(Utils::GetIGIModelsPath(current_level_))) return true;
+    for (int lvl = 1; lvl <= 14; ++lvl) {
+        if (lvl == current_level_) continue;
+        if (existsExact(Utils::GetExeDirectory() + "\\editor\\models\\level" +
+                        std::to_string(lvl))) return true;
+        if (existsExact(Utils::GetIGIModelsPath(lvl))) return true;
+    }
+    if (existsExact(Utils::GetExeDirectory() + "\\editor\\models\\common")) return true;
+    if (existsExact(Utils::GetIGIRootPath() + "\\missions\\location0\\common\\models")) return true;
+    if (existsExact(Utils::GetIGIRootPath() + "\\editor\\models")) return true;
+    return false;
+}
+
+const igi::lod::LodChain& Renderer_Objects::GetLodChain(const std::string& modelId, bool isBuilding) {
+    (void)isBuilding;  // existence is kind-independent; one chain per level+name
+    const std::string key = std::to_string(current_level_) + ":" + modelId;
+    auto it = lod_chain_cache_.find(key);
+    if (it != lod_chain_cache_.end()) return it->second;
+
+    igi::lod::LodChain chain = igi::lod::BuildLodChain(
+        modelId, [this](const std::string& n) { return MeshNameResolves(n); });
+    if (chain.count > 1) {
+        std::string names;
+        for (int i = 0; i < chain.count; ++i) {
+            if (i) names += ", ";
+            names += chain.names[i];
+        }
+        Logger::Get().Log(LogLevel::DEBUG, "[Renderer_Objects] LOD chain for '" + modelId +
+            "' has " + std::to_string(chain.count) + " levels: " + names);
+    }
+    return lod_chain_cache_.emplace(key, std::move(chain)).first->second;
+}
+
+std::string Renderer_Objects::GetLodMeshName(const std::string& modelId, bool isBuilding, int level) {
+    const igi::lod::LodChain& chain = GetLodChain(modelId, isBuilding);
+    if (level < 0 || level >= chain.count) return std::string();
+    return chain.names[level];
+}
+
+bool Renderer_Objects::GetAuthoredLodDistances(const std::string& modelId, float out[5]) {
+    EnsurePortalDistancesLoaded();
+    auto it = authored_lod_distances_.find(modelId);
+    if (it == authored_lod_distances_.end()) return false;
+    for (int i = 0; i < 5; ++i) out[i] = it->second[static_cast<size_t>(i)];
+    return true;
+}
+
+int Renderer_Objects::SelectLodForDistance(const std::string& modelId, bool isBuilding,
+                                           float fov, float dist, float radius, float k) {
+    const igi::lod::LodChain& chain = GetLodChain(modelId, isBuilding);
+    if (chain.count <= 0) return -1;  // VirModel_Get reports not-found
+    float dists[5] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    if (!GetAuthoredLodDistances(modelId, dists)) return -1;  // complexity branch not ported
+    return igi::lod::SelectAuthoredLod(dists, chain.count, fov, dist, radius, k);
+}
 
 float Renderer_Objects::GetMeshZOffset(const std::string& modelId, bool isBuilding) {
     return GetOrLoadMesh(modelId, isBuilding).mainZOffset;
@@ -23,6 +108,12 @@ glm::vec3 Renderer_Objects::GetMeshCenter(const std::string& modelId, bool isBui
 }
 
 const Mesh& Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isBuilding) {
+    // Resolve and cache this model's LOD chain (issue #62) as part of the mesh
+    // lookup. The draw path reads it through GetLodChain / GetLodMeshName /
+    // SelectLodForDistance; resolving it here means any model the editor can
+    // load carries its chain (count 1 when it has no lower-detail sibling).
+    (void)GetLodChain(modelId, isBuilding);
+
     FillLevelModelKey(level_model_key_scratch_, current_level_, isBuilding, modelId);
     auto it = mesh_cache_.find(level_model_key_scratch_);
     if (it != mesh_cache_.end()) {

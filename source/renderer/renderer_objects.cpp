@@ -367,6 +367,9 @@ void Renderer_Objects::ClearCaches() {
 void Renderer_Objects::ClearResCache() {
     res_tex_indexes_.clear();
     res_model_indexes_.clear();
+    // LOD chains are built over the loaded .res model set (issue #62), so they
+    // are stale the moment that set changes.
+    lod_chain_cache_.clear();
     for (const auto& p : tmp_mef_paths_) {
         std::error_code ec;
         std::filesystem::remove(p, ec);
@@ -425,6 +428,11 @@ void Renderer_Objects::LoadResCache(int levelNo, const std::string& igi_path) {
     addTex  (commonDir  + "\\textures\\location0.res");
     addModel(missionDir + "\\models\\" + levelName + ".res");
     addModel(commonDir  + "\\models\\location0.res");
+
+    // A lazy cross-level call can add model names that a previously built LOD
+    // chain (issue #62) saw as absent, so drop the cached chains. They are
+    // rebuilt on the next lookup; this runs once per level load.
+    lod_chain_cache_.clear();
 
 }
 

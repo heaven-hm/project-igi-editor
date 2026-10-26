@@ -32,8 +32,17 @@ static PFNGLXSWAPINTERVALEXTPROC glXSwapIntervalEXT;
 gl_info_s g_gl_info;
 
 bool GL_Init() {
-	if (glewInit() != GLEW_OK) {
-		Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "glewInit error\n");
+	const GLenum glew_status = glewInit();
+	if (glew_status != GLEW_OK) {
+		// LogStartup, not Log: this runs before the renderer's logging path is
+		// usable, and the specific code is the whole diagnosis.  A bare
+		// "glewInit error" cannot distinguish a driver that reports no GL
+		// version from one that reports GL 1.0/1.1 only from a WGL-level
+		// failure -- all three have completely different fixes.  See
+		// docs/igi-re-parity/WINE_SMOKE.md for the observed values.
+		LogStartup(log_type_t::LOG_ERROR, __FILE__, __LINE__,
+		           "glewInit error %u: %s\n",
+		           (unsigned)glew_status, (const char *)glewGetErrorString(glew_status));
 		return false;
 	}
 
