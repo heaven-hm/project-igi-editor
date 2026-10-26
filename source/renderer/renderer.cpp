@@ -12,6 +12,53 @@
  Renderer
 ================================================================================
 */
+
+// A renderer sub-system that fails to initialise used to make `Renderer::Init`
+// return false, which made `App::Init` return false, which made `main` `return 2`
+// with no message anywhere -- and, because the log was never flushed, often with an
+// empty log file too.  The user got a bare exit code and nothing else.
+//
+// The overwhelmingly likely cause is a GL context too old for this renderer's
+// shaders (the shader folders are /41 and /45; a driver reporting GL 2.1 cannot
+// compile either), so the report names the failing sub-system AND the driver's own
+// version strings.  It goes to stderr as well as the log, because the log is
+// exactly what was missing in the first place.
+void ReportInitFailure(const char* subsystem) {
+  const char* vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+  const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+  const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+  const char* glsl = reinterpret_cast<const char*>(glGetString(GL_SHADING_LANGUAGE_VERSION));
+  const char* err = nullptr;
+  switch (glGetError()) {
+    case GL_INVALID_ENUM: err = "GL_INVALID_ENUM"; break;
+    case GL_INVALID_VALUE: err = "GL_INVALID_VALUE"; break;
+    case GL_INVALID_OPERATION: err = "GL_INVALID_OPERATION"; break;
+    case GL_OUT_OF_MEMORY: err = "GL_OUT_OF_MEMORY"; break;
+    default: break;
+  }
+
+  std::fprintf(stderr,
+      "\n[renderer] initialisation failed in '%s'.\n"
+      "  GL_VENDOR:   %s\n"
+      "  GL_RENDERER: %s\n"
+      "  GL_VERSION:  %s\n"
+      "  GLSL:        %s\n"
+      "  last GL error: %s\n"
+      "  The renderer needs an OpenGL 4.1+ core context; its shader folders are\n"
+      "  '41' and '45'.  A context older than that cannot compile them, which is\n"
+      "  the usual reason this fails.  See the shader compile errors above (if any)\n"
+      "  and docs/KNOWN_ISSUES.md.\n\n",
+      subsystem, vendor ? vendor : "(null)", renderer ? renderer : "(null)",
+      version ? version : "(null)", glsl ? glsl : "(null)", err ? err : "none");
+
+  Logger::Get().Log(LogLevel::ERR,
+      std::string("[renderer] initialisation failed in '") + subsystem +
+      "' (GL_VERSION=" + (version ? version : "?") +
+      ", GLSL=" + (glsl ? glsl : "?") +
+      ", last GL error=" + (err ? err : "none") + ")");
+  Logger::Get().Flush();
+}
+
 Renderer::Renderer() : ubo_mats_(0), ubo_fog_(0), splines_(objects_) {
 }
 
@@ -39,22 +86,27 @@ bool Renderer::Init() {
   }
 
   if (!skydome_.Init()) {
+    ReportInitFailure("skydome");
     return false;
   }
 
   if (!flat_sky_layers_.Init()) {
+    ReportInitFailure("flat_sky_layers");
     return false;
   }
 
   if (!terrain_.Init()) {
+    ReportInitFailure("terrain");
     return false;
   }
 
   if (!objects_.Init()) {
+    ReportInitFailure("objects");
     return false;
   }
 
   if (!rain_.Init()) {
+    ReportInitFailure("rain");
     return false;
   }
 

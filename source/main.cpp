@@ -768,6 +768,25 @@ int main(int argc, char **argv) {
   glutDisplayFunc(OnDisplay);
 
   if (!g_app.Init(argc, argv)) {
+    // Exit code 2 with no explanation was the worst possible failure mode: the user
+    // saw the process vanish and, because the log was never flushed, usually an empty
+    // log file too.  Report to stderr (the log may be the thing that is broken) and
+    // flush whatever the log did get, including any shader compile error above.
+    const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+    std::fprintf(stderr,
+        "\n[igi1ed] startup failed during App::Init and the editor cannot continue.\n"
+        "  GL_RENDERER: %s\n"
+        "  GL_VERSION:  %s\n"
+        "  This build needs an OpenGL 4.1+ core context.  If the version above is\n"
+        "  lower, that is the cause: the shaders in shaders/41 and shaders/45 cannot\n"
+        "  compile on it.  Check the shader compile errors and the log file next to\n"
+        "  this executable for the specific failure.\n\n",
+        renderer ? renderer : "(null)", version ? version : "(null)");
+    Logger::Get().Log(LogLevel::ERR,
+        std::string("[igi1ed] startup failed during App::Init (GL_VERSION=") +
+        (version ? version : "?") + ")");
+    Logger::Get().Flush();
     return 2;
   }
 
