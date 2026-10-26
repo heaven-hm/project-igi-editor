@@ -90,6 +90,90 @@ void main() {
 }
 )";
 
+// ─── GLSL 1.20 variants (legacy 2.1 context) ──────────────────────────────────
+// Selected at runtime when g_gl_info.legacy_gl21_ is set.  These are language
+// ports only: identical uniforms, identical arithmetic, identical varyings.
+// The one structural difference is the shared `Matrices` uniform block, which
+// GLSL 1.20 does not have (and which this context cannot have -- no
+// GL_ARB_uniform_buffer_object).  Its third matrix becomes the plain uniform
+// `u_mvp`, matching what gl_helper.cpp's UBO emulation uploads; u_unused1 and
+// u_unused2 are never read.  Attribute indices come from
+// GL_LegacyBindInlineAttribLocations() before glLinkProgram.
+static const char* RAIN_VERT_SRC_120 = R"(
+#version 120
+attribute vec3 a_seed;   // per-drop random seed, x/y/z in [0,1)
+attribute vec2 a_corner; // x = width side, y = bottom/top
+
+uniform mat4 u_mvp;
+
+uniform vec3  u_cameraPos;
+uniform float u_time;
+uniform float u_boxSize;     // footprint around the camera that drops are scattered in
+uniform float u_heightStart; // world units, where drops spawn
+uniform float u_heightEnd;   // world units, where drops disappear
+uniform float u_streakLen;   // world units
+uniform float u_halfWidth;   // world units
+
+void main() {
+    float fallRange = max(u_heightStart - u_heightEnd, 1.0);
+    float speed = (0.08 + a_seed.z * 0.10) * fallRange;
+    float z = u_heightStart - mod(u_time * speed + a_seed.y * fallRange + u_cameraPos.z, fallRange);
+    vec2 cell = mod(a_seed.xy * u_boxSize - u_cameraPos.xy, u_boxSize) - u_boxSize * 0.5;
+    vec3 worldPos = vec3(u_cameraPos.x + cell.x, u_cameraPos.y + cell.y,
+                         z + a_corner.y * u_streakLen);
+    worldPos.xy += vec2(a_corner.x * u_halfWidth);
+    gl_Position = u_mvp * vec4(worldPos, 1.0);
+}
+)";
+
+static const char* RAIN_FRAG_SRC_120 = R"(
+#version 120
+uniform float u_alpha;
+
+void main() {
+    gl_FragColor = vec4(0.8, 0.85, 0.9, clamp(u_alpha * 1.25, 0.0, 0.28));
+}
+)";
+
+static const char* SNOW_VERT_SRC_120 = R"(
+#version 120
+attribute vec3 a_seed;
+attribute vec2 a_corner;
+uniform mat4 u_mvp;
+uniform vec3 u_cameraPos;
+uniform float u_time;
+uniform float u_boxSize;
+uniform float u_heightStart;
+uniform float u_heightEnd;
+uniform float u_halfExtent;
+uniform float u_driftUnits;
+void main() {
+    float fallRange = max(u_heightStart - u_heightEnd, 1.0);
+    float speed = (0.025 + a_seed.z * 0.040) * fallRange;
+    float z = u_heightStart - mod(u_time * speed + a_seed.z * fallRange + u_cameraPos.z, fallRange);
+    float halfBox = u_boxSize * 0.5;
+    float cellX = mod(a_seed.x * u_boxSize - u_cameraPos.x, u_boxSize) - halfBox +
+                  sin(u_time * 0.45 + a_seed.x * 17.0) * u_driftUnits;
+    float cellY = mod(a_seed.y * u_boxSize - u_cameraPos.y, u_boxSize) - halfBox +
+                  cos(u_time * 0.35 + a_seed.y * 19.0) * u_driftUnits;
+    // OpenIGI builds a square flake quad from a 0.045m half-extent. Its
+    // diagonal Z ordering is retained so the physical 0.09m footprint and
+    // depth relationship match the reference renderer.
+    vec3 worldPos = vec3(u_cameraPos.x + cellX + a_corner.x * u_halfExtent,
+                         u_cameraPos.y + cellY + a_corner.y * u_halfExtent,
+                         z + a_corner.x * u_halfExtent);
+    gl_Position = u_mvp * vec4(worldPos, 1.0);
+}
+)";
+
+static const char* SNOW_FRAG_SRC_120 = R"(
+#version 120
+uniform float u_alpha;
+void main() {
+    gl_FragColor = vec4(0.92, 0.97, 1.0, clamp(u_alpha * 1.75, 0.10, 0.42));
+}
+)";
+
 static GLuint CompileRainShader(GLenum type, const char* src) {
     GLuint s = glCreateShader(type);
     glShaderSource(s, 1, &src, nullptr);
@@ -119,6 +203,11 @@ static GLuint LinkWeatherProgram(const char* vertex_source, const char* fragment
     GLuint program = glCreateProgram();
     glAttachShader(program, vert);
     glAttachShader(program, frag);
+    // GLSL 1.20 has no layout(location = N), so the attribute indices the 330
+    // originals declare must be re-bound by name before linking.
+    if (g_gl_info.legacy_gl21_) {
+        GL_LegacyBindInlineAttribLocations(program);
+    }
     glLinkProgram(program);
     glDeleteShader(vert);
     glDeleteShader(frag);
@@ -137,8 +226,12 @@ static GLuint LinkWeatherProgram(const char* vertex_source, const char* fragment
 }
 
 bool Renderer_Rain::Init() {
-    shader_program_ = LinkWeatherProgram(RAIN_VERT_SRC, RAIN_FRAG_SRC, ubo_binding_point_);
-    snow_program_ = LinkWeatherProgram(SNOW_VERT_SRC, SNOW_FRAG_SRC, ubo_binding_point_);
+    const char* rain_vs = g_gl_info.legacy_gl21_ ? RAIN_VERT_SRC_120 : RAIN_VERT_SRC;
+    const char* rain_fs = g_gl_info.legacy_gl21_ ? RAIN_FRAG_SRC_120 : RAIN_FRAG_SRC;
+    const char* snow_vs = g_gl_info.legacy_gl21_ ? SNOW_VERT_SRC_120 : SNOW_VERT_SRC;
+    const char* snow_fs = g_gl_info.legacy_gl21_ ? SNOW_FRAG_SRC_120 : SNOW_FRAG_SRC;
+    shader_program_ = LinkWeatherProgram(rain_vs, rain_fs, ubo_binding_point_);
+    snow_program_ = LinkWeatherProgram(snow_vs, snow_fs, ubo_binding_point_);
     if (!shader_program_ || !snow_program_) {
         Shutdown();
         return false;

@@ -206,6 +206,161 @@ void main() {
 }
 )";
 
+// ─── GLSL 1.20 variants (legacy 2.1 context) ──────────────────────────────────
+// Selected at runtime when g_gl_info.legacy_gl21_ is set.  These are language
+// ports only: identical uniforms, identical arithmetic, identical varyings.
+// The shared `Matrices` uniform block does not exist in GLSL 1.20 (and this
+// context has no GL_ARB_uniform_buffer_object), so its third matrix becomes the
+// plain uniform `u_mvp`, matching what gl_helper.cpp's UBO emulation uploads;
+// u_unused1 and u_unused2 are never read.  Attribute indices come from
+// GL_LegacyBindInlineAttribLocations() before glLinkProgram.
+static const char* OBJ_VERT_SRC_120 = R"(
+#version 120
+attribute vec3 a_pos;
+attribute vec3 a_normal;
+attribute vec2 a_uv;
+attribute vec2 a_uv2;
+
+uniform mat4 u_mvp; // Proj * View * GlobalScale
+
+
+uniform mat4 u_model;
+
+varying vec3 v_normal;
+varying vec2 v_uv;
+varying vec2 v_uv2;
+varying vec3 v_fragPos;
+
+void main() {
+    vec4 worldPos   = u_model * vec4(a_pos, 1.0);
+    v_fragPos       = worldPos.xyz;
+    v_normal        = mat3(u_model) * a_normal;
+    v_uv            = a_uv;
+    v_uv2           = a_uv2;
+    gl_Position     = u_mvp * worldPos;
+}
+
+)";
+
+static const char* OBJ_FRAG_SRC_120 = R"(
+#version 120
+// GLSL 1.20 has no textureLod(); explicit-LOD sampling needs this extension,
+// which is core only from GLSL 1.30 on.  Everything else here is 1.20 core.
+#extension GL_ARB_shader_texture_lod : enable
+varying vec3 v_normal;
+varying vec2 v_uv;
+varying vec2 v_uv2;
+varying vec3 v_fragPos;
+
+uniform vec3  u_dirlight;      // directional light RGB (sun)
+uniform vec3  u_ambient;       // ambient light RGB
+uniform vec3  u_lightDir;      // direction toward the sun (world space)
+uniform sampler2D u_texture;
+uniform int   u_useTexture;
+uniform sampler2D u_lightmap;
+uniform int   u_useLightmap;   // 0 = no baked lightmap for this submesh
+uniform vec3  u_lightmapScale; // live re-light scale when object was moved since bake
+uniform int   u_lm_authentic;  // Baked mode: exact diffuse x lightmap multiply, like the original engine
+uniform float u_alpha;
+uniform vec4  u_baseColor;
+uniform vec3  u_tint;
+uniform float u_glassMin;
+uniform float u_gamma;
+
+void main() {
+    vec3 N = normalize(v_normal);
+    vec3 lightDir = normalize(u_lightDir);
+
+    // Hemisphere ambient: sky (up) is warmer/brighter, ground (down) is dimmer.
+    // This ensures every face — including side walls — always gets meaningful light.
+    float hemiT = dot(N, vec3(0.0, 0.0, 1.0)) * 0.5 + 0.5; // 0=down, 1=up
+    vec3 hemi = mix(u_ambient * 0.75, u_ambient * 1.35, hemiT);
+
+    // Sun: front faces bright, back faces get 40% warm fill (no black backs).
+    float diff     = max(dot(N, lightDir), 0.0);
+    float backFill = max(-dot(N, lightDir), 0.0) * 0.40;
+
+    // Subtle specular
+    vec3 viewDir = normalize(vec3(0.0, 1.0, 1.0));
+    vec3 halfVec = normalize(lightDir + viewDir);
+    float spec = pow(max(dot(N, halfVec), 0.0), 32.0) * 0.08;
+
+    vec3 light = hemi + u_dirlight * (diff + backFill + spec);
+
+    vec4 texColor = (u_useTexture != 0) ? texture2D(u_texture, v_uv) : u_baseColor;
+    // Alpha of blended submeshes (glass, alpha-routed floors) must not decay
+    // with mip level: glGenerateMipmap averages the alpha channel, so distant
+    // fragments faded and then hit the cutout discard — whole building floors
+    // washed out / vanished at range. Sample mip 0 for the blended case;
+    // true opaque cutouts (u_alpha ~ 1.0) keep mip-filtered cutout behavior.
+    float texA = (u_alpha >= 0.99) ? texColor.a
+                                   : texture2DLod(u_texture, v_uv, 0.0).a;
+    float finalAlpha = (u_useTexture != 0 ? texA : 1.0) * u_alpha;
+
+    if (u_glassMin > 0.0) {
+        finalAlpha = max(finalAlpha, u_glassMin);
+        light += vec3(spec * 1.5);
+    }
+
+    vec3 litColor;
+    if (u_useLightmap != 0) {
+        vec2 olmUV = vec2(v_uv2.x, 1.0 - v_uv2.y);
+        vec3 lm = texture2D(u_lightmap, olmUV).rgb * u_lightmapScale;
+        if (u_lm_authentic == 0) {
+            // Warm ambient floor: no lightmapped face should be black.
+            // OLM stores absolute lighting; dark faces get lifted to warm minimum.
+            lm = max(lm, u_ambient * 0.90);
+        }
+        litColor = texColor.rgb * lm * u_tint;
+    } else {
+        litColor = light * texColor.rgb * u_tint;
+    }
+
+    if (u_lm_authentic == 0) {
+        litColor = pow(max(litColor, 0.0), vec3(u_gamma));
+    }
+    gl_FragColor = vec4(litColor, finalAlpha);
+
+    if (u_glassMin <= 0.0 && u_alpha >= 0.99 && texA < 0.75) discard;
+    if (gl_FragColor.a < 0.01) discard;
+}
+)";
+
+static const char* PICK_VERT_SRC_120 = R"(
+#version 120
+attribute vec3 a_pos;
+attribute vec3 a_normal;
+attribute vec2 a_uv;
+
+uniform mat4 u_mvp;
+
+uniform mat4 u_model;
+
+void main() {
+    gl_Position = u_mvp * u_model * vec4(a_pos, 1.0);
+}
+)";
+
+static const char* PICK_FRAG_SRC_120 = R"(
+#version 120
+uniform int u_object_id;
+void main() {
+    // GLSL 1.20 has no bitwise operators (they arrive with GLSL 1.30), so the
+    // shifts and masks become floor/mod arithmetic.  Pick ids are i+1 or
+    // kAttaPickBase + n with kAttaPickBase = 0x800000, i.e. integers below
+    // 2^24, which float represents exactly; every intermediate here is an
+    // integer-valued float, so the bytes written are the same as the original
+    // (verified numerically over the whole id domain).
+    float id = float(u_object_id);
+    gl_FragColor = vec4(
+        mod(floor(id / 65536.0), 256.0) / 255.0,
+        mod(floor(id /   256.0), 256.0) / 255.0,
+        mod(           id       , 256.0) / 255.0,
+        1.0
+    );
+}
+)";
+
 // ─── Shader Compile Helper ────────────────────────────────────────────────────
 static GLuint CompileShader(GLenum type, const char* src) {
     GLuint s = glCreateShader(type);
@@ -224,13 +379,20 @@ static GLuint CompileShader(GLenum type, const char* src) {
 }
 
 static GLuint BuildShaderProgram() {
-    GLuint vert = CompileShader(GL_VERTEX_SHADER,   OBJ_VERT_SRC);
-    GLuint frag = CompileShader(GL_FRAGMENT_SHADER, OBJ_FRAG_SRC);
+    const char* vs_src = g_gl_info.legacy_gl21_ ? OBJ_VERT_SRC_120 : OBJ_VERT_SRC;
+    const char* fs_src = g_gl_info.legacy_gl21_ ? OBJ_FRAG_SRC_120 : OBJ_FRAG_SRC;
+    GLuint vert = CompileShader(GL_VERTEX_SHADER,   vs_src);
+    GLuint frag = CompileShader(GL_FRAGMENT_SHADER, fs_src);
     if (!vert || !frag) return 0;
 
     GLuint prog = glCreateProgram();
     glAttachShader(prog, vert);
     glAttachShader(prog, frag);
+    // GLSL 1.20 has no layout(location = N), so the attribute indices the 330
+    // originals declare must be re-bound by name before linking.
+    if (g_gl_info.legacy_gl21_) {
+        GL_LegacyBindInlineAttribLocations(prog);
+    }
     glLinkProgram(prog);
 
     GLint ok = 0;
@@ -249,13 +411,18 @@ static GLuint BuildShaderProgram() {
 }
 
 static GLuint BuildPickShaderProgram() {
-    GLuint vert = CompileShader(GL_VERTEX_SHADER,   PICK_VERT_SRC);
-    GLuint frag = CompileShader(GL_FRAGMENT_SHADER, PICK_FRAG_SRC);
+    const char* vs_src = g_gl_info.legacy_gl21_ ? PICK_VERT_SRC_120 : PICK_VERT_SRC;
+    const char* fs_src = g_gl_info.legacy_gl21_ ? PICK_FRAG_SRC_120 : PICK_FRAG_SRC;
+    GLuint vert = CompileShader(GL_VERTEX_SHADER,   vs_src);
+    GLuint frag = CompileShader(GL_FRAGMENT_SHADER, fs_src);
     if (!vert || !frag) return 0;
 
     GLuint prog = glCreateProgram();
     glAttachShader(prog, vert);
     glAttachShader(prog, frag);
+    if (g_gl_info.legacy_gl21_) {
+        GL_LegacyBindInlineAttribLocations(prog);
+    }
     glLinkProgram(prog);
 
     GLint ok = 0;

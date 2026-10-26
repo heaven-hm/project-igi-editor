@@ -745,7 +745,12 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  if (g_gl_info.support_version_45_) {
+  if (g_gl_info.legacy_gl21_) {
+    // Apple's legacy profile (GL 2.1 / GLSL 1.20) cannot compile either of the
+    // other tiers; shaders/21 is the GLSL 1.20 port.  See gl_helper.cpp.
+    Str_Cat(g_folders.shader_folder_, count_of(g_folders.shader_folder_),
+            "/21");
+  } else if (g_gl_info.support_version_45_) {
     Str_Cat(g_folders.shader_folder_, count_of(g_folders.shader_folder_),
             "/45");
   } else {
@@ -778,10 +783,11 @@ int main(int argc, char **argv) {
         "\n[igi1ed] startup failed during App::Init and the editor cannot continue.\n"
         "  GL_RENDERER: %s\n"
         "  GL_VERSION:  %s\n"
-        "  This build needs an OpenGL 4.1+ core context.  If the version above is\n"
-        "  lower, that is the cause: the shaders in shaders/41 and shaders/45 cannot\n"
-        "  compile on it.  Check the shader compile errors and the log file next to\n"
-        "  this executable for the specific failure.\n\n",
+        "  Shader tiers are '21' (GLSL 1.20), '41' and '45'.  A context below\n"
+        "  OpenGL 3.0 uses the 2.1 fallback, selected automatically.  Check the\n"
+        "  shader compile errors and the log file next to this executable for the\n"
+        "  specific failure; docs/igi-re-parity/GL21_FALLBACK.md records what the\n"
+        "  fallback emulates.\n\n",
         renderer ? renderer : "(null)", version ? version : "(null)");
     Logger::Get().LogAlways(LogLevel::ERR,
         std::string("[igi1ed] startup failed during App::Init (GL_VERSION=") +

@@ -84,6 +84,10 @@ file(GLOB SOURCES_CLI CONFIGURE_DEPENDS "source/cli/*.*")
 file(GLOB SOURCES_MENU CONFIGURE_DEPENDS "source/menu/*.*")
 file(GLOB SHADERS_41 CONFIGURE_DEPENDS "shaders/41/*.*")
 file(GLOB SHADERS_45 CONFIGURE_DEPENDS "shaders/45/*.*")
+# GLSL 1.20 tier for the GL 2.1 fallback (Apple's legacy profile, the only
+# context Wine offers on macOS).  Selected at runtime by GL_Init(); see the
+# compatibility block in source/renderer/gl_helper.cpp.
+file(GLOB SHADERS_21 CONFIGURE_DEPENDS "shaders/21/*.*")
 
 # Windows icon + version resource, generated from `assets/igi-editor.rc.in` so the
 # FILEVERSION/PRODUCTVERSION values come from the `version` file (issue #44) and
@@ -134,10 +138,11 @@ source_group("runtime" FILES ${SOURCES_RUNTIME})
 source_group("renderer" FILES ${SOURCES_RENDERER})
 source_group("cli" FILES ${SOURCES_CLI})
 source_group("menu" FILES ${SOURCES_MENU})
+source_group("shaders/21" FILES ${SHADERS_21})
 source_group("shaders/41" FILES ${SHADERS_41})
 source_group("shaders/45" FILES ${SHADERS_45})
 
-add_executable(igi-editor ${SOURCES} ${SOURCES_LEVEL} ${SOURCES_RUNTIME} ${SOURCES_RENDERER} ${SOURCES_CLI} ${SOURCES_MENU} ${SHADERS_41} ${SHADERS_45})
+add_executable(igi-editor ${SOURCES} ${SOURCES_LEVEL} ${SOURCES_RUNTIME} ${SOURCES_RENDERER} ${SOURCES_CLI} ${SOURCES_MENU} ${SHADERS_21} ${SHADERS_41} ${SHADERS_45})
 
 if (WIN32)
   set_target_properties(igi-editor PROPERTIES
@@ -292,6 +297,14 @@ if (WIN32)
       "${PROJECT_SOURCE_DIR}/assets/editor"
       "$<TARGET_FILE_DIR:igi-editor>/editor"
 
+    # The GLSL 1.20 tier is copied from shaders/21 rather than kept as a second
+    # copy under assets/editor/shaders, so the two cannot drift apart -- which is
+    # what made the old shaders/32 tier dead code (present in the repo, absent
+    # from assets/editor, and therefore never shipped).
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${PROJECT_SOURCE_DIR}/shaders/21"
+      "$<TARGET_FILE_DIR:igi-editor>/editor/shaders/21"
+
     # Copy files to root (DLLs and version)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       ${IGI_RUNTIME_FILES}
@@ -369,6 +382,7 @@ add_executable(igi_tests
     tests/test_mef_native_lightmap.cpp
     tests/test_mef_dual_set.cpp
     tests/test_mef_corpus.cpp
+    tests/test_mef_import.cpp
     tests/test_igi1conv_lightmap.cpp
     tests/test_debug_command_parser.cpp
     tests/test_capture_camera.cpp
@@ -489,6 +503,7 @@ target_sources(igi_tests PRIVATE
     source/renderer/fnt_parser.cpp
     source/level/terrain_files.cpp
     source/renderer/mef_native.cpp
+    source/renderer/mef_writer.cpp
     source/visual_integrity.cpp
     source/utils_igi1conv.cpp
     source/game_clock.cpp

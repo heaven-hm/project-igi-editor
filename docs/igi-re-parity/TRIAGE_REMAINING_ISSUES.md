@@ -30,14 +30,29 @@ This triage was written before the porting work started. Landed since, on
 | 68 | Ladder placement | `8551c6b1`, `140d152b` |
 | 57 | Snow particles | Snow is **not** a separate system: it is the rain task's `snow` mode (`r->snow = rain == 0`, `Rain_New` `0x498960`, `src/dxinit/rain.c:153`). Ported into `source/runtime/rain_rules.*`; see `docs/igi-re-parity/SNOW.md` |
 | 37, 40, 42, 44, 47, 48, 59 | defects / parity gaps | `8551c6b1` |
+| 80 | Cutscenes | `273bb24f` — `source/runtime/cutscene_rules.*`, `docs/igi-re-parity/CUTSCENES.md` |
+| 79, 69 | Roads / spline segment placement | `273bb24f` — `source/runtime/spline_rules.*`, `docs/igi-re-parity/ROAD_SPLINES.md` |
+| 73 | Animation playback | `273bb24f` — `source/runtime/anim_rules.*`, `docs/igi-re-parity/ANIMATION.md` |
+| 72 | Lightmap bake | `273bb24f` — `source/runtime/lightmap_rules.*`, `docs/igi-re-parity/LIGHTMAP_BAKE.md` |
+| 60 | Helicopter rotor + flight preview | `273bb24f` — `source/runtime/heli_rules.*`, `docs/igi-re-parity/HELICOPTER.md` |
 
-Still genuinely open after that: **#80** cutscenes, **#79** roads, **#73**
-animation, **#72** lightmap bake, **#69** splines, **#63** light fixtures,
-**#60** helicopter, **#56**/#54 gameplay umbrellas, **#52** post-processing
-(no retail counterpart), **#51** 3-layer lightmap (editor design, not a retail
-mode set), **#50** `renderer_draw.cpp` split (pure refactor), **#49** roadmap,
-**#29** OBJ→MEF importer, **#7** AI/waypoint editor. The rows below remain the
-entry-point map for those.
+Still genuinely open after that, in rough order of tractability:
+
+| # | Issue | State |
+| --- | --- | --- |
+| 29 | OBJ→MEF importer | In progress — native MEF writer + `--import-mef`, static models first |
+| 63 | Light fixtures from emissive geometry + baked lightmaps | Editor design. I.G.I. declares no point lights, so there is no fixture symbol in IGI-RE to port; the issue's own premise is open-igi's `LightFixtureExtractor`. The oracle can only supply the lightmap bake side (#72) |
+| 56, 54 | Gameplay umbrellas | Feature requests |
+| 52 | Post-processing | **No retail counterpart** — IGI.exe has no post-process pass to mirror |
+| 51 | 3-layer lightmap | Editor design, not a retail mode set |
+| 50 | Split `renderer_draw.cpp` | Pure refactor, no behavioural oracle |
+| 49 | Roadmap | Tracking issue |
+| 7 | AI / waypoint editor | IGI-RE exposes no nav-mesh or waypoint-authoring symbols |
+
+**Wiring remains** for several rows whose *rules* are now ported and tested but which are
+not yet driven by the renderer or GUI: #80, #72, #60, #70, #58, and #62's per-frame LOD
+switch. Each is recorded as "ported, unwired" in its own `docs/igi-re-parity/*.md`. Porting
+a rule and calling it from a draw path are separate claims; the tests pin the former only.
 
 
 ## A caveat that applies to several rows

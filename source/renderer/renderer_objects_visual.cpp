@@ -241,9 +241,9 @@ void Renderer_Objects::DrawModelPreview(const std::string& modelId, GLuint ubo_m
 
     // Overwrite u_mvp (3rd mat4 in the shared UBO). The scene re-uploads the whole
     // UBO next frame, and the scene pass for this frame already finished, so this is safe.
-    glBindBuffer(GL_UNIFORM_BUFFER, ubo_mats);
-    glBufferSubData(GL_UNIFORM_BUFFER, 2 * sizeof(glm::mat4), sizeof(glm::mat4),
-                    glm::value_ptr(mvp));
+    // GL_BufferSubData routes this into the emulated block on a 2.1 context.
+    GL_BufferSubData(ubo_mats, GL_UNIFORM_BUFFER, 2 * sizeof(glm::mat4), sizeof(glm::mat4),
+                     glm::value_ptr(mvp));
 
     // Isolated viewport with its own cleared depth so the preview never z-fights HUD.
     glViewport(vpX, vpY, vpW, vpH);
@@ -664,15 +664,38 @@ void main() {
     fragColor = u_color;
 }
 )";
+        // GLSL 1.20 variants (legacy 2.1 context): no layout(), no uniform
+        // blocks.  The Matrices block's third matrix is the plain uniform
+        // `u_mvp` that gl_helper.cpp's UBO emulation uploads; u_unused1 and
+        // u_unused2 are never read.  Attribute indices are bound by
+        // GL_LegacyBindInlineAttribLocations() before glLinkProgram.
+        static const char* simple_vert_120 = R"(
+#version 120
+uniform mat4 u_mvp;
+uniform mat4 u_model;
+attribute vec3 a_pos;
+void main() {
+    gl_Position = u_mvp * u_model * vec4(a_pos, 1.0);
+}
+)";
+        static const char* simple_frag_120 = R"(
+#version 120
+uniform vec4 u_color;
+void main() {
+    gl_FragColor = u_color;
+}
+)";
+        const char* simple_vert_src = g_gl_info.legacy_gl21_ ? simple_vert_120 : simple_vert;
+        const char* simple_frag_src = g_gl_info.legacy_gl21_ ? simple_frag_120 : simple_frag;
         GLint ok;
         GLuint vert = glCreateShader(GL_VERTEX_SHADER);
-        glShaderSource(vert, 1, &simple_vert, nullptr);
+        glShaderSource(vert, 1, &simple_vert_src, nullptr);
         glCompileShader(vert);
         glGetShaderiv(vert, GL_COMPILE_STATUS, &ok);
         if (!ok) { glDeleteShader(vert); return; }
 
         GLuint frag = glCreateShader(GL_FRAGMENT_SHADER);
-        glShaderSource(frag, 1, &simple_frag, nullptr);
+        glShaderSource(frag, 1, &simple_frag_src, nullptr);
         glCompileShader(frag);
         glGetShaderiv(frag, GL_COMPILE_STATUS, &ok);
         if (!ok) { glDeleteShader(vert); glDeleteShader(frag); return; }
@@ -680,6 +703,9 @@ void main() {
         selection_shader_ = glCreateProgram();
         glAttachShader(selection_shader_, vert);
         glAttachShader(selection_shader_, frag);
+        if (g_gl_info.legacy_gl21_) {
+            GL_LegacyBindInlineAttribLocations(selection_shader_);
+        }
         glLinkProgram(selection_shader_);
         glDeleteShader(vert);
         glDeleteShader(frag);
@@ -768,15 +794,35 @@ void main() {
     fragColor = u_color;
 }
 )";
+    // GLSL 1.20 variants (legacy 2.1 context): no layout(), no uniform blocks.
+    // See the selection-box pair above for the u_mvp / Matrices rationale.
+    static const char* vs_120 = R"(
+#version 120
+uniform mat4 u_mvp;
+uniform mat4 u_model;
+attribute vec3 a_pos;
+void main() {
+    gl_Position = u_mvp * u_model * vec4(a_pos, 1.0);
+}
+)";
+    static const char* fs_120 = R"(
+#version 120
+uniform vec4 u_color;
+void main() {
+    gl_FragColor = u_color;
+}
+)";
+    const char* vs_src = g_gl_info.legacy_gl21_ ? vs_120 : vs;
+    const char* fs_src = g_gl_info.legacy_gl21_ ? fs_120 : fs;
     GLint ok = 0;
     GLuint vert = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vert, 1, &vs, nullptr);
+    glShaderSource(vert, 1, &vs_src, nullptr);
     glCompileShader(vert);
     glGetShaderiv(vert, GL_COMPILE_STATUS, &ok);
     if (!ok) { glDeleteShader(vert); return 0; }
 
     GLuint frag = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(frag, 1, &fs, nullptr);
+    glShaderSource(frag, 1, &fs_src, nullptr);
     glCompileShader(frag);
     glGetShaderiv(frag, GL_COMPILE_STATUS, &ok);
     if (!ok) { glDeleteShader(vert); glDeleteShader(frag); return 0; }
@@ -784,6 +830,9 @@ void main() {
     GLuint p = glCreateProgram();
     glAttachShader(p, vert);
     glAttachShader(p, frag);
+    if (g_gl_info.legacy_gl21_) {
+        GL_LegacyBindInlineAttribLocations(p);
+    }
     glLinkProgram(p);
     glDeleteShader(vert);
     glDeleteShader(frag);
@@ -808,6 +857,17 @@ void FlushGizmo(const GzBatch& b, GLuint prog, GLuint ubo_mats, GLuint ubo_bindi
         glBindVertexArray(0);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
+
+    // Save the caller's program.  This helper is called from inside
+    // Renderer_Objects::Draw's per-object loop, which has its object shader
+    // bound; ending on glUseProgram(0) unconditionally would leave the rest of
+    // that loop with no program, so every later glUniform* raised
+    // GL_INVALID_OPERATION and the objects drew through the fixed-function
+    // pipeline instead of their shader.  Restoring the previous program is
+    // still correct when the caller really was in fixed-function state, because
+    // then the saved value is 0.
+    GLint prev_prog = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
 
     glUseProgram(prog);
     const GLuint blk = glGetUniformBlockIndex(prog, "Matrices");
@@ -841,7 +901,7 @@ void FlushGizmo(const GzBatch& b, GLuint prog, GLuint ubo_mats, GLuint ubo_bindi
     if (!cull_was_enabled) glDisable(GL_CULL_FACE);
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glUseProgram(0);
+    glUseProgram((GLuint)prev_prog);
 }
 
 // Draw a planar arc (fan outline) around `origin`, in the plane spanned by the

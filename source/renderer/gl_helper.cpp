@@ -29,6 +29,191 @@ static PFNWGLSWAPINTERVALEXTPROC wglSwapIntervalEXT;
 static PFNGLXSWAPINTERVALEXTPROC glXSwapIntervalEXT;
 #endif
 
+/*
+================================================================================
+GL 2.1 compatibility
+
+Apple's legacy profile is the only OpenGL context Wine offers on macOS.  It
+reports GL_VERSION "2.1 Metal - 89.3" and GLSL 1.20, and Wine returns NULL for
+both a 4.1 core and a 4.1 compatibility context request, so the shaders/41 and
+shaders/45 tiers can never compile there.  A probe of that context under Wine
+11.0 (docs/igi-re-parity/GL21_FALLBACK.md) reported:
+
+    glGenVertexArrays / glBindVertexArray / glDeleteVertexArrays   NULL
+    GL_APPLE_vertex_array_object                                   YES
+    glUniformBlockBinding / glGetUniformBlockIndex                 NULL
+    glBindBufferBase                                               NULL
+    GL_ARB_uniform_buffer_object                                   no
+    glGenFramebuffers / glGenerateMipmap / glActiveTexture         OK
+
+Exactly two things therefore need repairing, and both are repaired here rather
+than at the call sites (there are ~103 VAO calls and 26 glBindBufferBase calls):
+
+  1. Vertex array objects.  GLEW leaves the core entry points NULL, but the
+     APPLE variants are present and are the same API for our usage.  GL_Init()
+     points the NULL core pointers at them, which fixes every call site at once.
+
+  2. Uniform buffer objects.  No emulation preserves the GL semantics, so the
+     matrices and fog parameters are re-uploaded as the plain uniforms that the
+     shaders/21 tier declares.  GL_BufferData() keeps the bytes a UBO upload
+     would have written, and the patched glBindBufferBase() pushes them to
+     whichever program is current.
+================================================================================
+*/
+
+#include <unordered_map>
+#include <vector>
+
+struct legacy_ubo_s {
+	GLsizeiptr				size_;
+	std::vector<uint8_t>	data_;
+};
+
+static std::unordered_map<GLuint, legacy_ubo_s> g_legacy_ubos;
+
+static void LegacyUploadMat4(GLuint prog, const char* name, const uint8_t* src) {
+	const GLint loc = glGetUniformLocation(prog, name);
+	if (loc >= 0) {
+		glUniformMatrix4fv(loc, 1, GL_FALSE, reinterpret_cast<const GLfloat*>(src));
+	}
+}
+
+static void LegacyUploadVec4(GLuint prog, const char* name, const uint8_t* src) {
+	const GLint loc = glGetUniformLocation(prog, name);
+	if (loc >= 0) {
+		glUniform4fv(loc, 1, reinterpret_cast<const GLfloat*>(src));
+	}
+}
+
+static void LegacyUploadFloat(GLuint prog, const char* name, const uint8_t* src) {
+	const GLint loc = glGetUniformLocation(prog, name);
+	if (loc >= 0) {
+		glUniform1fv(loc, 1, reinterpret_cast<const GLfloat*>(src));
+	}
+}
+
+// Pushes a cached uniform block into the current program under the plain
+// uniform names the shaders/21 tier declares.  The block layouts come from
+// renderer.h: ubo_mats_s is three mat4 in declaration order
+// (mvp_mat_follow_view_, mvp_flat_sky_layer_, mvp_objects_) and ubo_fog_s is a
+// vec4 followed by a float.  Both tests are size-guarded so a program is only
+// given the block it actually declares.
+static void LegacyUploadUboToCurrentProgram(const legacy_ubo_s& ubo) {
+	GLint prog = 0;
+	glGetIntegerv(GL_CURRENT_PROGRAM, &prog);
+	if (prog == 0) {
+		return;
+	}
+
+	const uint8_t* base = ubo.data_.data();
+	const size_t size = ubo.data_.size();
+
+	if (size >= 3 * 64) {
+		LegacyUploadMat4(static_cast<GLuint>(prog), "g_mvp_mat_follow_view", base + 0);
+		LegacyUploadMat4(static_cast<GLuint>(prog), "g_mvp_flat_sky_layer", base + 64);
+		LegacyUploadMat4(static_cast<GLuint>(prog), "g_mvp_objects", base + 128);
+
+		// The inline object/rain shaders name the same third matrix `u_mvp`
+		// (`uniform Matrices { mat4 u_unused1; mat4 u_unused2; mat4 u_mvp; }`),
+		// so the emulation has to answer to both names.
+		LegacyUploadMat4(static_cast<GLuint>(prog), "u_mvp", base + 128);
+	}
+
+	if (size >= 20) {
+		LegacyUploadVec4(static_cast<GLuint>(prog), "g_fog_color", base + 0);
+		LegacyUploadFloat(static_cast<GLuint>(prog), "g_fog_far", base + 16);
+	}
+}
+
+// Stands in for glDepthRangef(), which is GL 4.1 (or ARB_ES2_compatibility) and
+// is NULL on a 2.1 context; the GL 1.0 glDepthRange takes the same arguments as
+// doubles.  A probe of every GL entry point this source calls found this to be
+// the only NULL one not already guarded by support_version_45_ or emulated
+// above.  See docs/igi-re-parity/GL21_FALLBACK.md.
+static void GLAPIENTRY LegacyDepthRangef(GLfloat n, GLfloat f) {
+	glDepthRange(static_cast<GLdouble>(n), static_cast<GLdouble>(f));
+}
+
+// glGetUniformBlockIndex() is NULL on a 2.1 context and is called directly --
+// not only through GL_SetUniformBlockBinding() -- in renderer_objects.cpp,
+// renderer_objects_visual.cpp and renderer_rain.cpp.  Returning GL_INVALID_INDEX
+// is the truthful answer ("this program has no such block") and it makes every
+// existing `if (blk != GL_INVALID_INDEX) glUniformBlockBinding(...)` guard skip
+// the bind, which is what the emulation needs.  Repairing it here rather than at
+// the four call sites keeps one policy in one place.
+static GLuint GLAPIENTRY LegacyGetUniformBlockIndex(GLuint program, const GLchar* name) {
+	(void)program;
+	(void)name;
+	return GL_INVALID_INDEX;
+}
+
+// Unreachable while the shim above returns GL_INVALID_INDEX, but GLEW leaves it
+// NULL and a NULL call would crash if any caller ever binds unconditionally.
+static void GLAPIENTRY LegacyUniformBlockBinding(GLuint program, GLuint index, GLuint binding) {
+	(void)program;
+	(void)index;
+	(void)binding;
+}
+
+// Stands in for glBindBufferBase(), which is NULL on a 2.1 context.  Only the
+// uniform-buffer case is emulated; nothing else in this renderer calls it.
+static void GLAPIENTRY LegacyBindBufferBase(GLenum target, GLuint index, GLuint buffer) {
+	(void)index;
+	if (target != GL_UNIFORM_BUFFER) {
+		return;
+	}
+
+	const auto it = g_legacy_ubos.find(buffer);
+	if (it == g_legacy_ubos.end()) {
+		return;
+	}
+
+	LegacyUploadUboToCurrentProgram(it->second);
+}
+
+// GLSL 1.20 has no layout(location = N) qualifier, so the attribute indices the
+// shaders/41 tier declares must be re-bound by name before linking.  These are
+// exactly the indices the 410 originals use; a name the program does not
+// declare is ignored by glBindAttribLocation, so binding a superset is safe.
+// vs_in_clr is the one name whose index differs between families (1 in the
+// skydome pair, 2 in the flat-sky pair), which is why the vertex filename picks
+// the set.
+static void LegacyBindAttribLocations(const char* vs_filename, GLuint program) {
+	const char* vs = vs_filename ? vs_filename : "";
+
+	// The inline object / preview / rain shaders (renderer_objects.cpp,
+	// renderer_objects_visual.cpp, renderer_rain.cpp) each declare their
+	// attributes with layout(location = N); these are those indices, and no
+	// name appears with two different indices, so binding the whole set is
+	// safe for every program.
+	glBindAttribLocation(program, 0, "a_pos");
+	glBindAttribLocation(program, 1, "a_normal");
+	glBindAttribLocation(program, 2, "a_uv");
+	glBindAttribLocation(program, 3, "a_uv2");
+	glBindAttribLocation(program, 0, "a_seed");
+	glBindAttribLocation(program, 1, "a_corner");
+
+	// The file-based tier, dispatched by vertex filename because vs_in_clr is
+	// index 1 in the skydome pair and index 2 in the flat-sky pair.
+	if (strstr(vs, "flat_sky_layer")) {
+		glBindAttribLocation(program, 0, "vs_in_pos");
+		glBindAttribLocation(program, 1, "vs_in_texcoord");
+		glBindAttribLocation(program, 2, "vs_in_clr");
+	} else if (strstr(vs, "skydome")) {
+		glBindAttribLocation(program, 0, "vs_in_pos");
+		glBindAttribLocation(program, 1, "vs_in_clr");
+	} else if (strstr(vs, "terrain_passing")) {
+		glBindAttribLocation(program, 0, "vs_in_pos_and_alpha");
+		glBindAttribLocation(program, 1, "vs_in_uv");
+	} else if (strstr(vs, "terrain_fog")) {
+		glBindAttribLocation(program, 0, "vs_in_pos_local");
+	}
+}
+
+void GL_LegacyBindInlineAttribLocations(GLuint program) {
+	LegacyBindAttribLocations(nullptr, program);
+}
+
 gl_info_s g_gl_info;
 
 bool GL_Init() {
@@ -53,6 +238,51 @@ bool GL_Init() {
 
 	// requires OpenGL 4.5 and above or ARB_direct_state_access to support glBindTextureUnit
 	g_gl_info.support_version_45_ = glewIsSupported("GL_VERSION_4_5") == GL_TRUE;
+
+	// A context without uniform buffer objects cannot run the shaders/41 or
+	// shaders/45 tiers at all, so treat "no GL 3.0" as "use the 2.1 fallback".
+	g_gl_info.legacy_gl21_ = glewIsSupported("GL_VERSION_3_0") != GL_TRUE;
+
+	if (g_gl_info.legacy_gl21_) {
+		// Point GLEW's NULL core VAO entry points at the APPLE equivalents.
+		// This is the whole reason the ~103 VAO call sites need no edits.
+		// The casts are only for the APPLE prototypes' `const GLuint*` on
+		// glGenVertexArrays/glDeleteVertexArrays; the calls are identical.
+		if (!glGenVertexArrays && GLEW_APPLE_vertex_array_object) {
+			glGenVertexArrays = reinterpret_cast<PFNGLGENVERTEXARRAYSPROC>(glGenVertexArraysAPPLE);
+		}
+		if (!glBindVertexArray && GLEW_APPLE_vertex_array_object) {
+			glBindVertexArray = reinterpret_cast<PFNGLBINDVERTEXARRAYPROC>(glBindVertexArrayAPPLE);
+		}
+		if (!glDeleteVertexArrays && GLEW_APPLE_vertex_array_object) {
+			glDeleteVertexArrays = reinterpret_cast<PFNGLDELETEVERTEXARRAYSPROC>(glDeleteVertexArraysAPPLE);
+		}
+		// Unconditional in legacy mode, not only when GLEW left the pointer NULL:
+		// GL_BufferData()/GL_BufferSubData() below swallow every GL_UNIFORM_BUFFER
+		// upload whenever legacy_gl21_ is set, so this shim is the only path that
+		// can ever deliver those bytes.  On a 2.1 context that still advertises
+		// GL_ARB_uniform_buffer_object, GLEW would otherwise install the real
+		// entry point, the data would be dropped, and every emulated block would
+		// read back as zero matrices.
+		glBindBufferBase = LegacyBindBufferBase;
+		if (!glDepthRangef) {
+			glDepthRangef = LegacyDepthRangef;
+		}
+		if (!glGetUniformBlockIndex) {
+			glGetUniformBlockIndex = LegacyGetUniformBlockIndex;
+		}
+		if (!glUniformBlockBinding) {
+			glUniformBlockBinding = LegacyUniformBlockBinding;
+		}
+
+		printf("GL 2.1 fallback active: shaders/21 tier, emulated uniform blocks\n");
+
+		if (!glGenVertexArrays) {
+			LogStartup(log_type_t::LOG_ERROR, __FILE__, __LINE__,
+			           "no vertex array object support (neither core nor APPLE)\n");
+			return false;
+		}
+	}
 
 #if defined(_WIN32)
 	// Find the extension function
@@ -103,8 +333,41 @@ GLuint GL_CreateBuffer(GLenum target, GLsizeiptr size, const void* data, GLenum 
 }
 
 void GL_BufferData(GLuint obj, GLenum target, GLsizeiptr size, const void* data, GLenum usage) {
+	// A uniform buffer cannot exist on a 2.1 context.  Keep its bytes instead,
+	// so the patched glBindBufferBase() can upload them as plain uniforms.
+	if (g_gl_info.legacy_gl21_ && target == GL_UNIFORM_BUFFER) {
+		legacy_ubo_s& ubo = g_legacy_ubos[obj];
+		ubo.size_ = size;
+		ubo.data_.assign(static_cast<size_t>(size), 0);
+		if (data) {
+			memcpy(ubo.data_.data(), data, static_cast<size_t>(size));
+		}
+		return;
+	}
+
 	glBindBuffer(target, obj);
 	glBufferData(target, size, data, usage);
+	glBindBuffer(target, 0);
+}
+
+void GL_BufferSubData(GLuint obj, GLenum target, GLintptr offset, GLsizeiptr size, const void* data) {
+	// A uniform buffer cannot exist on a 2.1 context; patch the emulated
+	// block's cache so the next bind uploads the updated values.
+	if (g_gl_info.legacy_gl21_ && target == GL_UNIFORM_BUFFER) {
+		legacy_ubo_s& ubo = g_legacy_ubos[obj];
+		const size_t end = static_cast<size_t>(offset) + static_cast<size_t>(size);
+		if (ubo.data_.size() < end) {
+			ubo.data_.resize(end, 0);
+			ubo.size_ = static_cast<GLsizeiptr>(end);
+		}
+		if (data) {
+			memcpy(ubo.data_.data() + offset, data, static_cast<size_t>(size));
+		}
+		return;
+	}
+
+	glBindBuffer(target, obj);
+	glBufferSubData(target, offset, size, data);
 	glBindBuffer(target, 0);
 }
 
@@ -247,6 +510,12 @@ bool GL_CreateProgram(const char* shader_full_filenames[SUPPORT_SHADER_COUNT], g
 		}
 	}
 
+	// GLSL 1.20 has no layout(location = N), so the attribute indices have to be
+	// bound by name before linking; see LegacyBindAttribLocations().
+	if (g_gl_info.legacy_gl21_) {
+		LegacyBindAttribLocations(shader_full_filenames[VERTEX_SHADER], program);
+	}
+
 	glLinkProgram(program);
 
 	// check link status
@@ -327,6 +596,15 @@ bool GL_CreateProgramVSFS(const char* vs, const char* fs, gl_program_s& gl_prog)
 }
 
 bool GL_SetUniformBlockBinding(gl_program_s& gl_prog, const char* uniform_block_name, GLuint binding_point) {
+	// On a 2.1 context there is no uniform block to bind -- the shaders/21 tier
+	// declares plain uniforms and the patched glBindBufferBase() uploads them.
+	// Report success so callers' "if (!...) return false" stays inert.
+	if (g_gl_info.legacy_gl21_) {
+		(void)uniform_block_name;
+		(void)binding_point;
+		return true;
+	}
+
 	GLuint idx = glGetUniformBlockIndex(gl_prog.program_, uniform_block_name);
 	if (idx == GL_INVALID_INDEX) {
 		return false;

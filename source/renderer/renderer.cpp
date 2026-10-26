@@ -44,10 +44,13 @@ void ReportInitFailure(const char* subsystem) {
       "  GL_VERSION:  %s\n"
       "  GLSL:        %s\n"
       "  last GL error: %s\n"
-      "  The renderer needs an OpenGL 4.1+ core context; its shader folders are\n"
-      "  '41' and '45'.  A context older than that cannot compile them, which is\n"
-      "  the usual reason this fails.  See the shader compile errors above (if any)\n"
-      "  and docs/KNOWN_ISSUES.md.\n\n",
+      "  Shader tiers are '21' (GLSL 1.20), '41' and '45'.  A context below\n"
+      "  OpenGL 3.0 is served by the 2.1 fallback, selected automatically, which\n"
+      "  emulates uniform blocks and binds vertex arrays through the APPLE\n"
+      "  extension.  If it is active (it prints 'GL 2.1 fallback active' above)\n"
+      "  then this is a shader or uniform problem in the '21' tier, not a\n"
+      "  context-version problem.  See the shader compile errors above (if any),\n"
+      "  docs/KNOWN_ISSUES.md and docs/igi-re-parity/GL21_FALLBACK.md.\n\n",
       subsystem, vendor ? vendor : "(null)", renderer ? renderer : "(null)",
       version ? version : "(null)", glsl ? glsl : "(null)", err ? err : "none");
 

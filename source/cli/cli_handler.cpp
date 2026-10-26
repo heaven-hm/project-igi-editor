@@ -3,6 +3,7 @@
 #include "cli_tests.h"
 #include "common.h"
 #include "logger.h"
+#include "renderer/mef_writer.h"
 #include "renderer/res_writer.h"
 #include "renderer/renderer_objects.h"
 #include "utils.h"
@@ -16,7 +17,7 @@ bool CLIHandler::IsCLICommand(int argc, char **argv) {
     std::string arg = argv[i];
     if (arg == "--help" || arg == "--run-tests" ||
         arg == "--extract-level" || arg == "--verify-level" ||
-        arg == "--import-model") {
+        arg == "--import-model" || arg == "--import-mef") {
       return true;
     }
   }
@@ -45,6 +46,13 @@ void CLIHandler::PrintHelp() {
       << "      --delay <sec>       Delay between levels (default: 5)\n"
       << "  --extract-level <N> [outdir]  Extract level N resources\n\n"
       << "  --import-model <N> <model> [--source-level <N>]  Import a model family into level N\n\n"
+      << "  --import-mef <in.obj> <out.mef>   Import an OBJ mesh as a static .mef model\n"
+      << "      (also: --mef <in.obj> --import-mef <out.mef>)\n"
+      << "      --source-mef <ref.mef>  Copy the reference's attachments (static models only)\n"
+      << "      --mef-format <0|3>      Output format (default 0, rigid)\n"
+      << "      --keep-winding          Do not reverse OBJ face winding\n"
+      << "      --no-collision          Do not write the collision chunks\n"
+      << "      --pivot-origin          Use (0,0,0) as the HSEM pivot instead of the bbox centre\n\n"
       << "For asset conversion, use igi1conv.exe (in editor/tools/):\n"
       << "  igi1conv tex / mef / qsc / qvm / res / mtp / dat / terrain / fnt / graph\n"
       << "  Run: igi1conv --help\n";
@@ -69,6 +77,12 @@ int CLIHandler::Process(int argc, char **argv) {
     } else if (arg == "--run-tests") {
       Logger::Get().Log(LogLevel::INFO, "[CLI] Run tests command requested.");
       return RunAllTests();
+    } else if (arg == "--import-mef") {
+      // OBJ -> .mef importer (issue #29).  All parsing and all format logic live
+      // in mef_writer.cpp so they are covered by the host test lane; this branch
+      // only forwards the process arguments.
+      Logger::Get().Log(LogLevel::INFO, "[CLI] Import MEF command requested.");
+      return mef_writer::RunImportMefCli(argc, argv);
     } else if (arg == "--import-model" && i + 2 < argc) {
       int levelNo = std::stoi(argv[++i]);
       std::string modelId = argv[++i];
