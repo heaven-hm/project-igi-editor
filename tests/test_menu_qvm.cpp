@@ -228,7 +228,7 @@ TEST(MenuQvm, CorpusContainersParse) {
     ASSERT_FALSE(ingame.instructions.empty());
     EXPECT_EQ(ingame.instructions.front().address, 0u);
     const QVMInstruction& last = ingame.instructions.back();
-    EXPECT_EQ(last.address + last.size, ingame.header.sz_ctable);
+    EXPECT_EQ(last.address + last.size, static_cast<size_t>(ingame.header.codeSize));
 
     const QVMFile main = QVM_Parse(MainMenuPath().string());
     ASSERT_TRUE(main.valid) << main.error;
@@ -254,8 +254,8 @@ TEST(MenuQvm, OperandLayoutsPinnedByTheRetailBytes) {
     const std::vector<unsigned char> bytes = ReadFileBytes(IngameMenuPath());
     const QVMFile qvm = QVM_Parse(IngameMenuPath().string());
     ASSERT_TRUE(qvm.valid) << qvm.error;
-    const size_t code = qvm.header.of_ctable;
-    ASSERT_LE(code + qvm.header.sz_ctable, bytes.size());
+    const size_t code = static_cast<size_t>(qvm.header.code);
+    ASSERT_LE(code + static_cast<size_t>(qvm.header.codeSize), bytes.size());
 
     // The first statement is the MenuManager declaration: PUSHIIB <name>, CALL, BRA,
     // then one PUSHSIB + BRK block per argument.

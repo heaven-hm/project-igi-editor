@@ -278,6 +278,13 @@ EditorMenu LoadEditorMenu(const std::string& game_root, bool terrain_expanded,
         return result;
     }
 
+    // Keep the definition the model was built from so the menu can be edited and
+    // saved back through `menu/menu_qvm_writer.h`.  A fallback never reaches here,
+    // so `definition.ok` is true exactly when the retail file was read -- and the
+    // writer refuses a definition that is not ok, so a fallback menu can never
+    // overwrite the retail file.
+    result.definition = definition;
+
     // Editor wiring.  A retail item with no editor behaviour stays in the item
     // list and reports why it is inert.
     for (MenuUiScreen& screen : model.screens) {

@@ -564,6 +564,7 @@ target_sources(igi_tests PRIVATE
     source/runtime/sound_emitter.cpp
     source/runtime/weather_mode.cpp
     source/menu/qvm_image.cpp
+    source/menu/menu_qvm_writer.cpp
     source/menu/menu_text_res.cpp
     source/menu/menu_ui.cpp
     source/app_menu.cpp

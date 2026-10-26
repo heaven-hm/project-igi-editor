@@ -410,6 +410,12 @@ struct EditorMenuLabelStats {
 
 struct EditorMenu {
     MenuUiModel model;
+    // The definition `model` was built from, kept so the menu can be edited and
+    // saved back (`menu/menu_qvm_writer.h`).  `ok == false` when the retail file
+    // was not used, i.e. exactly when `fallback` is true; the writer refuses a
+    // definition that is not ok, so a fallback menu is never written over the
+    // retail file.
+    MenuDefinition definition;
     bool retail = false;      // built from the retail definition
     bool fallback = false;    // built from the editor's own row list
     std::string reason;       // why the retail definition was not used
