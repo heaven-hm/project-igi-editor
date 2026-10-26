@@ -31,6 +31,15 @@ public:
 
     void Init(const std::string& logFile = "editor.log");
     void Log(LogLevel level, const std::string& message);
+
+    // Logs even when the configured filter would drop the message.  Needed because
+    // the configuration is loaded AFTER the logger starts, so a failure during
+    // startup happens while `Config::Get()` still holds its defaults -- and with
+    // logging disabled by default that made every startup failure vanish from the
+    // log entirely, leaving a zero-byte file to debug from.  Use this only for
+    // diagnostics that must survive a failure to reach configuration.
+    void LogAlways(LogLevel level, const std::string& message);
+
     void Flush();
 
     // These are intentionally small diagnostics seams: callers can report the

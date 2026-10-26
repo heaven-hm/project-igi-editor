@@ -98,6 +98,10 @@ void Logger::Log(LogLevel level, const std::string& message) {
         return;
     }
 
+    LogAlways(level, message);
+}
+
+void Logger::LogAlways(LogLevel level, const std::string& message) {
     auto now = std::chrono::system_clock::now();
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
 

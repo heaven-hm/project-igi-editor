@@ -783,7 +783,7 @@ int main(int argc, char **argv) {
         "  compile on it.  Check the shader compile errors and the log file next to\n"
         "  this executable for the specific failure.\n\n",
         renderer ? renderer : "(null)", version ? version : "(null)");
-    Logger::Get().Log(LogLevel::ERR,
+    Logger::Get().LogAlways(LogLevel::ERR,
         std::string("[igi1ed] startup failed during App::Init (GL_VERSION=") +
         (version ? version : "?") + ")");
     Logger::Get().Flush();

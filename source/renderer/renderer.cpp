@@ -51,7 +51,7 @@ void ReportInitFailure(const char* subsystem) {
       subsystem, vendor ? vendor : "(null)", renderer ? renderer : "(null)",
       version ? version : "(null)", glsl ? glsl : "(null)", err ? err : "none");
 
-  Logger::Get().Log(LogLevel::ERR,
+  Logger::Get().LogAlways(LogLevel::ERR,
       std::string("[renderer] initialisation failed in '") + subsystem +
       "' (GL_VERSION=" + (version ? version : "?") +
       ", GLSL=" + (glsl ? glsl : "?") +
