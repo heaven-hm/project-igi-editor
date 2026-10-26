@@ -2,7 +2,17 @@
 
 Status: **audit + extracted rule module, not wired.**
 
+> **Snow is not a separate system.** This document covers rain and snow
+> together, because they are one task in the engine: `Rain_New`'s third argument
+> becomes `r->snow = rain == 0` (`src/dxinit/rain.c:153`) and every snow
+> difference is a branch on that field. The snow-specific rules, their
+> citations, the retail levels that author snow (LEVEL7 and LEVEL12) and the
+> audit of the editor's snow path are in **[`SNOW.md`](SNOW.md)** (#57). There
+> is no `Snow` symbol in IGI-RE; the module's snow API is the `R7` block of
+> `source/runtime/rain_rules.h`, not a parallel module.
+
 * Audit: this document.
+* Snow half: [`SNOW.md`](SNOW.md) (#57) — read it for anything snow-specific.
 * Extracted, tested retail rules: `source/runtime/rain_rules.{h,cpp}`
   (**no editor code calls it**), tests in `tests/test_rain_rules.cpp`.
 * The editor's live rain path (`source/renderer/renderer_rain.cpp` +
@@ -50,6 +60,10 @@ Three facts settle the issue's framing:
    task type `"RainDynCubeObj"`, `cutscene/rain.c:568`), a world-space DynCube
    volume with an eleven-parameter schema — a *different feature*, not ported
    here and not what #58 asked about.
+   **This is the answer to #57 as well, not a dead end**: the snow branches are
+   enumerated, cited and ported in `SNOW.md` and in the `R7` block of
+   `source/runtime/rain_rules.h`. The triage note "no IGI-RE symbol" is true of
+   the *name* and false of the *behaviour*.
 2. **The task is owned by a level-authored `RainEffect` object**, not by the
    level's sky or weather globals. `RainEffect_Init` (`0x436780`,
    `fxobj/rain.c:60-84`) registers the task type, the five-parameter schema and
@@ -293,6 +307,7 @@ that the editor has (or should have) a corresponding path for:
 | R4 | `LifetimeTicks`, `WrapZ`, `LayerBaseZUnits`, `FallDistanceUnits`, `ProbeTopUnits` |
 | R6 | `AlphaByte`, `RainStreakLengthUnits`, `SnowFlakeSizeUnits`, `DropKindCount` |
 | R7 | `ParseRainEffect` + `AuthoredRainEffect` (the five-parameter schema, the oracle defaults, the `Is Rain` inversion, the `Is Active` expression) |
+| snow (the module's R7 block) | `SnowFromAuthoredIsRain`, `SpawnRatePerTick`, `SpawnZUnits`, `SnowSwayDisplacementUnits`, `SnowSwayReloadTicks`, `SnowSwayTimerAfterReload`, `SnowSwayFirstRollTick`, `SnowWrapTileX/Y`, `SnowFlakeWidthUnits`, `SnowVerticesPerParticle`, `SnowFlakeDiffuse`, `SnowTextureName`, `SnowRuleDifferences` — see [`SNOW.md`](SNOW.md) |
 
 **It is not called by anything.** `Renderer_Rain` is a GPU vertex-shader field
 that computes positions from `u_time` and a per-drop seed

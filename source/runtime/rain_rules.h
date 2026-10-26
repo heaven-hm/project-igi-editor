@@ -24,6 +24,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -276,5 +277,125 @@ struct AuthoredRainEffect {
 // declares fewer than five parameters.
 AuthoredRainEffect ParseRainEffect(const std::string& type,
                                    const std::vector<std::string>& arg_tokens);
+
+// ---------------------------------------------------------------------------
+// R7 - SNOW. There is no snow system: snow is rain's `snow` flag set.
+// ---------------------------------------------------------------------------
+//
+// IGI-RE contains no symbol named `Snow`. `Rain_New`'s third argument becomes
+// `r->snow = rain == 0` (rain.c:153) and every snow difference is a branch on
+// that one field. The authored selector is the `Is Rain` bool8 parameter
+// (fxobj/rain.c:77), fed from `RainEffect::unk24` at fxobj/rain.c:141, so the
+// parameter is INVERTED: TRUE selects rain streaks, FALSE selects snow flakes.
+//
+// Every site where `snow` changes a Rain_* rule (the table returned by
+// SnowRuleDifferences below):
+//
+//   rain.c:153      Rain_New      r->snow = rain == 0 - the flag itself
+//   rain.c:572      Rain_Update   speed = snow ? 204.8 : 2048.0
+//   rain.c:631      Rain_Update   d->z = kLayer - speed (so the spawn z differs)
+//   rain.c:592-617  Rain_Update   the horizontal random walk and tile wrap
+//   rain.c:337-364  Rain_FillVB   6-vertex camera-facing quad, not a 2-vertex line
+//   rain.c:382-388  Rain_FillVB   r->matrix = camera basis * gWorldScale (billboard)
+//   rain.c:430-447  Rain_DrawCell binds snow.tex and draws D3DPT_TRIANGLELIST
+//   fxobj/rain.c:82 RainEffect_Init loads "snow.tex" once, for both modes
+//
+// Rain and snow share everything else: the same pool, accumulator, tile lattice,
+// 6 m wrap band, 18 m draw band, ground probe, fade, vertex groups, blend and
+// clip states. See docs/igi-re-parity/SNOW.md.
+
+// rain.c:153 `r->snow = rain == 0`, where `rain` is the authored `Is Rain` bool
+// (fxobj/rain.c:141). Returns true when the object is a snow emitter.
+bool SnowFromAuthoredIsRain(bool authored_is_rain);
+
+// Derived from the accumulator (rain.c:619-636): the steady-state number of
+// particles spawned per Rain_Update call is speed / kSpawnStep, i.e. 6.6667 for
+// rain and 0.6667 for snow - snow fills the pool ten times more slowly. The per-tick
+// count is not constant: the accumulator test is a strict `>` against kSpawnStep,
+// so rain alternates 6/7 and snow alternates 0/1.
+float SpawnRatePerTick(bool is_snow);
+
+// rain.c:631 `d->z = kLayer - speed`: a new particle is placed one speed step
+// below the top of the 6 m band, so a snow flake starts at 24371.2 units
+// (5.95 m) where a rain streak starts at 22528 units (5.5 m).
+float SpawnZUnits(bool is_snow);
+
+// rain.c:597-598 `d->dx = (Random_Float() - 0.5f) * kSway`. `random_float` is a
+// Random_Float draw (math/random.c:22-26, in [0, 1)), so a component lies in
+// [-kSway/2, +kSway/2) = [-68.26667, +68.26667) units. dx/dy are a PER-TICK
+// displacement, held constant until the next re-roll (rain.c:600-602).
+float SnowSwayDisplacementUnits(float random_float);
+
+// rain.c:596 `d->timer += Random_Int(gDxRainRandom, 30) + 30`. Random_Int is
+// `Random_Next() % n` (math/random.c:28-31), so the reload value is 30..59 ticks
+// for a draw in [0, 29]. The argument is clamped to that range.
+int SnowSwayReloadTicks(int random_int_30);
+
+// rain.c:595-596: the test is `if (d->timer-- < 0)`, and the reload happens
+// AFTER the post-decrement, so the stored timer becomes
+// `(timer - 1) + (Random_Int(30) + 30)` = 28..57 when the old value is -1.
+int SnowSwayTimerAfterReload(int random_int_30);
+
+// Derived from rain.c:630 (`d->timer = 0` at spawn) and the post-decrement at
+// rain.c:595: a fresh flake's first sway direction is rolled on its SECOND
+// Rain_Update, not after 30..59 ticks. Between spawn and that roll dx/dy are
+// whatever the drop slot already held - Rain_Update never initialises them.
+int SnowSwayFirstRollTick();
+
+// rain.c:603-616. The horizontal wrap is a single conditional add/subtract by
+// kTileF (rain.c:690, 10895.36 units), NOT a modulo, and it XORs a bit of
+// RainDrop::kind (bit 0 for x, bit 1 for y) which selects the vertex group.
+// `wrapped` is true when the engine would have adjusted the coordinate.
+struct SnowTileWrap {
+    float value = 0.0f;
+    bool wrapped = false;
+};
+
+SnowTileWrap SnowWrapTileX(float x_units);
+SnowTileWrap SnowWrapTileY(float y_units);
+
+// rain.c:605 and rain.c:612 - the kind bits the x/y wraps toggle.
+constexpr int kSnowWrapKindBitX = 1;
+constexpr int kSnowWrapKindBitY = 2;
+
+// rain.c:341-342 builds the quad as `vx +/- size` with `size = fade * kFlakeSize`
+// (rain.c:309, kFlakeSize = 81.92 at rain.c:685), so the half-extent is 81.92
+// units and the flake is 163.84 units == 0.04 m across. `SnowFlakeSizeUnits`
+// above is that half-extent.
+float SnowFlakeWidthUnits();
+
+// rain.c:364 (`v += 6`), rain.c:372 (`v += 2`) and the draw counts at
+// rain.c:447 (`mult = 6`) and rain.c:458 (`mult = 2`).
+int SnowVerticesPerParticle();
+int RainVerticesPerParticle();
+
+// rain.c:353 sets all four quad vertices to 0xFFFFFFFF; rain.c:366-367 gives the
+// rain line an opaque-white top vertex and the alpha-coloured bottom vertex.
+std::uint32_t SnowFlakeDiffuse();
+std::uint32_t RainStreakTopDiffuse();
+
+// fxobj/rain.c:82 `gRainTexture = Game_AddTexture("snow.tex")`. RainEffect_Changed
+// passes `gRainTexture + 0x18` for BOTH modes (fxobj/rain.c:141); 0x18 is the
+// embedded `Texture` inside `GameTexture { char name[0x18]; char tex[0x24]; }`
+// (game/game.c:167-170) and rain.c:432 binds its `surface` (Texture::surface is
+// at offset 0x20, res/restypes.h:13-25). Only the snow branch binds it; the rain
+// branch binds NULL (rain.c:449).
+const char* SnowTextureName();
+
+// rain.c:434 (`k = 4`) when the texture pointer is non-null and rain.c:437
+// (`k = 3`) when it is null; `k` is the stage-0 texture-argument count.
+int SnowTextureStageArgCountWithTexture();
+int SnowTextureStageArgCountWithoutTexture();
+
+// One row per site where `snow` changes a Rain_* rule. Addresses are the IGI.exe
+// HOOK addresses; citations are IGI-RE file:line.
+struct SnowRuleDifference {
+    const char* rule;
+    const char* function;
+    std::uint32_t address;
+    const char* citation;
+};
+
+std::span<const SnowRuleDifference> SnowRuleDifferences();
 
 }  // namespace igi::rain

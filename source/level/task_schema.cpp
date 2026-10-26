@@ -153,13 +153,35 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
           add(sc, "Heading",  "Real32",    6);
           add(sc, "Model",    "String16",  7); }
         // Generic positioned objects: pos@3, ori@6, model scanned from arg 9+
+        // GunPickup is deliberately NOT in this list: its third parameter is not
+        // a model. See the dedicated block below.
         for (const char* t : {"AlarmLight","Elevator","Generator",
                                "GenericPickup","GenericTBA","Plane","Radio",
-                               "RotatingObject","Siren", "GunPickup"}) {
+                               "RotatingObject","Siren"}) {
             add(s[t], "Position",    "ObjectPos", 3);
             add(s[t], "Orientation", "Real32x9",  6);
             add(s[t], "Model",       "String16",  9);
         }
+        // GenericPickup's third parameter really is a model — IGI-RE
+        // src/comprun/pickup.c:269-271 GenericPickup_Init (0x46C1xx) adds
+        //   pos ObjectPos @3, obj.matrix Real32x9 @6, model Param_String16 @9
+        // (the loop above already covers it; recorded here so the GunPickup
+        // contrast below is unambiguous).
+        //
+        // GunPickup: IGI-RE src/comprun/pickup.c:460-481 GunPickup_Init
+        // (HOOK 0x46CB70) does ParamTable_New(3) and adds
+        //   pos        ObjectPos      @3  (pickup.c:477)
+        //   obj.matrix Real32x9       @6  (pickup.c:478)
+        //   weaponName Param_EnumString32 @9, enum WeaponType_GetIdEnum()
+        //                                 (pickup.c:479)
+        // The old schema reused the generic loop, so the editor labelled the
+        // weapon-ID slot "Model" of type String16 and offered a free-text box
+        // for a value the engine resolves through the weapon enum. Authoring a
+        // model name there produced a GunPickup the engine cannot resolve.
+        { auto& sc = s["GunPickup"];
+          add(sc, "Position",    "ObjectPos",     3);
+          add(sc, "Orientation", "Real32x9",      6);
+          add(sc, "ID",          "EnumString32",  9); }
         // StationaryGun (the player-mannable machinegun): IGI-RE
         // src/statgun/statgun.c:142-150 StationaryGun_Open (0x473ED0) adds
         // exactly eight params in this order —
@@ -201,12 +223,24 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
           add(sc, "Range",       "Real32",    12);
           add(sc, "Active Expr", "VarString", 13);
           add(sc, "Team Expr",   "VarString", 14); }
-        // AmmoPickup: pos@3, ori@6, model@9, ammo@10
+        // AmmoPickup: IGI-RE src/comprun/pickup.c:642-664 AmmoPickup_Init
+        // (HOOK 0x46D420) does ParamTable_New(4) and adds
+        //   pos       ObjectPos         @3  (pickup.c:659)
+        //   obj.matrix Real32x9         @6  (pickup.c:660)
+        //   ammoName  Param_EnumString32 @9, enum AmmoType_GetEnum()
+        //                                   (pickup.c:661)
+        //   count     Param_Int16       @10 (pickup.c:662)
+        // The third slot is an ammo-type enum, not a model: the old schema
+        // labelled it "Model"/String16, the same defect GunPickup had.
+        // AmmoPickup_Changed resolves it with Script_EvalExpr + AmmoType_Find
+        // (pickup.c:709-717), so it is an expression over the ammo enum, and the
+        // fourth is what AmmoPickup_Touch hands the toucher as msg.count
+        // (pickup.c:744) — never the touching weapon's clip size.
         { auto& sc = s["AmmoPickup"];
-          add(sc, "Position",    "ObjectPos", 3);
-          add(sc, "Orientation", "Real32x9",  6);
-          add(sc, "Model",       "String16",  9);
-          add(sc, "Ammo",        "Int16",     10); }
+          add(sc, "Position",    "ObjectPos",    3);
+          add(sc, "Orientation", "Real32x9",     6);
+          add(sc, "ID",          "EnumString32", 9);
+          add(sc, "Ammo",        "Int16",       10); }
 
         return s;
     }();

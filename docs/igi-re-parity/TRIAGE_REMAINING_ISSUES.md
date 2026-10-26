@@ -12,6 +12,34 @@ IGI-RE (the decompilation of retail `IGI.exe`) is the only source; where an issu
 cites a name that does not exist in IGI-RE, that is stated rather than papered
 over.
 
+## Status: the "remaining 23" count above is stale
+
+This triage was written before the porting work started. Landed since, on
+`fix/igi-re-known-issues`:
+
+| # | Issue | Landed by |
+| --- | --- | --- |
+| 67 | Magic-object table | `f65d3768` — attachments spawn the definition's model, recursively |
+| 66 | Fog presets from FlatSky | `4d30ad3b`, `19d226a4` — the engine's own fog, *not* the issue's FlatSky premise |
+| 74 | QVM in-game menu | `42a689bb`, `41d4d33a` (retail menu definition + `.RES` labels) |
+| 62 | LOD chains | `c7bd9e2a` (lightmap ref index), `013b06bb` (authored distances), `aa225a6e` (loader wiring) — the per-frame switch remains |
+| 43 | Create/edit lights and smoke FX | `aa225a6e` |
+| 58 | Rain renderer audit | `aa225a6e` — audited and extracted; renderer wiring remains |
+| 70 | Editor sound system | `aa225a6e` — rules ported; wiring remains |
+| 75 | Weapon/ammo pickup parity | `aa225a6e` — rules ported; wiring remains |
+| 68 | Ladder placement | `8551c6b1`, `140d152b` |
+| 57 | Snow particles | Snow is **not** a separate system: it is the rain task's `snow` mode (`r->snow = rain == 0`, `Rain_New` `0x498960`, `src/dxinit/rain.c:153`). Ported into `source/runtime/rain_rules.*`; see `docs/igi-re-parity/SNOW.md` |
+| 37, 40, 42, 44, 47, 48, 59 | defects / parity gaps | `8551c6b1` |
+
+Still genuinely open after that: **#80** cutscenes, **#79** roads, **#73**
+animation, **#72** lightmap bake, **#69** splines, **#63** light fixtures,
+**#60** helicopter, **#56**/#54 gameplay umbrellas, **#52** post-processing
+(no retail counterpart), **#51** 3-layer lightmap (editor design, not a retail
+mode set), **#50** `renderer_draw.cpp` split (pure refactor), **#49** roadmap,
+**#29** OBJ→MEF importer, **#7** AI/waypoint editor. The rows below remain the
+entry-point map for those.
+
+
 ## A caveat that applies to several rows
 
 Some issue titles cite identifiers from **open-igi**, a separate C# reimplementation,
@@ -232,6 +260,28 @@ entry plus a six-byte code section, and with the fix reverted all four new tests
 ```
 
 with `QVM_DecompileToString` printing `"\\"";` where the round-trip requires `"\\\"";`.
+
+### The reader side: the engine does not unescape either — MATCHED, NOT A DEFECT
+
+The escaping above is the *decompiler's* half. The other half is `QSC::Load`
+(`source/level/level_common.cpp:483`), which calls
+`CleanBloatedBackslashesInPlace` (`:11-36`) and then `Parser_ForwardToDoubleQuoto`
+(`:768-787`). Neither unescapes `\\` or `\"`: `CleanBloatedBackslashesInPlace`
+collapses only runs of **four or more** backslashes down to two, and
+`Parser_ForwardToDoubleQuoto` skips two characters on a backslash purely to find
+the closing quote.
+
+That is exactly what the engine does. `Reader_ReadLine`
+(`src/qsc/reader.c:36-111`) scans a quoted region with `if (c == '\\') c = s[++i];`
+and rewrites nothing — the backslash survives in the token. Its only purpose is to
+terminate the closing-quote search and to keep a `//` *inside* a string from being
+taken as a comment (`reader.c:98-101`, "starts on the opening quote and stops
+there, so `//` is cut even inside strings").
+
+So the editor must **not** add an unescape: that would diverge from the engine. The
+asymmetry is inherent to the format and is inert on retail data, because 0 of
+29070 retail strings contain a backslash. Recorded here so the next pass does not
+"fix" it in the wrong direction.
 
 The fix is `\` -> `\\` in `EscapeQSCString`. No reader needed changing: both in-repo
 inverses already accept `\\` — `qsc::Lex` (`source/level/qsc_lexer.cpp:141-150`) and

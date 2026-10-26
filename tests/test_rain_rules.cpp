@@ -27,15 +27,19 @@
 #include "../source/renderer/weather_math.h"
 #include "../source/runtime/rain_rules.h"
 #include "../source/runtime/weather_particle_style.h"
+#include "../source/level/qvm_decompiler.h"
+#include "../source/level/qvm_parser.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <span>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -380,6 +384,246 @@ TEST(RainRules, DefaultsComeFromRainEffectCreate) {
 }
 
 // ===========================================================================
+// R7 - SNOW is rain's `snow` flag, not a separate system
+//   dxinit/rain.c:153      Rain_New      r->snow = rain == 0
+//   dxinit/rain.c:572      Rain_Update   speed = snow ? 204.8 : 2048.0
+//   dxinit/rain.c:592-617  Rain_Update   the sway and the tile wrap
+//   dxinit/rain.c:337-388  Rain_FillVB   quad geometry and billboard matrix
+//   dxinit/rain.c:430-459  Rain_DrawCell snow.tex and D3DPT_TRIANGLELIST
+//   fxobj/rain.c:82        RainEffect_Init loads snow.tex
+// ===========================================================================
+
+TEST(RainRules, SnowIsRainWithTheAuthoredFlagInverted) {
+    // rain.c:153 `r->snow = rain == 0`, fed from unk24 ("Is Rain") at
+    // fxobj/rain.c:141. TRUE selects rain streaks, FALSE selects snow flakes.
+    EXPECT_FALSE(igi::rain::SnowFromAuthoredIsRain(true));
+    EXPECT_TRUE(igi::rain::SnowFromAuthoredIsRain(false));
+
+    // The same inversion through the authored parser.
+    const igi::rain::AuthoredRainEffect rain = igi::rain::ParseRainEffect(
+        "RainEffect", {"-1", "RainEffect", "", "TRUE", "50.0", "20.0", "TRUE", "0.13"});
+    const igi::rain::AuthoredRainEffect snow = igi::rain::ParseRainEffect(
+        "RainEffect", {"-1", "RainEffect", "", "FALSE", "50.0", "20.0", "1", "0.3125"});
+    EXPECT_FALSE(igi::rain::SnowFromAuthoredIsRain(rain.is_rain));
+    EXPECT_TRUE(igi::rain::SnowFromAuthoredIsRain(snow.is_rain));
+}
+
+TEST(RainRules, SnowFallsAtATenthOfTheRainSpeed) {
+    // rain.c:572 `speed = r->snow ? kSnowSpeed : kRainSpeed` with the two
+    // statics at rain.c:122-123.
+    EXPECT_FLOAT_EQ(igi::rain::SpeedUnitsPerTick(true), 204.8f);
+    EXPECT_FLOAT_EQ(igi::rain::SpeedUnitsPerTick(false) / igi::rain::SpeedUnitsPerTick(true), 10.0f);
+    EXPECT_FLOAT_EQ(igi::rain::SpeedUnitsPerTick(true) / igi::rain::kUnitsPerMetre, 0.05f);
+    // The wrap period scales with it: kLayer / speed (rain.c:590-591, 681).
+    EXPECT_EQ(igi::rain::LifetimeTicks(true), 120);
+    EXPECT_EQ(igi::rain::LifetimeTicks(false), 12);
+}
+
+TEST(RainRules, SnowSpawnRateIsATenthOfRain) {
+    // Derived from the accumulator at rain.c:619-636: speed / kSpawnStep.
+    EXPECT_NEAR(igi::rain::SpawnRatePerTick(false), 6.6666667f, 1e-5f);
+    EXPECT_NEAR(igi::rain::SpawnRatePerTick(true), 0.6666667f, 1e-5f);
+    EXPECT_NEAR(igi::rain::SpawnRatePerTick(false) / igi::rain::SpawnRatePerTick(true), 10.0f, 1e-4f);
+}
+
+TEST(RainRules, SnowFirstSpawnLandsOnTheSecondUpdate) {
+    // rain.c:619-625: the accumulator starts at 0 (rain.c:150) and the emit test
+    // is a strict `acc > kSpawnStep`. Rain's first tick already exceeds it
+    // (2048 > 307.2) and emits; snow's first tick reaches only 204.8, so the
+    // first flake appears on the second Rain_Update.
+    float rain_acc = 0.0f;
+    float snow_acc = 0.0f;
+    EXPECT_GT(igi::rain::SpawnCountForTick(igi::rain::kRainSpeedUnitsPerTick, rain_acc, 0), 0);
+    EXPECT_EQ(igi::rain::SpawnCountForTick(igi::rain::kSnowSpeedUnitsPerTick, snow_acc, 0), 0);
+    EXPECT_GT(igi::rain::SpawnCountForTick(igi::rain::kSnowSpeedUnitsPerTick, snow_acc, 1), 0);
+}
+
+TEST(RainRules, SnowSpawnRateMatchesSpeedOverSpawnStep) {
+    // Steady state is speed / kSpawnStep == 0.6667 flakes per tick for snow, and
+    // because the test is a strict `>` the per-tick count alternates 0/1 rather
+    // than being constant. `drops_already` stays 0 so the pool cap cannot mask
+    // the rate; the cap itself is pinned by PoolFullStopsSpawningWithoutDraining.
+    float acc = 0.0f;
+    int total = 0;
+    for (int tick = 0; tick < 600; ++tick)
+        total += igi::rain::SpawnCountForTick(igi::rain::kSnowSpeedUnitsPerTick, acc, 0);
+
+    const double expected = 600.0 * 204.8 / 307.2;  // == 400
+    EXPECT_NEAR(static_cast<double>(total), expected, 1.0);
+    // The drain is `while (acc > kSpawnStep)`, so the loop exits the first time
+    // that test is false: the invariant on exit is `acc <= kSpawnStep`, NOT
+    // `acc < kSpawnStep`. Equality is a legal steady state and x87 actually
+    // reaches it — `acc + 204.8f - 307.2f` accumulates the 80-bit intermediate
+    // and lands exactly on 307.2f, while the same code on the x86-64 host keeps
+    // 32-bit values and finishes one ulp lower. Asserting `<` here was wrong and
+    // only passed by luck of the host FPU; `<=` is what rain.c:619-625 states.
+    EXPECT_LE(acc, igi::rain::kSpawnStep);
+    EXPECT_GE(acc, 0.0f);
+    EXPECT_LT(total, 600);  // snow never emits a flake every tick
+}
+
+TEST(RainRules, SnowSpawnsOneSpeedStepBelowTheLayerTop) {
+    // rain.c:631 `d->z = kLayer - speed`, the same line for both modes but with
+    // the mode's speed. 24576 - 204.8 == 24371.2 units (5.95 m).
+    EXPECT_FLOAT_EQ(igi::rain::SpawnZUnits(true), 24371.2f);
+    EXPECT_FLOAT_EQ(igi::rain::SpawnZUnits(false), 22528.0f);
+    EXPECT_FLOAT_EQ(igi::rain::SpawnZUnits(true),
+                    igi::rain::kLayerUnits - igi::rain::kSnowSpeedUnitsPerTick);
+}
+
+TEST(RainRules, SnowSwayDisplacementIsHalfOpenAroundZero) {
+    // rain.c:597-598 `(Random_Float() - 0.5f) * kSway` with Random_Float in
+    // [0, 1) (math/random.c:22-26) and kSway = 136.53334 (rain.c:691).
+    EXPECT_FLOAT_EQ(igi::rain::SnowSwayDisplacementUnits(0.5f), 0.0f);
+    EXPECT_FLOAT_EQ(igi::rain::SnowSwayDisplacementUnits(0.0f), -68.26667f);
+    EXPECT_FLOAT_EQ(igi::rain::SnowSwayDisplacementUnits(1.0f), 68.26667f);
+    EXPECT_FLOAT_EQ(igi::rain::SnowSwayDisplacementUnits(0.0f),
+                    -igi::rain::SnowSwayHalfRangeUnits());
+    for (int i = 0; i < 1024; ++i) {
+        const float rf = static_cast<float>(i) / 1024.0f;
+        const float d = igi::rain::SnowSwayDisplacementUnits(rf);
+        EXPECT_GE(d, -igi::rain::SnowSwayHalfRangeUnits());
+        EXPECT_LT(d, igi::rain::SnowSwayHalfRangeUnits());
+    }
+}
+
+TEST(RainRules, SnowSwayReloadsEveryThirtyToFiftyNineTicks) {
+    // rain.c:596 `d->timer += Random_Int(gDxRainRandom, 30) + 30`, and
+    // Random_Int(r, n) == Random_Next() % n (math/random.c:28-31).
+    EXPECT_EQ(igi::rain::SnowSwayReloadTicks(0), 30);
+    EXPECT_EQ(igi::rain::SnowSwayReloadTicks(29), 59);
+    for (int draw = 0; draw < 30; ++draw) {
+        const int ticks = igi::rain::SnowSwayReloadTicks(draw);
+        EXPECT_GE(ticks, igi::rain::SnowSwayTicksMin());
+        EXPECT_LE(ticks, igi::rain::SnowSwayTicksMax());
+    }
+    // rain.c:595-596 the add runs after the post-decrement, so the stored value
+    // is (old - 1) + reload == Random_Int(30) + 28 for old == -1.
+    EXPECT_EQ(igi::rain::SnowSwayTimerAfterReload(0), 28);
+    EXPECT_EQ(igi::rain::SnowSwayTimerAfterReload(29), 57);
+}
+
+TEST(RainRules, SnowSwayTimerMatchesTheEngineLoopVerbatim) {
+    // Re-derive the engine's timer from rain.c:595-596 and rain.c:630 here,
+    // independently of the module, and prove the first roll and the interval.
+    const auto simulate = [](int random_int_30, std::vector<int>& roll_ticks) {
+        int timer = 0;  // rain.c:630, set when the drop is created
+        for (int tick = 1; tick <= 400; ++tick) {
+            if (timer-- < 0) {  // rain.c:595 post-decrement
+                timer += random_int_30 + 30;  // rain.c:596
+                roll_ticks.push_back(tick);
+            }
+        }
+    };
+    for (int draw = 0; draw < 30; ++draw) {
+        std::vector<int> rolls;
+        simulate(draw, rolls);
+        ASSERT_GE(rolls.size(), 2u) << "draw " << draw;
+        EXPECT_EQ(rolls.front(), igi::rain::SnowSwayFirstRollTick()) << "draw " << draw;
+        for (std::size_t i = 1; i < rolls.size(); ++i) {
+            EXPECT_EQ(rolls[i] - rolls[i - 1], igi::rain::SnowSwayReloadTicks(draw))
+                << "draw " << draw << " roll " << i;
+        }
+        EXPECT_EQ(igi::rain::SnowSwayFirstRollTick(), 2);
+    }
+}
+
+TEST(RainRules, SnowTileWrapIsASingleStepNotAModulo) {
+    // rain.c:603-616. Strict comparisons: x == 0 and x == kTileF do not wrap.
+    const igi::rain::SnowTileWrap zero = igi::rain::SnowWrapTileX(0.0f);
+    EXPECT_FALSE(zero.wrapped);
+    EXPECT_FLOAT_EQ(zero.value, 0.0f);
+
+    const igi::rain::SnowTileWrap at_top = igi::rain::SnowWrapTileX(igi::rain::kTileUnitsF);
+    EXPECT_FALSE(at_top.wrapped);
+
+    const igi::rain::SnowTileWrap below = igi::rain::SnowWrapTileX(-1.0f);
+    EXPECT_TRUE(below.wrapped);
+    EXPECT_FLOAT_EQ(below.value, igi::rain::kTileUnitsF - 1.0f);
+
+    const igi::rain::SnowTileWrap above = igi::rain::SnowWrapTileX(igi::rain::kTileUnitsF + 1.0f);
+    EXPECT_TRUE(above.wrapped);
+    EXPECT_FLOAT_EQ(above.value, 1.0f);
+
+    // y behaves identically but toggles the other kind bit (rain.c:612).
+    const igi::rain::SnowTileWrap y_below = igi::rain::SnowWrapTileY(-1.0f);
+    EXPECT_TRUE(y_below.wrapped);
+    EXPECT_FLOAT_EQ(y_below.value, igi::rain::kTileUnitsF - 1.0f);
+
+    EXPECT_EQ(igi::rain::kSnowWrapKindBitX, 1);
+    EXPECT_EQ(igi::rain::kSnowWrapKindBitY, 2);
+    EXPECT_EQ(igi::rain::kSnowWrapKindBitX ^ igi::rain::kSnowWrapKindBitY, 3);
+    EXPECT_LT(igi::rain::kSnowWrapKindBitX | igi::rain::kSnowWrapKindBitY,
+              igi::rain::DropKindCount());
+}
+
+TEST(RainRules, SnowFlakeIsAFortyMillimetreSixVertexQuad) {
+    // rain.c:309 `size = r->fade * kFlakeSize`, rain.c:341-342 `vx +/- size`,
+    // rain.c:364 `v += 6`, rain.c:447 `mult = 6`. kFlakeSize = 81.92 (rain.c:685)
+    // is the half-extent, so the quad is 163.84 units == 0.04 m across.
+    EXPECT_FLOAT_EQ(igi::rain::SnowFlakeSizeUnits(), 81.92f);
+    EXPECT_FLOAT_EQ(igi::rain::SnowFlakeWidthUnits(), 163.84f);
+    EXPECT_FLOAT_EQ(igi::rain::SnowFlakeWidthUnits() / igi::rain::kUnitsPerMetre, 0.04f);
+    EXPECT_EQ(igi::rain::SnowVerticesPerParticle(), 6);
+    EXPECT_EQ(igi::rain::RainVerticesPerParticle(), 2);
+    // The 0x780-vertex buffer (rain.c:140) is four groups of 480 (rain.c:328);
+    // 80 flakes * 6 vertices == 480, so a full pool still fits one group.
+    EXPECT_LE(igi::rain::kDropCapacity * igi::rain::SnowVerticesPerParticle(), 4 * 480);
+}
+
+TEST(RainRules, SnowFlakeDiffuseIsOpaqueWhite) {
+    // rain.c:353 all four quad vertices are 0xFFFFFFFF; the rain streak's top
+    // vertex is 0x00FFFFFF (alpha byte 0) and its bottom is r->color (rain.c:366-367).
+    EXPECT_EQ(igi::rain::SnowFlakeDiffuse(), 0xFFFFFFFFu);
+    EXPECT_EQ(igi::rain::RainStreakTopDiffuse(), 0x00FFFFFFu);
+    EXPECT_EQ((igi::rain::RainStreakTopDiffuse() >> 24) & 0xFFu, 0u);
+    EXPECT_EQ((igi::rain::SnowFlakeDiffuse() >> 24) & 0xFFu, 0xFFu);
+    EXPECT_EQ(igi::rain::SnowFlakeDiffuse() & 0x00FFFFFFu,
+              igi::rain::RainStreakTopDiffuse());
+}
+
+TEST(RainRules, SnowSamplesSnowDotTex) {
+    // fxobj/rain.c:82 `gRainTexture = Game_AddTexture("snow.tex")`, passed as
+    // `gRainTexture + 0x18` for both modes (fxobj/rain.c:141) and bound only by
+    // the snow branch (rain.c:430-438). Rain binds NULL (rain.c:449).
+    EXPECT_STREQ(igi::rain::SnowTextureName(), "snow.tex");
+    EXPECT_EQ(igi::rain::SnowTextureStageArgCountWithTexture(), 4);   // rain.c:434
+    EXPECT_EQ(igi::rain::SnowTextureStageArgCountWithoutTexture(), 3); // rain.c:437
+    EXPECT_GT(igi::rain::SnowTextureStageArgCountWithTexture(),
+              igi::rain::SnowTextureStageArgCountWithoutTexture());
+}
+
+TEST(RainRules, SnowRuleDifferenceTableCoversEverySnowBranch) {
+    // The complete set of places where `snow` changes a Rain_* rule.
+    const std::span<const igi::rain::SnowRuleDifference> differences =
+        igi::rain::SnowRuleDifferences();
+    EXPECT_EQ(differences.size(), 8u);
+
+    const std::vector<std::uint32_t> expected_addresses = {
+        0x498960u,  // Rain_New          rain.c:153
+        0x499CF0u,  // Rain_Update       rain.c:572
+        0x499090u,  // Rain_FillVB       rain.c:337-364, 382-388
+        0x499430u,  // Rain_DrawCell     rain.c:430-447
+        0x436780u,  // RainEffect_Init   fxobj/rain.c:82
+    };
+    for (const igi::rain::SnowRuleDifference& difference : differences) {
+        EXPECT_NE(difference.rule, nullptr);
+        EXPECT_NE(difference.function, nullptr);
+        EXPECT_NE(difference.citation, nullptr);
+        EXPECT_GT(std::string(difference.rule).size(), 0u);
+        EXPECT_GT(std::string(difference.function).size(), 0u);
+        EXPECT_GT(std::string(difference.citation).size(), 0u);
+        EXPECT_NE(difference.address, 0u);
+    }
+    for (const std::uint32_t address : expected_addresses) {
+        const bool found = std::any_of(
+            differences.begin(), differences.end(),
+            [address](const igi::rain::SnowRuleDifference& d) { return d.address == address; });
+        EXPECT_TRUE(found) << "missing address 0x" << std::hex << address;
+    }
+}
+
+// ===========================================================================
 // Divergence pins: the editor's current behaviour, for docs/igi-re-parity/RAIN.md
 // ===========================================================================
 
@@ -452,6 +696,34 @@ TEST(RainRulesDivergence, StreakAndFlakeExtentsDiffer) {
               igi::rain::RainStreakLengthUnits() / igi::rain::kUnitsPerMetre);
 }
 
+TEST(RainRulesDivergence, SnowDriftIsASinusoidNotARandomWalk) {
+    // Oracle: a constant per-tick displacement (dx, dy), re-rolled every 30..59
+    // ticks, each component in (-68.267, +68.267) units (rain.c:595-602, 691).
+    EXPECT_LT(igi::rain::SnowSwayHalfRangeUnits(),
+              igi::rain::kTileUnitsF);  // far smaller than a tile
+    EXPECT_GT(igi::rain::SnowSwayHalfRangeUnits(), 0.0f);
+    // Editor: one sine of amplitude kSnowDriftMeters (renderer/weather_math.h:22,
+    // renderer/renderer_rain.cpp:70-73) - a deterministic periodic path with no
+    // re-roll at all.
+    EXPECT_FLOAT_EQ(igi::weather::kSnowDriftMeters, 0.35f);
+    EXPECT_NE(igi::rain::SnowSwayHalfRangeUnits() / igi::rain::kUnitsPerMetre,
+              igi::weather::kSnowDriftMeters);
+}
+
+TEST(RainRulesDivergence, SnowFlakeSizeAndAlphaAreBoosted) {
+    // Oracle: a 0.04 m untextured-independent quad with a constant opaque-white
+    // diffuse (rain.c:341-342, 353, 685) and alpha byte trunc(a * 255).
+    EXPECT_FLOAT_EQ(igi::rain::SnowFlakeWidthUnits() / igi::rain::kUnitsPerMetre, 0.04f);
+    EXPECT_EQ(igi::rain::AlphaByte(0.3125f), 79);
+    // Editor: a 0.09 m ground-visible flake with a boosted, clamped alpha
+    // (renderer/weather_math.h:12,19-20,28-30; runtime/weather_particle_style.h:9-11).
+    EXPECT_FLOAT_EQ(igi::weather::kSnowFlakeMeters, 0.045f);
+    EXPECT_FLOAT_EQ(igi::WeatherParticleLengthMeters(true), 0.09f);
+    EXPECT_FLOAT_EQ(igi::weather::SnowFlakeAlpha(0.3125f), 0.42f);
+    EXPECT_NE(igi::weather::SnowFlakeAlpha(0.3125f) * 255.0f,
+              static_cast<float>(igi::rain::AlphaByte(0.3125f)));
+}
+
 // ===========================================================================
 // Corpus: the shipped declaration is the authoritative schema
 // ===========================================================================
@@ -510,4 +782,118 @@ TEST(RainRulesCorpus, Level4InstanceIsTheOracleDefaultShape) {
     // (runtime/level_weather.h:18); the oracle's is 0.3125
     // (fxobj/rain.c:92-93).
     EXPECT_FLOAT_EQ(igi::rain::AuthoredRainEffect{}.alpha, 0.3125f);
+}
+
+// ===========================================================================
+// Corpus: the shipped level data that authors SNOW
+//
+// LEVEL4 is the only level with a decompiled text form, and it authors RAIN
+// ("Is Rain" TRUE, rain.c:153). Two levels author snow: the retail
+// OBJECTS.QVM files of LEVEL7 and LEVEL12 carry
+//   Task_New(-1, "RainEffect", "", FALSE, 50.0, 20.0, "1", <alpha>)
+// which the editor's own QVM decompiler (source/level/qvm_decompiler.cpp)
+// renders to QSC text. FALSE is `r->snow = rain == 0` == 1, so both levels run
+// the snow branch of every rule above.
+// ===========================================================================
+
+namespace {
+
+fs::path LevelObjectsQvm(int level) {
+    return GameRoot() / "MISSIONS" / "location0" /
+           ("LEVEL" + std::to_string(level)) / "OBJECTS.QVM";
+}
+
+// Decompiles one retail level's OBJECTS.QVM and returns its first authored
+// RainEffect through the same token layout ParseRainEffect consumes.
+igi::rain::AuthoredRainEffect AuthoredRainEffectFromQvm(const fs::path& path, bool& ok) {
+    ok = false;
+    const QVMFile qvm = QVM_Parse(path.string());
+    if (!qvm.valid) {
+        ADD_FAILURE() << path.string() << ": " << qvm.error;
+        return {};
+    }
+    const std::string text = QVM_DecompileToString(qvm);
+    std::vector<std::string> args =
+        SplitTopLevel(CallArguments(text, "Task_New(-1, \"RainEffect\""));
+    if (args.size() < 8u) {
+        ADD_FAILURE() << path.string() << ": no 8-argument RainEffect Task_New";
+        return {};
+    }
+    std::vector<std::string> tokens;
+    tokens.reserve(args.size());
+    for (std::string& arg : args) tokens.push_back(Trim(arg));
+    ok = true;
+    return igi::rain::ParseRainEffect("RainEffect", tokens);
+}
+
+}  // namespace
+
+TEST(RainRulesCorpus, LevelsSevenAndTwelveAuthorSnow) {
+    const fs::path level7 = LevelObjectsQvm(7);
+    const fs::path level12 = LevelObjectsQvm(12);
+    if (!fs::is_regular_file(level7) || !fs::is_regular_file(level12))
+        GTEST_SKIP() << "Set IGI_GAME_PATH to an installed IGI root (" << level7.string() << ")";
+
+    bool ok7 = false;
+    bool ok12 = false;
+    const igi::rain::AuthoredRainEffect snow7 = AuthoredRainEffectFromQvm(level7, ok7);
+    const igi::rain::AuthoredRainEffect snow12 = AuthoredRainEffectFromQvm(level12, ok12);
+    ASSERT_TRUE(ok7) << level7.string();
+    ASSERT_TRUE(ok12) << level12.string();
+
+    // "Is Rain" FALSE -> `r->snow = rain == 0` (rain.c:153) is 1.
+    EXPECT_TRUE(snow7.present);
+    EXPECT_FALSE(snow7.is_rain);
+    EXPECT_TRUE(igi::rain::SnowFromAuthoredIsRain(snow7.is_rain));
+    EXPECT_TRUE(snow12.present);
+    EXPECT_FALSE(snow12.is_rain);
+    EXPECT_TRUE(igi::rain::SnowFromAuthoredIsRain(snow12.is_rain));
+
+    // Both are active ("Is Active" is the literal "1") and both keep the
+    // RainEffect_Create defaults for the traceline band (fxobj/rain.c:90-91).
+    EXPECT_TRUE(snow7.falling);
+    EXPECT_TRUE(snow7.active_is_literal);
+    EXPECT_TRUE(snow12.falling);
+    EXPECT_TRUE(snow12.active_is_literal);
+    EXPECT_FLOAT_EQ(snow7.traceline_start_metres, 50.0f);
+    EXPECT_FLOAT_EQ(snow7.traceline_end_metres, 20.0f);
+    EXPECT_FLOAT_EQ(snow12.traceline_start_metres, 50.0f);
+    EXPECT_FLOAT_EQ(snow12.traceline_end_metres, 20.0f);
+
+    // LEVEL7 authors alpha 0.06, LEVEL12 keeps the 0.3125 default. Both become
+    // the same white ARGB whose alpha byte is trunc(a * 255) (rain.c:646-649).
+    EXPECT_FLOAT_EQ(snow7.alpha, 0.059999998658895493f);
+    EXPECT_FLOAT_EQ(snow12.alpha, 0.3125f);
+    EXPECT_EQ(igi::rain::AlphaByte(snow7.alpha), 15);
+    EXPECT_EQ(igi::rain::AlphaByte(snow12.alpha), 79);
+
+    // The snow rules themselves, on the authored data: a tenth of the speed, a
+    // tenth of the spawn rate, and the 30..59 tick sway re-roll.
+    EXPECT_FLOAT_EQ(igi::rain::SpeedUnitsPerTick(igi::rain::SnowFromAuthoredIsRain(snow7.is_rain)),
+                    204.8f);
+    EXPECT_EQ(igi::rain::LifetimeTicks(igi::rain::SnowFromAuthoredIsRain(snow7.is_rain)), 120);
+    EXPECT_NEAR(igi::rain::SpawnRatePerTick(true), 0.6666667f, 1e-5f);
+}
+
+TEST(RainRulesCorpus, LevelFourAuthorsRainNotSnow) {
+    // The counterpart, so the corpus test cannot pass by treating every
+    // RainEffect as snow: LEVEL4/objects.qsc:75 authors "Is Rain" TRUE.
+    const fs::path path = Level4Qsc();
+    if (!fs::is_regular_file(path))
+        GTEST_SKIP() << "Set IGI_GAME_PATH to an installed IGI root (" << path.string() << ")";
+
+    const std::string text = ReadFile(path);
+    std::vector<std::string> args =
+        SplitTopLevel(CallArguments(text, "Task_New(-1, \"RainEffect\""));
+    ASSERT_EQ(args.size(), 8u) << "LEVEL4/objects.qsc:75";
+    std::vector<std::string> tokens;
+    tokens.reserve(args.size());
+    for (std::string& arg : args) tokens.push_back(Trim(arg));
+
+    const igi::rain::AuthoredRainEffect rain = igi::rain::ParseRainEffect("RainEffect", tokens);
+    ASSERT_TRUE(rain.present);
+    EXPECT_TRUE(rain.is_rain);
+    EXPECT_FALSE(igi::rain::SnowFromAuthoredIsRain(rain.is_rain));
+    EXPECT_FLOAT_EQ(igi::rain::SpeedUnitsPerTick(igi::rain::SnowFromAuthoredIsRain(rain.is_rain)),
+                    2048.0f);
 }

@@ -193,8 +193,12 @@ const std::vector<WeaponDefinition>& WeaponSystem::GetVanillaWeaponCatalog() {
             15.0f, 60.0f, 1, 1, 1, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
             1.5f, 100.0f, 10001, "grenade_shot_1", "grenade_shot_1", true,
             ProjectileType::ProximityMine),
+        // Rounds/Clip is 10, not 1. WEAPONS/BINOCULARS/WEAPON.QVM calls
+        // DefineWeaponType with argument 16 = 10; that is the retail table's
+        // "Rounds/Clip" field, stored at WeaponType + 0x648 (game/game.c:630)
+        // and granted verbatim by a GunPickup (comprun/pickup.c:583).
         CreateVanillaWeapon(18, "WEAPON_ID_BINOCULARS", "Binoculars", "102_01_1",
-            8.0f, 50.0f, 1, 1, 1, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+            8.0f, 50.0f, 10, 1, 1, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
             1.0f, 0.0f, 919, "", "", false),
         CreateVanillaWeapon(19, "WEAPON_ID_MEDIPACK", "Medipack", "121_01_1",
             0.0f, 120.0f, 1, 60, 1, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,

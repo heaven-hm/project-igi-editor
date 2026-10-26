@@ -77,11 +77,14 @@ RailPath CurvedRail(int spans) {
 // The retail rail from the shipped mission data:
 //   /Users/haseeb-mir/Downloads/IGI/MISSIONS/location0/LEVEL1/objects.qsc
 // `Task_New(1500, "SplineObj", "", FALSE, FALSE, FALSE, FALSE, 20, 0, 0, 0, 0,
-//  3.1415929794311523, 1, 1, 1, 0, 0, 0, ...)` holds 11 `SplineObjWaypoint`
-// children, and every `Train` in the level (task ids 1499, …) names 1500 as its
-// rail. The waypoints carry their own NumAreas counts, so the engine's rail
-// length is the sum of 10 Hermite spans with 20/10/10/10/10/10/20/20/10/10/10
-// sub-segments (SplineObjSegment_Setup, src/sound/segsetup.c:256-366).
+//  3.1415929794311523, 1, 1, 1, 0, 0, 0, ...)` holds **12** `SplineObjWaypoint`
+// children (objects.qsc:486-497), and every `Train` in the level (task ids 1499,
+// ...) names 1500 as its rail. Twelve waypoints give **11** Hermite spans, and
+// span i uses waypoint i's own NumAreas: 20/10/10/10/10/10/20/20/10/10/10
+// (SplineObjSegment_Setup, src/sound/segsetup.c:256-366).
+//
+// Earlier revisions of this fixture carried only the first 11 waypoints, so the
+// rail was 10 spans and 532,479 units short. See `PLACEMENT_SPLINES.md` §3.2.
 namespace {
 
 struct RetailWaypoint {
@@ -102,6 +105,7 @@ const RetailWaypoint kLevel1Rail[] = {
     {0.0, 0.0, 4.2815909385681152, 22755560.0, -56439088.0, 174504624.0, 10},
     {0.0, 0.0, 4.2815909385681152, 22533198.0, -56922920.0, 174504640.0, 10},
     {0.0, 0.0, 4.2815909385681152, 22310838.0, -57406752.0, 174504640.0, 10},
+    {0.0, 0.0, 4.2815909385681152, 22088476.0, -57890580.0, 174504640.0, 10},
 };
 
 // `useWaypointSegments = false` is the editor's current substitution: one
@@ -127,42 +131,67 @@ RailPath RetailRail(bool useWaypointSegments) {
 
 }  // namespace
 
-// The shipped rail is 3,928,793.21 game units long (958.2 m) and its length is
+// The shipped rail is 4,461,272.69 game units long (1089.1 m) and its length is
 // the engine's `SplineObj.length`, the sum of the per-joint segment lengths
-// (src/tagitem/spline.c:824-830), not the 3,903,025.28-unit chord sum.
+// (src/tagitem/spline.c:824-830), not the chord sum.
 //
-// Retail train 1499 authors `start_dist = -4045627.5`, which is MORE than one
-// rail length back from the end: the engine's `do { d += obj->length; } while
-// (!(d >= 0.0f))` (src/tagitem/spline.c:243-246) has to run TWICE. The old
-// app_lookup.cpp arithmetic `clamp(totalLen + rawPos, 0, totalLen)` added the
-// length once, leaving -116834.29, and then clamped the train to arc 0 — the
-// start of the rail, about 390 m and 1.6 million units away from where the game
-// puts it.
-TEST(TrainRailPlacement, RetailLevel1Train1499NeedsMoreThanOneWrap) {
+// Retail train 1499 authors `start_dist = -4045627.5`. That is LESS than one
+// rail length back from the end (4045627.5 < 4461272.69), so the engine's
+// `do { d += obj->length; } while (!(d >= 0.0f))` (src/tagitem/spline.c:243-246)
+// runs ONCE, and the old app_lookup.cpp arithmetic
+// `clamp(totalLen + rawPos, 0, totalLen)` happens to agree with it on this train.
+//
+// This test previously asserted a 3,928,793.21-unit rail and a TWO-wrap result.
+// That was an artefact of a fixture that carried 11 of the rail's 12 waypoints:
+// the last span (532,479.48 units) was missing, which made the rail look shorter
+// than `|start_dist|` and turned a one-wrap train into an apparent two-wrap one.
+// The wrap loop is still the engine's rule and is pinned on synthetic input
+// below, because no retail LEVEL1 train needs more than one addition.
+TEST(TrainRailPlacement, RetailLevel1Train1499WrapsOnce) {
     const RailPath rail = RetailRail(true);
-    ASSERT_NEAR(rail.length, 3928793.209947, 0.01);
+    ASSERT_NEAR(rail.length, 4461272.686198, 0.01);
 
     const double startDist = -4045627.5;
     const double wrapped = WrapRailDistance(startDist, rail.length);
-    EXPECT_NEAR(wrapped, 3811958.919895, 0.01);
+    EXPECT_NEAR(wrapped, 415645.186198, 0.01);
 
-    // The old arithmetic, for contrast: one addition, then a clamp to the rail
-    // start, which is where the train used to be drawn.
+    // One addition is enough, so the old clamp agrees on this train.
     const double oldSingleAdd =
         std::max(0.0, std::min(rail.length, rail.length + startDist));
-    EXPECT_DOUBLE_EQ(oldSingleAdd, 0.0);
-    EXPECT_GT(wrapped - oldSingleAdd, 3800000.0);
+    EXPECT_NEAR(oldSingleAdd, wrapped, 1e-6);
 
-    // And the placement follows the wrapped arc, not the clamp.
+    // And the placement follows the wrapped arc, not the clamp to the rail start.
     const TrainPlacement placed =
         PlaceTrainOnRail(rail, startDist, kCarLength, 0.0, 0.0, 0.0, true);
     ASSERT_TRUE(placed.found);
     glm::dvec3 railStart;
     ASSERT_TRUE(SampleRailPoint(rail, 0.0, railStart));
     const double error = glm::length(placed.position - railStart);
-    EXPECT_GT(error, 1600000.0);
-    EXPECT_NEAR(placed.position.x, 22359627.2, 1.0);
-    EXPECT_NEAR(placed.position.z, 174504640.0, 1.0);
+    EXPECT_GT(error, 400000.0);
+    // Arc 415,645.19 lands in span 1 (waypoint 1 -> 2), just short of waypoint 2
+    // at (24857834, -55958668, 174412928) — near the START of the rail.
+    EXPECT_NEAR(placed.position.x, 24871953.53, 1.0);
+    EXPECT_NEAR(placed.position.z, 174412944.16, 1.0);
+}
+
+// The engine's wrap is a LOOP, not a single addition: it keeps adding
+// `obj->length` until the distance is non-negative
+// (src/tagitem/spline.c:243-246). No retail LEVEL1 train exercises it, so the
+// rule is pinned synthetically here rather than left untested.
+TEST(TrainRailPlacement, WrapRailDistanceLoopsUntilNonNegative) {
+    const RailPath rail = RetailRail(true);
+    const double length = rail.length;
+
+    // Two and a half rail lengths back: the loop must run three times.
+    const double wrapped = WrapRailDistance(-2.5 * length, length);
+    EXPECT_NEAR(wrapped, 0.5 * length, 1e-6);
+    EXPECT_GE(wrapped, 0.0);
+    EXPECT_LT(wrapped, length);
+
+    // Exactly one length back wraps to 0, not to `length`.
+    EXPECT_NEAR(WrapRailDistance(-length, length), 0.0, 1e-6);
+    // Already non-negative: untouched.
+    EXPECT_DOUBLE_EQ(WrapRailDistance(1234.5, length), 1234.5);
 }
 
 // The other three retail trains are inside one rail length, so the old and new
@@ -182,15 +211,15 @@ TEST(TrainRailPlacement, TheOtherRetailTrainsAgreeWithASingleAdd) {
 
 // The editor substitutes the container's single segment count for every span,
 // because a waypoint's own NumAreas (arg 11) is not loaded into LevelObject. On
-// this rail the two lengths differ by 320 units out of 3.93 million (0.008%), so
+// this rail the two lengths differ by 320 units out of 4.46 million (0.0072%), so
 // the substitution is a safe approximation for placement — but it is an
 // approximation, and it is the one remaining divergence from the engine's rail.
 TEST(TrainRailPlacement, UniformSegmentCountIsANegligibleApproximation) {
     const RailPath engine = RetailRail(true);
     const RailPath editor = RetailRail(false);
 
-    EXPECT_NEAR(engine.length, 3928793.209947, 0.01);
-    EXPECT_NEAR(editor.length, 3929113.429173, 0.01);
+    EXPECT_NEAR(engine.length, 4461272.686198, 0.01);
+    EXPECT_NEAR(editor.length, 4461592.905424, 0.01);
     EXPECT_LT(std::fabs(editor.length - engine.length), 400.0);
     EXPECT_LT(std::fabs(editor.length - engine.length) / engine.length, 1e-4);
 }

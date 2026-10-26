@@ -683,11 +683,15 @@ is *authored*.
 
 ---
 
-## 8. Divergences in the editor (reported, not fixed here)
+## 8. Divergences in the editor — all three FIXED
 
-These files are outside this task's write scope.
+This section originally recorded three defects found while porting the pickups.
+All three are fixed on `fix/igi-re-known-issues`; each entry keeps the original
+finding and adds what changed and how it was verified.
 
-### 8.1 `source/level/task_schema.cpp` mislabels the pickup enum parameter
+### 8.1 `source/level/task_schema.cpp` mislabelled the pickup enum parameter — FIXED
+
+Original defect:
 
 ```
 source/level/task_schema.cpp:155-162   GenericPickup/GunPickup: Position, Orientation, Model:String16
@@ -697,73 +701,96 @@ source/level/task_schema.cpp:204-209   AmmoPickup: Position, Orientation, Model:
 IGI-RE declares `GunPickup`'s third parameter as **`ID` / `EnumString32`
 populated from `WeaponType_GetIdEnum`** (`comprun/pickup.c:479`) and
 `AmmoPickup`'s third as **`ID` / `EnumString32` from `AmmoType_GetEnum`**
-(`comprun/pickup.c:661`). The *argument index* (`@9`) is correct; the parameter
-**name and type are wrong**, which is what makes the inspector offer a free-text
-model field where the engine expects a `WEAPON_ID_*`/`AMMO_ID_*` enum.
+(`comprun/pickup.c:661`). The *argument index* (`@9`) was already correct; the
+parameter **name and type were wrong**, which made the inspector offer a
+free-text model field where the engine expects a `WEAPON_ID_*`/`AMMO_ID_*` enum.
 
-Impact: cosmetic today, because `source/level/level_objects.cpp:104-126` resolves
-the token at `@9` through `ResolvePickupModelId` anyway and
-`source/level/level_objects_serialize.cpp:248-260, 420-428` preserves
-`argTokens[9]` verbatim. But a schema-driven UI cannot warn about
-`Task_New(333, "GunPickup", ..., "")`, and `CheckPickupArgs` is exactly the
-missing check.
+Fix: `GunPickup` was removed from the generic positioned-object loop — that loop
+is correct for `GenericPickup`, whose third parameter really is `Param_String16`
+(`comprun/pickup.c:271`) — and given its own three-parameter block; and
+`AmmoPickup`'s third parameter became `ID` / `EnumString32`. `EnumString32` was
+already a recognised schema type (`source/renderer/renderer.h:243`,
+`source/app_editor.cpp:788`, `source/mcp/mcp_tools_objects.cpp:472`), so it
+renders as a text field with the right semantics. The names match
+`source/runtime/pickup_rules.cpp:37,49`, so the two descriptions of the same
+table cannot drift apart.
 
-### 8.2 `source/app.cpp` invents an `AmmoPickup` count from the active weapon
+### 8.2 `source/app.cpp` invented an `AmmoPickup` count and a phantom flag — FIXED
 
-```
-source/app.cpp:2723-2737   GunPickup: SelectWeaponByScriptId + the flag
-source/app.cpp:2739-2759   AmmoPickup: count, then AddReserveAmmo
-source/app.cpp:2291-2302   set_boolean builds "<type>_<id>.<field>"
-source/app.cpp:2318-2322   those flags are initialised false
-```
-
-Three observations, in decreasing order of severity:
-
-1. **The `clip_capacity` fallback has no basis in IGI-RE.** `source/app.cpp:2740`
-   seeds `rounds` from `GetActiveWeapon().clip_capacity` and only overwrites it
-   from `argTokens[10]` when that token exists and parses
-   (`source/app.cpp:2741-2748`, with the comment "Preserve the clip-sized
-   fallback for malformed authored counts"). `AmmoPickup`'s count is the authored
-   `Int16` parameter (`comprun/pickup.c:662`); it is never the clip size of
-   whatever weapon the player happens to be holding, and `AmmoPickup_Touch`
-   consults no weapon at all. An `AmmoPickup` with no `Ammo` token is malformed,
-   and the engine would have stored whatever `Script_GetArgInt` returned for the
-   absent argument - not a weapon-dependent value. `CheckPickupArgs` reports this
-   case as `count_ok == false`.
-2. **The editor publishes an extra `GenericPickup_<id>.isPickedUp` flag for
-   `GunPickup` and `AmmoPickup`** (`source/app.cpp:2728-2730`, `2753-2755`, and
-   the init at `2318-2322`). IGI-RE registers only `<TypeName>_<id>.isPickedUp`:
-   a `GunPickup` registers `GunPickup_<id>.isPickedUp` and never a
-   `GenericPickup_` one (`comprun/pickup.c:588`, `723`). A level script that read
-   `GenericPickup_<id>.isPickedUp` for a gun would see `true` in the editor and
-   `false` in the engine.
+1. **The `clip_capacity` fallback had no basis in IGI-RE.** `source/app.cpp:2740`
+   seeded `rounds` from `GetActiveWeapon().clip_capacity` and only overwrote it
+   from `argTokens[10]` when that token existed and parsed, with the comment
+   "Preserve the clip-sized fallback for malformed authored counts".
+   `AmmoPickup`'s count is the authored `Int16` parameter
+   (`comprun/pickup.c:662`); it is never the clip size of whatever weapon the
+   player happens to be holding, and `AmmoPickup_Touch` consults no weapon at all
+   (`comprun/pickup.c:741-742`). `AmmoPickup_Create` zeroes the field
+   (`comprun/pickup.c:676`), so an `AmmoPickup` whose `Ammo` token is absent or
+   unparseable grants **0**. The fallback is now `0`; `CheckPickupArgs` reports
+   the case as `count_ok == false`.
+2. **The editor published an extra `GenericPickup_<id>.isPickedUp` flag for
+   `GunPickup` and `AmmoPickup`** (the touch handlers and the reset at
+   `source/app.cpp:2318-2322`). IGI-RE registers only
+   `<TypeName>_<id>.isPickedUp`: a `GunPickup` registers
+   `GunPickup_<id>.isPickedUp` and never a `GenericPickup_` one
+   (`comprun/pickup.c:588`, `723`). A level script that read
+   `GenericPickup_<id>.isPickedUp` for a gun saw `true` in the editor and `false`
+   in the engine. Both extra publishes and the extra reset are removed.
 3. The flag *naming* itself is right: `set_boolean` builds
-   `task_type + "_" + task_id + "." + field` (`source/app.cpp:2299-2301`), which
-   is exactly `Task_GetName`'s `"%s_%d"` fallback plus the `.isPickedUp` suffix
-   (section 6). No change needed there - but it should come from
-   `PickupScriptFlagName` so the two cannot drift.
+   `task_type + "_" + task_id + "." + field`, which is exactly `Task_GetName`'s
+   `"%s_%d"` fallback plus the `.isPickedUp` suffix (section 6). Re-confirmed
+   against `Task_GetName` (`param/task.c:123-135`): the authored name is used
+   only when a level name handler is installed on `gLevelNameEvent`, and
+   `Level_GetNameEvent` (`0x4F1200`) has no installer for pickups — the only
+   `TaskType_SetHandler` callers on it are the `Sound_GetNameEvent` types
+   (`define/sounddef.c:49`, `define/graph.c:49`, `animtrig/sounddef.c:160`,
+   `define/triggeronce.c:54`). No change needed there.
 
 The `GunPickup` path is otherwise faithful in shape: it calls
 `SelectWeaponByScriptId` (`source/app.cpp:2724`), and
 `RestoreOrInitializeAmmoState` (`source/weapon_system.cpp:291-293`) fills the clip
 from `clip_capacity` - which is the editor's stand-in for the engine's `clipSize`
-grant. That makes 8.3 directly live rather than theoretical.
+grant.
 
-### 8.3 Two clip sizes disagree with retail
+### 8.3 Clip sizes — BINOCULARS fixed, KNIFE still recorded
 
-`source/weapon_system.cpp:196-197` sets `WEAPON_ID_BINOCULARS` to
-`clip_capacity = 1`; retail is **10**. `source/weapon_system.cpp:202-203` sets
-`WEAPON_ID_KNIFE` to `1`; retail is **-1**. Because a `GunPickup` grants
-`clipSize` verbatim, a `WEAPON_ID_BINOCULARS` `GunPickup` would grant 10 in the
-engine and 1 in the editor. The `KNIFE` case cannot even be represented:
-`WeaponDefinition::clip_capacity` is `uint32_t`, so retail's `-1` would become
-`4294967295`.
+`source/weapon_system.cpp` set `WEAPON_ID_BINOCULARS` to `clip_capacity = 1`;
+retail is **10**. `WEAPONS/BINOCULARS/WEAPON.QVM` passes `DefineWeaponType`
+argument 16 = 10, which is the retail table's `Rounds/Clip` field: it is the
+sixteenth `Task_DeclareParameters("WeaponConfig", ...)` parameter, and
+`DefineWeaponType` fills `unk640[0..3]` from arguments 14..17
+(`src/weapon/weapontype.c:305-308`), so `unk640[2]` — read as `w[0x648/4]` at
+`src/game/game.c:630` — is argument 16. **Fixed to 10.**
 
-Both are latent; no retail level places a `GunPickup` of either weapon (the
-histogram in section 7 has no `BINOCULARS` and no `KNIFE`). A corpus test asserts
-both mismatches by name so they cannot change silently.
+`WEAPON_ID_KNIFE` is `1` in the editor and **-1** in retail
+(`WEAPONS/KNIFE/WEAPON.QVM`, argument 16 = -1). This one is still not
+representable: `WeaponDefinition::clip_capacity` is `uint32_t`, so retail's -1
+becomes 4294967295. Making it faithful needs a signed field plus a clamp at three
+consumption sites — `source/weapon_system.cpp:304` (initialises
+`current_clip_ammo_` from the clip), `:467` (the `Reload` guard) and `:491`
+(`rounds_needed`) — mirroring the engine's own clamp
+`give.ammo = w[0x648/4] > 0 ? w[0x648/4] : 0` (`src/game/game.c:630`). Left as a
+recorded divergence rather than half-ported: the knife is
+`uses_ammunition = false`, so `Reload` returns before the guard and `Update`
+never reaches `rounds_needed`, which is why the wrong value has no reachable
+effect today.
+
+A corpus test (`PickupCorpusTest.RetailClipSizesMatchTheEditorWeaponTable`,
+`tests/test_pickup_rules.cpp`) reads every `WEAPONS/*/WEAPON.QVM` and asserts the
+mismatch list by name. It asserted two names; after the BINOCULARS fix it asserts
+one (`WEAPON_ID_KNIFE`), so neither can change silently.
+
+Note on the *other* weapon table: `WEAPONS/weaponconfig.qvm` is a separate,
+stale container whose `Task_New(-1, "WeaponConfig", ...)` rows disagree with the
+per-weapon files on many fields (AK47 clip 32 vs 30, Minimi 100 vs 60, Desert
+Eagle 9 vs 10, and several `Effective Range` values). It is **not** what the
+engine loads per weapon: `weapon/weapontype.c:33-40` runs the `WEAPON.QVM` in
+each subfolder. The editor's catalog matches the per-weapon files on every field
+of every weapon it models, so `weaponconfig.qvm` must not be used as the parity
+reference.
 
 ---
+
 
 ## 9. Not modelled
 

@@ -404,7 +404,12 @@ add_executable(igi_tests
     tests/test_menu_ui.cpp
     tests/test_magic_object_expand.cpp
     tests/test_mission_fog.cpp
+    tests/test_spline_rules.cpp
+    tests/test_anim_rules.cpp
+    tests/test_lightmap_rules.cpp
     tests/test_smoke_rules.cpp
+    tests/test_heli_rules.cpp
+    tests/test_cutscene_rules.cpp
     tests/test_alarm_light_rules.cpp
     tests/test_rain_rules.cpp
     tests/test_pickup_rules.cpp
@@ -532,7 +537,12 @@ target_sources(igi_tests PRIVATE
     source/runtime/map_computer_projection.cpp
     source/runtime/level_weather.cpp
     source/runtime/mission_fog.cpp
+    source/runtime/spline_rules.cpp
+    source/runtime/anim_rules.cpp
+    source/runtime/lightmap_rules.cpp
     source/runtime/smoke.cpp
+    source/runtime/heli_rules.cpp
+    source/runtime/cutscene_rules.cpp
     source/runtime/alarm_light.cpp
     source/runtime/pickup_rules.cpp
     source/runtime/rain_rules.cpp

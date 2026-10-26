@@ -195,37 +195,96 @@ reproduced, plus the loader gap in §2.1(a) — not of a separate override.
 
 ### 3.2 Retail evidence for the signed scalar
 
-`LEVEL1/objects.qsc` authors an 11-waypoint `SplineObj` (task id 1500) and every
-`Train` in the level names it as its rail — task id 1499 uses
-`start_dist = -4045627.5`. The waypoints carry their own `NumAreas`
-(20/10/10/10/10/10/20/20/10/10/10), so the rail is 10 Hermite spans and the
-engine's `SplineObj.length` — the sum of the per-joint `segLength`s — is
-**3 928 793.21 game units = 958.2 m**. (The chord sum is 3 903 025.28 units; the
-Hermite length is 25 768 units longer.)
+`LEVEL1/objects.qsc:485-497` authors a **12**-waypoint `SplineObj` (task id 1500)
+and every `Train` in the level names it as its rail — task id 1499 uses
+`start_dist = -4045627.5`. Twelve waypoints give **11** Hermite spans, and span *i*
+takes waypoint *i*'s own `NumAreas` (`20/10/10/10/10/10/20/20/10/10/10` — the first
+eleven of the twelve authored values; the twelfth waypoint contributes as the final
+span's endpoint). The engine's `SplineObj.length` — the sum of the per-joint
+`segLength`s (`SplineObjWaypoint_Changed`, `src/tagitem/spline.c:833-839`) — is
+**4 461 272.69 game units = 1089.1 m**. The Hermite length exceeds the chord sum
+because each span is a curve, not a chord.
 
-`-4045627.5` is **more than one rail length back from the end**, so the engine's
-wrap loop has to run **twice**:
-
-```
-wrap(-4045627.5, 3928793.21):
-   d = -4045627.5 + 3928793.21 = -116834.29   still negative -> loop again
-   d =  -116834.29 + 3928793.21 = 3811958.92  done
-```
-
-The old editor arithmetic added the length once and then clamped, so it left
-`-116834.29` and clamped the train to **arc 0 — the start of the rail**:
+`-4045627.5` is **less than one rail length back from the end**
+(4045627.5 < 4461272.69), so the engine's wrap loop
+`d = dist; if (!(d >= 0)) do d += obj->length; while (!(d >= 0));`
+(`SplineObj_GetPoints`, `src/tagitem/spline.c:246-256`) runs **once**:
 
 ```
-new  : arc 3811958.92  -> pos (22359627.2, -57300592.4, 174504640.0)
-old  : arc 0.0000000   -> pos (25287152.0, -55948040.0, 174410960.0)
-error: 1 617 000 game units ~= 394 m
+wrap(-4045627.5, 4461272.69):
+   d = -4045627.5 + 4461272.69 = 415645.19   >= 0 -> done, one addition
 ```
 
-That 394 m displacement, not a 95 m one, is the whole of the "misplaced /
-misaligned / floating" symptom for this level. The three other trains on the same
-rail (`-575416.9375`, `-971400.125`, `-3744122.25`) are all inside one rail
-length, where the single add and the loop agree — which is exactly why the bug
-survived: only the train with the largest `start_dist` was visibly wrong.
+So on this train the old editor arithmetic `clamp(totalLen + rawPos, 0, totalLen)`
+happens to reach the same arc:
+
+```
+engine: arc 415645.19 -> pos (24871953.53, ..., 174412944.16)   span 1, just short of waypoint 2
+old   : arc 415645.19 -> same
+```
+
+The wrap **loop** is still the engine's rule and the editor must keep it — a clamp
+is not equivalent in general, and it is what the replacement in
+`source/app_lookup.cpp` implements — but **no retail LEVEL1 train exercises the
+multi-wrap path**: all four authored `start_dist` values (`-4045627.5`,
+`-575416.9375`, `-971400.125`, `-3744122.25`) are inside one rail length. The loop
+is therefore pinned on synthetic input
+(`TrainRailPlacement.WrapRailDistanceLoopsUntilNonNegative`), and the four retail
+trains are pinned as one-add cases.
+
+#### Precision note — the engine accumulates `obj->length` in `float`
+
+The `4 461 272.69` above is a **double-precision** sum of the eleven span lengths,
+and that is not what the engine produces. `SplineObj.length` is a `float`
+(`src/sound/soundtypes.h:54`) and the accumulation rounds to `float` on **every**
+addition:
+
+```c
+obj->length = 0;                                  /* float */
+for (p = Waypoint_Next(p); p; p = Waypoint_Next(p))
+    if (p->seg) obj->length = p->seg->length + obj->length;   /* spline.c:836-838 */
+```
+
+Summing the same eleven spans in `float` gives **4 461 267.50** units, and the
+train-1499 wrap is therefore exactly **415 640.00**, not `415 645.19`. The residual
+is **5.19 units — 1.1 × 10⁻⁶ relative**, i.e. last-bits of a 23-bit mantissa
+accumulated over eleven additions.
+
+It changes no decision: `415640.00` and `415645.19` are both non-negative on the
+first addition, both land in span 1, and both place the train at
+`(24871953.5…, …, 174412944.1…)`. The wrap **count** (one) and the placement
+**span** (1) are identical either way — which is why the pinned assertions
+(`tests/test_train_rail.cpp:152-174`) still describe the outcome correctly while
+their length constants are 5.19 units high.
+
+Two known locations carry the same double-vs-float divergence and are recorded
+rather than silently "corrected":
+
+- The **test fixture** (`tests/test_train_rail.cpp`) builds the rail with the
+  editor's builder, which sums `length` in `double`.
+- The **production builder**, `source/renderer/spline_geometry.cpp:588-594`
+  (`out.length = 0.0; out.length += len;`), also sums in `double`, so the editor's
+  arc-length axis runs ~5 units high on this rail versus the engine. This is a
+  genuine (if negligible) parity gap in the shipped rule, not just in the doc: to
+  match the oracle exactly the accumulator must be `float`. No placement or
+  collision decision on retail data depends on it, and the fix is left for a
+  dedicated change so that it is tested against the engine's per-joint
+  `segLength` values rather than approximated here.
+
+#### Correction — this section was wrong
+
+An earlier revision claimed an 11-waypoint rail, 10 spans, 3 928 793.21 units and a
+**two**-wrap wrap. All of those numbers came from one off-by-one: the rail's twelfth
+waypoint (`22088476.0, -57890580.0, 174504640.0`, `objects.qsc:497`) was dropped, so
+the final span — **532 479.48 units** — was missing. The shortened rail made
+`|start_dist|` exceed the length and turned a one-wrap train into an apparent
+two-wrap one. The old `NumAreas` list was already the eleven *span* counts, which is
+why the data looked self-consistent.
+
+`tests/test_train_rail.cpp` carried the same truncated fixture and asserted the
+wrong length, wrapped arc and position. Both the fixture and the doc are corrected;
+the test now asserts 12 waypoints, 11 spans, 4 461 272.69 units, a single wrap to arc
+415 645.19 and the position that arc implies.
 
 Both figures were produced by the shipped port itself, driving the 11 retail
 waypoints through `BuildRailPath`, and are pinned by
@@ -511,7 +570,9 @@ Observed output (host lane, `bash scripts/run-host-tests.sh`):
   `file:line`; the container's `pos` at args 9-11 is additionally confirmed by the
   shipped `LEVEL1/objects.qsc` and its `Task_DeclareParameters` line.
 * The signed train scalar and its magnitude on real data: `-4045627.5` on the
-  3 928 793.21-unit rail 1500 wraps twice to 3 811 958.92 units (§3.2).
+  4 461 272.69-unit rail 1500 wraps once to 415 645.19 units (§3.2). The wrap
+  *loop* is additionally pinned on synthetic input, because no retail LEVEL1 train
+  needs more than one addition.
 * Both changed translation units compile with the exact i686-w64-mingw32 flags
   from `build-mingw/compile_commands.json`.
 * Both gtest suites pass in the host lane (§9). The two tests that carry the
@@ -605,8 +666,8 @@ constant. It only shifts cars along the rail; it cannot move the rail.
 
 A waypoint's own `NumAreas` (arg 11) is also not loaded, so the editor uses the
 container's single segment count for every span. Measured against the real rail
-1500 the difference is 3 929 113.43 vs 3 928 793.21 units — **320 units in 3.93
-million, 0.008%** — pinned by
+1500 the difference is 4 461 592.91 vs 4 461 272.69 units — **320 units in 4.46
+million, 0.0072%** — pinned by
 `TrainRailPlacement.UniformSegmentCountIsANegligibleApproximation`.
 
 A third, smaller divergence: a car clamped to arc 0 takes `PlaceTrainOnRail`'s

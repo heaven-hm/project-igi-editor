@@ -7,6 +7,7 @@
 #include "runtime/audio_system.h"
 #include "runtime/gameplay_spawn.h"
 #include "runtime/log_policy.h"
+#include "runtime/pickup_rules.h"
 #include "runtime/map_computer_camera.h"
 #include "runtime/auto_save_policy.h"
 #include "runtime/editor_hover_policy.h"
@@ -2318,8 +2319,13 @@ void App::SetupRuntimeInteractionState() {
 		} else if (authored_object.type == "GunPickup" ||
 				authored_object.type == "AmmoPickup" ||
 				authored_object.type == "GenericPickup") {
+			// Only the task's own type publishes the flag: register_flag names it
+			// with Task_GetName (comprun/pickup.c:202-213, param/task.c:123-135),
+			// so a GunPickup owns "GunPickup_<id>.isPickedUp" and a GenericPickup
+			// owns "GenericPickup_<id>.isPickedUp". Nothing registers the
+			// cross-product, so the old extra "GenericPickup_" reset for every
+			// pickup type cleared a symbol no level script can observe.
 			set_boolean(authored_object.type, authored_object.taskId, "isPickedUp", false);
-			set_boolean("GenericPickup", authored_object.taskId, "isPickedUp", false);
 		} else if (authored_object.type == "GenericTBA") {
 			set_boolean(authored_object.type, authored_object.taskId, "isFinished", false);
 			set_boolean(authored_object.type, authored_object.taskId, "isFinishedThisTick", false);
@@ -2722,11 +2728,17 @@ igi::RuntimeInteractionResult App::HandleGameplayInteraction(
 
 	if (target.type == "GunPickup") {
 		if (gameplay_host_.GetWorld().GetWeapons().SelectWeaponByScriptId(target.weaponEnumId)) {
+			// IGI-RE src/comprun/pickup.c:202-213 register_flag builds the flag
+			// with Task_GetName (src/param/task.c:123-135), which composes
+			// "<type>_<id>" because no level name handler is installed for
+			// pickups -- Level_GetNameEvent (0x4F1200) returns gLevelNameEvent
+			// and the only TaskType_SetHandler callers on it are the
+			// Sound_GetNameEvent types. A GunPickup therefore publishes
+			// "GunPickup_<id>.isPickedUp" and nothing else; the extra
+			// "GenericPickup_<id>.isPickedUp" this used to set as well was a
+			// phantom flag no level script can observe.
 			gameplay_host_.GetWorld().SetMissionStateBoolean(
 				"GunPickup_" + target.taskId + ".isPickedUp",
-				true);
-			gameplay_host_.GetWorld().SetMissionStateBoolean(
-				"GenericPickup_" + target.taskId + ".isPickedUp",
 				true);
 			target.deleted = true;
 			status_message_ = "Weapon acquired: " +
@@ -2737,21 +2749,28 @@ igi::RuntimeInteractionResult App::HandleGameplayInteraction(
 	}
 
 	if (target.type == "AmmoPickup") {
-		uint32_t rounds = gameplay_host_.GetWorld().GetWeapons().GetActiveWeapon().clip_capacity;
+		// IGI-RE src/comprun/pickup.c:744 AmmoPickup_Touch (0x46D990) hands the
+		// toucher `msg.count = t->count` -- the authored fourth parameter,
+		// truncated to the field's int16_t by ParamInt16_Parse 0x4F0110
+		// (src/physobj/paramops.c:627-633). The engine never substitutes the
+		// touching weapon's clip size, and AmmoPickup_Create zeroes the field
+		// (pickup.c:676), so a pickup whose count token is absent or malformed
+		// grants nothing rather than the clip size of whatever the player
+		// happens to be holding. The truncation comes from the ported rule
+		// (igi::TruncatePickupCount) so the two cannot drift.
+		uint32_t rounds = 0;
 		if (target.argTokens.size() > 10) {
-			try {
+			const std::string text = StripQuotes(target.argTokens[10]);
+			char* end = nullptr;
+			const long value = std::strtol(text.c_str(), &end, 10);
+			if (end != text.c_str() && end != nullptr && *end == '\0') {
 				rounds = static_cast<uint32_t>(
-					std::stoul(StripQuotes(target.argTokens[10])));
-			} catch (...) {
-				// Preserve the clip-sized fallback for malformed authored counts.
+					igi::TruncatePickupCount(static_cast<int>(value)));
 			}
 		}
 		gameplay_host_.GetWorld().GetWeapons().AddReserveAmmo(rounds);
 		gameplay_host_.GetWorld().SetMissionStateBoolean(
 			"AmmoPickup_" + target.taskId + ".isPickedUp",
-			true);
-		gameplay_host_.GetWorld().SetMissionStateBoolean(
-			"GenericPickup_" + target.taskId + ".isPickedUp",
 			true);
 		target.deleted = true;
 		status_message_ = "Ammunition acquired";

@@ -1042,13 +1042,13 @@ TEST(PickupCorpusTest, RetailClipSizesMatchTheEditorWeaponTable) {
 
     // KNOWN DIVERGENCE, named rather than silently accepted: the editor's table
     // stores clip_capacity as uint32_t, so retail's -1 (KNIFE) cannot be
-    // represented, and BINOCULARS is 10 in retail but 1 in the editor. Both
-    // matter for a GunPickup, which grants clipSize verbatim (pickup.c:583).
+    // represented. It matters for a GunPickup, which grants clipSize verbatim
+    // (pickup.c:583). BINOCULARS used to be the second member of this list
+    // (retail 10, editor 1) and is now corrected to 10.
     std::sort(mismatches.begin(), mismatches.end());
     std::printf("  clip-size mismatches: ");
     for (const std::string& name : mismatches) std::printf("%s ", name.c_str());
     std::printf("\n");
-    ASSERT_EQ(mismatches.size(), 2u);
-    EXPECT_EQ(mismatches[0], "WEAPON_ID_BINOCULARS");
-    EXPECT_EQ(mismatches[1], "WEAPON_ID_KNIFE");
+    ASSERT_EQ(mismatches.size(), 1u);
+    EXPECT_EQ(mismatches[0], "WEAPON_ID_KNIFE");
 }

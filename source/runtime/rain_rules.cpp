@@ -251,4 +251,97 @@ AuthoredRainEffect ParseRainEffect(const std::string& type,
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// R7 - snow is rain's `snow` flag, not a separate system (dxinit/rain.c:153)
+// ---------------------------------------------------------------------------
+
+bool SnowFromAuthoredIsRain(bool authored_is_rain) {
+    // rain.c:153 `r->snow = rain == 0`, with `rain` = RainEffect::unk24
+    // (fxobj/rain.c:141). The authored parameter is therefore inverted.
+    return !authored_is_rain;
+}
+
+float SpawnRatePerTick(bool is_snow) {
+    // Derived from rain.c:619-636: `acc = speed + r->spawn` emits one particle
+    // per whole kSpawnStep, so the steady-state rate is speed / kSpawnStep.
+    return SpeedUnitsPerTick(is_snow) / kSpawnStep;
+}
+
+float SpawnZUnits(bool is_snow) {
+    // rain.c:631 `d->z = kLayer - speed`, shared by both modes but speed differs.
+    return kLayerUnits - SpeedUnitsPerTick(is_snow);
+}
+
+float SnowSwayDisplacementUnits(float random_float) {
+    // rain.c:597-598, verbatim: (Random_Float() - kHalfF) * kSway.
+    return (random_float - 0.5f) * kSwayUnits;
+}
+
+int SnowSwayReloadTicks(int random_int_30) {
+    // rain.c:596. Random_Int(r, 30) == Random_Next() % 30 (math/random.c:28-31),
+    // so the draw is in [0, 29]; the clamp is a guard, not engine behaviour.
+    if (random_int_30 < 0) random_int_30 = 0;
+    if (random_int_30 > 29) random_int_30 = 29;
+    return random_int_30 + kSwayTicksMin;  // kSwayTicksMin == 30
+}
+
+int SnowSwayTimerAfterReload(int random_int_30) {
+    // rain.c:595-596: `if (d->timer-- < 0) d->timer += Random_Int(30) + 30;`
+    // The decrement has already happened when the add runs, so the old value -1
+    // becomes -2 + (Random_Int(30) + 30) == Random_Int(30) + 28.
+    return SnowSwayReloadTicks(random_int_30) - 2;
+}
+
+int SnowSwayFirstRollTick() {
+    // rain.c:630 sets `d->timer = 0` at spawn; rain.c:595 tests `timer-- < 0`.
+    // Update 1: 0 is not < 0, timer becomes -1. Update 2: -1 < 0, so the first
+    // dx/dy roll happens here.
+    return 2;
+}
+
+SnowTileWrap SnowWrapTileX(float x_units) {
+    // rain.c:603-605 `if (!(x >= 0)) { d->x += kTileF; d->kind ^= 1; }`
+    // rain.c:606-608 `else if (d->x > kTileF) { d->x -= kTileF; d->kind ^= 1; }`
+    if (!(x_units >= 0.0f)) return {x_units + kTileUnitsF, true};
+    if (x_units > kTileUnitsF) return {x_units - kTileUnitsF, true};
+    return {x_units, false};
+}
+
+SnowTileWrap SnowWrapTileY(float y_units) {
+    // rain.c:610-615, the y twin: kind ^= 2.
+    if (!(y_units >= 0.0f)) return {y_units + kTileUnitsF, true};
+    if (y_units > kTileUnitsF) return {y_units - kTileUnitsF, true};
+    return {y_units, false};
+}
+
+float SnowFlakeWidthUnits() {
+    // rain.c:341-342 `x0 = vx - size; x1 = vx + size` with size = fade * kFlakeSize.
+    return 2.0f * kFlakeSizeUnits;
+}
+
+int SnowVerticesPerParticle() { return 6; }  // rain.c:364, 447
+int RainVerticesPerParticle() { return 2; }  // rain.c:372, 458
+
+std::uint32_t SnowFlakeDiffuse() { return 0xFFFFFFFFu; }     // rain.c:353
+std::uint32_t RainStreakTopDiffuse() { return 0x00FFFFFFu; } // rain.c:366
+
+const char* SnowTextureName() { return "snow.tex"; }  // fxobj/rain.c:82
+
+int SnowTextureStageArgCountWithTexture() { return 4; }     // rain.c:434
+int SnowTextureStageArgCountWithoutTexture() { return 3; }  // rain.c:437
+
+std::span<const SnowRuleDifference> SnowRuleDifferences() {
+    static const SnowRuleDifference kDifferences[] = {
+        {"flag", "Rain_New", 0x498960u, "src/dxinit/rain.c:153"},
+        {"speed", "Rain_Update", 0x499CF0u, "src/dxinit/rain.c:572"},
+        {"spawn-z", "Rain_Update", 0x499CF0u, "src/dxinit/rain.c:631"},
+        {"sway-and-wrap", "Rain_Update", 0x499CF0u, "src/dxinit/rain.c:592-617"},
+        {"quad-geometry", "Rain_FillVB", 0x499090u, "src/dxinit/rain.c:337-364"},
+        {"billboard-matrix", "Rain_FillVB", 0x499090u, "src/dxinit/rain.c:382-388"},
+        {"texture-and-primitive", "Rain_DrawCell", 0x499430u, "src/dxinit/rain.c:430-447"},
+        {"texture-load", "RainEffect_Init", 0x436780u, "src/fxobj/rain.c:82"},
+    };
+    return kDifferences;
+}
+
 }  // namespace igi::rain
