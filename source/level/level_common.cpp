@@ -8,31 +8,54 @@
 #include "logger.h"
 #include <string>
 
-static void CleanBloatedBackslashesInPlace(char* str) {
+// Reader_ReadLine, HOOK 0x4BEFE0, src/qsc/reader.c:36-111 (IGI-RE).
+//
+// The engine's line reader is the only place the QSC format has comments: its
+// strip block (reader.c:80-109) ends the line at the first "//".  The quoted
+// region loop it contains is entered with c == '"' and breaks on its first
+// check, so as written it never skips a quoted region -- reader.c:88 states the
+// result: "starts on the opening quote and stops there, so \"//\" is cut even
+// inside strings".  Nothing else is rewritten: in particular the engine does
+// not collapse or unescape backslashes in this function, so the former
+// CleanBloatedBackslashesInPlace (no engine counterpart) is gone.
+//
+// This parser scans the whole file rather than a per-line buffer, so the cut is
+// applied in place and the line terminators (which Parser_SkipWhiteChar treats
+// as space) are preserved.
+static void StripLineCommentsInPlace(char* str) {
     if (!str) return;
-    char* src = str;
-    char* dst = str;
-    while (*src) {
-        if (*src == '\\') {
-            int count = 0;
-            while (src[count] == '\\') {
-                count++;
+
+    char* w = str;
+    char* line = str;
+
+    while (*line) {
+        char* end = line;
+        while (*end && *end != '\r' && *end != '\n') {
+            end++;
+        }
+
+        char* cut = end;
+        for (char* p = line; p + 1 < end; p++) {
+            if (p[0] == '/' && p[1] == '/') {
+                cut = p;
+                break;
             }
-            if (count >= 4) {
-                *dst++ = '\\';
-                *dst++ = '\\';
-                src += count;
-            } else {
-                for (int i = 0; i < count; ++i) {
-                    *dst++ = '\\';
-                }
-                src += count;
-            }
-        } else {
-            *dst++ = *src++;
+        }
+
+        for (char* p = line; p < cut; p++) {
+            *w++ = *p;
+        }
+        for (char* p = end; *p == '\r' || *p == '\n'; p++) {
+            *w++ = *p;
+        }
+
+        line = end;
+        while (*line == '\r' || *line == '\n') {
+            line++;
         }
     }
-    *dst = '\0';
+
+    *w = '\0';
 }
 
 
@@ -489,7 +512,7 @@ void QSC::Load(const char* filename) {
 		return;
 	}
 
-	CleanBloatedBackslashesInPlace(scripts_);
+	StripLineCommentsInPlace(scripts_);
 
 	// Make a pristine copy for raw line extraction because Parse() is destructive
 	size_t len = strlen(scripts_);
@@ -765,11 +788,30 @@ bool QSC::Parser_ForwardToChar(char c) {
 	return *pc_ != '\0';
 }
 
+// Quoted-string scan.
+//
+// There is no counterpart to this helper in the engine's line reader:
+// Reader_ReadLine's quoted-region loop (HOOK 0x4BEFE0, src/qsc/reader.c:87-103)
+// is entered with c == '"' and breaks on its first check, so it never advances.
+// The scan that actually finds the closing quote is in Lex_ReadToken
+// (HOOK 0x517260, src/terrdraw/lexer.c:32-60): on a backslash it consumes the
+// next character and continues, otherwise a '"' ends the string.  That is what
+// the loop below does.
+//
+// The value is kept raw.  DEVIATION (reported, not fixed here): Lex_ReadToken
+// also decodes \b \n \r \t \xNN and drops the backslash for any other escaped
+// character, so the engine's value for "...\n..." contains a real newline.
+// Decoding here would require ArgTokenFromArg (source/level/level_objects_internal.h)
+// to re-escape on write, which is outside this module.
 bool QSC::Parser_ForwardToDoubleQuoto() {
 	while (*pc_) {
 
 		if (*pc_ == '\\') {
 			pc_ += 2;	// skip escape character
+			if (pc_[-1] == '\0') {
+				pc_--;	// the escape ran into the terminator
+				break;
+			}
 		}
 		else if (*pc_ == '"') {
 			break;

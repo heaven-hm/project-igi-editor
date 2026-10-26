@@ -7,7 +7,7 @@
 //   * `src/qvm/qvm.c:641-689` `Qvm_OpCall` (HOOK 0x4BD880) -- the call encoding:
 //     `code[pc] == OP_CALL`, `argc = *(int32*)(code+pc+1)`, then `argc` int32 code
 //     offsets, one per argument; the interpreter resumes at `pc + argc*4 + 5`.
-//     `QVM_Parse` implements exactly that (source/level/qvm_parser.cpp:202-227) and
+//     `QVM_Parse` implements exactly that (source/level/qvm_parser.cpp:436-468) and
 //     the offsets are the `call_targets` this file follows.
 //   * `src/qasm/asm.c:62-126` -- how each push operand is emitted (`Emit` writes
 //     `n - 1` operand bytes), which is why `PUSH1`, `PUSHB`, `PUSHW`, `PUSHSIB` and
@@ -134,14 +134,31 @@ private:
                type == QVMOpType::PUSHIIW;
     }
 
-    std::string NameOf(const QVMInstruction& in) const {
+    // The name a push refers to, through the engine's pool lookup: nullptr when
+    // Qvm_GetString refuses the index.
+    const char* NameOf(const QVMInstruction& in) const {
         if (in.type == QVMOpType::PUSHI) {
-            return in.inline_text;  // inline form; the retail assembler emits the indexed one
+            return in.inline_text.c_str();  // inline form; the retail assembler emits the indexed one
         }
-        if (in.operand < qvm_.identifiers.size()) {
-            return qvm_.identifiers[in.operand];
+        return qvm_.name_pool.Resolve(in.operand);
+    }
+
+    // The engine's pool lookup, Qvm_GetString (HOOK 0x4BEC40,
+    // src/qsc/qvmop.c:470-476): `index < count && offsets[index] < size`, else
+    // nothing.  Qvm_OpPushIndexed's `bad_index` path (src/qsc/qvmop.c:455-457)
+    // turns a refused index into QVM_ERR_INDEX = 15, which Qvm_Run prints as
+    // "Index out of range" (src/qvm/qvm.c:419-421); the previous reader compared
+    // against the vector size and substituted an empty string instead.
+    const char* ResolvePool(const QVMTextPool& pool, const QVMInstruction& in, Program& p) const {
+        const char* text = pool.Resolve(in.operand);
+        if (!text) {
+            AddProblem(p, std::string(QVM_OpName(in.type)) + " at " + Hex(in.address) +
+                              " indexes " + std::to_string(in.operand) +
+                              ", which the pool refuses (QVM error 15, index out of range: " +
+                              std::to_string(pool.count) + " entries, table " +
+                              std::to_string(pool.table_bytes) + " bytes)");
         }
-        return std::string();
+        return text;
     }
 
     static Node Integer(long long value) {
@@ -213,14 +230,12 @@ private:
         case QVMOpType::PUSHSI:
         case QVMOpType::PUSHSIB:
         case QVMOpType::PUSHSIW: {
-            if (in.operand >= qvm_.strings.size()) {
-                AddProblem(p, std::string(QVM_OpName(in.type)) + " at " + Hex(in.address) + " indexes string " +
-                                  std::to_string(in.operand) + ", but the container has " +
-                                  std::to_string(qvm_.strings.size()) + " strings");
+            const char* text = ResolvePool(qvm_.string_pool, in, p);
+            if (!text) {
                 return false;
             }
             out->kind = Node::Kind::String;
-            out->text = qvm_.strings[in.operand];
+            out->text = text;
             ++*values;
             return true;
         }
@@ -233,13 +248,12 @@ private:
         case QVMOpType::PUSHII:
         case QVMOpType::PUSHIIB:
         case QVMOpType::PUSHIIW: {
-            if (in.type != QVMOpType::PUSHI && in.operand >= qvm_.identifiers.size()) {
-                AddProblem(p, std::string(QVM_OpName(in.type)) + " at " + Hex(in.address) + " indexes name " +
-                                  std::to_string(in.operand) + ", but the container has " +
-                                  std::to_string(qvm_.identifiers.size()) + " names");
+            const char* name = in.type == QVMOpType::PUSHI ? NameOf(in)
+                                                           : ResolvePool(qvm_.name_pool, in, p);
+            if (!name) {
                 return false;
             }
-            *out = Name(NameOf(in));
+            *out = Name(name);
             ++*values;
             return true;
         }
@@ -343,7 +357,15 @@ private:
         if (index == 0 || !IsNamePush(qvm_.instructions[index - 1].type)) {
             AddProblem(p, "the call at " + Hex(call.address) + " is not preceded by a function-name push");
         } else {
-            out->text = NameOf(qvm_.instructions[index - 1]);
+            const char* name = NameOf(qvm_.instructions[index - 1]);
+            if (!name) {
+                AddProblem(p, "the call at " + Hex(call.address) +
+                                  " is preceded by a name push whose pool index " +
+                                  std::to_string(qvm_.instructions[index - 1].operand) +
+                                  " the name pool refuses (QVM error 15, index out of range)");
+                return false;
+            }
+            out->text = name;
         }
 
         // `Qvm_OpCall` resumes at the instruction after the argument table, which is
@@ -719,13 +741,10 @@ MenuValue ToValue(const Node& node) {
     return out;
 }
 
-struct TypeDecl {
-    std::string name;
-    std::vector<MenuField> fields;  // declaration order, no values
-};
-
-const std::vector<MenuField>* FindDecl(const std::vector<TypeDecl>& types, const std::string& type) {
-    for (const TypeDecl& t : types) {
+// `MenuTypeDecl` is the public spelling of this (menu/qvm_image.h); the reader's
+// declarations are kept on the definition so the writer can re-emit them.
+const std::vector<MenuField>* FindDecl(const std::vector<MenuTypeDecl>& types, const std::string& type) {
+    for (const MenuTypeDecl& t : types) {
         if (t.name == type) {
             return &t.fields;
         }
@@ -752,7 +771,7 @@ int CountTaskNew(const Node& node) {
 // rule. During parameter parsing `gLevelTaskNewEnabled` is 0, so a nested `Task_New`
 // in a parameter position is an error in the runtime (level.c:182-185, 209); the
 // reader reports it too.
-bool BuildWidget(const Node& call, const std::vector<TypeDecl>& types, MenuWidget* out, std::string* error) {
+bool BuildWidget(const Node& call, const std::vector<MenuTypeDecl>& types, MenuWidget* out, std::string* error) {
     if (call.args.size() < 3) {
         *error = "a Task_New has " + std::to_string(call.args.size()) +
                  " arguments; it needs at least an id, a type and a name";
@@ -816,7 +835,7 @@ MenuDefinition Build(const Program& program, const std::string& source) {
     // (src/level/level.c:156-166), so this list is data the script carries rather
     // than something the engine consumes; the *order* it implies is the order the
     // runtime parses arguments in (level.c:214-221).
-    std::vector<TypeDecl> types;
+    std::vector<MenuTypeDecl> types;
     for (const Node& statement : program.statements) {
         if (!statement.IsCall() || statement.text != "Task_DeclareParameters") {
             continue;
@@ -826,7 +845,7 @@ MenuDefinition Build(const Program& program, const std::string& source) {
                         " arguments; it needs a type name followed by name/type pairs";
             return def;
         }
-        TypeDecl decl;
+        MenuTypeDecl decl;
         decl.name = ToValue(statement.args[0]).AsText();
         for (size_t i = 1; i + 1 < statement.args.size(); i += 2) {
             MenuField field;
@@ -860,6 +879,8 @@ MenuDefinition Build(const Program& program, const std::string& source) {
         return def;
     }
     def.widget_count = widget_count;
+    // The statements the script carries, in file order, for the save-back half.
+    def.declarations = types;
     if (def.root.type != "MenuManager") {
         def.error = "the script's top-level Task_New creates '" + def.root.type + "', not a MenuManager";
         return def;
@@ -916,6 +937,23 @@ const MenuField* MenuWidget::FindField(const std::string& field_name) const {
 
 const MenuValue* MenuWidget::FindValue(const std::string& field_name) const {
     const MenuField* field = FindField(field_name);
+    if (field == nullptr || field->values.empty()) {
+        return nullptr;
+    }
+    return &field->values.front();
+}
+
+MenuField* MenuWidget::FindField(const std::string& field_name) {
+    for (MenuField& field : fields) {
+        if (field.name == field_name) {
+            return &field;
+        }
+    }
+    return nullptr;
+}
+
+MenuValue* MenuWidget::FindValue(const std::string& field_name) {
+    MenuField* field = FindField(field_name);
     if (field == nullptr || field->values.empty()) {
         return nullptr;
     }
@@ -998,6 +1036,52 @@ const MenuWidget* MenuDefinition::FindById(int id) const {
 
 const MenuWidget* MenuDefinition::FindByType(const std::string& type) const {
     for (const MenuWidget* widget : Flatten()) {
+        if (widget->type == type) {
+            return widget;
+        }
+    }
+    return nullptr;
+}
+
+const MenuTypeDecl* MenuDefinition::FindType(const std::string& type) const {
+    for (const MenuTypeDecl& decl : declarations) {
+        if (decl.name == type) {
+            return &decl;
+        }
+    }
+    return nullptr;
+}
+
+// Mutable counterparts: same traversal, so an edit made through one of these is
+// the edit `menu/menu_qvm_writer.h` serialises.
+std::vector<MenuWidget*> MenuDefinition::Flatten() {
+    std::vector<MenuWidget*> out;
+    if (root.type.empty()) {
+        return out;
+    }
+    std::vector<MenuWidget*> stack{&root};
+    while (!stack.empty()) {
+        MenuWidget* widget = stack.back();
+        stack.pop_back();
+        out.push_back(widget);
+        for (auto it = widget->children.rbegin(); it != widget->children.rend(); ++it) {
+            stack.push_back(&*it);
+        }
+    }
+    return out;
+}
+
+MenuWidget* MenuDefinition::FindById(int id) {
+    for (MenuWidget* widget : Flatten()) {
+        if (widget->id == id) {
+            return widget;
+        }
+    }
+    return nullptr;
+}
+
+MenuWidget* MenuDefinition::FindByType(const std::string& type) {
+    for (MenuWidget* widget : Flatten()) {
         if (widget->type == type) {
             return widget;
         }

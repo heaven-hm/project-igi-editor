@@ -142,11 +142,25 @@ TEST(QscLexerTest, HexLiteralUpperPrefix) {
 }
 
 TEST(QscLexerTest, HexLiteralMixedCase) {
+    // The engine has no hex-literal token kind. Lexer_IsNumber (HOOK 0x4C0170,
+    // src/qsc/lexer.c:252-265) accepts "0xDEAD" as a number, but Lexer_IsInteger
+    // (HOOK 0x4C01D0, src/qsc/lexer.c:267-277) rejects any word containing
+    // 'e'/'E', so Lexer_Next (HOOK 0x4BFC70, src/qsc/lexer.c:234-241) stores
+    // Str_ToFloat of it and emits TOK_FLOAT. "0xff"/"0XFF" (no 'e') stay
+    // integer and go through Str_ToInt. Emulating the engine's Str_ToFloat
+    // (HOOK 0x517570 -> crt_atof 0x516AD3 -> crt_fltin 0x516E83 ->
+    // _strgtold12 0x4ADBF9) on "0xDEAD" returns +0.0: the CRT parser is
+    // decimal-only, so it stops at 'x'.
     auto r = Lex("0xDEAD");
     EXPECT_TRUE(r.ok);
     ASSERT_GE(r.tokens.size(), 1u);
-    EXPECT_EQ(r.tokens[0].kind, TokKind::HexLit);
-    EXPECT_EQ(r.tokens[0].int_val, 0xDEAD);
+    EXPECT_EQ(r.tokens[0].kind, TokKind::FloatLit);
+    EXPECT_EQ(r.tokens[0].lexeme, "0xDEAD");
+    // SOURCE BUG (not a test bug): source/level/qsc_lexer.cpp:306 implements
+    // Str_ToFloat as std::strtod, which accepts C99 hex floats and returns
+    // 57005 for "0xDEAD". This assertion encodes the engine's value and fails
+    // until Str_ToFloat is made decimal-only.
+    EXPECT_NEAR(r.tokens[0].float_val, 0.0f, 1e-6f);
 }
 
 TEST(QscLexerTest, HexLiteralZero) {
@@ -271,34 +285,77 @@ TEST(QscLexerTest, LineCommentAtEndOfLine) {
     EXPECT_EQ(r.tokens[1].kind, TokKind::End);
 }
 
+// The engine has no block comments. Reader_ReadLine (HOOK 0x4BEFE0,
+// src/qsc/reader.c:104-107) ends a line only at the first "//"; Lexer_Next
+// (HOOK 0x4BFC70) reads '/' as binary op 0x06 (src/qsc/lexer.c:134-138) and
+// '*' as binary op 0x05 (src/qsc/lexer.c:114-118). "/* ... */" is therefore
+// ordinary operator/word tokens, never a comment.
 TEST(QscLexerTest, BlockCommentInline) {
     auto r = Lex("/* block */ baz");
     EXPECT_TRUE(r.ok);
-    ASSERT_GE(r.tokens.size(), 1u);
-    EXPECT_EQ(r.tokens[0].kind, TokKind::Ident);
-    EXPECT_EQ(r.tokens[0].lexeme, "baz");
+    ASSERT_EQ(r.tokens.size(), 7u);
+    EXPECT_EQ(r.tokens[0].kind, TokKind::Op);
+    EXPECT_EQ(r.tokens[0].lexeme, "/");
+    EXPECT_EQ(r.tokens[1].kind, TokKind::Op);
+    EXPECT_EQ(r.tokens[1].lexeme, "*");
+    EXPECT_EQ(r.tokens[2].kind, TokKind::Ident);
+    EXPECT_EQ(r.tokens[2].lexeme, "block");
+    EXPECT_EQ(r.tokens[3].kind, TokKind::Op);
+    EXPECT_EQ(r.tokens[3].lexeme, "*");
+    EXPECT_EQ(r.tokens[4].kind, TokKind::Op);
+    EXPECT_EQ(r.tokens[4].lexeme, "/");
+    EXPECT_EQ(r.tokens[5].kind, TokKind::Ident);
+    EXPECT_EQ(r.tokens[5].lexeme, "baz");
+    EXPECT_EQ(r.tokens[6].kind, TokKind::End);
 }
 
 TEST(QscLexerTest, BlockCommentMultiline) {
+    // Each line is tokenized on its own (Reader_ReadLine), so the opening "/*",
+    // the middle text and the closing "*/" all become tokens.
     auto r = Lex("/* line1\n   line2\n*/qux");
     EXPECT_TRUE(r.ok);
-    ASSERT_GE(r.tokens.size(), 1u);
-    EXPECT_EQ(r.tokens[0].kind, TokKind::Ident);
-    EXPECT_EQ(r.tokens[0].lexeme, "qux");
+    ASSERT_EQ(r.tokens.size(), 8u);
+    EXPECT_EQ(r.tokens[0].lexeme, "/");
+    EXPECT_EQ(r.tokens[1].lexeme, "*");
+    EXPECT_EQ(r.tokens[2].kind, TokKind::Ident);
+    EXPECT_EQ(r.tokens[2].lexeme, "line1");
+    EXPECT_EQ(r.tokens[3].kind, TokKind::Ident);
+    EXPECT_EQ(r.tokens[3].lexeme, "line2");
+    EXPECT_EQ(r.tokens[4].lexeme, "*");
+    EXPECT_EQ(r.tokens[5].lexeme, "/");
+    EXPECT_EQ(r.tokens[6].kind, TokKind::Ident);
+    EXPECT_EQ(r.tokens[6].lexeme, "qux");
+    EXPECT_EQ(r.tokens[7].kind, TokKind::End);
 }
 
 TEST(QscLexerTest, BlockCommentBetweenTokens) {
     auto r = Lex("A /* ignored */ B");
     EXPECT_TRUE(r.ok);
-    ASSERT_GE(r.tokens.size(), 2u);
+    ASSERT_EQ(r.tokens.size(), 8u);
     EXPECT_EQ(r.tokens[0].lexeme, "A");
-    EXPECT_EQ(r.tokens[1].lexeme, "B");
+    EXPECT_EQ(r.tokens[1].lexeme, "/");
+    EXPECT_EQ(r.tokens[2].lexeme, "*");
+    EXPECT_EQ(r.tokens[3].lexeme, "ignored");
+    EXPECT_EQ(r.tokens[4].lexeme, "*");
+    EXPECT_EQ(r.tokens[5].lexeme, "/");
+    EXPECT_EQ(r.tokens[6].lexeme, "B");
+    EXPECT_EQ(r.tokens[7].kind, TokKind::End);
 }
 
 TEST(QscLexerTest, UnterminatedBlockCommentIsRejected) {
+    // There is nothing to terminate: "/*" is just '/' then '*'. The engine
+    // reports no error and the line lexes as operators and words.
     const auto r = Lex("/* missing terminator");
-    EXPECT_FALSE(r.ok);
-    EXPECT_NE(r.error.find("unterminated block comment"), std::string::npos);
+    EXPECT_TRUE(r.ok);
+    EXPECT_TRUE(r.error.empty());
+    ASSERT_EQ(r.tokens.size(), 5u);
+    EXPECT_EQ(r.tokens[0].lexeme, "/");
+    EXPECT_EQ(r.tokens[1].lexeme, "*");
+    EXPECT_EQ(r.tokens[2].kind, TokKind::Ident);
+    EXPECT_EQ(r.tokens[2].lexeme, "missing");
+    EXPECT_EQ(r.tokens[3].kind, TokKind::Ident);
+    EXPECT_EQ(r.tokens[3].lexeme, "terminator");
+    EXPECT_EQ(r.tokens[4].kind, TokKind::End);
 }
 
 // ---------- operators ----------
@@ -447,9 +504,19 @@ TEST(QscLexerTest, ErrorMalformedHexNoDigits) {
 }
 
 TEST(QscLexerTest, ErrorMalformedFloatExponentNoDigits) {
+    // Lex_ReadToken (HOOK 0x517260, src/terrdraw/lexer.c:102-118) consumes the
+    // 'e' of "1e" even when no exponent digits follow, so the token text is
+    // "1e". Lexer_IsInteger (HOOK 0x4C01D0) rejects 'e' and Lexer_Next
+    // (HOOK 0x4BFC70, src/qsc/lexer.c:234-241) makes it TOK_FLOAT. The engine's
+    // Str_ToFloat (HOOK 0x517570 -> crt_atof 0x516AD3) parses the leading "1":
+    // emulating the engine returns 1.0, not an error.
     auto r = Lex("1e");
-    EXPECT_FALSE(r.ok);
-    EXPECT_FALSE(r.error.empty());
+    EXPECT_TRUE(r.ok);
+    EXPECT_TRUE(r.error.empty());
+    ASSERT_GE(r.tokens.size(), 1u);
+    EXPECT_EQ(r.tokens[0].kind, TokKind::FloatLit);
+    EXPECT_EQ(r.tokens[0].lexeme, "1e");
+    EXPECT_NEAR(r.tokens[0].float_val, 1.0f, 1e-6f);
 }
 
 TEST(QscLexerTest, ErrorUnexpectedCharAt) {

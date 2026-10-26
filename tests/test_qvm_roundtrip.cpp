@@ -108,16 +108,25 @@ std::vector<uint8_t> BuildMinimalQvm(const std::vector<uint8_t>& code) {
     return binary;
 }
 
-// Same container, but with a one-entry string pool ("stable"/"svalue") so a
-// PUSHSI/PUSHII operand can reference it.  Layout follows QVM_Parse's header
-// reads (source/level/qvm_parser.cpp): of_svalue at 0x20, sz_svalue at 0x28,
-// of_ctable at 0x2C, sz_ctable at 0x30.
+// Same container, but with a one-entry string pool so a PUSHSI/PUSHII operand can
+// reference it.  The header follows the engine's QvmHeader/QvmStrings
+// (src/qvm/qvmtypes.h:4-30, read by Qvm_Load 0x4BD220, src/qvm/qvm.c:472-483):
+// strOffsets@0x1C, strText@0x20, strTableSize@0x24, strTextSize@0x28, then
+// code@0x2C and codeSize@0x30.
+//
+// The offsets TABLE is not optional: Qvm_Load wires a pool only when the table's
+// byte size is non-zero, so a text blob with sz=0 is a container the engine
+// cannot read (0 of 1043 retail files have that shape).
 std::vector<uint8_t> BuildQvmWithStringPool(const std::vector<uint8_t>& code,
                                             const std::string& pooledString) {
     std::string pool = pooledString;
     pool.push_back('\0');
 
-    std::vector<uint8_t> binary(60U + pool.size() + code.size(), 0U);
+    constexpr size_t kHeader = 60U;
+    constexpr size_t kStringTable = 4U;  // one uint32 offset
+    const size_t text = kHeader + kStringTable;
+
+    std::vector<uint8_t> binary(text + pool.size() + code.size(), 0U);
     binary[0] = 'L'; binary[1] = 'O'; binary[2] = 'O'; binary[3] = 'P';
 
     auto write_u32 = [&binary](size_t offset, uint32_t value) {
@@ -127,21 +136,22 @@ std::vector<uint8_t> BuildQvmWithStringPool(const std::vector<uint8_t>& code,
         binary[offset + 3] = static_cast<uint8_t>((value >> 24U) & 0xFFU);
     };
 
-    write_u32(0x04, 8U);
-    write_u32(0x08, 5U);
-    write_u32(0x0C, 60U);
-    write_u32(0x10, 60U);
-    write_u32(0x14, 0U);
-    write_u32(0x18, 0U);
-    write_u32(0x1C, 60U);
-    write_u32(0x20, 60U);
-    write_u32(0x24, 0U);
+    write_u32(0x04, 8U);   // version
+    write_u32(0x08, 5U);   // unk08, >= 5 accepted
+    write_u32(0x0C, kHeader);   // name pool: offsets table (empty)
+    write_u32(0x10, kHeader);   // name pool: text (empty)
+    write_u32(0x14, 0U);        // name pool: table bytes
+    write_u32(0x18, 0U);        // name pool: text bytes
+    write_u32(0x1C, kHeader);   // string pool: offsets table
+    write_u32(0x20, static_cast<uint32_t>(text));  // string pool: text
+    write_u32(0x24, static_cast<uint32_t>(kStringTable));
     write_u32(0x28, static_cast<uint32_t>(pool.size()));
-    write_u32(0x2C, static_cast<uint32_t>(60U + pool.size()));
+    write_u32(0x2C, static_cast<uint32_t>(text + pool.size()));
     write_u32(0x30, static_cast<uint32_t>(code.size()));
 
-    std::copy(pool.begin(), pool.end(), binary.begin() + 60);
-    std::copy(code.begin(), code.end(), binary.begin() + 60 + pool.size());
+    write_u32(kHeader, 0U);  // offsets[0] = 0: the pool's first (only) string
+    std::copy(pool.begin(), pool.end(), binary.begin() + text);
+    std::copy(code.begin(), code.end(), binary.begin() + text + pool.size());
     return binary;
 }
 
@@ -708,35 +718,52 @@ TEST(QvmStringEscapeTest, CompileDecompilePipelinePreservesEscapedStrings) {
 //               the `QvmAsm_OpPush` registrations, src/qasm/asm.c:46-57).
 //               THIS PARSER FOLLOWS THE INTERPRETER.
 //
-//  Why the assembler wins for BLK/JSR: a `.qvm` is an assembler artefact, and a
-//  linear walk must follow the bytes the producer wrote or it desynchronises.
-//  The interpreter's reading of BLK is a latent retail defect (any 1-byte BLK
-//  makes it consume the next four bytes as a skip count), which is exactly why
-//  no working script contains one.  Nothing is changed here: the divergence is
-//  unobservable in the corpus (0 occurrences of all three across 1043 files,
-//  enforced by QvmCorpusLayoutTest below) and `QVM_Parse` is shared by five
-//  call sites, so the layouts are pinned rather than altered.
+//  BLK / JSR / PUSHA follow the INTERPRETER — the engine's own reader — because
+//  that is what decides whether a file is accepted.  BLK carries a 4-byte skip
+//  count and advances 5 + skip (`Qvm_OpBlk`, HOOK 0x4BE980, src/qsc/qvmop.c:338-342).
+//  JSR is registered as `Qvm_OpError`/`Qvm_OpIllegal` (HOOK 0x4BEC90,
+//  src/qsc/qvmop.c:490-496; src/qvm/qvm.c:545), so the walk stops with
+//  QVM_ERR_ILLEGAL and the file is refused.  Both are unobservable in the retail
+//  corpus (0 occurrences of all three across 1043 files), enforced by
+//  QvmCorpusLayoutTest below.
 // ============================================================
 
-TEST(QvmOperandLayoutTest, BlkAndJsrAreOneByteAndPushaIsFiveBytes) {
-    // BLK, JSR, BRK — all three one byte in an assembler-produced stream.
+TEST(QvmOperandLayoutTest, BlkIsFivePlusSkipAndJsrIsRefused) {
+    // BLK with skip 0 -> 5 bytes, then BRK.
     {
-        const std::vector<uint8_t> code = {0x2F /*BLK*/, 0x17 /*JSR*/, 0x00 /*BRK*/};
+        const std::vector<uint8_t> code = {0x2F /*BLK*/, 0x00, 0x00, 0x00, 0x00 /*skip=0*/,
+                                           0x00 /*BRK*/};
         const QVMFile qvm = ParseSyntheticQvm(BuildMinimalQvm(code), "_rt_layout_1.qvm");
         ASSERT_TRUE(qvm.valid) << qvm.error;
-        ASSERT_EQ(qvm.instructions.size(), 3u);
+        ASSERT_EQ(qvm.instructions.size(), 2u);
         EXPECT_EQ(qvm.instructions[0].type, QVMOpType::BLK);
-        EXPECT_EQ(qvm.instructions[0].size, 1u);   // assembler: QvmAsm_OpPlain
-        EXPECT_EQ(qvm.instructions[1].type, QVMOpType::JSR);
-        EXPECT_EQ(qvm.instructions[1].size, 1u);   // assembler: QvmAsm_OpPlain
-        EXPECT_EQ(qvm.instructions[2].type, QVMOpType::BRK);
-        EXPECT_EQ(qvm.instructions[2].size, 1u);
+        EXPECT_EQ(qvm.instructions[0].size, 5u);   // 5 + skip(0)
+        EXPECT_EQ(qvm.instructions[1].type, QVMOpType::BRK);
+    }
+
+    // BLK with skip 4 -> 9 bytes: the four skipped bytes are data, not opcodes.
+    {
+        const std::vector<uint8_t> code = {0x2F, 0x04, 0x00, 0x00, 0x00,
+                                           0xAA, 0xBB, 0xCC, 0xDD, 0x00 /*BRK*/};
+        const QVMFile qvm = ParseSyntheticQvm(BuildMinimalQvm(code), "_rt_layout_2.qvm");
+        ASSERT_TRUE(qvm.valid) << qvm.error;
+        ASSERT_EQ(qvm.instructions.size(), 2u);
+        EXPECT_EQ(qvm.instructions[0].size, 9u);   // 5 + 4
+        EXPECT_EQ(qvm.instructions[1].type, QVMOpType::BRK);
+    }
+
+    // JSR is illegal in the engine's own reader, so the file is refused.
+    {
+        const std::vector<uint8_t> code = {0x17 /*JSR*/, 0x00 /*BRK*/};
+        const QVMFile qvm = ParseSyntheticQvm(BuildMinimalQvm(code), "_rt_layout_3.qvm");
+        EXPECT_FALSE(qvm.valid);
+        EXPECT_EQ(qvm.error_code, 5);              // QVM_ERR_ILLEGAL
     }
 
     // PUSHA with a 4-byte operand, then BRK — the interpreter's 5-byte form.
     {
         const std::vector<uint8_t> code = {0x06, 0x10, 0x00, 0x00, 0x00, 0x00 /*BRK*/};
-        const QVMFile qvm = ParseSyntheticQvm(BuildMinimalQvm(code), "_rt_layout_2.qvm");
+        const QVMFile qvm = ParseSyntheticQvm(BuildMinimalQvm(code), "_rt_layout_4.qvm");
         ASSERT_TRUE(qvm.valid) << qvm.error;
         ASSERT_EQ(qvm.instructions.size(), 2u);
         EXPECT_EQ(qvm.instructions[0].type, QVMOpType::PUSHA);

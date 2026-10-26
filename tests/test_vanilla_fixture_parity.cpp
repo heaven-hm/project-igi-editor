@@ -172,8 +172,12 @@ TEST(VanillaFixtureParityTest, LevelOneObjectsExposeAuthoredGameplayPrimitives) 
 
     const QVMFile objects = QVM_Parse(objects_path.string());
     ASSERT_TRUE(objects.valid) << objects.error;
-    EXPECT_EQ(objects.header.ver_major, 8U);
-    EXPECT_EQ(objects.header.ver_minor, 5U);
+    // The retail header carries one version word and a second word the loader
+    // refuses below 5 (src/qvm/qvm.c:441-446).  The old "ver_major = 8 /
+    // ver_minor = 5" split was an editor invention over those two ints, so the
+    // assertion follows the engine's fields now.
+    EXPECT_EQ(objects.header.version, 8);
+    EXPECT_EQ(objects.header.unk08, 5);
 
     // These definitions are the authored bridge between the QVM and the
     // native runtime: player spawn, patrol, mission flow, and objectives.

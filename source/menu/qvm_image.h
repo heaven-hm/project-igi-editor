@@ -18,7 +18,7 @@
 //     `argc = *(int32*)(code+pc+1)` and `argc` int32 code offsets, one per
 //     argument, each pointing at the code that pushes that argument; the next
 //     instruction is at `pc + argc*4 + 5`. `QVM_Parse` implements exactly this
-//     (see `source/level/qvm_parser.cpp:210-227`).
+//     (see `source/level/qvm_parser.cpp:436-468`).
 //   * `src/level/level.c:182-239` `Level_NewTask` (HOOK 0x4F0780) -- the runtime
 //     rule that makes the tree: after the declared parameters are parsed the task
 //     becomes the `Task_New` symbol context and the REMAINING arguments are
@@ -73,6 +73,23 @@ struct MenuField {
     std::vector<MenuValue> values;
 };
 
+// One widget type's parameter declaration, exactly as the script carries it:
+// `Task_DeclareParameters(typeName, field1Name, field1Type, field2Name, ...)`, in
+// the file's own statement order. The runtime's `Task_DeclareParameters` is a
+// no-op returning 0 (`src/level/level.c:156-166`), so this is data the script
+// holds for its own reader -- but its ORDER is the order `Level_NewTask` parses
+// arguments in (`src/level/level.c:214-221`) and it matches the C `ParamTable`
+// order (docs/igi-re-parity/MENU_SYSTEM.md section 7).
+//
+// The reader used to parse these statements into a local and throw them away; a
+// widget's own `MenuField`s say what its arguments are, but only the declaration
+// list says which types exist and in what order the statements appear, which a
+// byte-faithful save-back has to reproduce (`menu/menu_qvm_writer.h`).
+struct MenuTypeDecl {
+    std::string name;
+    std::vector<MenuField> fields;  // declaration order, no values
+};
+
 // One widget instance.
 struct MenuWidget {
     // The task id: `Task_New`'s first argument. Retail menu scripts address
@@ -95,6 +112,10 @@ struct MenuWidget {
     // Numeric value of the first value of the first field with this name, or
     // `fallback` when the field is absent or not numeric.
     double FieldNumber(const std::string& field_name, double fallback = 0.0) const;
+
+    // Mutable counterparts, for editing a widget and saving it back.
+    MenuField* FindField(const std::string& field_name);
+    MenuValue* FindValue(const std::string& field_name);
 };
 
 // The whole menu a container describes.
@@ -104,6 +125,10 @@ struct MenuDefinition {
     std::string source;  // the path this was read from, when known
     MenuWidget root;     // type == "MenuManager" when ok
     int widget_count = 0;  // every widget, including nested
+    // The script's own `Task_DeclareParameters` statements, in file order. Empty
+    // for a definition built by hand; `menu/menu_qvm_writer.h` recovers an
+    // equivalent list from the widget tree when it is empty.
+    std::vector<MenuTypeDecl> declarations;
 
     // Parses a "LOOP" container with `QVM_Parse`, then builds the definition.
     static MenuDefinition FromQvmFile(const std::string& path);
@@ -113,6 +138,9 @@ struct MenuDefinition {
     // that already hold the text.
     static MenuDefinition FromDecompiledSource(const std::string& source);
 
+    // The declaration of this widget type, or nullptr when the script declares none.
+    const MenuTypeDecl* FindType(const std::string& type) const;
+
     // Every widget, depth-first, including nested ones.
     std::vector<const MenuWidget*> Flatten() const;
     // Depth-first widget ids, in `Flatten()` order.
@@ -121,6 +149,11 @@ struct MenuDefinition {
     const MenuWidget* FindById(int id) const;
     // The first widget of this type, depth-first, or nullptr.
     const MenuWidget* FindByType(const std::string& type) const;
+
+    // Mutable counterparts, for editing a definition and saving it back.
+    std::vector<MenuWidget*> Flatten();
+    MenuWidget* FindById(int id);
+    MenuWidget* FindByType(const std::string& type);
 };
 
 }  // namespace igi

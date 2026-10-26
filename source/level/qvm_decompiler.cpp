@@ -275,6 +275,23 @@ struct StatementIfNode : public ASTNode {
     }
 };
 
+// The engine's pool lookup, Qvm_GetString (HOOK 0x4BEC40, src/qsc/qvmop.c:470-476):
+// `index < count && offsets[index] < size` or nothing.  Qvm_OpPushIndexed's
+// `bad_index` path (src/qsc/qvmop.c:455-457) turns a refused index into
+// QVM_ERR_INDEX = 15, which Qvm_Run prints as "Index out of range"
+// (src/qvm/qvm.c:419-421); the previous reader invented an empty string and
+// "id_unknown" instead of refusing.
+static const char* ResolvePoolIndex(const QVMTextPool& pool, uint32_t index) {
+    const char* text = pool.Resolve(index);
+    if (!text) {
+        Logger::Get().Log(LogLevel::ERR,
+            "[QVM_Decompile] Index out of range (QVM error 15): pool index " +
+            std::to_string(index) + " of " + std::to_string(pool.count) +
+            " entries, table " + std::to_string(pool.table_bytes) + " bytes");
+    }
+    return text;
+}
+
 static std::vector<std::shared_ptr<ASTNode>> walk(
     const QVMFile& qvm,
     const std::map<uint32_t, size_t>& addrToInstrIndex,
@@ -346,20 +363,24 @@ static std::vector<std::shared_ptr<ASTNode>> walk(
         }
 
         else if (op.type == QVMOpType::PUSHSI || op.type == QVMOpType::PUSHSIB || op.type == QVMOpType::PUSHSIW) {
-            std::string val = "\"\"";
-            if (op.operand < qvm.strings.size()) {
-                val = "\"" + EscapeQSCString(qvm.strings[op.operand]) + "\"";
+            const char* text = ResolvePoolIndex(qvm.string_pool, op.operand);
+            if (!text) {
+                success = false;
+                return {};
             }
-            statements.push_back(std::make_shared<LiteralStringNode>(val));
+            statements.push_back(std::make_shared<LiteralStringNode>(
+                "\"" + EscapeQSCString(text) + "\""));
             address = op.address + op.size;
         }
 
         else if (op.type == QVMOpType::PUSHII || op.type == QVMOpType::PUSHIIB || op.type == QVMOpType::PUSHIIW) {
-            std::string val = "id_unknown";
-            if (op.operand < qvm.identifiers.size()) {
-                val = EscapeQSCString(qvm.identifiers[op.operand]);
+            const char* text = ResolvePoolIndex(qvm.name_pool, op.operand);
+            if (!text) {
+                success = false;
+                return {};
             }
-            statements.push_back(std::make_shared<LiteralIdentifierNode>(val));
+            statements.push_back(std::make_shared<LiteralIdentifierNode>(
+                EscapeQSCString(text)));
             address = op.address + op.size;
         }
 

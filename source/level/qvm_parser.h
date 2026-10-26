@@ -3,14 +3,101 @@
 #include <vector>
 #include <cstdint>
 
+// ============================================================================
+// The "LOOP" container, read the way the retail engine reads it.
+//
+// ORACLE: IGI-RE, the verified C decompilation of retail IGI.exe.
+//   * `src/qvm/qvmtypes.h:4-20`  -- struct QvmHeader (the 60-byte file header)
+//   * `src/qvm/qvmtypes.h:23-30` -- struct QvmStrings (one string/name pool)
+//   * `src/qvm/qvm.c:433-486`    -- Qvm_Load (HOOK 0x4BD220): the validation,
+//                                   the two pools and the code section
+//   * `src/qsc/qvmop.c:470-476`  -- Qvm_GetString (HOOK 0x4BEC40): the only
+//                                   pool reader
+//   * `src/qvm/qvm.c:328-337`    -- Qvm_Execute (HOOK 0x4BCFD0) and
+//                                   `src/qvm/qvm.c:521-570` Qvm_Init (HOOK
+//                                   0x4BD430), which say what each opcode's
+//                                   handler is, and therefore its operand width
+//   * the opcode bodies in `src/qsc/qvmop.c`, cited per case in qvm_parser.cpp
+//
+// Nothing here executes script code; the decode is the same per-instruction
+// reading the interpreter performs, applied to the whole code section.
+// ============================================================================
+
+// The engine's QvmHeader, field for field (`src/qvm/qvmtypes.h:4-20`).
+// `sizeof(QvmHeader) == 60`, which is the size Qvm_Load compares the file
+// against (`src/qvm/qvm.c:441`).
+//
+// `symTableSize` / `strTableSize` are BYTE sizes, not entry counts:
+// `symOffsets + symTableSize == symText` and `symTableSize / 4` equals the
+// number of NUL-terminated names in `symText`, in all 1043 retail containers.
+// Qvm_Load nevertheless assigns the byte size to `QvmStrings::count`
+// (`src/qvm/qvm.c:475`, `:481`), so the engine indexes past its own offsets
+// array; QVMTextPool below carries the entry count instead.  See the report.
 struct QVMHeader {
-    char signature[4];
-    uint32_t ver_major;
-    uint32_t ver_minor;
-    uint32_t of_itable, of_ivalue, sz_itable, sz_ivalue;
-    uint32_t of_stable, of_svalue, sz_stable, sz_svalue;
-    uint32_t of_ctable, sz_ctable;
-    uint32_t unknown_1, unknown_2;
+    char magic[4];          // 0x00  "LOOP"
+    int32_t version;        // 0x04  8, else refused (src/qvm/qvm.c:441)
+    int32_t unk08;          // 0x08  < 5 refused (src/qvm/qvm.c:443-446)
+    int32_t symOffsets;     // 0x0C  byte offset of the name-offsets array
+    int32_t symText;        // 0x10  byte offset of the name text
+    int32_t symTableSize;   // 0x14  BYTE size of the name-offsets array
+    int32_t symTextSize;    // 0x18  byte size of the name text
+    int32_t strOffsets;     // 0x1C  byte offset of the string-offsets array
+    int32_t strText;        // 0x20  byte offset of the string text
+    int32_t strTableSize;   // 0x24  BYTE size of the string-offsets array
+    int32_t strTextSize;    // 0x28  byte size of the string text
+    int32_t code;           // 0x2C  byte offset of the code section
+    int32_t codeSize;       // 0x30
+    int32_t stackSize;      // 0x34  0 -> 0x800 (src/qvm/qvm.c:447-454)
+    int32_t typeStackSize;  // 0x38  0 -> 0x100
+};
+static_assert(sizeof(QVMHeader) == 60, "QvmHeader is 60 bytes");
+
+// The engine's error codes (`src/qvm/qvm.h:21-36`); Qvm_Run
+// (`src/qvm/qvm.c:367-430`) maps each to the text it prints.
+enum QVMError {
+    QVM_ERR_UNDERFLOW = 1,
+    QVM_ERR_OVERFLOW = 2,
+    QVM_ERR_INTERNAL = 3,
+    QVM_ERR_ILLEGAL = 5,
+    QVM_ERR_OPERAND = 6,
+    QVM_ERR_UNKNOWN_NAME = 7,
+    QVM_ERR_NOT_VARIABLE = 8,
+    QVM_ERR_NOT_FUNCTION = 9,
+    QVM_ERR_NO_FUNCTION = 10,
+    QVM_ERR_SYNTAX = 11,
+    QVM_ERR_CONDITION = 12,
+    QVM_ERR_ARGS = 13,
+    QVM_ERR_DATABLOCK = 14,
+    QVM_ERR_RANGE = 15,
+};
+
+// One of the engine's two pools: `Qvm.names` (the identifier table) or
+// `Qvm.strings` (`src/qvm/qvmtypes.h:23-30`), wired by Qvm_Load
+// (`src/qvm/qvm.c:472-483`) and read only by Qvm_GetString
+// (`src/qsc/qvmop.c:470-476`):
+//
+//     if (i < t->count && t->offsets[i] < t->size) return t->data + t->offsets[i];
+//     return NULL;
+//
+// `count` here is the ENTRY count (`<table byte size> / 4`); the engine's own
+// `count` is the header's byte size, which over-reads the array.
+struct QVMTextPool {
+    std::vector<int32_t> offsets;  // t->offsets: one byte offset per entry
+    std::string data;              // t->data: the text blob
+    int32_t size = 0;              // t->size: byte size of the text blob
+    uint32_t count = 0;            // t->count, as entries (table byte size / 4)
+    int32_t table_bytes = 0;       // the header field as written, for reporting
+
+    bool empty() const { return count == 0; }
+
+    // Qvm_GetString: the C string for `index`, or nullptr when the engine's
+    // bounds test fails.  The engine also admits negative indices (it has no
+    // `i >= 0` test); a negative offset is refused here.
+    const char* Resolve(uint32_t index) const;
+
+    // Resolve(), copied out and bounded by the text blob rather than by the
+    // first NUL byte past its end.
+    std::string Get(uint32_t index) const;
 };
 
 enum class QVMOpType : uint8_t {
@@ -38,11 +125,17 @@ struct QVMInstruction {
 
 struct QVMFile {
     QVMHeader header;
-    std::vector<std::string> identifiers;  // ivalue parsed
-    std::vector<std::string> strings;      // svalue parsed
+    QVMTextPool name_pool;   // engine `Qvm.names`
+    QVMTextPool string_pool; // engine `Qvm.strings`
+    std::vector<std::string> identifiers;  // name_pool.Get(i), i in [0, count)
+    std::vector<std::string> strings;      // string_pool.Get(i), i in [0, count)
     std::vector<QVMInstruction> instructions;
     bool valid = false;
     std::string error;
+    // The engine's `vm->error` value when the decode stopped on one
+    // (QVM_ERR_ILLEGAL for RET/JSR/ILLEGAL, QVM_ERR_RANGE for a pool index
+    // that Qvm_GetString refuses); 0 when there is none.
+    int error_code = 0;
 
     uint32_t totalInstructions() const { return (uint32_t)instructions.size(); }
     uint32_t identifierCount() const { return (uint32_t)identifiers.size(); }

@@ -272,8 +272,14 @@ TEST_F(McpDomainToolsTest, KeepsAnonymousIdAcrossMutableFields) {
 
 TEST_F(McpDomainToolsTest, IgnoresBlockCommentedTaskCallsForAiMutation) {
     const fs::path qsc = root_ / "missions/location0/level1/objects.qsc";
+    // The engine has no block comments: Reader_ReadLine (HOOK 0x4BEFE0,
+    // src/qsc/reader.c:104-107) ends a line only at the first "//", and
+    // Lexer_Next (HOOK 0x4BFC70, src/qsc/lexer.c:114-138) reads "/*" as the
+    // operators '/' '*'. A "/* ... */" fixture line therefore leaves the
+    // Task_New inside it live (and makes the line a parse error), so the only
+    // comment form that can guard "commented-out task calls are ignored" is "//".
     std::ofstream(qsc, std::ios::binary)
-        << "/* Task_New(-1, \"HumanSoldier\", \"Commented\", 17, 18, 19, 0, \"200_01_3\", 0, -1, 0); */\n"
+        << "// Task_New(-1, \"HumanSoldier\", \"Commented\", 17, 18, 19, 0, \"200_01_3\", 0, -1, 0);\n"
            "Task_New(-1, \"HumanSoldier\", \"Live\", 17, 18, 19, 0, \"200_01_3\", 0, -1, 0);\n";
     std::string error;
     ASSERT_TRUE(service_->RefreshRevision(error)) << error;

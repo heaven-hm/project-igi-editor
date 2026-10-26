@@ -61,7 +61,11 @@ TEST(QscParserTest, EmptyBlock) {
 }
 
 TEST(QscParserPropertyTest, WhitespaceAndCommentsPreserveCallShape) {
-    for (const std::string& gap : {" ", "\n", "\r\n", "/*gap*/"}) {
+    // The engine's only comment form is "//" (Reader_ReadLine, HOOK 0x4BEFE0,
+    // src/qsc/reader.c:104-107); a "/*gap*/" is not a comment but the operator
+    // pair '/' '*' (Lexer_Next, HOOK 0x4BFC70, src/qsc/lexer.c:114-138), which
+    // is a parse error in prefix position. Use a line comment as the gap.
+    for (const std::string& gap : {" ", "\n", "\r\n", "//gap\n"}) {
         const std::string source = "F" + gap + "(" + gap + "17," + gap + "TRUE);";
         const auto lexed = Lex(source);
         ASSERT_TRUE(lexed.ok) << source << ": " << lexed.error;
@@ -105,13 +109,23 @@ TEST(QscParserTest, CallWithIntArg) {
 }
 
 TEST(QscParserTest, CallWithHexArg) {
+    // "0xDEAD" contains 'E', so Lexer_IsInteger (HOOK 0x4C01D0,
+    // src/qsc/lexer.c:267-277) rejects it and Lexer_Next (HOOK 0x4BFC70,
+    // src/qsc/lexer.c:234-241) emits TOK_FLOAT, not an integer: the engine has
+    // no hex-literal token kind. Only 0x/0X/$ words without 'e'/'E' reach
+    // Str_ToInt. The engine's Str_ToFloat (HOOK 0x517570 -> crt_atof 0x516AD3 ->
+    // crt_fltin 0x516E83) is decimal-only and returns +0.0 for "0xDEAD".
     auto r = LexAndParse("SetFlags(0xDEAD);");
     EXPECT_TRUE(r.ok);
     const Node* call = FirstCallNode(r);
     ASSERT_NE(call, nullptr);
     ASSERT_EQ(call->children.size(), 1u);
-    EXPECT_EQ(call->children[0]->kind, NodeKind::IntLit);
-    EXPECT_EQ(call->children[0]->i_val, 0xDEAD);
+    EXPECT_EQ(call->children[0]->kind, NodeKind::FloatLit);
+    // SOURCE BUG (not a test bug): source/level/qsc_lexer.cpp:306 implements
+    // Str_ToFloat with std::strtod, which accepts C99 hex floats and yields
+    // 57005. This assertion encodes the engine's value and fails until
+    // Str_ToFloat is made decimal-only.
+    EXPECT_NEAR(call->children[0]->f_val, 0.0f, 1e-6f);
 }
 
 TEST(QscParserTest, CallWithFloatArg) {
