@@ -89,20 +89,21 @@ bool LanguageResources::AddFile(const std::string& filepath, std::string& error)
     }
     FileIndex index;
     index.path = filepath;
-    // RES_BuildIndex keeps only the final path component of each entry
-    // (source/renderer/res_writer.cpp:233-240), so it serves the FinalComponent
-    // form; the full stored name is needed for the engine-path form and is taken
-    // from the same reader's streaming pass.
+    // RES_BuildIndex keys every entry by the engine's own resource identity -- the
+    // full name, upper-cased and backslash-folded (res_writer.cpp:454 via
+    // igi_res::NormalizeResourceName, matching Resource_IsLoaded at
+    // src/res/resource.c:136-138) -- not by the leaf.  So the FinalComponent form
+    // has to take the leaf here, and the engine-path form is taken from the
+    // reader's streaming pass below.
     std::unordered_map<std::string, ResEntryInfo> raw_index;
     if (!RES_BuildIndex(filepath, raw_index, error)) return false;
-    // RES_BuildIndex keys keep the archive's own spelling ("Main Menu",
-    // "LOCAL:english/..."); the engine compares upper-cased names
-    // (src/res/resource.c:136-137), so both of this module's maps are keyed on the
-    // normalised form. Retail data has no normalisation collision with differing
-    // payloads (measured), and exact duplicates carry identical text.
+    // The engine compares upper-cased names (src/res/resource.c:136-137), so both
+    // of this module's maps are keyed on the normalised form.  Retail data has no
+    // normalisation collision with differing payloads (measured), and exact
+    // duplicates carry identical text.
     index.by_final.reserve(raw_index.size());
     for (const auto& entry : raw_index) {
-        index.by_final.emplace(Normalize(entry.first), entry.second);
+        index.by_final.emplace(Normalize(FinalComponent(entry.first)), entry.second);
     }
 
     std::string scan_error;

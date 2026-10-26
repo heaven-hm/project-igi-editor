@@ -94,10 +94,34 @@ std::filesystem::path WriteSyntheticArchive(const std::string& file_name,
     for (int i = 0; i < 4; ++i) bytes.push_back(static_cast<unsigned char>("ILFF"[i]));
     for (int i = 0; i < 12; ++i) bytes.push_back(0);
     for (int i = 0; i < 4; ++i) bytes.push_back(static_cast<unsigned char>("IRES"[i]));
+    const auto put32 = [&bytes](std::size_t at, uint32_t v) {
+        bytes[at + 0] = static_cast<unsigned char>(v & 0xFFu);
+        bytes[at + 1] = static_cast<unsigned char>((v >> 8) & 0xFFu);
+        bytes[at + 2] = static_cast<unsigned char>((v >> 16) & 0xFFu);
+        bytes[at + 3] = static_cast<unsigned char>((v >> 24) & 0xFFu);
+    };
+
+    std::size_t last_header = 0;
     for (const auto& entry : entries) {
+        last_header = bytes.size();
         AppendChunk(bytes, "NAME", entry.first);
+        last_header = bytes.size();
         AppendChunk(bytes, "CSTR", entry.second + std::string(1, '\0'));
     }
+    // The chain ends on a zero `next`: Chunk_Next (HOOK 0x4B7470, src/res/chunk.c:9-15)
+    // returns NULL on next == 0, which is how the walk terminates.  AppendChunk
+    // writes its own length there, which is correct for every chunk but the last --
+    // leaving it set made the walk step past the end of the form.
+    if (!entries.empty()) put32(last_header + 12, 0u);
+    // The root form must carry a real size and a power-of-two align.  The engine's
+    // Chunk_FirstChild (HOOK 0x4B7490, src/res/chunk.c:17-32) returns NULL when
+    // `size == 0` or the align is not a power of two, so a zeroed root header
+    // yields an archive with no members at all -- which is what this fixture used
+    // to write, and the reader only stopped accepting it when it became faithful
+    // to that rule.
+    put32(4, static_cast<uint32_t>(bytes.size()));  // size: the whole form
+    put32(8, 4u);                                   // align
+    put32(12, 0u);                                  // next: the root is not a sibling
     const std::filesystem::path path = std::filesystem::temp_directory_path() / file_name;
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
@@ -206,7 +230,11 @@ TEST(MenuTextRes, EnginePathFormMatchesTheRetailArchives) {
     // (IGI-RE src/menu/menumanager.c:254-255).
     EXPECT_EQ(resources.file_count(), 2u);
     EXPECT_EQ(resources.file_paths().size(), 2u);
-    EXPECT_EQ(resources.entry_count(), 288u);  // 262 menusystem.res + 28 missions.res, 2 shared
+    EXPECT_EQ(resources.entry_count(), 289u);  // 262 menusystem.res + 28 missions.res, 2 shared,
+                                               // plus the one PATH/nested member the engine's
+                                               // Resource_AddChunks registers (0x4B60F0,
+                                               // src/res/resource.c:328-375) and the old
+                                               // leaf-name reader dropped.
 
     // MenuManager_GetString builds "LOCAL:<gLanguageNames[language]>/<name>"
     // (menumanager.c:837, profile.c:379, profile.c:419), and that is the form the
