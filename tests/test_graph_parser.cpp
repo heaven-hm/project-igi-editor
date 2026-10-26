@@ -149,7 +149,7 @@ TEST_F(GraphParserTest, WriteSupportsAddingAndRemovingNodes) {
     std::filesystem::remove(out);
 }
 
-TEST_F(GraphParserTest, WriteRegeneratesAdjacencyWithoutDeletedNode) {
+TEST_F(GraphParserTest, WritePreservesTheRouteTableVerbatim) {
     GraphFile g = GRAPH_Parse(GraphPathMulti());  // graph7: nodes + edges
     ASSERT_TRUE(g.valid);
     ASSERT_GT(g.edges.size(), 0u);
@@ -164,19 +164,32 @@ TEST_F(GraphParserTest, WriteRegeneratesAdjacencyWithoutDeletedNode) {
     const std::string out = TempOut("igi_graph_adj.dat");
     ASSERT_TRUE(GRAPH_Write(GraphPathMulti(), out, g));
 
-    // The adjacency matrix must no longer reference the deleted node.
+    // The route table is engine DATA, not something the writer recomputes: Graph_Read
+    // loads it verbatim (HOOK 0x4FA160, src/graphnode/stream.c:300-307) and
+    // AIGraph_SaveRoutes writes back what the graph holds (HOOK 0x509520,
+    // src/ai/aigraph.c:231-238).  The old writer regenerated it with Floyd-Warshall
+    // and cleared the deleted node's row and column, which was invented behaviour --
+    // so this pins the engine's rule instead: the table survives the write unchanged.
+    //
+    // NOTE: that means the writer will not repair a table after an editor-side node
+    // delete; the editor's delete path owns that, not the serialiser.
     std::ifstream f(out, std::ios::binary);
     std::vector<char> d((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     f.close();
     int mn = 0; std::memcpy(&mn, d.data() + 12, 4);
     ASSERT_GT(mn, delId);
-    auto refAt = [&](int r, int c) {
-        int v; std::memcpy(&v, d.data() + 30 + ((size_t)r * mn + c) * 8, 4); return v;
-    };
-    for (int k = 0; k < mn; ++k) {
-        EXPECT_EQ(refAt(delId, k), -1) << "deleted node row not cleared at col " << k;
-        EXPECT_EQ(refAt(k, delId), -1) << "deleted node col not cleared at row " << k;
-    }
+
+    std::ifstream src(GraphPathMulti(), std::ios::binary);
+    std::vector<char> s((std::istreambuf_iterator<char>(src)), std::istreambuf_iterator<char>());
+    src.close();
+    ASSERT_GE(s.size(), 30u);
+    int smn = 0; std::memcpy(&smn, s.data() + 12, 4);
+    ASSERT_EQ(mn, smn);
+    const size_t tableBytes = static_cast<size_t>(mn) * static_cast<size_t>(mn) * 8u;
+    ASSERT_GE(d.size(), 30u + tableBytes);
+    ASSERT_GE(s.size(), 30u + tableBytes);
+    EXPECT_EQ(0, std::memcmp(d.data() + 30, s.data() + 30, tableBytes))
+        << "the route table must be written verbatim, not regenerated";
     std::filesystem::remove(out);
 }
 
