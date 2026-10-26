@@ -102,11 +102,22 @@ struct PortalRecord {
 };
 
 struct ParsedGeometry {
+    // One REND group record: MeshGroup (src/render/rendertypes.h:6-18) for
+    // formats 0/1, LmGroup (src/render/render.c:40-54) for format 3.  The
+    // engine issues one DrawIndexedPrimitiveVB per group, drawing the group's
+    // inline index array offset by g->base.
     struct RenderBlock {
         size_t triangleStart = 0;
         size_t triangleCount = 0;
-        int materialSlot = 0;
+        int materialSlot = 0;  // g->texture; -1 when 0xFFFF (untextured)
+        // EDITOR CONVENTION, not an engine field: g->sorted selects the engine's
+        // depth-sorted alpha-blended pass (src/render/render.c:994,1030); the
+        // editor expresses that as opacity < 1.
         float opacity = 1.0f;
+        int lightmapSlot = -1;  // format 3: g->lightmap (0xFFFF = none)
+        uint16_t sorted = 0;    // raw g->sorted
+        uint8_t flags = 0;      // raw g->flags; bit 0 = additive (render.c:1185)
+        uint8_t alpha = 0;      // raw g->alpha; alpha-test value (render.c:1203)
     };
 
     std::vector<RenderVertex> vertices;
@@ -120,10 +131,21 @@ struct ParsedGeometry {
     std::string renderLayout;
     std::vector<BoneInfo> bones;          // populated from REIH+MANB
     std::vector<Attachment> attachments;  // populated from ATTA
-    // Type-1 XTRV is two runs (OpenIGI MefSkinner / 0x49B700): base vertices
-    // that DNER draws, then extra weighted influences that accumulate into them.
+    // Type-1 XTRV is two runs, exactly as BoneMesh_Skin reads them
+    // (HOOK 0x49B700, src/dxinit/d3drender.c:232-245):
+    //   unk10 base vertices that the draw call indexes, then unkC extra
+    //   weighted influences that accumulate into a base vertex.
     uint32_t baseVertexCount = 0;
     uint32_t extraInfluenceCount = 0;
+    // format 3 only: the ID_LTMP ("PMTL") chunk the loader stores in
+    // MeshRender::unk18 (src/bonemesh/d3drender.c:229).  Never read by the
+    // engine; exposed for completeness of the per-format field mapping.
+    size_t lightmapChunkSize = 0;
+    // The HSMC chunk exists.  A missing HSMC is a clean return with coll = NULL
+    // (src/bonemesh/d3drender.c:246-250), not an error.
+    bool collisionPresent = false;
+    // A chunk link failed the engine's own checks (gChunkError, BSS 0xA43E5C).
+    bool chunkError = false;
 
     // ---- Collision/material data for ASCII export ----
     std::vector<XtvcVertex>  xtvcVerts;    // XTVC type1 (set 0)

@@ -76,8 +76,15 @@ std::vector<uint8_t> BuildMef(const std::vector<ChunkSpec>& specs) {
 
 // HSEM must be exactly 156 bytes (mef_native.cpp:625) and carries the model type
 // at +32 (ReadModelType, mef_native.cpp:173-179).
+//
+// The version word at +0 is not optional: Mesh_Load (HOOK 0x4CF390,
+// src/model/model.c:367-373) refuses a mesh whose version is not 0.10, so a
+// fixture that leaves it zero is a file the engine would reject.  Retail .mef
+// files carry 0.1f there (mef_writer.cpp writes it, and all 2212 static retail
+// models round-trip through it).
 std::vector<uint8_t> MakeHsem(uint32_t modelType) {
     std::vector<uint8_t> d(156, 0);
+    PutF32(d, 0, 0.1f);
     PutU32(d, 32, modelType);
     return d;
 }
