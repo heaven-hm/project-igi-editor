@@ -114,7 +114,11 @@ void AppendChunk(std::vector<uint8_t>& bytes, uint32_t fourcc, const std::vector
     const uint32_t padded_length = static_cast<uint32_t>((data.size() + 3u) & ~3u);
     AppendU32(bytes, fourcc);
     AppendU32(bytes, static_cast<uint32_t>(data.size()));
-    AppendU32(bytes, 0);
+    // align = 4, as in every shipped archive.  Chunk_Data (HOOK 0x4B74D0,
+    // src/res/chunk.c:34-49) computes the payload as
+    // `parent + ((align + off + 0xF) & ~(align - 1))`, which is meaningless at 0 --
+    // this fixture used to write 0 and the engine-faithful reader rejects it.
+    AppendU32(bytes, 4);
     AppendU32(bytes, 16u + padded_length);
     bytes.insert(bytes.end(), data.begin(), data.end());
     bytes.resize(bytes.size() + padded_length - data.size(), 0);
@@ -132,14 +136,40 @@ std::vector<uint8_t> MinimalRgb565Font() {
     std::vector<uint8_t> anmf(40, 0);
     anmf[22] = 2; anmf[24] = 1; anmf[26] = 3;
     AppendChunk(bytes, 0x464D4E41, anmf); // ANMF
-    std::vector<uint8_t> tran(2, 0); tran[0] = 1;
+    // TRAN is the engine's whole character map: 256 uint16 entries, which
+    // src/res/sprite.c:197-199 walks two bytes at a time for 256 codes.  A 2-byte
+    // chunk made the parser report a truncated map and reject the font outright.
+    // Entry 0 = 1 selects frame 1, read 1-based (sprite.c:199-202 -> Sprite_SetFrame),
+    // which is the single ANMF frame below.
+    std::vector<uint8_t> tran(512, 0); tran[0] = 1;
     AppendChunk(bytes, 0x4E415254, tran); // TRAN
+    // TexHeader: format@0, width@14, height@16, unk12@18, bitsPerPixel@22
+    // (src/file/texture.c:38-49).  TexRes_Load derives the pitch as
+    // `bitsPerPixel * unk12 / 8` (texture.c:110), so both must be set or the atlas is
+    // rejected as zero-sized: 16 bpp * 2 / 8 = 4 bytes == width 2 * 2 bytes, which is
+    // exactly the BODY below.
     std::vector<uint8_t> texh(24, 0);
-    texh[0] = 2; texh[14] = 2; texh[16] = 1;
+    texh[0] = 2; texh[14] = 2; texh[16] = 1; texh[18] = 2; texh[22] = 16;
     AppendChunk(bytes, 0x48584554, texh); // TEXH
+    const std::size_t body_header = bytes.size();
     std::vector<uint8_t> body;
     AppendU16(body, 0xffff); AppendU16(body, 0);
     AppendChunk(bytes, 0x59444F42, body); // BODY
+
+    // The root form needs a real size and a power-of-two align: Chunk_FirstChild
+    // (HOOK 0x4B7490, src/res/chunk.c:17-32) returns NULL when size == 0 or the align
+    // is not a power of two, so a zeroed root header is an archive with no members at
+    // all.  And Chunk_Next (0x4B7470, :9-15) ends the sibling walk on next == 0, so the
+    // last chunk must not carry its own length there.
+    const auto put32 = [&bytes](std::size_t at, uint32_t v) {
+        bytes[at + 0] = static_cast<uint8_t>(v & 0xFFu);
+        bytes[at + 1] = static_cast<uint8_t>((v >> 8) & 0xFFu);
+        bytes[at + 2] = static_cast<uint8_t>((v >> 16) & 0xFFu);
+        bytes[at + 3] = static_cast<uint8_t>((v >> 24) & 0xFFu);
+    };
+    put32(4, static_cast<uint32_t>(bytes.size()));  // size: the whole form
+    put32(8, 4u);                                   // align
+    put32(body_header + 12, 0u);                    // chain terminator
     return bytes;
 }
 } // namespace
@@ -156,7 +186,11 @@ TEST(FntParserSyntheticTest, ParsesMinimalRgb565FontAndGlyphMap) {
     EXPECT_EQ(glyph.height, 1);
     EXPECT_EQ(glyph.advance, 3);
     ASSERT_EQ(font.rgba.size(), 8u);
-    EXPECT_EQ(font.rgba[3], 255);
+    // Format 2 is ARGB1555 in the engine's own table (D3DTex_DownloadTexture
+    // 0x50AD10, src/sysmisc/d3dtex.c:411-432), not RGB565: the alpha comes from the
+    // low 5 bits and expands as 31 << 3 = 248, so an all-ones pixel is not fully
+    // opaque.  The old expectation of 255 assumed RGB565.
+    EXPECT_EQ(font.rgba[3], 248);
     EXPECT_EQ(font.rgba[7], 0);
 }
 
