@@ -399,6 +399,7 @@ add_executable(igi_tests
     tests/test_declared_position_fallback.cpp
     tests/test_keybindings.cpp
     tests/test_menu_qvm.cpp
+    tests/test_menu_text_res.cpp
     tests/test_menu_ui.cpp
 )
 
@@ -523,6 +524,7 @@ target_sources(igi_tests PRIVATE
     source/runtime/level_weather.cpp
     source/runtime/weather_mode.cpp
     source/menu/qvm_image.cpp
+    source/menu/menu_text_res.cpp
     source/menu/menu_ui.cpp
     source/app_menu.cpp
 )
