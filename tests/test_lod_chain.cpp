@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "lod/lod_chain.h"
+#include "lod/lod_settings.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -291,6 +292,155 @@ TEST(LodChainCorpusTest, EveryRetailLevelBundleMatchesTheMeasuredChainHistogram)
     std::printf("[lod] bundles=%d names=%d chain>1=%d (%.1f%%) hist 1:%d 2:%d 3:%d 4:%d 5:%d gaps=%d nonDigitEndings=%d\n",
                 levels, names, multi, 100.0 * multi / names, hist[1], hist[2], hist[3],
                 hist[4], hist[5], gaps, nonDigitEndings);
+}
+
+// --------------------------------------------------------------------------
+// VirModel_InitLods: the distance array is written BEFORE the find
+// (src/model/model.c:153-158)
+// --------------------------------------------------------------------------
+
+TEST(LodChainTest, DistanceIsWrittenAtTheIndexThatTerminatedTheLoop) {
+    // Chain of exactly 2, so the loop breaks on i == 3. The engine still writes
+    // lod_dist[2] = 100/(3*3) = 11 before breaking, and leaves lod_dist[3] = 0
+    // and lod_dist[4] = 0 from the zeroed VirModel.
+    const auto names = MakeSet({"a_1", "a_2"});
+    const LodChain c = ChainIn(names, "a_1");
+
+    ASSERT_EQ(c.count, 2);
+    EXPECT_EQ(c.distance[0], 100);  // 100/(1*1)
+    EXPECT_EQ(c.distance[1], 25);   // 100/(2*2)
+    EXPECT_EQ(c.distance[2], 11);   // 100/(3*3) — the terminating iteration
+    EXPECT_EQ(c.distance[3], 0);    // never reached, VirModel was zeroed
+    EXPECT_EQ(c.distance[4], 0);
+}
+
+TEST(LodChainTest, FullChainWritesAllFiveDistances) {
+    const auto names = MakeSet({"m_1", "m_2", "m_3", "m_4", "m_5"});
+    const LodChain c = ChainIn(names, "m_1");
+
+    ASSERT_EQ(c.count, 5);
+    EXPECT_EQ(c.distance[0], 100);
+    EXPECT_EQ(c.distance[1], 25);
+    EXPECT_EQ(c.distance[2], 11);
+    EXPECT_EQ(c.distance[3], 6);   // 100/16
+    EXPECT_EQ(c.distance[4], 4);   // 100/25
+}
+
+TEST(LodChainTest, MissOnTheFirstStepLeavesEveryDistanceAtZero) {
+    // The engine breaks on i == 1, after writing lod_dist[0]. So distance[0] is
+    // set even though lod_count is 0.
+    const auto names = MakeSet({"other"});
+    const LodChain c = ChainIn(names, "absent");
+
+    EXPECT_EQ(c.count, 0);
+    EXPECT_EQ(c.distance[0], 100);
+    EXPECT_EQ(c.distance[1], 0);
+}
+
+// --------------------------------------------------------------------------
+// ModelLODSettings_Changed: monotonize, then scale by k4096
+// (src/animtrig/lodsettings.c:157-171)
+// --------------------------------------------------------------------------
+
+TEST(LodSettingsTest, MonotonizeRaisesEachDistanceToItsPredecessor) {
+    float d[5] = {10.0f, 5.0f, 30.0f, 20.0f, 25.0f};
+    igi::lod::MonotonizeDistances(d);
+
+    EXPECT_FLOAT_EQ(d[0], 10.0f);  // i == 0 is never compared
+    EXPECT_FLOAT_EQ(d[1], 10.0f);  // 5 raised to 10
+    EXPECT_FLOAT_EQ(d[2], 30.0f);  // already above
+    EXPECT_FLOAT_EQ(d[3], 30.0f);  // 20 raised to 30
+    EXPECT_FLOAT_EQ(d[4], 30.0f);  // 25 raised to 30
+}
+
+TEST(LodSettingsTest, MonotonizeLeavesAnAscendingTableUntouched) {
+    float d[5] = {0.0f, 70.0f, 170.0f, 300.0f, 500.0f};
+    igi::lod::MonotonizeDistances(d);
+
+    EXPECT_FLOAT_EQ(d[0], 0.0f);
+    EXPECT_FLOAT_EQ(d[1], 70.0f);
+    EXPECT_FLOAT_EQ(d[2], 170.0f);
+    EXPECT_FLOAT_EQ(d[3], 300.0f);
+    EXPECT_FLOAT_EQ(d[4], 500.0f);
+}
+
+TEST(LodSettingsTest, DistancesAreScaledBy4096ForTheModel) {
+    const float d[5] = {0.0f, 70.0f, 170.0f, 300.0f, 500.0f};
+    float out[5] = {};
+    igi::lod::ScaleDistancesToWorldUnits(d, out);
+
+    EXPECT_FLOAT_EQ(out[0], 0.0f);
+    EXPECT_FLOAT_EQ(out[1], 70.0f * 4096.0f);
+    EXPECT_FLOAT_EQ(out[4], 500.0f * 4096.0f);
+}
+
+// --------------------------------------------------------------------------
+// lod_select, authored-table branch (src/lod/mesh3d.c:172-184)
+// --------------------------------------------------------------------------
+
+TEST(LodSelectTest, PicksTheFirstBucketWhoseDistanceCoversTheViewDepth) {
+    // Table in world units, ascending, as ModelLODSettings_Changed would leave it.
+    const float dists[5] = {0.0f, 70.0f * 4096.0f, 170.0f * 4096.0f,
+                            300.0f * 4096.0f, 500.0f * 4096.0f};
+    const float fov = 1.0f, k = 1.0f, radius = 0.0f;
+
+    // d == dists[0] == 0 is not > dists[0], and dists[0] == 0 takes the special
+    // path: i = min(n-1, 1) = 1, then 0 > dists[1] is false, so the result is 1.
+    EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 5, fov, 0.0f, radius, k), 1);
+
+    EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 5, fov, 70.0f * 4096.0f, radius, k), 1);
+    EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 5, fov, 80.0f * 4096.0f, radius, k), 2);
+    EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 5, fov, 200.0f * 4096.0f, radius, k), 3);
+    EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 5, fov, 400.0f * 4096.0f, radius, k), 4);
+}
+
+TEST(LodSelectTest, PastTheCutoffIsNotDrawn) {
+    const float dists[5] = {0.0f, 70.0f * 4096.0f, 170.0f * 4096.0f,
+                            300.0f * 4096.0f, 500.0f * 4096.0f};
+
+    EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 5, 1.0f, 500.0f * 4096.0f, 0.0f, 1.0f), 4);
+    EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 5, 1.0f, 501.0f * 4096.0f, 0.0f, 1.0f), -1);
+}
+
+TEST(LodSelectTest, ANonZeroFirstDistanceStartsTheScanAtLodZero) {
+    // dists[0] != 0, so the special path is skipped and the scan starts at 0.
+    const float dists[5] = {10.0f, 20.0f, 30.0f, 40.0f, 100.0f};
+
+    EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 5, 1.0f, 5.0f, 0.0f, 1.0f), 0);
+    EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 5, 1.0f, 15.0f, 0.0f, 1.0f), 1);
+    EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 5, 1.0f, 45.0f, 0.0f, 1.0f), 4);
+}
+
+TEST(LodSelectTest, ShortChainsClampToTheLastAvailableLod) {
+    // lod_count 1: i = n-1 = 0, the `i > 1` guard does not apply, and the scan
+    // loop cannot run because i < n-1 is false. A zero first distance therefore
+    // still selects 0 rather than 1.
+    const float dists[5] = {0.0f, 20.0f, 30.0f, 40.0f, 100.0f};
+    EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 1, 1.0f, 5.0f, 0.0f, 1.0f), 0);
+
+    // lod_count 2: i = n-1 = 1, the guard leaves it at 1.
+    EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 2, 1.0f, 5.0f, 0.0f, 1.0f), 1);
+}
+
+TEST(LodSelectTest, RadiusIsSubtractedBeforeTheFovAndKScale) {
+    const float dists[5] = {0.0f, 100.0f, 200.0f, 300.0f, 1000.0f};
+    // d = fov * ((dist - r) * k). dists[0] == 0, so the scan starts at i = 1.
+    //
+    // r = 50: d = 1 * ((150 - 50) * 2) = 200 -> 200 > 100 advances to i = 2,
+    //         200 > 200 stops. Result 2.
+    EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 5, 1.0f, 150.0f, 50.0f, 2.0f), 2);
+    // If the radius were dropped the same call would give d = 300 and land on 3,
+    // so this pair is what pins the subtraction to the right side of the scale.
+    EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 5, 1.0f, 150.0f, 0.0f, 2.0f), 3);
+
+    // r = 50 at dist 160: d = 1 * ((160 - 50) * 2) = 220 -> 220 > 200 advances
+    // to i = 3, then 220 > 300 stops. Result 3.
+    EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 5, 1.0f, 160.0f, 50.0f, 2.0f), 3);
+}
+
+TEST(LodSelectTest, NoChainIsNeverDrawn) {
+    const float dists[5] = {0.0f, 20.0f, 30.0f, 40.0f, 100.0f};
+    EXPECT_EQ(igi::lod::SelectAuthoredLod(dists, 0, 1.0f, 5.0f, 0.0f, 1.0f), -1);
 }
 
 } // namespace

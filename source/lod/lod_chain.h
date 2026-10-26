@@ -105,17 +105,41 @@ struct LodChain {
 // Builds the chain for `modelName`. `exists` must answer whether a model name
 // resolves in the loaded set — the equivalent of ModelLod_Find returning
 // non-NULL. Every step follows the oracle lines cited above.
+//
+// This is a port of VirModel_InitLods (src/model/model.c:145-163):
+//
+//     void VirModel_InitLods(VirModel *m) {
+//         char name[32];
+//         int i, n = 0;
+//         m->unk24 = 0;
+//         strcpy(name, m->name);
+//         for (i = 1; i <= VIRMODEL_LODS; i++) {
+//             m->lod_dist[i - 1] = (uint16_t)(100 / (i * i));
+//             m->lods[i - 1] = ModelLod_Find(name);
+//             if (!m->lods[i - 1]) break;
+//             name[strlen(name) - 1]++;
+//             n++;
+//         }
+//         m->lod_count = (uint16_t)n;
+//     }
+//
+// The ORDER matters and is easy to get wrong: `lod_dist[i - 1]` is assigned
+// BEFORE the find, so the distance at the index that terminated the loop is
+// still written. Assigning the distance only after a successful find leaves
+// `distance[count]` at 0 where the engine has 100/((count+1)^2).
 template <class ExistsFn>
 LodChain BuildLodChain(const std::string& modelName, ExistsFn&& exists) {
-    LodChain chain;
-    std::string current = modelName;
-    for (int level = 1; level <= kVirModelLods; ++level) {
-        if (!exists(current)) break;  // model.c:157-158
-        chain.names[level - 1] = current;
-        chain.distance[level - 1] = LodDistance(level);
-        chain.count = level;
-        if (level < kVirModelLods) IncrementLodName(current);  // model.c:160
+    LodChain chain;                        // VirModel is zeroed by Model_Init
+    std::string name = modelName;          // strcpy(name, m->name)
+    int n = 0;
+    for (int i = 1; i <= kVirModelLods; ++i) {
+        chain.distance[i - 1] = LodDistance(i);   // model.c:154, before the find
+        if (!exists(name)) break;                 // model.c:157-158
+        chain.names[i - 1] = name;                // m->lods[i-1] = ModelLod_Find(name)
+        IncrementLodName(name);                   // model.c:160
+        ++n;
     }
+    chain.count = n;                       // m->lod_count = n
     return chain;
 }
 
