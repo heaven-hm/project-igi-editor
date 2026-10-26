@@ -465,7 +465,8 @@ void Renderer::Draw(const draw_params_s &params,
       objects_.IsCameraInsideBuildingBounds(params.level_objects_->GetObjects(),
                                              params.view_define_->pos_);
   if (!params.fast_scene_preview_)
-    rain_.Draw(ubo_mats_, params.view_define_->pos_, cameraIsSheltered);
+    rain_.Draw(ubo_mats_, params.view_define_->pos_, params.view_define_->right_,
+               params.view_define_->up_, cameraIsSheltered);
 
   if (profileRenderer) {
     static int frames = 0;

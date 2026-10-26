@@ -13,13 +13,18 @@ public:
     void SetParams(bool active, bool is_snow, float startMeters, float endMeters, float alpha);
     void SetWeatherEnabled(bool enabled) { weather_enabled_ = enabled; }
 
-    void Draw(GLuint ubo_mats, const glm::vec3& cameraPos, bool cameraIsSheltered);
+    // cameraRight/cameraUp are the frame's camera basis. Rain_FillVB expands the
+    // flake quad in the camera's own axes (gTransContext.matrix, rain.c:338-340,
+    // :382-388), so the basis has to come from the frame being drawn.
+    void Draw(GLuint ubo_mats, const glm::vec3& cameraPos, const glm::vec3& cameraRight,
+              const glm::vec3& cameraUp, bool cameraIsSheltered);
     bool IsActive() const { return active_ && weather_enabled_; }
     bool IsSnow() const { return is_snow_; }
     bool IsWeatherEnabled() const { return weather_enabled_; }
 
 private:
-    void DrawSnow(GLuint ubo_mats, const glm::vec3& cameraPos, float time_sec);
+    void DrawSnow(GLuint ubo_mats, const glm::vec3& cameraPos, const glm::vec3& cameraRight,
+                  const glm::vec3& cameraUp, float time_sec);
 
     GLuint shader_program_ = 0;
     GLuint snow_program_ = 0;

@@ -138,22 +138,28 @@ float PickupTouchRange(float model_radius, float max_scale) {
 }
 
 bool PickupTouches(double range, const double pickup_pos[3], const double toucher_pos[3]) {
-    // touches() pickup.c:180-200. The engine computes in x87 long double
-    // (`long double r`, `long double z`, Vec3d_Length returns long double), so
-    // the arithmetic below is done in long double too.
+    // touches() pickup.c:180-200. The engine's differences are stored into a
+    // `Vec3d d` and a `double dz`, so under the file's
+    // `excess-precision=standard` pragma (pickup.c:1) each subtraction is
+    // ROUNDED TO DOUBLE first and only widened back to long double inside
+    // Vec3d_Length (vec3.c:39-44). Doing the subtraction in long double here
+    // would differ in the low bits, so it is done in double and widened after.
     const double effective_range = ApplyMinTouch(range);
 
-    const long double dx = static_cast<long double>(pickup_pos[0]) - toucher_pos[0];
-    const long double dy = static_cast<long double>(pickup_pos[1]) - toucher_pos[1];
-    // d.z = 0.0: the horizontal distance ignores z entirely (pickup.c:198).
-    const long double length = std::sqrt(dx * dx + dy * dy);
+    const double dx = pickup_pos[0] - toucher_pos[0];  // pickup.c:189
+    const double dy = pickup_pos[1] - toucher_pos[1];  // pickup.c:190
+    double dz = pickup_pos[2] - toucher_pos[2];        // pickup.c:192-197
+    if (dz < 0.0) dz = -dz;
 
-    long double z = static_cast<long double>(pickup_pos[2]) - toucher_pos[2];
-    if (z < 0.0L) z = -z;
+    const long double x = dx, y = dy;
+    // d.z = 0.0 before the length (pickup.c:198), so the horizontal test is the
+    // true 2D distance; Vec3d_Length 0x4B3130 sums the three squares in long
+    // double (vec3.c:39-44).
+    const long double length = std::sqrt(x * x + y * y + 0.0L);
 
     // Both comparisons are negated `>=`: exactly at range, or exactly 4096 units
     // away vertically, is NOT a touch.
-    return !(length >= effective_range) && !(z >= kPickupTouchHeightUnits);
+    return !(length >= effective_range) && !(dz >= kPickupTouchHeightUnits);
 }
 
 bool PickupTouchesFromModel(float model_radius, float max_scale, const double pickup_pos[3],

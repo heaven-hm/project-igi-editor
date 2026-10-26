@@ -4,14 +4,24 @@
  *          Split from renderer_objects.cpp; shares renderer_objects_internal.h.
  *****************************************************************************/
 #include "renderer_objects_internal.h"
+#include "../lod/lod_qvm_table.h"
 #include "../lod/lod_settings.h"
+#include "../lod/lod_select.h"
 #include "../runtime/weather_visibility.h"
 
 // ─── LOD virtual-model chains (issue #62) ────────────────────────────────────
-// See the header for the oracle citations. The three pieces are: an exact-name
-// existence predicate over the editor's loaded model set (ModelLod_Find's
-// semantics), the chain itself (VirModel_InitLods' rule), and the authored-table
-// selection (lod_select's authored branch).
+// Four pieces, all of them the engine's:
+//   1. an exact-name existence predicate over the editor's loaded model set
+//      (ModelLod_Find's strcmp, IGI-RE src/model/model.c:165-178);
+//   2. the chain itself (VirModel_InitLods' rule, src/model/model.c:145-163);
+//   3. the per-frame switch — BOTH branches of `lod_select`
+//      (src/lod/mesh3d.c:161-208), ported in source/lod/lod_select.h, which
+//      needs the LOD meshes' MeshHeader center/sphere/complexity
+//      (source/lod/mef_mesh_header.h) and the level-wide LODSettings table
+//      (source/lod/lod_qvm_table.h);
+//   4. `ModelObj_GetLOD`'s view-depth and bounding-radius inputs
+//      (src/lod/mesh3d.c:209-227) as `igi::lod::RigidViewDepth` /
+//      `igi::lod::MaxScale`.
 
 bool Renderer_Objects::MeshNameResolves(const std::string& modelId) const {
     if (modelId.empty()) return false;
@@ -82,13 +92,139 @@ bool Renderer_Objects::GetAuthoredLodDistances(const std::string& modelId, float
     return true;
 }
 
+namespace {
+
+// The level-wide `LODSettings` task after `LODSettings_Changed`
+// (IGI-RE src/animtrig/lodsettings.c:129-137): gLodRange, gLodBlend and the six
+// gLod*Detail / gLod*Cull globals that `lod_select`'s complexity branch reads
+// (src/lod/mesh3d.c:187,196,205). Read from <IGI>/lod.qvm, the same file
+// EnsurePortalDistancesLoaded parses for the per-model tables.
+//
+// File-local because `Renderer_Objects` has no member for it yet — see the
+// report: `renderer_objects.h` wants
+// `igi::lod::LevelLodSettings level_lod_settings_;` plus
+// `bool level_lod_settings_found_ = false;`. Re-parsed only when the resolved
+// path changes, so the per-frame cost is one string compare.
+struct LevelLodSettingsState {
+    igi::lod::LevelLodSettings settings;
+    bool found = false;  // a LODSettings task was present in lod.qvm
+};
+
+const LevelLodSettingsState& LevelLodSettingsForCurrentLevel() {
+    static std::string loadedFrom;
+    static LevelLodSettingsState state;
+
+    const std::string qvmPath = Utils::GetIGIRootPath() + "\\lod.qvm";
+    if (qvmPath == loadedFrom) return state;
+    loadedFrom = qvmPath;
+    state = LevelLodSettingsState{};
+
+    if (!std::filesystem::exists(qvmPath)) return state;
+    QVMFile qvm = QVM_Parse(qvmPath);
+    if (!qvm.valid) return state;
+    const std::string decompiled = QVM_DecompileToString(qvm);
+    if (decompiled.empty()) return state;
+
+    float raw[8] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+    if (!igi::lod::ParseLevelLodSettings(decompiled, raw)) {
+        Logger::Get().Log(LogLevel::WARNING,
+            "[Renderer_Objects] lod.qvm has no LODSettings task; unauthored models keep LOD 0");
+        return state;
+    }
+    state.settings = igi::lod::ScaleLevelLodSettings(raw[0], raw[1], raw[2], raw[3],
+                                                    raw[4], raw[5], raw[6], raw[7]);
+    state.found = true;
+    Logger::Get().Log(LogLevel::INFO,
+        "[Renderer_Objects] Level LODSettings: rigidDetail=" + std::to_string(state.settings.rigidDetail) +
+        " rigidCull=" + std::to_string(state.settings.rigidCull) +
+        " blend=" + std::to_string(state.settings.blend) +
+        " range=" + std::to_string(state.settings.range));
+    return state;
+}
+
+std::vector<uint8_t> ReadFileBytes(const std::string& path) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f) return {};
+    const std::streamsize n = f.tellg();
+    if (n <= 0) return {};
+    std::vector<uint8_t> bytes(static_cast<size_t>(n));
+    f.seekg(0, std::ios::beg);
+    if (!f.read(reinterpret_cast<char*>(bytes.data()), n)) return {};
+    return bytes;
+}
+
+}  // namespace
+
 int Renderer_Objects::SelectLodForDistance(const std::string& modelId, bool isBuilding,
                                            float fov, float dist, float radius, float k) {
-    const igi::lod::LodChain& chain = GetLodChain(modelId, isBuilding);
-    if (chain.count <= 0) return -1;  // VirModel_Get reports not-found
-    float dists[5] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    if (!GetAuthoredLodDistances(modelId, dists)) return -1;  // complexity branch not ported
-    return igi::lod::SelectAuthoredLod(dists, chain.count, fov, dist, radius, k);
+    // The chain is what `ModelObj_GetLOD` walks (IGI-RE src/lod/mesh3d.c:209-227);
+    // a model whose own name does not resolve has lod_count 0 and is not
+    // drawable at all (VirModel_Get, src/model/model.c:118-139).
+    GetLodChain(modelId, isBuilding);
+    auto it = lod_chain_cache_.find(std::to_string(current_level_) + ":" + modelId);
+    if (it == lod_chain_cache_.end() || it->second.count <= 0) return -1;
+    igi::lod::LodChain& chain = it->second;
+
+    // `lod_header(vm->lods[i])` — the three MeshHeader words both branches need.
+    // Filled once per (level, model): the MESH header is not part of the editor's
+    // ParsedGeometry, so it is read here (source/lod/mef_mesh_header.h).
+    if (!chain.headersLoaded) {
+        chain.headersLoaded = true;
+        for (int i = 0; i < chain.count; ++i) {
+            std::vector<uint8_t> bytes = FindMeshData(chain.names[i]);
+            if (bytes.empty()) {
+                const std::string path = GetOrExtractMefTemp(chain.names[i], isBuilding);
+                if (!path.empty()) bytes = ReadFileBytes(path);
+            }
+            chain.header[i] = igi::lod::ReadMefMeshHeader(bytes);
+            if (!chain.header[i].valid) {
+                Logger::Get().Log(LogLevel::DEBUG, "[Renderer_Objects] LOD " + std::to_string(i) +
+                    " of '" + modelId + "' (" + chain.names[i] + ") has no readable MESH header");
+            }
+        }
+    }
+
+    igi::lod::LodSelectInput vm;
+    vm.lodCount = chain.count;
+
+    // VirModel.unk24 / unk28: the authored ModelLODSettings table, monotonized
+    // and x4096 by GetAuthoredLodDistances. A model the level's lod.qvm does not
+    // name keeps unk24 == 0 and takes the complexity branch — which is the
+    // common case, not an edge case.
+    float authored[igi::lod::kVirModelLods] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    vm.hasAuthoredTable = GetAuthoredLodDistances(modelId, authored);
+    if (vm.hasAuthoredTable) {
+        for (int i = 0; i < igi::lod::kVirModelLods; ++i) vm.authoredDistance[i] = authored[i];
+    }
+
+    int complexity[igi::lod::kVirModelLods] = {0, 0, 0, 0, 0};
+    const char* names[igi::lod::kVirModelLods] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+    for (int i = 0; i < chain.count; ++i) {
+        if (chain.header[i].valid) complexity[i] = chain.header[i].complexity;
+        names[i] = chain.names[i].c_str();
+    }
+    vm.complexity = complexity;
+    vm.lodNames = names;
+
+    const LevelLodSettingsState& level = LevelLodSettingsForCurrentLevel();
+    if (!vm.hasAuthoredTable && !level.found) {
+        // `lod_select`'s complexity branch needs gLodRange, gLodBlend and
+        // gLod*Rigid*Detail/Cull, which only exist once the level's LODSettings
+        // task has been applied (LODSettings_Changed). With no such task the
+        // engine's globals are 0, `thr[0] = kOne / (detail * e)` is +inf and
+        // every unauthored rigid model is culled — reproducing that would blank
+        // the level, so an unauthored model keeps LOD 0 instead. Reported.
+        return 0;
+    }
+    const igi::lod::LodSelectResult r = igi::lod::LodSelect(
+        vm, static_cast<long double>(dist), static_cast<long double>(radius),
+        static_cast<long double>(k), level.settings.detail(igi::lod::LodKind::Rigid),
+        level.settings.cull(igi::lod::LodKind::Rigid), fov, true, level.settings);
+
+    if (!r.warning.empty()) {
+        Logger::Get().Log(LogLevel::WARNING, "[Renderer_Objects] " + r.warning);
+    }
+    return r.lod;
 }
 
 float Renderer_Objects::GetMeshZOffset(const std::string& modelId, bool isBuilding) {

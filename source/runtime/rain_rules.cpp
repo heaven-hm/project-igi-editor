@@ -14,9 +14,9 @@ namespace {
 constexpr double kLayerInv = 4.0690104166666664e-05;
 constexpr double kLayerOrigin = 36864.0;
 
-// rain.c:223-224 kGridOrigin and kTileInv, the grid snap. kTileInv is
-// 9.178218688807207e-05 (rain.c:679) = 1/kTile.
-constexpr double kTileInv = 9.178218688807207e-05;
+// rain.c:223-224 kGridOrigin and kTileInv, the grid snap. kTileInv lives in the
+// header (rain.c:679, kTileInvUnits) so the cell parity test below can share the
+// engine's exact multiply.
 
 // Matches Level::LoadFogInfo / level_weather.cpp: [0]=task id, [1]=type,
 // [2]=name, [3]=declared parameter 0.
@@ -138,9 +138,9 @@ float WrapZ(float z_units, float speed_units_per_tick) {
 GridPlacement PlaceGrid(double camera_x, double camera_y) {
     GridPlacement grid;
     const int ix = static_cast<int>(
-        std::floor((camera_x - kGridOriginUnits) * kTileInv + 0.5));
+        std::floor((camera_x - kGridOriginUnits) * kTileInvUnits + 0.5));
     const int iy = static_cast<int>(
-        std::floor((camera_y - kGridOriginUnits) * kTileInv + 0.5));
+        std::floor((camera_y - kGridOriginUnits) * kTileInvUnits + 0.5));
 
     int mx = ix % kGridHalfTiles;
     int my = iy % kGridHalfTiles;
@@ -312,6 +312,15 @@ SnowTileWrap SnowWrapTileY(float y_units) {
     if (!(y_units >= 0.0f)) return {y_units + kTileUnitsF, true};
     if (y_units > kTileUnitsF) return {y_units - kTileUnitsF, true};
     return {y_units, false};
+}
+
+int CellVertexGroup(double tile_x, double tile_y) {
+    // rain.c:404-408, verbatim: q = (floor(y * kTileInv) & 1) << 1;
+    // q |= floor(x * kTileInv) & 1. The multiply by the engine's reciprocal is
+    // kept, not a division by kTileUnits (see kTileInvUnits).
+    int q = (static_cast<int>(std::floor(tile_y * kTileInvUnits)) & 1) << 1;
+    q |= static_cast<int>(std::floor(tile_x * kTileInvUnits)) & 1;
+    return q;
 }
 
 float SnowFlakeWidthUnits() {

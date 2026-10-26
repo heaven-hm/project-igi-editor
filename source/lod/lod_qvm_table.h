@@ -116,6 +116,68 @@ inline float AuthoredCutoffDistance(const AuthoredLodEntry& entry) {
     return d;
 }
 
+// ---------------------------------------------------------------------------
+// The level-wide `LODSettings` task, which is a DIFFERENT task type from
+// `ModelLODSettings` (src/animtrig/lodsettings.c:19-28, :96-103):
+//
+//   Task_New(-1, "LODSettings", "",
+//            <splineDetail>, <rigidDetail>, <boneDetail>,
+//            <splineCull>, <rigidCull>, <boneCull>, <blend>, <range>);
+//
+// `LODSettings_Changed` (HOOK 0x4EDAA0, src/animtrig/lodsettings.c:129-137) turns
+// the four detail/cull percentages into factors (`* 0.02`, `:52`), keeps `blend`
+// raw and scales `range` by 4096 into `gLodRange` — the values `lod_select`'s
+// complexity branch reads (src/lod/mesh3d.c:187,196,205). Returned through
+// `igi::lod::ScaleLevelLodSettings` so the scaling has one implementation.
+//
+// `false` when the level's lod.qvm has no LODSettings task; the caller then keeps
+// the globals' own defaults (BSS 0 with `gLodBlend = 1.0f`, and
+// `LODSettings_Create`'s blend 1.0 / range 4.0 — src/animtrig/lodsettings.c:117-127).
+inline bool ParseLevelLodSettings(const std::string& decompiled, float out[8]) {
+    std::stringstream ss(decompiled);
+    std::string line;
+    while (std::getline(ss, line)) {
+        if (line.find("Task_New") == std::string::npos) continue;
+        if (line.find("\"LODSettings\"") == std::string::npos) continue;
+
+        const size_t start = line.find('(');
+        const size_t end = line.rfind(')');
+        if (start == std::string::npos || end == std::string::npos || end <= start) continue;
+
+        std::vector<std::string> tokens;
+        std::stringstream argStream(line.substr(start + 1, end - start - 1));
+        std::string token;
+        while (std::getline(argStream, token, ',')) {
+            const size_t first = token.find_first_not_of(" \t\r\n");
+            if (first == std::string::npos) {
+                tokens.push_back(std::string());
+                continue;
+            }
+            const size_t last = token.find_last_not_of(" \t\r\n");
+            tokens.push_back(token.substr(first, last - first + 1));
+        }
+
+        // The type name is the second argument; the task name follows it and the
+        // eight parameters come after that (gLODSettingsParams, :96-103).
+        size_t typeAt = tokens.size();
+        for (size_t i = 0; i < tokens.size(); ++i) {
+            if (tokens[i] == "\"LODSettings\"") { typeAt = i; break; }
+        }
+        if (typeAt == tokens.size() || typeAt + 2 + 8 > tokens.size()) continue;
+
+        bool ok = true;
+        for (int i = 0; i < 8 && ok; ++i) {
+            try {
+                out[i] = std::stof(tokens[typeAt + 2 + static_cast<size_t>(i)]);
+            } catch (...) {
+                ok = false;
+            }
+        }
+        if (ok) return true;
+    }
+    return false;
+}
+
 } // namespace lod
 } // namespace igi
 

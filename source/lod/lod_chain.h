@@ -77,6 +77,8 @@
 #include <cstddef>
 #include <string>
 
+#include "mef_mesh_header.h"
+
 namespace igi {
 namespace lod {
 
@@ -100,6 +102,14 @@ struct LodChain {
     int count = 0;                        // VirModel.lod_count
     std::string names[kVirModelLods];     // names[i] is LOD i+1
     int distance[kVirModelLods] = {0};    // VirModel.lod_dist
+    // The MeshHeader words of each resolved LOD — `center`/`sphere` (the
+    // distance reference and bounding radius of `ModelObj_GetLOD`,
+    // src/lod/mesh3d.c:220-224) and `complexity` (the complexity branch of
+    // `lod_select`, src/lod/mesh3d.c:194-198). Not filled by BuildLodChain
+    // unless a header provider is supplied: reading them costs a .mef read per
+    // level, so the LOD switch fills them on first use (see lod_select.h).
+    MefMeshHeader header[kVirModelLods];
+    bool headersLoaded = false;
 };
 
 // Builds the chain for `modelName`. `exists` must answer whether a model name

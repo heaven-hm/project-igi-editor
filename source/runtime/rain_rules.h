@@ -73,6 +73,12 @@ constexpr double kTileUnits = 10895.3603515625;
 constexpr float kTileUnitsF = 10895.36f;
 constexpr double kGridOriginUnits = 59924.48193359375;
 
+// rain.c:679 DATA(534278) kTileInv = 9.178218688807207e-05 == 1/kTile. The
+// engine always MULTIPLIES a cell coordinate by this reciprocal (rain.c:223-224,
+// 404,408); dividing by kTileUnits is not the same expression at an exact tile
+// boundary, so the port keeps the multiply.
+constexpr double kTileInvUnits = 9.178218688807207e-05;
+
 // rain.c:674 DATA kTwelve = 12.0f and rain.c:675 kTwoTiles = 130744.32421875
 // (== 12 * kTile despite the name). The 24x24 cell array (rain.c:67) is a 2x2
 // mirror of a 12x12 fundamental block, so the world content repeats every 12
@@ -357,6 +363,19 @@ SnowTileWrap SnowWrapTileY(float y_units);
 // rain.c:605 and rain.c:612 - the kind bits the x/y wraps toggle.
 constexpr int kSnowWrapKindBitX = 1;
 constexpr int kSnowWrapKindBitY = 2;
+
+// rain.c:404-408, inside Rain_DrawCell (HOOK 0x499430):
+//
+//   int q = ((int)(long long)crt_floor(c->y * kTileInv) & 1) << 1;
+//   q |= (int)(long long)crt_floor(c->x * kTileInv) & 1;
+//   list = &r->lists[q];
+//
+// `kind` is ONLY ever consumed as this vertex-group index (Rain_FillVB writes a
+// drop into list[d->kind], rain.c:333-334,378) and as the two wrap XORs, so a
+// drop is drawn only by cells whose tile parity equals its kind. `tile_x` and
+// `tile_y` are world tile coordinates - the values DrawTileX/DrawTileY return -
+// and the result is the group index in [0, kDropKindCount).
+int CellVertexGroup(double tile_x, double tile_y);
 
 // rain.c:341-342 builds the quad as `vx +/- size` with `size = fade * kFlakeSize`
 // (rain.c:309, kFlakeSize = 81.92 at rain.c:685), so the half-extent is 81.92

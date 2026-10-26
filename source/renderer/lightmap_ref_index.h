@@ -45,11 +45,45 @@
 //      (sector.c:549). Skipping this is the easy way to shift every later
 //      object's lightmap by one.
 //
-// What this header deliberately does NOT decide: which page *inside* the file a
-// drawn LOD uses. `lm->count = mesh->texCount` gives the page count, but the key
-// the engine indexes `file->tex[i]` by on upload is not established from
-// lightmapbuild.c alone, so no rule is asserted here. See
-// docs/igi-re-parity/LIGHTMAP_REFS.md.
+// WHICH PAGE INSIDE THE FILE, AND WHAT A LOD WITH NO BAKE DOES — both resolved
+// from the draw path, not from the builder:
+//
+//   Direct3DRender_DrawRigidMesh   HOOK(0x49DF60)   src/render/render.c:1014-1058
+//
+//       } else if (h->format == 3) {
+//           Lightmaps *set;
+//           LmMesh *d = h->data;
+//           LmGroup *g;
+//           if (o->lightmaps && (set = o->lightmaps[lod].lightmaps) != NULL) {   /* :1019 */
+//               ...
+//               Direct3DRender_UploadLightmapMesh(d, &o->lightmaps[lod]);        /* :1023 */
+//               ...
+//               IDirect3DDevice7_SetTexture(DEV, 1, set->tex[g->lightmap].texture.surface);  /* :1033 */
+//           } else {
+//               Direct3DRender_UploadLightmapMesh(d, NULL);                      /* :1052 */
+//               use_state(g3DTextureStates, gTexStageIdx);                       /* no atlas bound */
+//               use_state(g3DRenderStates, gLitIdx);
+//           }
+//
+//   and the sorted path, Direct3DRender_DrawSortedFaceGroup_Lightmap
+//   HOOK(0x49F1C0) src/render/render.c:1213:
+//       IDirect3DDevice7_SetTexture(DEV, 1, p->lightmap->tex[g->lightmap].texture.surface);
+//
+// Three rules follow, each with its oracle line:
+//
+//   4. The file a drawn LOD samples is `o->lightmaps[lod]` — the ref whose
+//      `lodIndex` is the SELECTED LOD (render.c:1019, :1023). A lower LOD uses
+//      its OWN `.olm`, never LOD 0's: `RefIndexForLod` above gives its ref index.
+//   5. The page inside that file is the drawn group's own `LmGroup.lightmap`
+//      (uint16, `0xFFFF` = no page; the group loops test exactly that at
+//      src/render/render.c:1114 and :1098). `Lightmaps.count` is the page count
+//      (`mesh->texCount`, lightmapbuild.c:91), so the field indexes `set->tex[]`
+//      directly.
+//   6. When the selected LOD has no `.olm` at all (`set == NULL`) the engine
+//      draws that mesh with NO lightmap bound, in the ordinary lit state
+//      (render.c:1052-1054). It never falls back to another LOD's atlas — so an
+//      editor drawing a lower LOD without its own bake must bind nothing rather
+//      than LOD 0's page.
 
 #include <cstdio>
 #include <string>
@@ -107,6 +141,50 @@ inline std::string OlmFileName(const std::string& object_name, int ref_index) {
 // in (source/renderer/object_lightmap.cpp strips any directory prefix).
 inline std::string OlmFileNameForFirstLod(const std::string& object_name, const RefLayout& layout) {
     return OlmFileName(object_name, RefIndexForLod(layout, 0));
+}
+
+// `LmGroup.lightmap` — src/render/render.c:45 (uint16_t) and the `0xFFFF`
+// sentinel the group loops test (render.c:1098, :1114).
+constexpr int kNoLightmapPage = 0xFFFF;
+
+// The page `set->tex[...]` a drawn render group samples (rule 5 above), or -1
+// when the group carries no lightmap page of its own. A group without a page
+// keeps the previous group's scales (render.c:1107-1114), which is the engine's
+// behaviour and not something a per-submesh texture lookup can express.
+inline int PageIndexForGroup(int group_lightmap) {
+    return group_lightmap == kNoLightmapPage ? -1 : group_lightmap;
+}
+
+// The file a drawn LOD samples (rule 4): the ref index for that LOD, or -1 when
+// the LOD has no ref at all — in which case the engine binds no atlas
+// (rule 6, render.c:1052-1054) and the mesh must be drawn dynamically lit.
+inline int LightmapRefForDrawnLod(const RefLayout& layout, int lod_index) {
+    return RefIndexForLod(layout, lod_index);
+}
+
+// The entry a drawn LOD of the object that OWNS the `LightmapInfo` samples, in
+// the group list the editor's resolver returns (`igi1conv
+// ResolveLightmapFilesForLogicalId` collects every `<logicalId>_NNNNN.olm` and
+// sorts ascending, so entry k is ref k).
+//
+// `SectorObject_LoadLightmaps` (HOOK 0x4DC3D0, src/sector/sector.c:641-680) fills
+// the set in this order — `fill_refs` for `so->s.o` and its sectors first, then
+// `SectorObject_FillMagicRefs` for each part's attached magic objects, then
+// `SectorObject_FillRigidRefs` over the children — so the owner's refs are
+// 0..lod_count-1 and its LOD n atlas is entry n.
+//
+// MEASURED on the retail corpus (LEVEL1, all 22 groups): every group's ref 0..k-1
+// page sizes halve per ref exactly as `(1 << lodIndex)` predicts
+// (LightmapInfo_Changed, src/dirlight/lightmapinfo.c:150), e.g. `obj00004` =
+// 128x4, 64x2, 32x1, 16x1 for a 4-level model, and `obj00000` = 256x16, 256x8,
+// 256x4, 256x2, 64x1 for the 5-level owner followed by 256x2/256x1, 64x1/8x1 and
+// 128x4/64x2 for three 2-level dependants.
+//
+// The refs of the OTHER objects in the set (magic objects, rigid children) start
+// at 0 + the owner's lod_count + every preceding object's lod_count, which needs
+// `SectorObject_LoadLightmaps`'s walk — see docs/igi-re-parity/LIGHTMAP_REFS.md.
+inline int OwnerLightmapEntryForDrawnLod(int lod_index) {
+    return lod_index < 0 ? -1 : lod_index;
 }
 
 } // namespace lightmap

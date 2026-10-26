@@ -4,6 +4,7 @@
 #include "weather_math.h"
 #include "../runtime/weather_visibility.h"
 #include "../runtime/weather_particle_style.h"
+#include "../runtime/rain_rules.h"
 #include "../logger.h"
 #include <freeglut.h>
 #include <vector>
@@ -50,43 +51,37 @@ void main() {
 }
 )";
 
+// Snow is not a separate system: Rain_New stores `r->snow = rain == 0`
+// (IGI-RE src/dxinit/rain.c:153, HOOK 0x498960) and every snow difference is a
+// branch on that flag. This shader draws the flakes the engine's snow branch
+// builds: a camera-facing quad of six vertices (rain.c:337-364), opaque white
+// (rain.c:353), placed by the tile/layer the cell walk selected (rain.c:461-468).
 static const char* SNOW_VERT_SRC = R"(
 #version 330 core
-layout(location = 0) in vec3 a_seed;
-layout(location = 1) in vec2 a_corner;
+layout(location = 0) in vec3 a_seed;   // flake position inside the drawn tile + layer
+layout(location = 1) in vec2 a_corner; // quad corner sign, engine vertex order v0..v5
+
 layout(std140) uniform Matrices { mat4 u_unused1; mat4 u_unused2; mat4 u_mvp; };
-uniform vec3 u_cameraPos;
-uniform float u_time;
-uniform float u_boxSize;
-uniform float u_heightStart;
-uniform float u_heightEnd;
-uniform float u_halfExtent;
-uniform float u_driftUnits;
+uniform vec3  u_tile_origin;   // world x/y of the drawn cell + layer base z
+uniform vec3  u_camera_right;  // camera basis: the editor's gTransContext.matrix
+uniform vec3  u_camera_up;
+uniform float u_half_extent;   // fade * kFlakeSize (rain.c:309,341-342,685)
+
 void main() {
-    float fallRange = max(u_heightStart - u_heightEnd, 1.0);
-    float speed = (0.025 + a_seed.z * 0.040) * fallRange;
-    float z = u_heightStart - mod(u_time * speed + a_seed.z * fallRange + u_cameraPos.z, fallRange);
-    float halfBox = u_boxSize * 0.5;
-    float cellX = mod(a_seed.x * u_boxSize - u_cameraPos.x, u_boxSize) - halfBox +
-                  sin(u_time * 0.45 + a_seed.x * 17.0) * u_driftUnits;
-    float cellY = mod(a_seed.y * u_boxSize - u_cameraPos.y, u_boxSize) - halfBox +
-                  cos(u_time * 0.35 + a_seed.y * 19.0) * u_driftUnits;
-    // OpenIGI builds a square flake quad from a 0.045m half-extent. Its
-    // diagonal Z ordering is retained so the physical 0.09m footprint and
-    // depth relationship match the reference renderer.
-    vec3 worldPos = vec3(u_cameraPos.x + cellX + a_corner.x * u_halfExtent,
-                         u_cameraPos.y + cellY + a_corner.y * u_halfExtent,
-                         z + a_corner.x * u_halfExtent);
+    // rain.c:338-342 expands vx +/- size and vy +/- size in the camera's own
+    // axes, so the flake always faces the camera.
+    vec3 worldPos = u_tile_origin + a_seed +
+                    (u_camera_right * a_corner.x + u_camera_up * a_corner.y) * u_half_extent;
     gl_Position = u_mvp * vec4(worldPos, 1.0);
 }
 )";
 
 static const char* SNOW_FRAG_SRC = R"(
 #version 330 core
-uniform float u_alpha;
+uniform vec4 u_diffuse;   // SnowFlakeDiffuse() == 0xFFFFFFFF (rain.c:353)
 out vec4 fragColor;
 void main() {
-    fragColor = vec4(0.92, 0.97, 1.0, clamp(u_alpha * 1.75, 0.10, 0.42));
+    fragColor = u_diffuse;
 }
 )";
 
@@ -137,40 +132,27 @@ void main() {
 
 static const char* SNOW_VERT_SRC_120 = R"(
 #version 120
+// Attribute names are load-bearing on this tier: GL_LegacyBindInlineAttribLocations
+// binds a_seed -> 0 and a_corner -> 1 by name (gl_helper.cpp:193-194).
 attribute vec3 a_seed;
 attribute vec2 a_corner;
 uniform mat4 u_mvp;
-uniform vec3 u_cameraPos;
-uniform float u_time;
-uniform float u_boxSize;
-uniform float u_heightStart;
-uniform float u_heightEnd;
-uniform float u_halfExtent;
-uniform float u_driftUnits;
+uniform vec3  u_tile_origin;
+uniform vec3  u_camera_right;
+uniform vec3  u_camera_up;
+uniform float u_half_extent;
 void main() {
-    float fallRange = max(u_heightStart - u_heightEnd, 1.0);
-    float speed = (0.025 + a_seed.z * 0.040) * fallRange;
-    float z = u_heightStart - mod(u_time * speed + a_seed.z * fallRange + u_cameraPos.z, fallRange);
-    float halfBox = u_boxSize * 0.5;
-    float cellX = mod(a_seed.x * u_boxSize - u_cameraPos.x, u_boxSize) - halfBox +
-                  sin(u_time * 0.45 + a_seed.x * 17.0) * u_driftUnits;
-    float cellY = mod(a_seed.y * u_boxSize - u_cameraPos.y, u_boxSize) - halfBox +
-                  cos(u_time * 0.35 + a_seed.y * 19.0) * u_driftUnits;
-    // OpenIGI builds a square flake quad from a 0.045m half-extent. Its
-    // diagonal Z ordering is retained so the physical 0.09m footprint and
-    // depth relationship match the reference renderer.
-    vec3 worldPos = vec3(u_cameraPos.x + cellX + a_corner.x * u_halfExtent,
-                         u_cameraPos.y + cellY + a_corner.y * u_halfExtent,
-                         z + a_corner.x * u_halfExtent);
+    vec3 worldPos = u_tile_origin + a_seed +
+                    (u_camera_right * a_corner.x + u_camera_up * a_corner.y) * u_half_extent;
     gl_Position = u_mvp * vec4(worldPos, 1.0);
 }
 )";
 
 static const char* SNOW_FRAG_SRC_120 = R"(
 #version 120
-uniform float u_alpha;
+uniform vec4 u_diffuse;
 void main() {
-    gl_FragColor = vec4(0.92, 0.97, 1.0, clamp(u_alpha * 1.75, 0.10, 0.42));
+    gl_FragColor = u_diffuse;
 }
 )";
 
@@ -225,6 +207,159 @@ static GLuint LinkWeatherProgram(const char* vertex_source, const char* fragment
     return program;
 }
 
+// ─── SNOW ─────────────────────────────────────────────────────────────────────
+// IGI-RE has no snow system. Rain_New stores `r->snow = rain == 0`
+// (src/dxinit/rain.c:153, HOOK 0x498960) and every snow difference is a branch
+// on that one flag; the authored selector is the inverted `Is Rain` bool8
+// (src/fxobj/rain.c:77,141). Everything below is the transcription of those
+// branches and takes every constant from source/runtime/rain_rules.h, which
+// cites IGI-RE for each one - no arithmetic is invented here.
+//
+// The engine advances the pool once per RainEffect_Run (src/fxobj/rain.c:104,
+// HOOK 0x436990), i.e. once per tick; Renderer_Rain::Draw is the editor's tick.
+// Rain_UpdateGrid's per-cell ground probe (rain.c:220-278) and Rain_ClipCells'
+// clip/depth sort (rain.c:287,495+) are NOT transcribed - the editor has no
+// level raycast or sort pass in this file. The camera lattice the drops are
+// anchored to, the layer band and the cell parity test all come from the module
+// (PlaceGrid / DrawTileX / DrawTileY / LayerBaseZUnits / CellVertexGroup).
+namespace {
+
+// One RainDrop (src/dxinit/rain.c:40-70). x/y are the tile-lattice coordinates
+// Rain_Update wraps inside [0, kTileF) (rain.c:603-616) and z is the position
+// inside the 6 m band that wraps at kLayer (rain.c:587-591).
+struct SnowDrop {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float dx = 0.0f;
+    float dy = 0.0f;
+    int timer = 0;
+    int kind = 0;
+};
+
+struct SnowState {
+    SnowDrop drops[igi::rain::kDropCapacity];  // rain.c:65 `RainDrop drops[80]`
+    int count = 0;                             // Rain::dropCount
+    float spawn = 0.0f;                        // Rain::spawn (rain.c:619-636)
+    float fade = 0.0f;                         // Rain::fade, 0 at Rain_New (rain.c:155)
+    // Rain_Init seeds gDxRainRandom once (rain.c:184). The editor uses its own
+    // generator, as the drop buffers above do; the draw ORDER and the ranges are
+    // the engine's (rain.c:596-598,627-632), the stream is not.
+    std::mt19937 rng{204800};
+};
+
+SnowState& Snow() {
+    static SnowState state;
+    return state;
+}
+
+float SnowRandomUnit(SnowState& s) {
+    return std::uniform_real_distribution<float>(0.0f, 1.0f)(s.rng);
+}
+
+int SnowRandomInt(SnowState& s, int n) {
+    return std::uniform_int_distribution<int>(0, n - 1)(s.rng);
+}
+
+// RainEffect_Changed frees and rebuilds the Rain object whenever anything but the
+// alpha changes (src/fxobj/rain.c:133-142), so a switch to snow starts from an
+// empty pool at fade 0 exactly as Rain_New leaves it (rain.c:149-155).
+void SnowReset() {
+    SnowState& s = Snow();
+    s.count = 0;
+    s.spawn = 0.0f;
+    s.fade = 0.0f;
+}
+
+// Rain_Update, HOOK 0x499CF0 (src/dxinit/rain.c:565-637): the snow branches.
+void SnowTick(bool falling) {
+    SnowState& s = Snow();
+    const float speed = igi::rain::SpeedUnitsPerTick(true);  // 204.8 u/tick (rain.c:572)
+
+    // rain.c:573-585 - fade ramps one kFadeStep per tick and the update stops
+    // dead at zero (Rain_Render skips the draw there too, rain.c:209-212).
+    float f = falling ? s.fade + igi::rain::kFadeStep : s.fade - igi::rain::kFadeStep;
+    if (falling) {
+        if (!(f < 1.0f)) f = 1.0f;  // `if (!(f < kOne)) f = kOne`
+    } else if (!(f > 0.0f)) {
+        f = 0.0f;                   // `if (!(f > kZero)) f = kZero`
+    }
+    s.fade = f;
+    if (s.fade == 0.0f) return;     // x87_eq(r->fade, kZero), rain.c:584-585
+
+    for (int i = 0; i < s.count; ++i) {
+        SnowDrop& d = s.drops[i];
+
+        // rain.c:587-591 - `z = d->z - speed; if (z < 0) d->z = z + kLayer;`
+        d.z = igi::rain::WrapZ(d.z, speed);
+
+        // rain.c:595-602 - `if (d->timer-- < 0) { ... }`: the decrement happens
+        // before the test, so the reload lands on an already-decremented timer
+        // (SnowSwayTimerAfterReload).
+        const int before_decrement = d.timer;
+        d.timer = before_decrement - 1;
+        if (before_decrement < 0) {
+            d.timer += igi::rain::SnowSwayReloadTicks(
+                SnowRandomInt(s, igi::rain::kSwayTicksMin));  // Random_Int(r, 30)
+            d.dx = igi::rain::SnowSwayDisplacementUnits(SnowRandomUnit(s));  // rain.c:597
+            d.dy = igi::rain::SnowSwayDisplacementUnits(SnowRandomUnit(s));  // rain.c:598
+        }
+        const float x = d.dx + d.x;
+        d.x = x;                     // rain.c:600-601
+        d.y = d.dy + d.y;            // rain.c:602
+
+        // rain.c:603-616 - one kTileF step either way plus the kind bit that
+        // keeps the drop in the tile parity class it is drawn with.
+        const igi::rain::SnowTileWrap wrap_x = igi::rain::SnowWrapTileX(x);
+        if (wrap_x.wrapped) {
+            d.x = wrap_x.value;
+            d.kind ^= igi::rain::kSnowWrapKindBitX;
+        }
+        const igi::rain::SnowTileWrap wrap_y = igi::rain::SnowWrapTileY(d.y);
+        if (wrap_y.wrapped) {
+            d.y = wrap_y.value;
+            d.kind ^= igi::rain::kSnowWrapKindBitY;
+        }
+    }
+
+    // rain.c:619-636 - the accumulator emits one drop per whole kSpawnStep and
+    // the pool is never compacted: at 80 drops the engine returns early.
+    const int spawned = igi::rain::SpawnCountForTick(speed, s.spawn, s.count);
+    for (int i = 0; i < spawned && s.count < igi::rain::kDropCapacity; ++i) {
+        SnowDrop& d = s.drops[s.count];
+
+        const float x = SnowRandomUnit(s) * igi::rain::kTileUnitsF;  // rain.c:627
+        d.y = SnowRandomUnit(s) * igi::rain::kTileUnitsF;            // rain.c:628
+        d.x = x;
+        d.timer = 0;                                                 // rain.c:630
+        d.z = igi::rain::SpawnZUnits(true);                          // rain.c:631
+        d.kind = SnowRandomInt(s, igi::rain::DropKindCount());       // rain.c:632
+        // rain.c:626-632 never initialises dx/dy; the engine reads whatever the
+        // slot held. The port pins them to 0 instead of reading uninitialised
+        // memory. The first roll replaces them on the drop's second tick
+        // (SnowSwayFirstRollTick).
+        d.dx = 0.0f;
+        d.dy = 0.0f;
+        ++s.count;
+    }
+}
+
+// Rain_FillVB, HOOK 0x499090 (src/dxinit/rain.c:337-364,382-388): six vertices
+// per flake in the engine's own order - v0..v3 are the corners and v4 = v1,
+// v5 = v2 (rain.c:362-363) - written into the group named by `kind`
+// (rain.c:327-330,378). Corner signs only: the extent is rain_rules'
+// SnowFlakeSizeUnits() times the fade (rain.c:309).
+constexpr float kSnowCorners[6][2] = {  // 6 == SnowVerticesPerParticle() (rain.c:364,447)
+    {-1.0f, -1.0f},  // v0 = (x0, y0)  rain.c:344-345
+    {+1.0f, -1.0f},  // v1 = (x1, y0)  rain.c:346-347
+    {-1.0f, +1.0f},  // v2 = (x0, y1)  rain.c:348-349
+    {+1.0f, +1.0f},  // v3 = (x1, y1)  rain.c:350-351
+    {+1.0f, -1.0f},  // v4 = v1        rain.c:362
+    {-1.0f, +1.0f},  // v5 = v2        rain.c:363
+};
+
+}  // namespace
+
 bool Renderer_Rain::Init() {
     const char* rain_vs = g_gl_info.legacy_gl21_ ? RAIN_VERT_SRC_120 : RAIN_VERT_SRC;
     const char* rain_fs = g_gl_info.legacy_gl21_ ? RAIN_FRAG_SRC_120 : RAIN_FRAG_SRC;
@@ -266,32 +401,34 @@ bool Renderer_Rain::Init() {
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
-    // Snow flake buffer: 900 flakes, seed 271828 (matches OpenIGI SnowRenderer)
-    num_snow_flakes_ = igi::weather::kSnowFlakes;
-    std::vector<float> snow_verts;
-    snow_verts.reserve(num_snow_flakes_ * 6 * 5);
-    std::mt19937 rng_snow(271828);
-    for (int i = 0; i < num_snow_flakes_; ++i) {
-        float sx = dist(rng_snow), sy = dist(rng_snow), sz = dist(rng_snow);
-        const float corners[][2] = {
-            {-1.0f, -1.0f}, {1.0f, -1.0f}, {1.0f, 1.0f},
-            {-1.0f, -1.0f}, {1.0f, 1.0f}, {-1.0f, 1.0f},
-        };
-        for (const auto& corner : corners) {
-            snow_verts.insert(snow_verts.end(), {sx, sy, sz, corner[0], corner[1]});
-        }
-    }
+    // Snow flake buffer: the engine's pool is a fixed 80 drops (rain.c:65,624)
+    // drawn as six vertices each (rain.c:364,447) into four vertex groups of 480
+    // vertices - one per drop kind (rain.c:327-330,404-409). Rain_FillVB rewrites
+    // the whole buffer every tick (rain.c:307-393), so it is GL_DYNAMIC_DRAW and
+    // the contents are filled per frame by DrawSnow.
+    num_snow_flakes_ = igi::rain::kDropCapacity;
+    const int snow_group_stride = num_snow_flakes_ * igi::rain::SnowVerticesPerParticle();
+    const int snow_vertex_count = snow_group_stride * igi::rain::DropKindCount();
+    std::vector<float> snow_verts(static_cast<std::size_t>(snow_vertex_count) * 5, 0.0f);
 
     glGenVertexArrays(1, &vao_snow_);
     glGenBuffers(1, &vbo_snow_);
     glBindVertexArray(vao_snow_);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_snow_);
-    glBufferData(GL_ARRAY_BUFFER, snow_verts.size() * sizeof(float), snow_verts.data(), GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, snow_verts.size() * sizeof(float), snow_verts.data(), GL_DYNAMIC_DRAW);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
+
+    // fxobj/rain.c:82 loads "snow.tex" once, for both modes, and Rain_DrawCell's
+    // snow branch binds it (rain.c:430-434) while the rain branch binds NULL
+    // (rain.c:449). The editor has no reachable loader for the game's .tex format
+    // from this file, so the engine's own null-texture branch (rain.c:435-438)
+    // is what draws today; see the report for the wiring this needs.
+    Logger::Get().Log(LogLevel::INFO, std::string("[Renderer_Rain] Snow texture (fxobj/rain.c:82): ") +
+                                          igi::rain::SnowTextureName());
 
     // The editor draws fixed-function overlays after the scene. Leaving either
     // particle upload VBO bound lets affected drivers dereference NULL+0x444
@@ -312,16 +449,19 @@ void Renderer_Rain::Shutdown() {
 }
 
 void Renderer_Rain::SetParams(bool active, bool is_snow, float startMeters, float endMeters, float alpha) {
+    const bool snow_before = is_snow_;
     active_ = active;
     is_snow_ = is_snow;
     start_meters_ = startMeters;
     end_meters_ = endMeters;
     alpha_ = alpha;
+    // A switch into snow rebuilds the engine's Rain object (fxobj/rain.c:133-142).
+    if (is_snow_ && !snow_before) SnowReset();
     if (active_) {
         if (is_snow_) {
             Logger::Get().Log(LogLevel::INFO,
-                "[Renderer_Rain] SNOW parity: flakes=900 diameter=0.090m speed=0.025..0.065-band/s "
-                "alpha=clamp(authored*1.75,0.10,0.42) drift=0.350m");
+                "[Renderer_Rain] SNOW: IGI-RE Rain_Update snow branch - rain_rules speed/spawn-z/"
+                "sway/wrap, 6-vertex camera-facing billboard (rain.c:565-637,337-364)");
         } else {
             Logger::Get().Log(LogLevel::INFO,
                 "[Renderer_Rain] RAIN parity: drops=1200 length=0.080m width=0.012m speed=0.08..0.18-band/s "
@@ -330,7 +470,13 @@ void Renderer_Rain::SetParams(bool active, bool is_snow, float startMeters, floa
     }
 }
 
-void Renderer_Rain::Draw(GLuint ubo_mats, const glm::vec3& cameraPos, bool cameraIsSheltered) {
+void Renderer_Rain::Draw(GLuint ubo_mats, const glm::vec3& cameraPos, const glm::vec3& cameraRight,
+                         const glm::vec3& cameraUp, bool cameraIsSheltered) {
+    // RainEffect_Run calls Rain_Update once per tick (fxobj/rain.c:104) whether or
+    // not the effect is falling, so the snow pool is advanced here - before the
+    // visibility gate - and the fade-out runs to zero like the engine's.
+    if (is_snow_) SnowTick(active_);
+
     const bool selected_renderer_ready = is_snow_ ? snow_program_ != 0 : shader_program_ != 0;
     if (!igi::ShouldDrawWeatherForFrame(active_ && weather_enabled_, selected_renderer_ready,
                                         cameraIsSheltered)) return;
@@ -344,7 +490,7 @@ void Renderer_Rain::Draw(GLuint ubo_mats, const glm::vec3& cameraPos, bool camer
 
     const float time_sec = glutGet(GLUT_ELAPSED_TIME) / 1000.0f;
     if (is_snow_) {
-        DrawSnow(ubo_mats, cameraPos, time_sec);
+        DrawSnow(ubo_mats, cameraPos, cameraRight, cameraUp, time_sec);
         return;
     }
 
@@ -382,23 +528,65 @@ void Renderer_Rain::Draw(GLuint ubo_mats, const glm::vec3& cameraPos, bool camer
     GL_UnbindForImmediateMode();
 }
 
-void Renderer_Rain::DrawSnow(GLuint ubo_mats, const glm::vec3& cameraPos, float time_sec) {
-    const float height_start = cameraPos.z + start_meters_ * WORLD_UNITS_PER_METER;
-    const float height_end = cameraPos.z - end_meters_ * WORLD_UNITS_PER_METER;
-    if (height_start <= height_end) return;
+void Renderer_Rain::DrawSnow(GLuint ubo_mats, const glm::vec3& cameraPos, const glm::vec3& cameraRight,
+                             const glm::vec3& cameraUp, float time_sec) {
+    // The engine's snow has no time term: Rain_Update moves every drop by the same
+    // fixed step per tick (rain.c:587-591) and the sway is re-rolled on a tick
+    // timer (rain.c:595-598). SnowTick already advanced the pool for this frame.
+    (void)time_sec;
+
+    SnowState& s = Snow();
+    // Rain_Render returns at fade 0 (rain.c:209-212); fade also scales the quad
+    // (rain.c:309), so a zero fade has nothing to draw.
+    if (s.fade == 0.0f || s.count == 0) return;
+
+    // Rain_FillVB (rain.c:307-393): rebuild the four vertex groups from the pool.
+    const int verts_per_drop = igi::rain::SnowVerticesPerParticle();          // 6 (rain.c:364,447)
+    const int group_stride = igi::rain::kDropCapacity * verts_per_drop;       // 480 (rain.c:328)
+    std::vector<float> verts(static_cast<std::size_t>(group_stride) *
+                                 static_cast<std::size_t>(igi::rain::DropKindCount()) * 5,
+                             0.0f);
+    std::vector<int> group_count(igi::rain::DropKindCount(), 0);
+    for (int i = 0; i < s.count; ++i) {
+        const SnowDrop& d = s.drops[i];
+        const int group = d.kind;  // 0..3; the wrap XORs keep it in range (rain.c:605,612)
+        float* v = &verts[(static_cast<std::size_t>(group) * group_stride +
+                           static_cast<std::size_t>(group_count[group])) *
+                          5];
+        for (int c = 0; c < verts_per_drop; ++c) {
+            v[c * 5 + 0] = d.x;
+            v[c * 5 + 1] = d.y;
+            v[c * 5 + 2] = d.z;
+            v[c * 5 + 3] = kSnowCorners[c][0];
+            v[c * 5 + 4] = kSnowCorners[c][1];
+        }
+        ++group_count[group];
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_snow_);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, verts.size() * sizeof(float), verts.data());
 
     glUseProgram(snow_program_);
     glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
-    glUniform3f(glGetUniformLocation(snow_program_, "u_cameraPos"), cameraPos.x, cameraPos.y, cameraPos.z);
-    glUniform1f(glGetUniformLocation(snow_program_, "u_time"), time_sec);
-    glUniform1f(glGetUniformLocation(snow_program_, "u_boxSize"), igi::weather::kBoxMeters * WORLD_UNITS_PER_METER);
-    glUniform1f(glGetUniformLocation(snow_program_, "u_heightStart"), height_start);
-    glUniform1f(glGetUniformLocation(snow_program_, "u_heightEnd"), height_end);
-    glUniform1f(glGetUniformLocation(snow_program_, "u_halfExtent"),
-                igi::weather::kSnowFlakeMeters * WORLD_UNITS_PER_METER);
-    glUniform1f(glGetUniformLocation(snow_program_, "u_driftUnits"),
-                igi::weather::kSnowDriftMeters * WORLD_UNITS_PER_METER);
-    glUniform1f(glGetUniformLocation(snow_program_, "u_alpha"), alpha_);
+
+    // Rain_FillVB expands the quad in the camera's own axes (gTransContext.matrix,
+    // rain.c:338-342,382-388). The frame's basis arrives from the caller
+    // (renderer_draw.cpp passes view_define_->right_/up_, the same vectors the
+    // scene's view matrix is built from).
+    glUniform3f(glGetUniformLocation(snow_program_, "u_camera_right"), cameraRight.x, cameraRight.y,
+                cameraRight.z);
+    glUniform3f(glGetUniformLocation(snow_program_, "u_camera_up"), cameraUp.x, cameraUp.y, cameraUp.z);
+    // rain.c:309 `size = r->fade * kFlakeSize` is the quad's half extent, so the
+    // flake grows out of the fade instead of fading its colour.
+    glUniform1f(glGetUniformLocation(snow_program_, "u_half_extent"),
+                s.fade * igi::rain::SnowFlakeSizeUnits());
+    // rain.c:353 - all four corners carry 0xFFFFFFFF (opaque white).
+    const std::uint32_t diffuse = igi::rain::SnowFlakeDiffuse();
+    glUniform4f(glGetUniformLocation(snow_program_, "u_diffuse"),
+                static_cast<float>((diffuse >> 16) & 0xFFu) / 255.0f,
+                static_cast<float>((diffuse >> 8) & 0xFFu) / 255.0f,
+                static_cast<float>(diffuse & 0xFFu) / 255.0f,
+                static_cast<float>((diffuse >> 24) & 0xFFu) / 255.0f);
 
     GLboolean depth_mask_was;
     glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_mask_was);
@@ -406,9 +594,33 @@ void Renderer_Rain::DrawSnow(GLuint ubo_mats, const glm::vec3& cameraPos, float 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_DEPTH_TEST);
+
+    // Rain_Draw walks the 9x9 window from the camera's tile (rain.c:282,288-289)
+    // and Rain_DrawCell draws each cell's parity group - CellVertexGroup, rain.c:404-409 -
+    // in three kLayer-tall layers (rain.c:465-484). A drop is therefore drawn only
+    // by cells whose tile parity equals its kind, which is what makes the wrap's
+    // kind XOR keep it in place.
+    const igi::rain::GridPlacement grid = igi::rain::PlaceGrid(cameraPos.x, cameraPos.y);
+    const GLint tile_origin_loc = glGetUniformLocation(snow_program_, "u_tile_origin");
     glBindVertexArray(vao_snow_);
-    glDrawArrays(GL_TRIANGLES, 0, num_snow_flakes_ * 6);
+    for (int i = 0; i < igi::rain::kDrawWindowTiles; ++i) {
+        const double tile_x = igi::rain::DrawTileX(grid, i);
+        for (int j = 0; j < igi::rain::kDrawWindowTiles; ++j) {
+            const double tile_y = igi::rain::DrawTileY(grid, j);
+            const int group = igi::rain::CellVertexGroup(tile_x, tile_y);
+            if (group_count[group] == 0) continue;
+            for (int layer = 0; layer < igi::rain::kLayerCount; ++layer) {
+                // LayerBaseZUnits is the camera-relative base of each layer
+                // (rain.c:283,464-468); the drop's own z sits inside the 6 m band.
+                glUniform3f(tile_origin_loc, static_cast<float>(tile_x), static_cast<float>(tile_y),
+                            cameraPos.z + igi::rain::LayerBaseZUnits(cameraPos.z, layer));
+                // rain.c:446 D3DPT_TRIANGLELIST -> GL_TRIANGLES, `mult = 6`.
+                glDrawArrays(GL_TRIANGLES, group * group_stride, group_count[group] * verts_per_drop);
+            }
+        }
+    }
     glBindVertexArray(0);
+
     glDepthMask(depth_mask_was);
     glDisable(GL_BLEND);
     glUseProgram(0);

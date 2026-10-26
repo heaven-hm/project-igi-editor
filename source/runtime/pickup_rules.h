@@ -67,6 +67,17 @@ constexpr double kPickupTouchHeightUnits = 4096.0;
 // 4096 game units per metre, the scale the editor already uses elsewhere.
 constexpr double kPickupUnitsPerMetre = 4096.0;
 
+// VirModel_GetRadius 0x4D0950 (src/lod/mesh3d.c:381-387):
+//     if (vm && vm->lods[0]) return lod_header(vm->lods[0])->radius;
+//     return kOne;                                        /* mesh3d.c:88, = 1.0f */
+// A pickup whose model never resolved (GunPickup_Changed's `if (m)
+// RigidDynCubeObj_SetModel(...)` guard, pickup.c:580-581, and the same guard in
+// AmmoPickup_Changed pickup.c:716-717) keeps `model == NULL` and therefore has
+// radius 1.0, which the clamp below raises to 2867.2. This is the radius a
+// caller must use when the model's MeshHeader.radius is unavailable, NOT a
+// substitute for it.
+constexpr float kPickupNoModelRadius = 1.0f;
+
 // pickup.c:517  `t->weapon = 12;` in GunPickup_Create.
 // A GunPickup's weapon id before its ID parameter is evaluated. 12 is
 // WEAPON_ID_RPG18 in the retail weapon table (WEAPONS/RPG18/WEAPON.QVM,
@@ -195,8 +206,12 @@ float PickupTouchRange(float model_radius, float max_scale);
 //
 // Both comparisons are negated `>=`, so a toucher EXACTLY at `range` or exactly
 // 4096 units above/below is NOT touching. Vec3d_Length 0x4B3130
-// (src/math/vec3.c:41-45) is an x87 sqrt of the sum of squares, so the
+// (src/math/vec3.c:39-44) is an x87 sqrt of the sum of squares, so the
 // horizontal test is on the true 2D distance, not a box.
+//
+// Precision: the engine stores the three differences into a `Vec3d` and a
+// `double dz` (pickup.c:189-197), so each one is rounded to double before
+// Vec3d_Length widens it back to long double. This port rounds the same way.
 bool PickupTouches(double range, const double pickup_pos[3], const double toucher_pos[3]);
 
 // Convenience: the two steps together, for the common case where the caller has

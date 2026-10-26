@@ -5,6 +5,9 @@
  *****************************************************************************/
 #include "renderer_objects_internal.h"
 #include "igi_transform.h"
+#include "runtime/pickup_rules.h"
+
+#include <cstring>
 
 void Renderer_Objects::InitSphereMesh() {
     const int LAT = 12;
@@ -68,6 +71,84 @@ static void DrawLadderGizmoGeometry(const glm::mat3& frame, const glm::vec3& ori
                                     const glm::vec3& head, const glm::vec3& bottom_mount,
                                     const glm::vec3& top_mount, int rung_count,
                                     GLuint ubo_mats, GLuint ubo_binding);
+
+// ─── Pickup touch radius (GitHub issue #75) ──────────────────────────────────
+//
+// `radius()` (IGI-RE src/comprun/pickup.c:172-177) is
+//     VirModel_GetRadius(o->model) * max_scale(o)
+// and VirModel_GetRadius 0x4D0950 (src/lod/mesh3d.c:381-387) returns
+// `lod_header(vm->lods[0])->radius` - the MeshHeader.radius field
+// (IGI-RE src/model/modeltypes.h:21) - or kOne when there is no model at all
+// (mesh3d.c:88, `static const float kOne = 1.0f;`). A pickup whose model never
+// resolved keeps `model == NULL` (GunPickup_Changed's `if (m)
+// RigidDynCubeObj_SetModel(...)` guard, pickup.c:580-581; AmmoPickup_Changed
+// pickup.c:716-717), which is exactly igi::kPickupNoModelRadius.
+//
+// The editor's Mesh (renderer/model.h) does not carry the LOD header, so the
+// field is read from the model's MEF bytes - the same bytes the .res index
+// resolved for the mesh the renderer drew:
+//   * the file is an ILFF chain: a 16-byte header then chunks of
+//     name(4) size(4) align(4) skip(4) + payload, where `skip` links to the next
+//     chunk from the chunk START (mef_native.cpp ParseIlffChunks);
+//   * MeshHeader is the HSEM chunk, 156 bytes in every retail file measured
+//     (mef_writer.cpp:465-475, kHsemChunkSize);
+//   * inside it `radius` sits at +0x78: version 0x00, time[7] 0x04, format 0x20,
+//     data 0x24, unk28 0x28, coll 0x2C, center 0x30, sphere 0x3C, unk40[0x20]
+//     0x40, complexity 0x60, unk64[0x14] 0x64, radius 0x78
+//     (IGI-RE src/model/modeltypes.h:9-27, sizeof(MeshHeader) == 0x90).
+//
+// A chunk that is absent, short or out of bounds yields
+// igi::kPickupNoModelRadius, i.e. the engine's own value for an object whose
+// model did not resolve - never a fabricated radius.
+namespace {
+constexpr size_t kHsemRadiusOffset = 0x78;
+constexpr size_t kHsemMinSize = 0x7C;   // radius is a 4-byte field at 0x78
+
+uint32_t ReadU32Le(const uint8_t* p) {
+    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+           (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+}
+
+float PickupModelRadiusFromMefBytes(const std::vector<uint8_t>& bytes) {
+    if (bytes.size() < 16) return igi::kPickupNoModelRadius;
+    if (std::memcmp(bytes.data(), "ILFF", 4) != 0) return igi::kPickupNoModelRadius;
+
+    size_t pos = 16;   // past magic/size/align/skip (mef_native.cpp kIlffHeaderSize)
+    while (pos + 16 <= bytes.size()) {
+        const uint8_t* chunk = bytes.data() + pos;
+        const uint32_t size = ReadU32Le(chunk + 4);
+        const uint32_t skip = ReadU32Le(chunk + 12);
+        const size_t data = pos + 16;
+
+        if (std::memcmp(chunk, "HSEM", 4) == 0) {
+            if (size < kHsemMinSize || data + kHsemRadiusOffset + 4 > bytes.size())
+                return igi::kPickupNoModelRadius;
+            float radius = igi::kPickupNoModelRadius;
+            std::memcpy(&radius, bytes.data() + data + kHsemRadiusOffset, 4);
+            return radius;
+        }
+        if (skip == 0) break;                     // last chunk in the chain
+        const size_t next = pos + skip;           // mef_native.cpp: chunk.start + chunk.skip
+        if (next <= pos || next + 16 > bytes.size()) break;
+        pos = next;
+    }
+    return igi::kPickupNoModelRadius;
+}
+
+// The three PLACEABLE pickup task types, taken from the ported layout table
+// rather than a hand-written list: igi::FindPickupLayout (source/runtime/
+// pickup_rules.h:156) is backed by the four ParamTable_Add layouts at
+// pickup_rules.cpp:75-84. AddAmmo is the fourth layout but is a plain child of
+// the human it feeds with no Position and no Orientation parameter
+// (pickup.c:104-106, 776-778), so it has no world place to draw a volume at.
+bool IsPlacedPickup(const std::string& task_type) {
+    const igi::PickupLayout* layout = igi::FindPickupLayout(task_type);
+    return layout != nullptr && layout->kind != igi::PickupKind::AddAmmo;
+}
+}  // namespace
+
+static void DrawPickupTouchVolume(const glm::vec3& origin, float range, float half_height,
+                                  GLuint ubo_mats, GLuint ubo_binding);
 
 void Renderer_Objects::DrawMagicObjSpheres(const std::vector<LevelObject>& objects, GLuint ubo_mats) {
     EnsureMagicObjIdsLoaded();
@@ -154,6 +235,67 @@ void Renderer_Objects::DrawMagicObjSpheres(const std::vector<LevelObject>& objec
 
     glBindVertexArray(0);
     glUseProgram(0);
+
+    // ── Pickup touch volumes (GitHub issue #75) ──────────────────────────────
+    // A second pass, after the sphere pass, so the gizmo's own program/VAO can
+    // never disturb the spheres' uniforms. It is reached only through the
+    // editor's "Magic objects" overlay toggle (App::show_magic_obj_spheres_,
+    // app_input.cpp) — the same opt-in view the ladder gizmos below use, and,
+    // like them, it is not reached when that overlay's own data failed to load
+    // (the magicobj_ids_ / sphere_vao_ guards above).
+    //
+    // Each cylinder is the exact volume `touches()` accepts a toucher in
+    // (IGI-RE src/comprun/pickup.c:180-200), whose two entry points are
+    // GenericPickup_Touch 0x46C630 (pickup.c:361-366) and GunPickup_Touch
+    // 0x46D230 (pickup.c:599-616) — the addresses the issue cites. Nothing in
+    // the game draws it.
+    {
+        // model@level -> MeshHeader.radius in game units. The value is a
+        // property of an immutable MEF, so it is read once per model per level
+        // instead of per frame.
+        static std::unordered_map<std::string, float> radius_cache;
+        for (const auto& obj : objects) {
+            if (obj.deleted) continue;
+            if (!IsPlacedPickup(obj.type)) continue;
+
+            // `radius()` pickup.c:172-177 reads the model the pickup resolved
+            // to; when there is none the engine's own value is kOne
+            // (VirModel_GetRadius 0x4D0950, mesh3d.c:381-387), which the clamp
+            // in PickupTouchRange raises to kMinTouch.
+            float model_radius = igi::kPickupNoModelRadius;
+            if (!obj.modelId.empty()) {
+                FillLevelModelKey(level_model_key_scratch_, current_level_, obj.isBuilding, obj.modelId);
+                auto cached = radius_cache.find(level_model_key_scratch_);
+                if (cached != radius_cache.end()) {
+                    model_radius = cached->second;
+                } else {
+                    model_radius = PickupModelRadiusFromMefBytes(FindMeshData(obj.modelId));
+                    radius_cache[level_model_key_scratch_] = model_radius;
+                }
+            }
+
+            // `range = r; if (!(r >= kMinTouch)) range = kMinTouch;`
+            // (pickup.c:183-188) with `r = VirModel_GetRadius(model) * max_scale`
+            // (pickup.c:174-176). max_scale is the largest of the object's three
+            // scale factors (src/editobj/editobj.h:41-46) and the editor's
+            // LevelObject carries the one uniform scale RigidDynCubeObj_Init
+            // 0x4C5710 seeds to 1.0 (src/magicobj/magicobj.c:340-342).
+            const float range = igi::PickupTouchRange(model_radius, obj.scale);
+            const glm::vec3 origin((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z);
+
+            // The engine tests `o->pos` (RigidDynCubeObj's own position, which
+            // DynCube_Move writes and DynCubeObj_GetPosition 0x4C3440 returns),
+            // i.e. the authored position for a placed pickup: GunPickup_Changed
+            // 0x46D050 sets ground = pos (pickup.c:578) and pickup_move
+            // (pickup.c:497-503) moves the dynamic cube there. obj.pos is used
+            // because it is the position the pickup's model is drawn at (the
+            // same LevelObject::pos the object pass translates by), including the
+            // editor-only terrain snap offset the engine knows nothing about.
+            DrawPickupTouchVolume(origin, range,
+                                  (float)igi::kPickupTouchHeightUnits,
+                                  ubo_mats, ubo_binding_point_);
+        }
+    }
 
     // ── Ladder placement gizmos (GitHub issue #68) ───────────────────────────
     // A second pass, after the sphere pass, so the gizmo's own program/VAO can
@@ -1183,6 +1325,63 @@ static void DrawLadderGizmoGeometry(const glm::mat3& frame, const glm::vec3& ori
                glm::vec4(1.00f, 0.35f, 0.35f, 1.0f), glm::vec4(0.0f));
     FlushGizmo(points, prog, ubo_mats, ubo_binding, 0,
                glm::vec4(1.00f, 0.85f, 0.20f, 1.0f), glm::vec4(0.0f));
+}
+
+// ─── DrawPickupTouchVolume ───────────────────────────────────────────────────
+// Viewport preview of the volume the engine's pickup touch test accepts a
+// toucher in, for GitHub issue #75. The game draws nothing of the sort; every
+// line below is geometry `touches()` (IGI-RE src/comprun/pickup.c:180-200)
+// actually tests, reached from GenericPickup_Touch 0x46C630 (pickup.c:361-366),
+// GunPickup_Touch 0x46D230 (pickup.c:599-616) and AmmoPickup_Touch 0x46D990
+// (pickup.c:734-749):
+//
+//   * `d.z = 0.0;` (pickup.c:198) then `!(Vec3d_Length(&d) >= range)`
+//     (pickup.c:199) — the horizontal reach disc, on the true 2D distance;
+//   * `!(dz >= kTouchHeight)` (pickup.c:199, constant at pickup.c:160) — the two
+//     vertical gates, which is why the volume is a cylinder of half-height 4096
+//     and not a sphere;
+//   * four connectors joining the gates, so the volume reads as a cylinder.
+//
+// `range` is `max(VirModel_GetRadius(model) * max_scale, 2867.2)` already
+// resolved by the caller through igi::PickupTouchRange (pickup.c:172-177,
+// 183-188); it and `half_height` are in game units, the same units as
+// LevelObject::pos. The cylinder is drawn about world +Z: `touches()` reads only
+// `o->pos` (pickup.c:189-198), never the object's matrix, so the authored Euler
+// triple cannot rotate the volume.
+static void DrawPickupTouchVolume(const glm::vec3& origin, float range, float half_height,
+                                  GLuint ubo_mats, GLuint ubo_binding) {
+    const GLuint prog = EnsureGizmoShader();
+    if (prog == 0 || !(range > 0.0f) || !(half_height > 0.0f)) return;
+
+    const glm::vec3 ax(1.0f, 0.0f, 0.0f);
+    const glm::vec3 ay(0.0f, 1.0f, 0.0f);
+
+    // The reach disc at the pickup's own position — the point DynCube_Move
+    // places the dynamic cube at (pickup_move pickup.c:497-503) and the point
+    // `o->pos` the test subtracts the toucher from (pickup.c:189-190).
+    GzBatch reach;
+    Arc(reach, origin, ax, ay, 0.0f, glm::two_pi<float>(), range, 48);
+    const float arm = std::min(range * 0.25f, kGizmoRefLen * 0.25f);
+    reach.line(origin - ax * arm, origin + ax * arm);
+    reach.line(origin - ay * arm, origin + ay * arm);
+
+    // The vertical gates at exactly +/- kTouchHeight, where `!(dz >= kTouchHeight)`
+    // flips: a toucher exactly there is NOT touching (pickup.c:199).
+    GzBatch gate;
+    const glm::vec3 low(origin.x, origin.y, origin.z - half_height);
+    const glm::vec3 high(origin.x, origin.y, origin.z + half_height);
+    Arc(gate, low, ax, ay, 0.0f, glm::two_pi<float>(), range, 48);
+    Arc(gate, high, ax, ay, 0.0f, glm::two_pi<float>(), range, 48);
+    for (int i = 0; i < 4; ++i) {
+        const float a = glm::half_pi<float>() * (float)i;
+        const glm::vec3 d = (ax * std::cos(a) + ay * std::sin(a)) * range;
+        gate.line(low + d, high + d);
+    }
+
+    FlushGizmo(reach, prog, ubo_mats, ubo_binding, 0,
+               glm::vec4(1.00f, 0.65f, 0.15f, 1.0f), glm::vec4(0.0f));
+    FlushGizmo(gate, prog, ubo_mats, ubo_binding, 0,
+               glm::vec4(0.35f, 0.75f, 1.00f, 1.0f), glm::vec4(0.0f));
 }
 
 // ─── DrawAttachmentsForSpline ─────────────────────────────────────────────────
