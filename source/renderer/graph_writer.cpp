@@ -1,111 +1,689 @@
 /******************************************************************************
- * @file    graph_parser.cpp
- * @brief   Navigation graph (.dat) parser for I.G.I. 1
+ * @file    graph_writer.cpp
+ * @brief   IGI 1 navigation-graph (.dat) reader/writer, transcribed from the
+ *          retail engine's graph stream. See graph_writer.h for the full
+ *          function/address/file:line table this file is built from.
  *
- * Binary format (confirmed by reverse engineering):
+ * Reader  = GraphOpen  0x4F9FF0  src/graphnode/stream.c:196-237
+ *           Graph_Read 0x4FA160  src/graphnode/stream.c:252-314
+ * Writer  = the inverse of those two, using the engine's own primitives
+ *           GraphStream_WriteValue 0x4F9EB0 (stream.c:148-188) and the
+ *           GraphStream_Write* family (stream.c:368-458).
  *
- *   [0-3]   Magic: CC DD EE FF
- *   [4-15]  MaxNodes record  (12 bytes: sig 0x04E6 + 2-byte tag + 4-byte unk + int32 value)
- *   [16-27] Second header record (12 bytes, sig 0x040D, contents unused)
- *   [28-29] 2 padding bytes
- *   [30 ... 30 + MaxNodes*MaxNodes*8 - 1]
- *           Adjacency table: MaxNodes x MaxNodes entries of (int32 nodeRef, float32 dist),
- *           each entry 8 bytes; -1 / -1.0f indicates no connection.
- *
- *   After the adjacency table: tagged node records, one per active node:
- *     NodeID       (0x04CE) - int32
- *     NodePosition (0x0495) - double x3 (24 bytes)
- *     NodeGamma    (0x049C) - float32
- *     NodeRadius   (0x0423) - float32
- *     NodeMaterial (0x0429) - int32
- *     NodeCriteria (0x04E5) - pascal string: 1 length byte then <length> bytes
- *                             (the last byte in <length> is a null terminator;
- *                              empty criteria has length==1 and the byte is 0x00)
- *
- *   After all node records: tagged edge records, one per edge:
- *     EdgeLink1    (0x044A) - int32 (node ID)
- *     EdgeLink2    (0x04F6) - int32 (node ID)
- *     LinkType     (0x0423) - int32
- *
- *   Each tagged record header is 8 bytes:
- *     [0-1] signature (big-endian uint16)
- *     [2-3] sub-tag   (2 bytes, not used by us)
- *     [4-7] unknown   (4 bytes, not used by us)
- *   Data payload begins at header_offset + 8.
+ * The engine's file writer itself is not in the decompiled tree (only
+ * AIGraph_SaveRoutes 0x509520 writes a named value), so the record order here
+ * is the order GraphOpen/Graph_Read require and that every retail file in this
+ * repository uses - see the header comment in graph_writer.h.
  *****************************************************************************/
 
 #include "graph_writer.h"
 #include "../logger.h"
 
-#include <fstream>
-#include <cstring>
-#include <cstdint>
+#include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <fstream>
 #include <vector>
-#include <unordered_map>
 
 // ---------------------------------------------------------------------------
-// Signatures (read as big-endian uint16 from the file)
+// Constants and helpers from the engine's stream
 // ---------------------------------------------------------------------------
-static constexpr uint16_t SIG_MAX_NODES    = 0x04E6;
-static constexpr uint16_t SIG_NODE_ID      = 0x04CE;
-static constexpr uint16_t SIG_NODE_POS     = 0x0495;
-static constexpr uint16_t SIG_NODE_GAMMA   = 0x049C;
-static constexpr uint16_t SIG_NODE_RADIUS  = 0x0423;
-static constexpr uint16_t SIG_NODE_MAT     = 0x0429;
-static constexpr uint16_t SIG_NODE_CRIT    = 0x04E5;
-static constexpr uint16_t SIG_EDGE_LINK1   = 0x044A;
-static constexpr uint16_t SIG_EDGE_LINK2   = 0x04F6;
-// LinkType reuses SIG_NODE_RADIUS (0x0423) with a different sub-tag
+namespace {
 
-static constexpr uint32_t GRAPH_MAGIC = 0xFFEEDDCC; // CC DD EE FF in file (LE read)
+// stream.c:121-135
+int GraphStreamHash(const char* name) {
+    int h = 0;
+    unsigned int m = 1;
+    char c;
 
-// ---------------------------------------------------------------------------
-// Low-level read helpers
-// ---------------------------------------------------------------------------
-
-template <typename T>
-static T ReadLE(const uint8_t* p) {
-    T val;
-    std::memcpy(&val, p, sizeof(T));
-    return val;
+    while ((c = *name++)) {
+        if (c >= 'a' && c <= 'z')
+            c -= 0x20;
+        h = static_cast<int>(static_cast<unsigned int>(h) +
+                             static_cast<unsigned int>(c) * m);
+        m = (m + 0x13D) & 0xFFFF;
+    }
+    return h;
 }
 
-static uint16_t ReadSigBE(const uint8_t* p) {
-    // Signature is stored as two consecutive bytes; read big-endian.
-    return (static_cast<uint16_t>(p[0]) << 8) | p[1];
+// The handler table registered by Graph_Open 0x4FAA60 (src/graphtask/graph.c:
+// 141-150) and AIGraph_Init 0x508FA0 (src/sysmisc/aigraph.c:130), in
+// registration order. The type column is what the engine registered; the READER
+// ignores it and uses the type byte stored in the file (GraphOpen :221-223 sets
+// v.type from the file, GraphStream_ReadValue :61 switches on v.type).
+enum HandlerId {
+    H_MAX_NODES = 0,
+    H_NODE_ID,
+    H_NODE_POS,
+    H_NODE_GAMMA,
+    H_NODE_RADIUS,
+    H_NODE_MATERIAL,
+    H_NODE_CRITERIA,
+    H_LINK_ID1,
+    H_LINK_ID2,
+    H_LINK_TYPE,
+    H_ROUTE_TABLE,
+    H_COUNT
+};
+
+struct HandlerSpec {
+    const char* name;
+    int         type;
+};
+
+const HandlerSpec kHandlers[H_COUNT] = {
+    { "nMaxNodes",     TAG_INT },      // Graph_Open :141
+    { "nNodeID",       TAG_INT },      // Graph_Open :142
+    { "tNodePosition", TAG_VEC3D },    // Graph_Open :143
+    { "vNodeGamma",    TAG_FLOAT },    // Graph_Open :144
+    { "vNodeRadius",   TAG_FLOAT },    // Graph_Open :145
+    { "nNodeMaterial", TAG_INT },      // Graph_Open :146
+    { "nNodeCriteria", TAG_STRING },   // Graph_Open :147
+    { "nLinkID1",      TAG_INT },      // Graph_Open :148
+    { "nLinkID2",      TAG_INT },      // Graph_Open :149
+    { "eLinkType",     TAG_INT },      // Graph_Open :150
+    { "RouteTable",    TAG_BLOB },     // AIGraph_Init :130
+};
+
+// GraphStream_Find 0x4FA140 (stream.c:239-249). GraphStream_AddHandler :102-107
+// refuses a name whose hash collides with a registered one; the eleven names
+// above have eleven distinct hashes, so no name is ever unreachable.
+HandlerId FindHandler(int hash) {
+    for (int i = 0; i < H_COUNT; i++) {
+        if (GraphStreamHash(kHandlers[i].name) == hash)
+            return static_cast<HandlerId>(i);
+    }
+    return H_COUNT;
 }
 
 // ---------------------------------------------------------------------------
-// Bounds-checked accessors
+// StreamReader - GraphStream over a memory buffer.
+//
+// The engine reads through File_Read and never checks the tag it consumes
+// (ReadInt :480-488 reads five bytes and keeps the last four, ReadByte :460-468
+// reads two and keeps the second). Bounds checks are added so a truncated file
+// reports an error instead of reading past the buffer; the byte counts and
+// offsets are identical.
 // ---------------------------------------------------------------------------
+class StreamReader {
+public:
+    StreamReader(const uint8_t* data, size_t size) : data_(data), size_(size) {}
 
-struct Buffer {
-    const uint8_t* data;
-    size_t         size;
+    bool   eof() const { return pos_ >= size_; }
+    size_t pos() const { return pos_; }
+    // GraphStream_PeekByte 0x4FAA10 (src/graphtask/graph.c:66-76). At EOF the
+    // engine returns the low byte of its stream pointer, which no caller can
+    // observe because every peek is followed by a read; -1 is returned here.
+    int    peekByte() const { return pos_ < size_ ? data_[pos_] : -1; }
 
-    bool check(size_t offset, size_t needed) const {
-        return offset + needed <= size;
+    bool raw(void* out, size_t n) {
+        if (pos_ + n > size_) return false;
+        std::memcpy(out, data_ + pos_, n);
+        pos_ += n;
+        return true;
     }
 
-    uint16_t sig(size_t offset) const {
-        return ReadSigBE(data + offset);
+    // Verbatim copy of the bytes already consumed between two positions.
+    void copyRange(size_t from, size_t to, std::vector<uint8_t>& out) const {
+        if (from >= to || to > size_) return;
+        out.assign(data_ + from, data_ + to);
     }
 
-    template <typename T>
-    T read(size_t offset) const {
-        return ReadLE<T>(data + offset);
+    // stream.c:460-468
+    bool readByte(uint8_t& out) {
+        uint8_t b[2];
+        if (!raw(b, 2)) return false;
+        out = b[1];
+        return true;
+    }
+    // stream.c:470-478
+    bool readShort(int16_t& out) {
+        uint8_t b[3];
+        if (!raw(b, 3)) return false;
+        std::memcpy(&out, b + 1, 2);
+        return true;
+    }
+    // stream.c:480-488
+    bool readInt(int& out) {
+        uint8_t b[5];
+        if (!raw(b, 5)) return false;
+        std::memcpy(&out, b + 1, 4);
+        return true;
+    }
+    // stream.c:491-501
+    bool readFloat(float& out) {
+        uint8_t b[5];
+        if (!raw(b, 5)) return false;
+        std::memcpy(&out, b + 1, 4);
+        return true;
+    }
+    // stream.c:503-513
+    bool readDouble(double& out) {
+        uint8_t b[9];
+        if (!raw(b, 9)) return false;
+        std::memcpy(&out, b + 1, 8);
+        return true;
+    }
+    // stream.c:515-523, sizeof(Vec3d) == 24 (src/types.h:4-6)
+    bool readVec3d(double* out) {
+        uint8_t b[25];
+        if (!raw(b, 25)) return false;
+        std::memcpy(out, b + 1, 24);
+        return true;
+    }
+    // stream.c:526-537. The stored length counts the trailing NUL and `max` is
+    // not checked. Graph_AddNode strcpy's the text (src/graphnode/graph.c:283),
+    // so the value ends at the first NUL byte.
+    bool readString(std::string& out) {
+        uint8_t hdr[2];
+        if (!raw(hdr, 2)) return false;
+        const size_t len = hdr[1];
+        if (pos_ + len > size_) return false;
+        out.assign(reinterpret_cast<const char*>(data_ + pos_), len);
+        pos_ += len;
+        const size_t nul = out.find('\0');
+        if (nul != std::string::npos) out.resize(nul);
+        return true;
+    }
+    // stream.c:540-549. The stored size is skipped, `size` bytes are read.
+    bool readBlob(void* out, size_t size) {
+        uint8_t tag;
+        int     stored;
+        if (!readByte(tag)) return false;
+        if (!readInt(stored)) return false;
+        return raw(out, size);
+    }
+    // stream.c:317-366
+    void skip(int count) {
+        while (count-- > 0) {
+            if (eof()) return;
+            const uint8_t tag = data_[pos_];
+            pos_ += 1;
+            long long size = 0;
+            switch (tag) {
+            case TAG_UBYTE:
+            case TAG_BYTE:
+                size = 1;
+                break;
+            case TAG_USHORT:
+            case TAG_SHORT:
+                size = 2;
+                break;
+            case TAG_UINT:
+            case TAG_INT:
+            case TAG_FLOAT:
+                size = 4;
+                break;
+            case TAG_DOUBLE:
+                size = 8;
+                break;
+            case TAG_VEC3D:
+                size = 24;
+                break;
+            case TAG_STRING: {
+                uint8_t len = 0;
+                if (!raw(&len, 1)) return;
+                size = len;
+                break;
+            }
+            case TAG_BLOB: {
+                int blob = 0;
+                if (!raw(&blob, 4)) return;
+                size = blob;
+                break;
+            }
+            default:
+                continue;
+            }
+            if (size) {
+                if (pos_ + static_cast<size_t>(size) > size_) {
+                    pos_ = size_;
+                    return;
+                }
+                pos_ += static_cast<size_t>(size);
+            }
+        }
     }
 
-    // Read payload at [offset + 8] (standard record layout)
-    template <typename T>
-    T payload(size_t offset) const {
-        return ReadLE<T>(data + offset + 8);
+private:
+    const uint8_t* data_;
+    size_t         size_;
+    size_t         pos_ = 0;
+};
+
+// ---------------------------------------------------------------------------
+// StreamWriter - GraphStream_Write* (stream.c:368-458) and the named-record
+// framing of GraphStream_WriteValue 0x4F9EB0 (stream.c:148-188).
+// ---------------------------------------------------------------------------
+class StreamWriter {
+public:
+    std::vector<uint8_t> bytes;
+
+    // stream.c:386-394
+    void pushTagged(int tag, const void* v, size_t size) {
+        bytes.push_back(static_cast<uint8_t>(tag));
+        const uint8_t* p = static_cast<const uint8_t*>(v);
+        bytes.insert(bytes.end(), p, p + size);
+    }
+    // stream.c:368-374
+    void writeUByte(uint8_t v) {
+        bytes.push_back(TAG_UBYTE);
+        bytes.push_back(v);
+    }
+    // stream.c:377-383
+    void writeByte(int8_t v) {
+        bytes.push_back(TAG_BYTE);
+        bytes.push_back(static_cast<uint8_t>(v));
+    }
+    // stream.c:396-430
+    void writeUShort(uint16_t v) { pushTagged(TAG_USHORT, &v, 2); }
+    void writeShort(int16_t v)   { pushTagged(TAG_SHORT, &v, 2); }
+    void writeUInt(uint32_t v)   { pushTagged(TAG_UINT, &v, 4); }
+    void writeInt(int v)         { pushTagged(TAG_INT, &v, 4); }
+    void writeFloat(float v)     { pushTagged(TAG_FLOAT, &v, 4); }
+    void writeDouble(double v)   { pushTagged(TAG_DOUBLE, &v, 8); }
+    // stream.c:432-436
+    void writeVec3d(double x, double y, double z) {
+        const double v[3] = { x, y, z };
+        pushTagged(TAG_VEC3D, v, sizeof(v));
+    }
+    // stream.c:438-449. The engine stores strlen(v) + 1 in a uint8_t and then
+    // memcpy's that many bytes into a 0x104 stack buffer, so a criteria longer
+    // than 254 characters overruns it; the text is clamped here instead.
+    void writeString(const std::string& s) {
+        std::string t = s;
+        if (t.size() > 254) t.resize(254);
+        const int len = static_cast<int>(t.size()) + 1;
+        bytes.push_back(TAG_STRING);
+        bytes.push_back(static_cast<uint8_t>(len));
+        bytes.insert(bytes.end(), t.begin(), t.end());
+        bytes.push_back(0);
+    }
+    // stream.c:451-458
+    void writeBlob(const void* data, size_t size) {
+        writeUByte(TAG_BLOB);
+        writeInt(static_cast<int>(size));
+        const uint8_t* p = static_cast<const uint8_t*>(data);
+        bytes.insert(bytes.end(), p, p + size);
+    }
+
+    // GraphStream_WriteValue :148-188
+    void writeValueInt(const char* name, int v) {
+        writeUInt(static_cast<uint32_t>(GraphStreamHash(name)));
+        writeUByte(TAG_INT);
+        writeInt(v);
+    }
+    void writeValueFloat(const char* name, float v) {
+        writeUInt(static_cast<uint32_t>(GraphStreamHash(name)));
+        writeUByte(TAG_FLOAT);
+        writeFloat(v);
+    }
+    void writeValueVec3d(const char* name, double x, double y, double z) {
+        writeUInt(static_cast<uint32_t>(GraphStreamHash(name)));
+        writeUByte(TAG_VEC3D);
+        writeVec3d(x, y, z);
+    }
+    void writeValueString(const char* name, const std::string& v) {
+        writeUInt(static_cast<uint32_t>(GraphStreamHash(name)));
+        writeUByte(TAG_STRING);
+        writeString(v);
+    }
+    void writeValueBlob(const char* name, const void* data, size_t size) {
+        writeUInt(static_cast<uint32_t>(GraphStreamHash(name)));
+        writeUByte(TAG_BLOB);
+        writeBlob(data, size);
     }
 };
 
 // ---------------------------------------------------------------------------
-// GRAPH_Parse
+// GraphStream_ReadValue 0x4F9CD0 (stream.c:58-91): the value is read with the
+// type byte stored in the file. Each helper writes through the destination the
+// way the engine writes through its caller's pointer; a value wider than the
+// destination is truncated (the engine would clobber the neighbouring field).
+// ---------------------------------------------------------------------------
+bool ReadValueInt(StreamReader& s, int type, int& out) {
+    switch (type) {
+    case TAG_UBYTE:
+    case TAG_BYTE: {
+        uint8_t v = 0;
+        if (!s.readByte(v)) return false;
+        std::memcpy(&out, &v, 1);
+        return true;
+    }
+    case TAG_USHORT:
+    case TAG_SHORT: {
+        int16_t v = 0;
+        if (!s.readShort(v)) return false;
+        std::memcpy(&out, &v, 2);
+        return true;
+    }
+    case TAG_UINT:
+    case TAG_INT:
+        return s.readInt(out);
+    case TAG_FLOAT: {
+        float v = 0.f;
+        if (!s.readFloat(v)) return false;
+        std::memcpy(&out, &v, 4);
+        return true;
+    }
+    case TAG_DOUBLE: {
+        double v = 0.0;
+        if (!s.readDouble(v)) return false;
+        std::memcpy(&out, &v, 4);
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+bool ReadValueFloat(StreamReader& s, int type, float& out) {
+    switch (type) {
+    case TAG_FLOAT:
+        return s.readFloat(out);
+    case TAG_UBYTE:
+    case TAG_BYTE: {
+        uint8_t v = 0;
+        if (!s.readByte(v)) return false;
+        std::memcpy(&out, &v, 1);
+        return true;
+    }
+    case TAG_USHORT:
+    case TAG_SHORT: {
+        int16_t v = 0;
+        if (!s.readShort(v)) return false;
+        std::memcpy(&out, &v, 2);
+        return true;
+    }
+    case TAG_UINT:
+    case TAG_INT: {
+        int v = 0;
+        if (!s.readInt(v)) return false;
+        std::memcpy(&out, &v, 4);
+        return true;
+    }
+    case TAG_DOUBLE: {
+        double v = 0.0;
+        if (!s.readDouble(v)) return false;
+        std::memcpy(&out, &v, 4);
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+bool ReadValueVec3d(StreamReader& s, int type, double* out) {
+    if (type != TAG_VEC3D) return false;
+    return s.readVec3d(out);
+}
+
+// ---------------------------------------------------------------------------
+// Graph model operations (src/graphnode/graph.c)
+// ---------------------------------------------------------------------------
+
+struct LoadState {
+    GraphFile graph;
+    GraphNode temp;              // gGraphNodeTemp
+    int       link_a = -1;       // gGraphLinkA
+    int       link_b = -1;       // gGraphLinkB
+    bool      failed = false;
+    std::string fail;
+};
+
+void Fail(LoadState& st, const std::string& what) {
+    st.failed = true;
+    if (st.fail.empty()) st.fail = what;
+}
+
+// AIGraph_ClearRoutes 0x509340 (src/sysmisc/aigraph.c:162-175) over a freshly
+// sized table.
+void ClearRoutes(GraphFile& g, int n) {
+    g.route_table.assign(static_cast<size_t>(n) * static_cast<size_t>(n),
+                         GraphRouteEntry{});
+}
+
+// AIGraph_AllocRoutes 0x5092E0 (src/sysmisc/aigraph.c:144-160): the buffer
+// exists only when capacity > 1.
+void AllocRoutes(GraphFile& g) {
+    if (g.max_nodes > 1) {
+        ClearRoutes(g, g.max_nodes);
+    } else {
+        g.route_table.clear();
+    }
+}
+
+// Graph_Grow 0x4F9620 (src/graphnode/graph.c:298-316): room for `id`, in steps
+// of 100 nodes. The allocation event fires AIGraph_OnAlloc 0x5093B0, which
+// reallocates and clears the route table.
+void GraphGrow(GraphFile& g, int id) {
+    const int cap = g.max_nodes + ((id - g.max_nodes) / 100 + 1) * 100;
+    g.max_nodes = cap;
+    AllocRoutes(g);
+}
+
+// Graph_AddNode 0x4F9510 (src/graphnode/graph.c:262-295).
+// Not modelled: n->diameter = radius + radius (:278), n->unk2C = -1 (:282),
+// n->flags = Script_EvalExpr(criteria) (:286) and the node-add event (:289-291).
+GraphNode* GraphAddNode(LoadState& st, int id, double x, double y, double z,
+                        float gamma, float radius, int material,
+                        const std::string& criteria) {
+    GraphFile& g = st.graph;
+
+    if (id >= 1000) return nullptr;                     // :268-269
+    if (id >= g.max_nodes) GraphGrow(g, id);            // :270-271
+    if (GRAPH_FindNode(g, id)) {                        // :272-276
+        // The engine prints "GRAPHNODE ID ALREADY USED" and spins forever;
+        // the editor reports the duplicate instead of hanging.
+        Fail(st, "GRAPHNODE ID ALREADY USED: " + std::to_string(id));
+        return nullptr;
+    }
+
+    GraphNode n;
+    n.id       = id;
+    n.radius   = radius;
+    n.gamma    = gamma;
+    n.criteria = criteria;
+    n.material = material;
+    n.x        = x;
+    n.y        = y;
+    n.z        = z;
+    g.nodes.push_back(n);
+    return &g.nodes.back();
+}
+
+// Graph_AddLink 0x4F9B80 (src/graphnode/graph.c:453-472). GraphNode_AddLink
+// (:474-486) fills the node's 64 link slots; the editor keeps the links only in
+// GraphFile.edges.
+void GraphAddLink(GraphFile& g, int a, int b, int cost) {
+    GraphEdge e;
+    e.node1     = a;
+    e.node2     = b;
+    e.link_type = cost;
+    g.edges.push_back(e);
+}
+
+// Graph_Read 0x4FA160 (src/graphnode/stream.c:252-314): the old layout, read
+// from offset 0 (GraphOpen :230-232 rewinds first).
+bool ReadOldFormat(LoadState& st, StreamReader& s) {
+    GraphFile& g = st.graph;
+    g.is_legacy = true;
+
+    int nodes = 0, capacity = 0, links = 0;
+    if (!s.readInt(nodes) || !s.readInt(capacity) || !s.readInt(links)) {
+        Fail(st, "old-format header");
+        return false;
+    }
+    g.nodes.clear();
+    g.max_nodes = capacity;
+    AllocRoutes(g);                                   // :267 alloc event
+
+    for (int i = 0; i < nodes; i++) {
+        int id = 0;
+        double pos[3] = { 0.0, 0.0, 0.0 };
+        float gamma = 0.f, radius = 0.f;
+        float unused = 0.f;
+        int   mat = -1;                               // :271
+        std::string criteria;
+        bool has_unused = false, has_mat = false;
+
+        if (!s.readInt(id))    { Fail(st, "old-format node id");  return false; }
+        if (!s.readVec3d(pos)) { Fail(st, "old-format node pos"); return false; }
+        if (!s.readFloat(gamma))  { Fail(st, "old-format gamma");  return false; }
+        if (!s.readFloat(radius)) { Fail(st, "old-format radius"); return false; }
+        if (s.peekByte() == TAG_FLOAT) {              // :281-282
+            if (!s.readFloat(unused)) { Fail(st, "old-format unused float"); return false; }
+            has_unused = true;
+        }
+        if (s.peekByte() == TAG_INT) {                // :283-284
+            if (!s.readInt(mat)) { Fail(st, "old-format material"); return false; }
+            has_mat = true;
+        }
+        if (!s.readString(criteria)) { Fail(st, "old-format criteria"); return false; }
+
+        GraphNode* n = GraphAddNode(st, id, pos[0], pos[1], pos[2], gamma, radius,
+                                    mat, criteria);
+        if (n) {                                      // :288-298
+            n->has_unused_float = has_unused;
+            n->unused_float     = unused;
+            n->has_material     = has_mat;
+
+            // Node-load event: AIGraph_ReadNode 0x509480
+            // (src/sysmisc/aigraph.c:213-229) - two int-counted lists of int
+            // pairs, all four values discarded.
+            const size_t tail_start = s.pos();
+            int count = 0;
+            if (!s.readInt(count)) { Fail(st, "old-format node tail"); return false; }
+            for (int k = 0; k < count; k++) {
+                int a = 0, b = 0;
+                if (!s.readInt(a) || !s.readInt(b)) { Fail(st, "old-format node tail"); return false; }
+            }
+            if (!s.readInt(count)) { Fail(st, "old-format node tail"); return false; }
+            for (int k = 0; k < count; k++) {
+                int a = 0, b = 0;
+                if (!s.readInt(a) || !s.readInt(b)) { Fail(st, "old-format node tail"); return false; }
+            }
+            s.copyRange(tail_start, s.pos(), n->load_tail);
+        }
+    }
+
+    for (int i = 0; i < links; i++) {                 // :300-307
+        int a = 0, b = 0, cost = 0;
+        if (!s.readInt(a) || !s.readInt(b) || !s.readInt(cost)) {
+            Fail(st, "old-format link");
+            return false;
+        }
+        GraphAddLink(g, a, b, cost);
+    }
+
+    // Load event: AIGraph_LoadRoutes 0x509450 (src/sysmisc/aigraph.c:207-211).
+    // The engine passes g->routes without checking it; a capacity of 1 or less
+    // leaves it NULL, so the read is skipped here instead of writing through a
+    // null pointer.
+    if (g.max_nodes > 1) {
+        const size_t bytes = static_cast<size_t>(g.max_nodes) * g.max_nodes *
+                             sizeof(GraphRouteEntry);
+        if (!s.readBlob(g.route_table.data(), bytes)) {
+            Fail(st, "old-format route table");
+            return false;
+        }
+        g.has_route_table = true;
+    }
+    return true;
+}
+
+// GraphOpen 0x4F9FF0 (src/graphnode/stream.c:196-237), magic branch (:209-228).
+bool ReadNewFormat(LoadState& st, StreamReader& s) {
+    GraphFile& g = st.graph;
+
+    while (!s.eof()) {                                // :214
+        int hash = 0;
+        if (!s.readInt(hash)) break;                  // :218
+        const HandlerId h = FindHandler(hash);
+        if (h == H_COUNT) {                           // :224-226
+            s.skip(2);
+            continue;
+        }
+        uint8_t type = 0;
+        if (!s.readByte(type)) break;                 // :221
+
+        switch (h) {
+        case H_MAX_NODES: {                           // Graph_ReadMaxNodes :207-221
+            int n = g.max_nodes;
+            if (!ReadValueInt(s, type, n)) { Fail(st, "nMaxNodes"); return false; }
+            g.nodes.clear();                          // :212-214
+            g.max_nodes = n;                          // :219
+            break;
+        }
+        case H_NODE_ID:                               // Graph_ReadNodeID :223-233
+            st.temp = GraphNode();
+            if (!ReadValueInt(s, type, st.temp.id)) { Fail(st, "nNodeID"); return false; }
+            break;
+        case H_NODE_POS:                              // Graph_ReadNodePosition :235-239
+            if (!ReadValueVec3d(s, type, &st.temp.x)) { Fail(st, "tNodePosition"); return false; }
+            break;
+        case H_NODE_GAMMA:                            // Graph_ReadNodeGamma :241-245
+            if (!ReadValueFloat(s, type, st.temp.gamma)) { Fail(st, "vNodeGamma"); return false; }
+            break;
+        case H_NODE_RADIUS:                           // Graph_ReadNodeRadius :247-251
+            if (!ReadValueFloat(s, type, st.temp.radius)) { Fail(st, "vNodeRadius"); return false; }
+            break;
+        case H_NODE_MATERIAL: {                       // Graph_ReadNodeMaterial :253-260
+            int id = -1;
+            if (!ReadValueInt(s, type, id)) { Fail(st, "nNodeMaterial"); return false; }
+            // The engine stores Terrain_GetMaterial(world, id), or NULL for -1;
+            // the editor keeps the file's material index.
+            st.temp.material = id;
+            break;
+        }
+        case H_NODE_CRITERIA: {                       // Graph_ReadNodeCriteria :262-270
+            if (type != TAG_STRING) { Fail(st, "nNodeCriteria type"); return false; }
+            if (!s.readString(st.temp.criteria)) { Fail(st, "nNodeCriteria"); return false; }
+            // v->node = Graph_AddNode(...); a null result for id >= 1000 drops
+            // the node, exactly as the engine does.
+            const GraphNode* added = GraphAddNode(st, st.temp.id, st.temp.x, st.temp.y,
+                                                  st.temp.z, st.temp.gamma, st.temp.radius,
+                                                  st.temp.material, st.temp.criteria);
+            if (!added && st.failed) return false;
+            break;
+        }
+        case H_LINK_ID1:                              // Graph_ReadLinkID1 :272-279
+            st.link_a = -1;
+            st.link_b = -1;
+            if (!ReadValueInt(s, type, st.link_a)) { Fail(st, "nLinkID1"); return false; }
+            break;
+        case H_LINK_ID2:                              // Graph_ReadLinkID2 :281-285
+            if (!ReadValueInt(s, type, st.link_b)) { Fail(st, "nLinkID2"); return false; }
+            break;
+        case H_LINK_TYPE: {                           // Graph_ReadLinkType :287-293
+            int cost = 0;
+            if (!ReadValueInt(s, type, cost)) { Fail(st, "eLinkType"); return false; }
+            GraphAddLink(g, st.link_a, st.link_b, cost);
+            break;
+        }
+        case H_ROUTE_TABLE: {                         // AIGraph_ReadRouteTable :134-142
+            AllocRoutes(g);                           // :138
+            if (g.route_table.empty()) break;         // the engine's `if (g->routes)`
+            const size_t bytes = static_cast<size_t>(g.max_nodes) * g.max_nodes *
+                                 sizeof(GraphRouteEntry);
+            if (!s.readBlob(g.route_table.data(), bytes)) {
+                Fail(st, "RouteTable");
+                return false;
+            }
+            g.has_route_table = true;
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// Public API
 // ---------------------------------------------------------------------------
 
 GraphNodeKind GRAPH_NodeKind(const GraphNode& node) {
@@ -129,14 +707,17 @@ const GraphNode* GRAPH_FindNode(const GraphFile& graph, int id) {
 }
 
 bool GRAPH_RouteStep(const GraphFile& graph, int from, int to,
-                     int& next, float& cost) {
+                     int& next, float& dist) {
     if (from < 0 || to < 0 || from >= graph.max_nodes || to >= graph.max_nodes)
         return false;
-    const size_t slot = static_cast<size_t>(from) + static_cast<size_t>(to) * graph.max_nodes;
+    // AIGraph_GetRoute 0x509390: &g->routes[capacity * to + from].
+    const size_t slot = static_cast<size_t>(from) +
+                        static_cast<size_t>(to) * static_cast<size_t>(graph.max_nodes);
     if (slot >= graph.route_table.size()) return false;
     const GraphRouteEntry& e = graph.route_table[slot];
     next = e.next;
-    cost = e.cost;
+    dist = e.dist;
+    // AIGraph_GetStep 0x5096C0 returns the step only when next != -1.
     return next != -1;
 }
 
@@ -147,8 +728,8 @@ std::vector<int> GRAPH_EnumerateRoute(const GraphFile& graph, int from, int to) 
     int at = from;
     for (int guard = 0; guard <= graph.max_nodes; guard++) {
         if (at == to) return route;
-        int next; float cost;
-        if (!GRAPH_RouteStep(graph, at, to, next, cost)) return {};
+        int next; float dist;
+        if (!GRAPH_RouteStep(graph, at, to, next, dist)) return {};
         route.push_back(next);
         at = next;
     }
@@ -203,226 +784,227 @@ int GRAPH_NearestNode(const GraphFile& graph, double x, double y, double z,
     return best[0]->id;
 }
 
-// Record codeids (uint32 LE) and typeids, matching the bytes GRAPH_Parse reads.
-namespace {
-    constexpr uint32_t CODE_NODE_ID    = 0x0735CE04;
-    constexpr uint32_t CODE_NODE_POS   = 0x1D429504;
-    constexpr uint32_t CODE_NODE_GAMMA = 0x0F7E9C04;
-    constexpr uint32_t CODE_NODE_RAD   = 0x14302304;
-    constexpr uint32_t CODE_NODE_MAT   = 0x1BB62904;
-    constexpr uint32_t CODE_NODE_CRIT  = 0x1BD3E504;
-    constexpr uint32_t CODE_LINK_A     = 0x09104A04;
-    constexpr uint32_t CODE_LINK_B     = 0x0918F604;
-    constexpr uint32_t CODE_LINK_TYPE  = 0x0DA92304;
-    constexpr uint32_t TYPE_U32 = 0x05050000;
-    constexpr uint32_t TYPE_F32 = 0x06060000;
-    constexpr uint32_t TYPE_F6  = 0x08080000;
-    constexpr uint32_t TYPE_BSTR = 0x09090000;
-
-    void PutU32(std::vector<uint8_t>& b, uint32_t v) {
-        b.push_back((uint8_t)v); b.push_back((uint8_t)(v >> 8));
-        b.push_back((uint8_t)(v >> 16)); b.push_back((uint8_t)(v >> 24));
+GraphFile GRAPH_ParseLegacy(const uint8_t* data, size_t size, const std::string& filepath) {
+    LoadState st;
+    StreamReader s(data, size);
+    ReadOldFormat(st, s);
+    if (st.failed) {
+        st.graph.valid = false;
+        st.graph.error = st.fail + ": " + filepath;
+        Logger::Get().Log(LogLevel::ERR, "[GRAPH] " + st.graph.error);
+        return st.graph;
     }
-    void PutF32(std::vector<uint8_t>& b, float f) {
-        uint32_t v; std::memcpy(&v, &f, 4); PutU32(b, v);
-    }
-    void PutF64(std::vector<uint8_t>& b, double d) {
-        uint64_t v; std::memcpy(&v, &d, 8);
-        for (int i = 0; i < 8; ++i) b.push_back((uint8_t)(v >> (i * 8)));
-    }
-    // codeid + typeid(UInt32) + int32 value (12 bytes).
-    void PutU32Rec(std::vector<uint8_t>& b, uint32_t code, int32_t val) {
-        PutU32(b, code); PutU32(b, TYPE_U32); PutU32(b, (uint32_t)val);
-    }
-    void PutF32Rec(std::vector<uint8_t>& b, uint32_t code, float val) {
-        PutU32(b, code); PutU32(b, TYPE_F32); PutF32(b, val);
-    }
+    st.graph.valid = true;
+    Logger::Get().Log(LogLevel::INFO,
+        "[GRAPH] Parsed " + filepath + " | old layout | nodes=" +
+        std::to_string(st.graph.nodes.size()) + " links=" +
+        std::to_string(st.graph.edges.size()) + " capacity=" +
+        std::to_string(st.graph.max_nodes));
+    return st.graph;
 }
 
-// Forward declarations for legacy format (defined after GRAPH_Write).
-static bool GRAPH_WriteLegacy(const std::string& outPath, const GraphFile& graph);
-static bool GRAPH_SaveLegacy(const std::string& srcPath, const std::string& outPath,
-                             const GraphFile& graph);
+GraphFile GRAPH_Parse(const std::string& filepath) {
+    GraphFile result;
 
-bool GRAPH_Write(const std::string& srcPath, const std::string& outPath,
-                 const GraphFile& graph) {
-    std::ifstream file(srcPath, std::ios::binary | std::ios::ate);
+    std::ifstream file(filepath, std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
-        Logger::Get().Log(LogLevel::ERR, "[GRAPH] Write: cannot open source: " + srcPath);
-        return false;
+        result.error = "Unable to open " + filepath + " for reading";
+        Logger::Get().Log(LogLevel::ERR, "[GRAPH] " + result.error);
+        return result;
     }
     const size_t fileSize = static_cast<size_t>(file.tellg());
     file.seekg(0);
-    // Detect legacy tagged format (first byte 0x05, no magic).
-    {
-        uint8_t first4[4] = {};
-        file.read(reinterpret_cast<char*>(first4), 4);
-        file.close();
-        uint32_t magic = 0; std::memcpy(&magic, first4, 4);
-        if (magic != GRAPH_MAGIC && first4[0] == 0x05) {
-            GraphFile w = graph;
-            w.is_legacy = true;
-            return GRAPH_WriteLegacy(outPath, w);
-        }
+    std::vector<uint8_t> buf(fileSize);
+    if (fileSize && !file.read(reinterpret_cast<char*>(buf.data()),
+                               static_cast<std::streamsize>(fileSize))) {
+        result.error = "Read error on file: " + filepath;
+        Logger::Get().Log(LogLevel::ERR, "[GRAPH] " + result.error);
+        return result;
     }
-    file.open(srcPath, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) return false;
-    file.seekg(0);
-    constexpr size_t HEADER_SIZE = 30;
-    if (fileSize < HEADER_SIZE) return false;
-    std::vector<uint8_t> src(fileSize);
-    if (!file.read(reinterpret_cast<char*>(src.data()), static_cast<std::streamsize>(fileSize)))
-        return false;
     file.close();
 
-    Buffer b{ src.data(), fileSize };
-    if (b.read<uint32_t>(0) != GRAPH_MAGIC) return false;
-    if (b.sig(4) != SIG_MAX_NODES)          return false;
-    const int maxNodes = b.payload<int32_t>(4);
-    if (maxNodes <= 0 || maxNodes > 4096)   return false;
+    // GraphOpen :208 reads four bytes and compares them with GRAPH_MAGIC.
+    if (fileSize < 4) {
+        result.error = "File too small to be a graph: " + filepath;
+        Logger::Get().Log(LogLevel::ERR, "[GRAPH] " + result.error);
+        return result;
+    }
+    uint32_t magic = 0;
+    std::memcpy(&magic, buf.data(), 4);
 
-    const size_t adjBytes = static_cast<size_t>(maxNodes) * maxNodes * 8;
-    const size_t nodeDataStart = HEADER_SIZE + adjBytes;
-    if (nodeDataStart > fileSize) return false;
-
-    // Preserve the header verbatim; regenerate the adjacency table below.
-    std::vector<uint8_t> out(src.begin(), src.begin() + HEADER_SIZE);
-
-    // --- Adjacency / all-pairs shortest-path routing table. ---
-    // The game stores, per node-id pair (a,b): the PREDECESSOR of b on the
-    // shortest path a->b (ref) and the total path distance (dist); (-1,-1) for
-    // self / unreachable. Edge weight = 3D euclidean distance between node
-    // positions. Computed with Floyd-Warshall over the present node ids so that
-    // adding/removing nodes or moving them keeps the routing table consistent
-    // (a stale table with dangling refs crashes the game).
-    //
-    // Byte-fidelity: when the caller passes back an UNCHANGED graph (the common
-    // case - GRAPH_Write is the full serializer, but most saves don't actually
-    // edit anything), regenerating Floyd-Warshall from scratch can produce a
-    // different-but-equivalent predecessor/distance layout than the game's
-    // original file. That breaks byte-identity round-trips and risks touching
-    // data the game expects verbatim. So: re-parse the source to detect "no
-    // change", and in that case copy the original adjacency bytes verbatim.
-    // Only when the graph genuinely changed do we regenerate.
-    {
-        GraphFile orig = GRAPH_Parse(srcPath);
-        bool unchanged = orig.valid;
-        if (unchanged) {
-            if (orig.nodes.size() != graph.nodes.size() ||
-                orig.edges.size() != graph.edges.size()) {
-                unchanged = false;
-            }
-        }
-        if (unchanged) {
-            for (size_t i = 0; i < graph.nodes.size() && unchanged; ++i) {
-                const GraphNode& a = orig.nodes[i];
-                const GraphNode& b = graph.nodes[i];
-                if (a.id != b.id || a.x != b.x || a.y != b.y || a.z != b.z ||
-                    a.gamma != b.gamma || a.radius != b.radius ||
-                    a.material != b.material || a.criteria != b.criteria) {
-                    unchanged = false;
-                }
-            }
-        }
-        if (unchanged) {
-            for (size_t i = 0; i < graph.edges.size() && unchanged; ++i) {
-                const GraphEdge& a = orig.edges[i];
-                const GraphEdge& b = graph.edges[i];
-                if (a.node1 != b.node1 || a.node2 != b.node2 ||
-                    a.link_type != b.link_type) {
-                    unchanged = false;
-                }
-            }
-        }
-
-        if (unchanged) {
-            // Preserve the original adjacency table byte-for-byte.
-            out.insert(out.end(), src.begin() + HEADER_SIZE,
-                       src.begin() + nodeDataStart);
-        } else {
-            std::vector<uint8_t> adj(adjBytes);
-            const int32_t kNeg = -1; const float kNegF = -1.0f;
-            for (size_t k = 0; k < adjBytes / 8; ++k) {
-                std::memcpy(&adj[k * 8],     &kNeg,  4);
-                std::memcpy(&adj[k * 8 + 4], &kNegF, 4);
-            }
-
-            std::vector<int> ids;
-            std::vector<const GraphNode*> np;
-            for (const GraphNode& n : graph.nodes)
-                if (n.id > 0 && n.id < maxNodes) { ids.push_back(n.id); np.push_back(&n); }
-            const int n = static_cast<int>(ids.size());
-            std::unordered_map<int, int> idx;
-            for (int i = 0; i < n; ++i) idx[ids[i]] = i;
-
-            const double INF = 1e30;
-            std::vector<double> dist(static_cast<size_t>(n) * n, INF);
-            std::vector<int>    pred(static_cast<size_t>(n) * n, -1);
-            for (int i = 0; i < n; ++i) dist[static_cast<size_t>(i) * n + i] = 0.0;
-
-            for (const GraphEdge& e : graph.edges) {
-                auto a = idx.find(e.node1), b = idx.find(e.node2);
-                if (a == idx.end() || b == idx.end() || a->second == b->second) continue;
-                const int ia = a->second, ib = b->second;
-                const double dx = np[ia]->x - np[ib]->x, dy = np[ia]->y - np[ib]->y,
-                             dz = np[ia]->z - np[ib]->z;
-                const double w = std::sqrt(dx * dx + dy * dy + dz * dz);
-                if (w < dist[static_cast<size_t>(ia) * n + ib]) {
-                    dist[static_cast<size_t>(ia) * n + ib] = w; pred[static_cast<size_t>(ia) * n + ib] = ids[ia];
-                    dist[static_cast<size_t>(ib) * n + ia] = w; pred[static_cast<size_t>(ib) * n + ia] = ids[ib];
-                }
-            }
-
-            for (int k = 0; k < n; ++k)
-                for (int i = 0; i < n; ++i) {
-                    const double dik = dist[static_cast<size_t>(i) * n + k];
-                    if (dik >= INF) continue;
-                    for (int j = 0; j < n; ++j) {
-                        const double nd = dik + dist[static_cast<size_t>(k) * n + j];
-                        if (nd < dist[static_cast<size_t>(i) * n + j]) {
-                            dist[static_cast<size_t>(i) * n + j] = nd;
-                            pred[static_cast<size_t>(i) * n + j] = pred[static_cast<size_t>(k) * n + j];
-                        }
-                    }
-                }
-
-            for (int i = 0; i < n; ++i)
-                for (int j = 0; j < n; ++j) {
-                    if (i == j) continue;
-                    const double dd = dist[static_cast<size_t>(i) * n + j];
-                    if (dd >= INF) continue;
-                    const size_t off = (static_cast<size_t>(ids[i]) * maxNodes + ids[j]) * 8;
-                    const int32_t ref = pred[static_cast<size_t>(i) * n + j];
-                    const float   fdd = static_cast<float>(dd);
-                    std::memcpy(&adj[off],     &ref, 4);
-                    std::memcpy(&adj[off + 4], &fdd, 4);
-                }
-
-            out.insert(out.end(), adj.begin(), adj.end());
-        }
+    LoadState st;
+    bool ok = true;
+    if (magic == GRAPH_MAGIC) {
+        StreamReader s(buf.data() + 4, fileSize - 4);     // :209-228
+        ok = ReadNewFormat(st, s);
+    } else {
+        StreamReader s(buf.data(), fileSize);             // :229-233
+        ok = ReadOldFormat(st, s);
     }
 
+    if (!ok || st.failed) {
+        st.graph.valid = false;
+        st.graph.error = (st.fail.empty() ? std::string("graph parse failed")
+                                          : st.fail) + ": " + filepath;
+        Logger::Get().Log(LogLevel::ERR, "[GRAPH] " + st.graph.error);
+        return st.graph;
+    }
+
+    st.graph.valid = true;
+    Logger::Get().Log(LogLevel::INFO,
+        "[GRAPH] Parsed " + filepath +
+        " | " + (st.graph.is_legacy ? "old" : "new") + " layout" +
+        " | capacity=" + std::to_string(st.graph.max_nodes) +
+        " nodes=" + std::to_string(st.graph.nodes.size()) +
+        " links=" + std::to_string(st.graph.edges.size()) +
+        " routes=" + std::to_string(st.graph.route_table.size()));
+    return st.graph;
+}
+
+// ---------------------------------------------------------------------------
+// Serialization
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Graph_Grow 0x4F9620:298-316 applied to every node id at or past the capacity.
+// The engine grows once per added node, in the order the nodes are added; the
+// step-of-100 rule is order independent for a set of ids (checked by
+// construction: each grow rounds up past the id it is given).
+int CapacityFor(const GraphFile& graph) {
+    int cap = graph.max_nodes;
+    std::vector<int> ids;
+    ids.reserve(graph.nodes.size());
+    for (const GraphNode& n : graph.nodes) ids.push_back(n.id);
+    std::sort(ids.begin(), ids.end());
+    for (int id : ids) {
+        if (id >= cap) cap = cap + ((id - cap) / 100 + 1) * 100;
+    }
+    return cap;
+}
+
+// A node the engine cannot represent: Graph_AddNode refuses id >= 1000
+// (src/graphnode/graph.c:268-269) and -1 is the free-slot marker
+// (Graph_ClearNodes :326), and a duplicate id makes it spin (:272-276).
+bool ValidateNodes(const GraphFile& graph, std::string& why) {
+    std::vector<int> ids;
+    ids.reserve(graph.nodes.size());
+    for (const GraphNode& n : graph.nodes) {
+        if (n.id < 0) { why = "node id " + std::to_string(n.id) + " is negative"; return false; }
+        if (n.id >= 1000) { why = "node id " + std::to_string(n.id) + " >= 1000"; return false; }
+        ids.push_back(n.id);
+    }
+    std::sort(ids.begin(), ids.end());
+    for (size_t i = 1; i < ids.size(); i++) {
+        if (ids[i] == ids[i - 1]) {
+            why = "duplicate node id " + std::to_string(ids[i]);
+            return false;
+        }
+    }
+    return true;
+}
+
+// The route table exactly as the engine would hold it: the loaded cells, or a
+// cleared table when the capacity had to grow (Graph_Grow fires the allocation
+// event, AIGraph_OnAlloc 0x5093B0 -> AIGraph_AllocRoutes 0x5092E0 ->
+// AIGraph_ClearRoutes 0x509340).
+std::vector<GraphRouteEntry> RoutesFor(const GraphFile& graph, int capacity) {
+    const size_t cells = static_cast<size_t>(capacity) * static_cast<size_t>(capacity);
+    if (graph.route_table.size() == cells) return graph.route_table;
+    return std::vector<GraphRouteEntry>(cells, GraphRouteEntry{});
+}
+
+// The new layout: magic, then the named records (graph_writer.h documents why
+// this order is the one the reader's state machine needs).
+void WriteNewLayout(const GraphFile& graph, int capacity,
+                    const std::vector<GraphRouteEntry>& routes, bool write_routes,
+                    StreamWriter& w) {
+    uint8_t magic[4];
+    const uint32_t m = GRAPH_MAGIC;
+    std::memcpy(magic, &m, 4);
+    w.bytes.insert(w.bytes.end(), magic, magic + 4);
+
+    w.writeValueInt("nMaxNodes", capacity);
+    if (write_routes) {
+        // AIGraph_SaveRoutes 0x509520: WriteValue("RouteTable", BLOB, routes,
+        // capacity * capacity * sizeof(GraphStep)).
+        w.writeValueBlob("RouteTable", routes.data(),
+                         routes.size() * sizeof(GraphRouteEntry));
+    }
+    for (const GraphNode& n : graph.nodes) {
+        w.writeValueInt("nNodeID", n.id);
+        w.writeValueVec3d("tNodePosition", n.x, n.y, n.z);
+        w.writeValueFloat("vNodeGamma", n.gamma);
+        w.writeValueFloat("vNodeRadius", n.radius);
+        w.writeValueInt("nNodeMaterial", n.material);
+        w.writeValueString("nNodeCriteria", n.criteria);
+    }
+    for (const GraphEdge& e : graph.edges) {
+        w.writeValueInt("nLinkID1", e.node1);
+        w.writeValueInt("nLinkID2", e.node2);
+        w.writeValueInt("eLinkType", e.link_type);
+    }
+}
+
+// The old layout: the inverse of Graph_Read 0x4FA160 (stream.c:252-314).
+void WriteOldLayout(const GraphFile& graph, int capacity,
+                    const std::vector<GraphRouteEntry>& routes, bool write_routes,
+                    StreamWriter& w) {
+    w.writeInt(static_cast<int>(graph.nodes.size()));   // :258
+    w.writeInt(capacity);                               // :259
+    w.writeInt(static_cast<int>(graph.edges.size()));   // :260
 
     for (const GraphNode& n : graph.nodes) {
-        PutU32Rec(out, CODE_NODE_ID, n.id);
-        PutU32(out, CODE_NODE_POS); PutU32(out, TYPE_F6);
-        PutF64(out, n.x); PutF64(out, n.y); PutF64(out, n.z);
-        PutF32Rec(out, CODE_NODE_GAMMA, n.gamma);
-        PutF32Rec(out, CODE_NODE_RAD,   n.radius);
-        PutU32Rec(out, CODE_NODE_MAT,   n.material);
-        // Criteria: codeid + typeid(BSTR) + length byte + chars + null.
-        PutU32(out, CODE_NODE_CRIT); PutU32(out, TYPE_BSTR);
-        std::string crit = n.criteria;
-        if (crit.size() > 254) crit.resize(254);
-        out.push_back((uint8_t)(crit.size() + 1));   // length includes the null
-        out.insert(out.end(), crit.begin(), crit.end());
-        out.push_back(0);
+        w.writeInt(n.id);                               // :277
+        w.writeVec3d(n.x, n.y, n.z);                    // :278
+        w.writeFloat(n.gamma);                          // :279
+        w.writeFloat(n.radius);                         // :280
+        if (n.has_unused_float) w.writeFloat(n.unused_float);   // :281-282
+        if (n.has_material)     w.writeInt(n.material);         // :283-284
+        w.writeString(n.criteria);                      // :287
+        if (!n.load_tail.empty()) {
+            w.bytes.insert(w.bytes.end(), n.load_tail.begin(), n.load_tail.end());
+        } else {
+            // AIGraph_ReadNode 0x509480 requires two int-counted pair lists; a
+            // node the editor created has neither, i.e. two empty lists.
+            w.writeInt(0);
+            w.writeInt(0);
+        }
+    }
+    for (const GraphEdge& e : graph.edges) {            // :300-307
+        w.writeInt(e.node1);
+        w.writeInt(e.node2);
+        w.writeInt(e.link_type);
+    }
+    if (write_routes) {                                 // AIGraph_LoadRoutes :209
+        w.writeBlob(routes.data(), routes.size() * sizeof(GraphRouteEntry));
+    }
+}
+
+} // namespace
+
+bool GRAPH_Write(const std::string& srcPath, const std::string& outPath,
+                 const GraphFile& graph) {
+    // srcPath is part of the historical signature; the layout to write is the
+    // one GRAPH_Parse selected and recorded in the graph itself.
+    (void)srcPath;
+
+    std::string why;
+    if (!ValidateNodes(graph, why)) {
+        Logger::Get().Log(LogLevel::ERR, "[GRAPH] Write refused: " + why + " (" + outPath + ")");
+        return false;
     }
 
-    for (const GraphEdge& e : graph.edges) {
-        PutU32Rec(out, CODE_LINK_A,    e.node1);
-        PutU32Rec(out, CODE_LINK_B,    e.node2);
-        PutU32Rec(out, CODE_LINK_TYPE, e.link_type);
+    const int capacity = CapacityFor(graph);
+    const bool write_routes = graph.has_route_table && capacity > 1;
+    const std::vector<GraphRouteEntry> routes =
+        write_routes ? RoutesFor(graph, capacity) : std::vector<GraphRouteEntry>();
+
+    StreamWriter w;
+    if (graph.is_legacy) {
+        WriteOldLayout(graph, capacity, routes, write_routes, w);
+    } else {
+        WriteNewLayout(graph, capacity, routes, write_routes, w);
     }
 
     std::ofstream f(outPath, std::ios::binary | std::ios::trunc);
@@ -430,683 +1012,30 @@ bool GRAPH_Write(const std::string& srcPath, const std::string& outPath,
         Logger::Get().Log(LogLevel::ERR, "[GRAPH] Write: cannot open output: " + outPath);
         return false;
     }
-    f.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
+    f.write(reinterpret_cast<const char*>(w.bytes.data()),
+            static_cast<std::streamsize>(w.bytes.size()));
     if (!f) return false;
-    Logger::Get().Log(LogLevel::INFO, "[GRAPH] Wrote " + std::to_string(graph.nodes.size()) +
-        " nodes, " + std::to_string(graph.edges.size()) + " edges to: " + outPath);
-    return true;
-}
+    f.close();
 
-// ---------------------------------------------------------------------------
-// Legacy (alternate tagged) format — 1-byte type tags, no magic.
-//   0x05 = int32   (5 bytes: tag + LE int32)
-//   0x06 = float32 (5 bytes: tag + LE float)
-//   0x08 = vec3d   (25 bytes: tag + 3 × LE double)
-//   0x09 = bstring (2 + len: tag + length byte + data, last byte is null)
-//
-// Layout:
-//   header:  nodeCount(i32)  maxNodes(i32)  edgeCount(i32)
-//   nodes:   ID  pos(v3d)  gamma  radius  f3  material  criteria
-//            numLinks  numLinks×targetId  numLinks×linkType
-//            hasGraphLink  [graphLinkTarget  graphLinkType]   (if hasGraphLink)
-//   edges:   edgeCount × (link1  link2  linkType)
-//   adjacency table: maxNodes × maxNodes × 8 bytes (raw, at END)
-// ---------------------------------------------------------------------------
-
-namespace {
-    // Read helpers for the legacy tagged format.
-    bool LegacyReadI32(const uint8_t* data, size_t size, size_t& off, int32_t& out) {
-        if (off + 5 > size || data[off] != 0x05) return false;
-        std::memcpy(&out, data + off + 1, 4);
-        off += 5; return true;
-    }
-    bool LegacyReadF32(const uint8_t* data, size_t size, size_t& off, float& out) {
-        if (off + 5 > size || data[off] != 0x06) return false;
-        std::memcpy(&out, data + off + 1, 4);
-        off += 5; return true;
-    }
-    bool LegacyReadV3d(const uint8_t* data, size_t size, size_t& off, double& x, double& y, double& z) {
-        if (off + 25 > size || data[off] != 0x08) return false;
-        std::memcpy(&x, data + off + 1, 8);
-        std::memcpy(&y, data + off + 9, 8);
-        std::memcpy(&z, data + off + 17, 8);
-        off += 25; return true;
-    }
-    bool LegacyReadStr(const uint8_t* data, size_t size, size_t& off, std::string& out) {
-        if (off + 2 > size || data[off] != 0x09) return false;
-        const uint8_t len = data[off + 1];
-        if (off + 2 + len > size) return false;
-        const char* p = reinterpret_cast<const char*>(data + off + 2);
-        out.assign(p, len);
-        while (!out.empty() && out.back() == '\0') out.pop_back();
-        off += 2 + len; return true;
-    }
-    // Write helpers.
-    void LegacyPutI32(std::vector<uint8_t>& b, int32_t v) {
-        b.push_back(0x05);
-        b.push_back((uint8_t)v); b.push_back((uint8_t)(v >> 8));
-        b.push_back((uint8_t)(v >> 16)); b.push_back((uint8_t)(v >> 24));
-    }
-    void LegacyPutF32(std::vector<uint8_t>& b, float v) {
-        uint32_t u; std::memcpy(&u, &v, 4);
-        b.push_back(0x06);
-        b.push_back((uint8_t)u); b.push_back((uint8_t)(u >> 8));
-        b.push_back((uint8_t)(u >> 16)); b.push_back((uint8_t)(u >> 24));
-    }
-    void LegacyPutV3d(std::vector<uint8_t>& b, double x, double y, double z) {
-        b.push_back(0x08);
-        uint64_t u; std::memcpy(&u, &x, 8);
-        for (int i = 0; i < 8; ++i) b.push_back((uint8_t)(u >> (i * 8)));
-        std::memcpy(&u, &y, 8);
-        for (int i = 0; i < 8; ++i) b.push_back((uint8_t)(u >> (i * 8)));
-        std::memcpy(&u, &z, 8);
-        for (int i = 0; i < 8; ++i) b.push_back((uint8_t)(u >> (i * 8)));
-    }
-    void LegacyPutStr(std::vector<uint8_t>& b, const std::string& s) {
-        std::string str = s;
-        if (str.size() > 254) str.resize(254);
-        b.push_back(0x09);
-        b.push_back((uint8_t)(str.size() + 1));  // length includes null terminator
-        b.insert(b.end(), str.begin(), str.end());
-        b.push_back(0);
-    }
-}
-
-GraphFile GRAPH_ParseLegacy(const uint8_t* data, size_t size, const std::string& filepath) {
-    GraphFile result;
-    result.is_legacy = true;
-    size_t off = 0;
-
-    // Header: nodeCount, maxNodes, edgeCount
-    int32_t nodeCount = 0, maxNodes = 0, edgeCount = 0;
-    if (!LegacyReadI32(data, size, off, nodeCount) ||
-        !LegacyReadI32(data, size, off, maxNodes) ||
-        !LegacyReadI32(data, size, off, edgeCount)) {
-        result.error = "Legacy header parse failed: " + filepath;
-        return result;
-    }
-    if (maxNodes <= 0 || maxNodes > 4096) {
-        result.error = "Legacy MaxNodes implausible: " + std::to_string(maxNodes);
-        return result;
-    }
-    result.max_nodes = maxNodes;
-
-    // Node records
-    for (int i = 0; i < nodeCount; ++i) {
-        GraphNode node;
-        int32_t id = 0;
-        if (!LegacyReadI32(data, size, off, id)) break;
-        node.id = id;
-        if (!LegacyReadV3d(data, size, off, node.x, node.y, node.z)) break;
-        if (!LegacyReadF32(data, size, off, node.gamma)) break;
-        if (!LegacyReadF32(data, size, off, node.radius)) break;
-        if (!LegacyReadF32(data, size, off, node.f3)) break;
-        if (!LegacyReadI32(data, size, off, node.material)) break;
-        if (!LegacyReadStr(data, size, off, node.criteria)) break;
-
-        // Per-node link list: numLinks, targets[], types[]
-        int32_t numLinks = 0;
-        if (!LegacyReadI32(data, size, off, numLinks)) break;
-        for (int j = 0; j < numLinks; ++j) {
-            int32_t t = 0; if (!LegacyReadI32(data, size, off, t)) { break; }
-            node.legacy_link_targets.push_back(t);
-        }
-        for (int j = 0; j < numLinks; ++j) {
-            int32_t t = 0; if (!LegacyReadI32(data, size, off, t)) { break; }
-            node.legacy_link_types.push_back(t);
-        }
-        // Inter-graph link
-        if (!LegacyReadI32(data, size, off, node.legacy_graph_link)) break;
-        if (node.legacy_graph_link != 0) {
-            LegacyReadI32(data, size, off, node.legacy_graph_link_tgt);
-            LegacyReadI32(data, size, off, node.legacy_graph_link_typ);
-        }
-        result.nodes.push_back(std::move(node));
-    }
-
-    // Edge records: edgeCount × (link1, link2, linkType)
-    for (int i = 0; i < edgeCount; ++i) {
-        int32_t l1 = 0, l2 = 0, lt = 0;
-        if (!LegacyReadI32(data, size, off, l1)) break;
-        if (!LegacyReadI32(data, size, off, l2)) break;
-        if (!LegacyReadI32(data, size, off, lt)) break;
-        GraphEdge e; e.node1 = l1; e.node2 = l2; e.link_type = lt;
-        result.edges.push_back(e);
-    }
-
-    // Attach edge link IDs to nodes (same as standard format).
-    for (const GraphEdge& e : result.edges) {
-        for (GraphNode& n : result.nodes) {
-            if (n.id == e.node1) {
-                if (n.link1 == -1) n.link1 = e.node2;
-                else if (n.link2 == -1) n.link2 = e.node2;
-            } else if (n.id == e.node2) {
-                if (n.link1 == -1) n.link1 = e.node1;
-                else if (n.link2 == -1) n.link2 = e.node1;
-            }
-        }
-    }
-
-    result.valid = true;
     Logger::Get().Log(LogLevel::INFO,
-        "[GRAPH] Legacy parse " + filepath + " | nodes=" + std::to_string(result.nodes.size()) +
-        " edges=" + std::to_string(result.edges.size()) +
-        " maxNodes=" + std::to_string(maxNodes));
-    return result;
-}
-
-// Full serializer for the legacy tagged format. Regenerates all tagged records
-// from `graph` and rebuilds the adjacency (APSP) table at the end.
-static bool GRAPH_WriteLegacy(const std::string& outPath, const GraphFile& graph) {
-    const int maxNodes = graph.max_nodes > 0 ? graph.max_nodes : 100;
-    std::vector<uint8_t> out;
-
-    // Header
-    LegacyPutI32(out, (int32_t)graph.nodes.size());
-    LegacyPutI32(out, maxNodes);
-    LegacyPutI32(out, (int32_t)graph.edges.size());
-
-    // Nodes
-    for (const GraphNode& n : graph.nodes) {
-        LegacyPutI32(out, n.id);
-        LegacyPutV3d(out, n.x, n.y, n.z);
-        LegacyPutF32(out, n.gamma);
-        LegacyPutF32(out, n.radius);
-        LegacyPutF32(out, n.f3);
-        LegacyPutI32(out, n.material);
-        LegacyPutStr(out, n.criteria);
-        const int nl = (int)n.legacy_link_targets.size();
-        LegacyPutI32(out, nl);
-        for (int t : n.legacy_link_targets) LegacyPutI32(out, t);
-        for (int t : n.legacy_link_types)   LegacyPutI32(out, t);
-        LegacyPutI32(out, n.legacy_graph_link);
-        if (n.legacy_graph_link != 0) {
-            LegacyPutI32(out, n.legacy_graph_link_tgt);
-            LegacyPutI32(out, n.legacy_graph_link_typ);
-        }
-    }
-
-    // Edges
-    for (const GraphEdge& e : graph.edges) {
-        LegacyPutI32(out, e.node1);
-        LegacyPutI32(out, e.node2);
-        LegacyPutI32(out, e.link_type);
-    }
-
-    // Adjacency (APSP) table — same Floyd-Warshall as the standard format.
-    {
-        const size_t adjBytes = static_cast<size_t>(maxNodes) * maxNodes * 8;
-        std::vector<uint8_t> adj(adjBytes);
-        const int32_t kNeg = -1; const float kNegF = -1.0f;
-        for (size_t k = 0; k < adjBytes / 8; ++k) {
-            std::memcpy(&adj[k * 8],     &kNeg,  4);
-            std::memcpy(&adj[k * 8 + 4], &kNegF, 4);
-        }
-
-        std::vector<int> ids;
-        std::vector<const GraphNode*> np;
-        for (const GraphNode& n : graph.nodes)
-            if (n.id > 0 && n.id < maxNodes) { ids.push_back(n.id); np.push_back(&n); }
-        const int n = static_cast<int>(ids.size());
-        std::unordered_map<int, int> idx;
-        for (int i = 0; i < n; ++i) idx[ids[i]] = i;
-
-        const double INF = 1e30;
-        std::vector<double> dist(static_cast<size_t>(n) * n, INF);
-        std::vector<int>    pred(static_cast<size_t>(n) * n, -1);
-        for (int i = 0; i < n; ++i) dist[static_cast<size_t>(i) * n + i] = 0.0;
-
-        for (const GraphEdge& e : graph.edges) {
-            auto a = idx.find(e.node1), b = idx.find(e.node2);
-            if (a == idx.end() || b == idx.end() || a->second == b->second) continue;
-            const int ia = a->second, ib = b->second;
-            const double dx = np[ia]->x - np[ib]->x, dy = np[ia]->y - np[ib]->y,
-                         dz = np[ia]->z - np[ib]->z;
-            const double w = std::sqrt(dx * dx + dy * dy + dz * dz);
-            if (w < dist[static_cast<size_t>(ia) * n + ib]) {
-                dist[static_cast<size_t>(ia) * n + ib] = w; pred[static_cast<size_t>(ia) * n + ib] = ids[ia];
-                dist[static_cast<size_t>(ib) * n + ia] = w; pred[static_cast<size_t>(ib) * n + ia] = ids[ib];
-            }
-        }
-        for (int k = 0; k < n; ++k)
-            for (int i = 0; i < n; ++i) {
-                const double dik = dist[static_cast<size_t>(i) * n + k];
-                if (dik >= INF) continue;
-                for (int j = 0; j < n; ++j) {
-                    const double nd = dik + dist[static_cast<size_t>(k) * n + j];
-                    if (nd < dist[static_cast<size_t>(i) * n + j]) {
-                        dist[static_cast<size_t>(i) * n + j] = nd;
-                        pred[static_cast<size_t>(i) * n + j] = pred[static_cast<size_t>(k) * n + j];
-                    }
-                }
-            }
-        for (int i = 0; i < n; ++i)
-            for (int j = 0; j < n; ++j) {
-                if (i == j) continue;
-                const double dd = dist[static_cast<size_t>(i) * n + j];
-                if (dd >= INF) continue;
-                const size_t off2 = (static_cast<size_t>(ids[i]) * maxNodes + ids[j]) * 8;
-                const int32_t ref = pred[static_cast<size_t>(i) * n + j];
-                const float   fdd = static_cast<float>(dd);
-                std::memcpy(&adj[off2],     &ref, 4);
-                std::memcpy(&adj[off2 + 4], &fdd, 4);
-            }
-        out.insert(out.end(), adj.begin(), adj.end());
-    }
-
-    std::ofstream f(outPath, std::ios::binary | std::ios::trunc);
-    if (!f.is_open()) {
-        Logger::Get().Log(LogLevel::ERR, "[GRAPH] Legacy write: cannot open: " + outPath);
-        return false;
-    }
-    f.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
-    if (!f) return false;
-    Logger::Get().Log(LogLevel::INFO, "[GRAPH] Legacy wrote " +
-        std::to_string(graph.nodes.size()) + " nodes, " +
-        std::to_string(graph.edges.size()) + " edges to: " + outPath);
+        "[GRAPH] Wrote " + std::to_string(graph.nodes.size()) + " nodes, " +
+        std::to_string(graph.edges.size()) + " links, capacity " +
+        std::to_string(capacity) + " (" +
+        (graph.is_legacy ? "old" : "new") + " layout) to: " + outPath);
     return true;
 }
 
-// Position-patch for the legacy format: walks the tagged node records and
-// overwrites the 3 position doubles of matched node IDs. File size unchanged.
-static bool GRAPH_SaveLegacy(const std::string& srcPath, const std::string& outPath,
-                             const GraphFile& graph) {
-    std::ifstream file(srcPath, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) return false;
-    const size_t fileSize = static_cast<size_t>(file.tellg());
-    file.seekg(0);
-    std::vector<uint8_t> buf(fileSize);
-    if (!file.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(fileSize)))
-        return false;
-    file.close();
-
-    size_t off = 0;
-    int32_t nodeCount = 0, maxNodes = 0, edgeCount = 0;
-    if (!LegacyReadI32(buf.data(), fileSize, off, nodeCount) ||
-        !LegacyReadI32(buf.data(), fileSize, off, maxNodes) ||
-        !LegacyReadI32(buf.data(), fileSize, off, edgeCount)) return false;
-
-    auto findEdited = [&graph](int id) -> const GraphNode* {
-        for (const GraphNode& n : graph.nodes)
-            if (n.id == id) return &n;
-        return nullptr;
-    };
-
-    for (int i = 0; i < nodeCount; ++i) {
-        int32_t id = 0; float f; std::string s;
-        double x, y, z;
-        if (!LegacyReadI32(buf.data(), fileSize, off, id)) break;
-        // Position v3d: tag at off, 3 doubles at off+1
-        if (off + 25 > fileSize || buf[off] != 0x08) break;
-        if (const GraphNode* ed = findEdited(id)) {
-            std::memcpy(buf.data() + off + 1,  &ed->x, 8);
-            std::memcpy(buf.data() + off + 9,  &ed->y, 8);
-            std::memcpy(buf.data() + off + 17, &ed->z, 8);
-        }
-        off += 25;
-        if (!LegacyReadF32(buf.data(), fileSize, off, f)) break;  // gamma
-        if (!LegacyReadF32(buf.data(), fileSize, off, f)) break;  // radius
-        if (!LegacyReadF32(buf.data(), fileSize, off, f)) break;  // f3
-        if (!LegacyReadI32(buf.data(), fileSize, off, id)) break; // material
-        if (!LegacyReadStr(buf.data(), fileSize, off, s)) break;  // criteria
-        // Skip per-node link data
-        int32_t nl = 0;
-        if (!LegacyReadI32(buf.data(), fileSize, off, nl)) break;
-        off += static_cast<size_t>(nl) * 5 * 2;  // nl targets + nl types
-        int32_t gl = 0;
-        if (!LegacyReadI32(buf.data(), fileSize, off, gl)) break;
-        if (gl != 0) off += 5 * 2;  // graphLinkTarget + graphLinkType
-    }
-
-    std::ofstream out(outPath, std::ios::binary | std::ios::trunc);
-    if (!out.is_open()) return false;
-    out.write(reinterpret_cast<const char*>(buf.data()), static_cast<std::streamsize>(fileSize));
-    return out.good();
-}
-
-// ---------------------------------------------------------------------------
-// GRAPH_Save — overwrite node positions in-place, preserving everything else.
-// Walks the tagged node records the same way GRAPH_Parse does and patches the
-// 3 position doubles of any node whose id appears in `graph.nodes`.
-// ---------------------------------------------------------------------------
 bool GRAPH_Save(const std::string& srcPath, const std::string& outPath,
                 const GraphFile& graph) {
-    std::ifstream file(srcPath, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        Logger::Get().Log(LogLevel::ERR, "[GRAPH] Save: cannot open source: " + srcPath);
-        return false;
+    // Everything the file holds, with the positions the caller edited.
+    GraphFile merged = GRAPH_Parse(srcPath);
+    if (!merged.valid) return false;
+    for (const GraphNode& n : graph.nodes) {
+        GraphNode* target = GRAPH_FindNode(merged, n.id);
+        if (!target) continue;
+        target->x = n.x;
+        target->y = n.y;
+        target->z = n.z;
     }
-    const size_t fileSize = static_cast<size_t>(file.tellg());
-    file.seekg(0);
-
-    // Detect legacy tagged format (first byte 0x05, no magic).
-    if (fileSize >= 4) {
-        uint8_t first4[4] = {};
-        file.read(reinterpret_cast<char*>(first4), 4);
-        file.seekg(0);
-        uint32_t magic = 0; std::memcpy(&magic, first4, 4);
-        if (magic != GRAPH_MAGIC && first4[0] == 0x05)
-            return GRAPH_SaveLegacy(srcPath, outPath, graph);
-    }
-
-    constexpr size_t HEADER_SIZE = 30;
-    if (fileSize < HEADER_SIZE) return false;
-
-    std::vector<uint8_t> buf(fileSize);
-    if (!file.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(fileSize)))
-        return false;
-    file.close();
-
-    Buffer b{ buf.data(), fileSize };
-
-    if (b.read<uint32_t>(0) != GRAPH_MAGIC)   return false;
-    if (b.sig(4) != SIG_MAX_NODES)            return false;
-    const int maxNodes = b.payload<int32_t>(4);
-    if (maxNodes <= 0 || maxNodes > 4096)     return false;
-
-    const size_t adjTableBytes  = static_cast<size_t>(maxNodes) * maxNodes * 8;
-    const size_t nodeDataStart  = HEADER_SIZE + adjTableBytes;
-    if (nodeDataStart >= fileSize)            return false;
-
-    // Fast lookup of edited positions by node id.
-    auto findEdited = [&graph](int id) -> const GraphNode* {
-        for (const GraphNode& n : graph.nodes)
-            if (n.id == id) return &n;
-        return nullptr;
-    };
-
-    auto writeDoubleLE = [&buf](size_t off, double v) {
-        std::memcpy(buf.data() + off, &v, sizeof(double));
-    };
-
-    // Walk node records exactly like GRAPH_Parse, patching positions.
-    size_t offset = nodeDataStart;
-    while (offset + 2 <= fileSize && b.sig(offset) == SIG_NODE_ID) {
-        if (!b.check(offset, 12)) break;
-        const int id = b.payload<int32_t>(offset);
-        offset += 12;
-
-        if (!b.check(offset, 32) || b.sig(offset) != SIG_NODE_POS) break;
-        if (const GraphNode* edited = findEdited(id)) {
-            writeDoubleLE(offset + 8,  edited->x);
-            writeDoubleLE(offset + 16, edited->y);
-            writeDoubleLE(offset + 24, edited->z);
-        }
-        offset += 32;
-
-        if (!b.check(offset, 12) || b.sig(offset) != SIG_NODE_GAMMA)  break;
-        offset += 12;
-        if (!b.check(offset, 12) || b.sig(offset) != SIG_NODE_RADIUS) break;
-        offset += 12;
-        if (!b.check(offset, 12) || b.sig(offset) != SIG_NODE_MAT)    break;
-        offset += 12;
-        if (!b.check(offset, 9)  || b.sig(offset) != SIG_NODE_CRIT)   break;
-        const uint8_t strLen = buf[offset + 8];
-        const size_t totalCrit = 8 + 1 + static_cast<size_t>(strLen);
-        if (!b.check(offset, totalCrit)) break;
-        offset += totalCrit;
-    }
-
-    std::ofstream out(outPath, std::ios::binary | std::ios::trunc);
-    if (!out.is_open()) {
-        Logger::Get().Log(LogLevel::ERR, "[GRAPH] Save: cannot open output: " + outPath);
-        return false;
-    }
-    out.write(reinterpret_cast<const char*>(buf.data()), static_cast<std::streamsize>(fileSize));
-    if (!out) return false;
-
-    Logger::Get().Log(LogLevel::INFO,
-        "[GRAPH] Saved " + std::to_string(graph.nodes.size()) + " node positions to: " + outPath);
-    return true;
-}
-
-GraphFile GRAPH_Parse(const std::string& filepath) {
-    GraphFile result;
-
-    // ------------------------------------------------------------------
-    // 1. Load file
-    // ------------------------------------------------------------------
-    std::ifstream file(filepath, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        result.error = "Cannot open file: " + filepath;
-        Logger::Get().Log(LogLevel::ERR, "[GRAPH] " + result.error);
-        return result;
-    }
-
-    const size_t fileSize = static_cast<size_t>(file.tellg());
-    file.seekg(0);
-
-    // Minimum viable header: magic(4) + MaxNodes record(12) + second record(12) + pad(2) = 30
-    constexpr size_t HEADER_SIZE = 30;
-    if (fileSize < HEADER_SIZE) {
-        result.error = "File too small to be a valid graph: " + filepath;
-        Logger::Get().Log(LogLevel::ERR, "[GRAPH] " + result.error);
-        return result;
-    }
-
-    std::vector<uint8_t> buf(fileSize);
-    if (!file.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(fileSize))) {
-        result.error = "Read error on file: " + filepath;
-        Logger::Get().Log(LogLevel::ERR, "[GRAPH] " + result.error);
-        return result;
-    }
-
-    Buffer b{ buf.data(), fileSize };
-
-    // ------------------------------------------------------------------
-    // 2. Validate magic
-    // ------------------------------------------------------------------
-    const uint32_t magic = b.read<uint32_t>(0);
-    if (magic != GRAPH_MAGIC) {
-        // Legacy alternate format: no magic, starts with a 1-byte type tag
-        // (0x05 = int32). Used by some graph files (e.g. level 8 graph1/graph7).
-        if (fileSize >= 5 && buf[0] == 0x05) {
-            GraphFile lg = GRAPH_ParseLegacy(buf.data(), fileSize, filepath);
-            if (lg.valid) return lg;
-            result.error = lg.error.empty() ? ("Legacy parse failed: " + filepath) : lg.error;
-        } else {
-            result.error = "Bad magic in graph file: " + filepath;
-        }
-        Logger::Get().Log(LogLevel::ERR, "[GRAPH] " + result.error);
-        return result;
-    }
-
-    // ------------------------------------------------------------------
-    // 3. MaxNodes record at offset 4
-    //    Signature: 0x04E6 at [4-5], value (int32 LE) at [4+8] = [12]
-    // ------------------------------------------------------------------
-    if (b.sig(4) != SIG_MAX_NODES) {
-        result.error = "Missing MaxNodes signature at offset 4: " + filepath;
-        Logger::Get().Log(LogLevel::ERR, "[GRAPH] " + result.error);
-        return result;
-    }
-
-    const int maxNodes = b.payload<int32_t>(4);
-    if (maxNodes <= 0 || maxNodes > 4096) {
-        result.error = "Implausible MaxNodes value " + std::to_string(maxNodes) + " in: " + filepath;
-        Logger::Get().Log(LogLevel::ERR, "[GRAPH] " + result.error);
-        return result;
-    }
-    result.max_nodes = maxNodes;
-
-    // ------------------------------------------------------------------
-    // 4. Read the adjacency / all-pairs route table
-    //    Starts at offset 30, size = MaxNodes * MaxNodes * 8 bytes.
-    //    Entry layout (LE): int32 nextNode, float cost; indexed
-    //    from + to*maxNodes (destination major axis). {-1,-1} = no route.
-    // ------------------------------------------------------------------
-    const size_t adjTableBytes = static_cast<size_t>(maxNodes) * maxNodes * 8;
-    const size_t nodeDataStart = HEADER_SIZE + adjTableBytes;
-
-    if (nodeDataStart >= fileSize) {
-        result.error = "Adjacency table overruns file size in: " + filepath;
-        Logger::Get().Log(LogLevel::ERR, "[GRAPH] " + result.error);
-        return result;
-    }
-
-    result.route_table.resize(static_cast<size_t>(maxNodes) * maxNodes);
-    if (adjTableBytes + HEADER_SIZE <= fileSize) {
-        for (size_t s = 0; s < result.route_table.size(); ++s) {
-            const size_t off = HEADER_SIZE + s * 8;
-            result.route_table[s].next = b.read<int32_t>(off);
-            result.route_table[s].cost = b.read<float>(off + 4);
-        }
-    }
-
-    Logger::Get().Log(LogLevel::INFO,
-        "[GRAPH] Parsing " + filepath +
-        " | MaxNodes=" + std::to_string(maxNodes) +
-        " | AdjTable=" + std::to_string(adjTableBytes) + " bytes" +
-        " | NodeData@" + std::to_string(nodeDataStart));
-
-    // ------------------------------------------------------------------
-    // 5. Parse node records
-    //    Each node: NodeID(12B) + NodePos(32B) + NodeGamma(12B) +
-    //               NodeRadius(12B) + NodeMaterial(12B) + NodeCriteria(8+1+L B)
-    // ------------------------------------------------------------------
-    size_t offset = nodeDataStart;
-
-    while (offset + 2 <= fileSize) {
-        uint16_t s = b.sig(offset);
-        if (s != SIG_NODE_ID) break;  // No more node records; move on to edges
-
-        GraphNode node;
-
-        // NodeID  ---------------------------------------------------
-        if (!b.check(offset, 12)) break;
-        node.id = b.payload<int32_t>(offset);
-        offset += 12;
-
-        // NodePosition (3 doubles = 24 bytes of payload) ------------
-        if (!b.check(offset, 32)) break;
-        if (b.sig(offset) != SIG_NODE_POS) {
-            Logger::Get().Log(LogLevel::WARNING,
-                "[GRAPH] Expected NodePos sig at offset " + std::to_string(offset));
-            break;
-        }
-        node.x = b.payload<double>(offset);
-        node.y = b.read<double>(offset + 16);
-        node.z = b.read<double>(offset + 24);
-        offset += 32;
-
-        // NodeGamma -------------------------------------------------
-        if (!b.check(offset, 12)) break;
-        if (b.sig(offset) != SIG_NODE_GAMMA) {
-            Logger::Get().Log(LogLevel::WARNING,
-                "[GRAPH] Expected NodeGamma sig at offset " + std::to_string(offset));
-            break;
-        }
-        node.gamma = b.payload<float>(offset);
-        offset += 12;
-
-        // NodeRadius ------------------------------------------------
-        if (!b.check(offset, 12)) break;
-        if (b.sig(offset) != SIG_NODE_RADIUS) {
-            Logger::Get().Log(LogLevel::WARNING,
-                "[GRAPH] Expected NodeRadius sig at offset " + std::to_string(offset));
-            break;
-        }
-        node.radius = b.payload<float>(offset);
-        offset += 12;
-
-        // NodeMaterial ----------------------------------------------
-        if (!b.check(offset, 12)) break;
-        if (b.sig(offset) != SIG_NODE_MAT) {
-            Logger::Get().Log(LogLevel::WARNING,
-                "[GRAPH] Expected NodeMaterial sig at offset " + std::to_string(offset));
-            break;
-        }
-        node.material = b.payload<int32_t>(offset);
-        offset += 12;
-
-        // NodeCriteria (pascal-style: 8-byte header + 1-byte length + <length> bytes)
-        // The length byte counts all bytes including the null terminator.
-        // An empty criteria has length == 1 and the single byte is 0x00.
-        if (!b.check(offset, 9)) break;
-        if (b.sig(offset) != SIG_NODE_CRIT) {
-            Logger::Get().Log(LogLevel::WARNING,
-                "[GRAPH] Expected NodeCriteria sig at offset " + std::to_string(offset));
-            break;
-        }
-        {
-            const size_t strHeaderEnd = offset + 8;  // payload starts here
-            const uint8_t strLen = buf[strHeaderEnd]; // length byte
-            const size_t  totalCritBytes = 8 + 1 + static_cast<size_t>(strLen);
-            if (!b.check(offset, totalCritBytes)) break;
-
-            if (strLen > 1) {
-                // Readable string: bytes [strHeaderEnd+1 .. strHeaderEnd+strLen-1]
-                // (last byte is null terminator, excluded)
-                const char* strPtr = reinterpret_cast<const char*>(buf.data() + strHeaderEnd + 1);
-                node.criteria.assign(strPtr, strLen - 1);
-                // Strip trailing null if present
-                while (!node.criteria.empty() && node.criteria.back() == '\0')
-                    node.criteria.pop_back();
-            }
-            offset += totalCritBytes;
-        }
-
-        result.nodes.push_back(std::move(node));
-    }
-
-    // ------------------------------------------------------------------
-    // 6. Parse edge records
-    //    Each edge: EdgeLink1(12B) + EdgeLink2(12B) + LinkType(12B)
-    //    LinkType reuses the 0x0423 signature with a different sub-tag.
-    // ------------------------------------------------------------------
-    while (offset + 2 <= fileSize) {
-        uint16_t s = b.sig(offset);
-        if (s != SIG_EDGE_LINK1) break;
-
-        if (!b.check(offset, 12)) break;
-        const int link1 = b.payload<int32_t>(offset);
-        offset += 12;
-
-        if (!b.check(offset, 12)) break;
-        if (b.sig(offset) != SIG_EDGE_LINK2) {
-            Logger::Get().Log(LogLevel::WARNING,
-                "[GRAPH] Expected EdgeLink2 sig at offset " + std::to_string(offset));
-            break;
-        }
-        const int link2 = b.payload<int32_t>(offset);
-        offset += 12;
-
-        int linkType = 0;
-        if (offset + 12 <= fileSize && b.sig(offset) == SIG_NODE_RADIUS) {
-            // 0x0423 doubles as LinkType when it follows EdgeLink2
-            linkType = b.payload<int32_t>(offset);
-            offset += 12;
-        }
-
-        GraphEdge edge;
-        edge.node1     = link1;
-        edge.node2     = link2;
-        edge.link_type = linkType;
-        result.edges.push_back(edge);
-    }
-
-    Logger::Get().Log(LogLevel::INFO,
-        "[GRAPH] Parsed " + std::to_string(result.nodes.size()) + " nodes, " +
-        std::to_string(result.edges.size()) + " edges from: " + filepath);
-
-    // ------------------------------------------------------------------
-    // 7. Attach edge link IDs to the corresponding node entries
-    //    (GraphNode::link1/link2 store the connected-node IDs for the
-    //     first two edges touching this node, for quick lookup by callers)
-    // ------------------------------------------------------------------
-    for (const GraphEdge& e : result.edges) {
-        // Find node with id == e.node1 and attach e.node2 as its link
-        for (GraphNode& n : result.nodes) {
-            if (n.id == e.node1) {
-                if (n.link1 == -1) n.link1 = e.node2;
-                else if (n.link2 == -1) n.link2 = e.node2;
-            } else if (n.id == e.node2) {
-                if (n.link1 == -1) n.link1 = e.node1;
-                else if (n.link2 == -1) n.link2 = e.node1;
-            }
-        }
-    }
-
-    result.valid = true;
-    return result;
+    return GRAPH_Write(srcPath, outPath, merged);
 }
