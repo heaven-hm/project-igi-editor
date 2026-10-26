@@ -39,6 +39,44 @@ static const std::set<std::string>& RotorAttachmentIds() {
     return ids;
 }
 
+// ─── Magic-object model resolution (issue #67) ───────────────────────────────
+// The engine spawns `def->model` for an ATTA record, not the record's name:
+// `arg.model = def->model` before the task is created
+// (IGI-RE `src/shadow/sector.c:667`, `src/magicobj/rigidcoll.c:484`), and the
+// attachment name is only ever used to look the definition up by exact strcmp
+// (`src/shadow/sector.c:656-658`). On the retail MAGICOBJ.QVM every definition
+// has `model == name` (measured: 374 of 374), so this resolves to the
+// attachment name on shipped data and the visible behaviour is unchanged; it
+// exists so a definition whose model differs loads the model the game loads.
+static const igi::MagicObjectRegistry& MagicObjectTable() {
+    static std::string loadedFrom;
+    static igi::MagicObjectRegistry registry;
+    const std::string qvmPath = Utils::GetIGIRootPath() + "\\magicobj\\magicobj.qvm";
+    if (loadedFrom == qvmPath) return registry;
+    loadedFrom = qvmPath;
+    registry = igi::MagicObjectRegistry{};
+    if (!std::filesystem::exists(qvmPath)) return registry;
+
+    QVMFile qvm = QVM_Parse(qvmPath);
+    if (!qvm.valid) return registry;
+    if (!registry.LoadDecompiledSource(QVM_DecompileToString(qvm))) return registry;
+
+    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Loaded " +
+        std::to_string(registry.GetDefinitions().size()) +
+        " magic-object definitions from magicobj.qvm");
+    return registry;
+}
+
+// The model an attachment spawns, or the attachment name when the table has no
+// entry for it (the engine warns and skips such a record: IGI-RE
+// `src/shadow/sector.c:659-663`; the editor keeps drawing the name it always
+// drew rather than dropping the node).
+static std::string MagicObjectModelId(const std::string& attachmentName) {
+    const igi::MagicObjectDefinition* def = MagicObjectTable().Find(attachmentName);
+    if (def == nullptr || def->model_id.empty()) return attachmentName;
+    return def->model_id;
+}
+
 std::string Renderer_Objects::AttaOccupancyKey(const std::string& modelId, const glm::vec3& worldPos) {
     char buf[160];
     snprintf(buf, sizeof(buf), "%s@%lld,%lld,%lld", modelId.c_str(),
@@ -451,18 +489,22 @@ bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId,
 
             for (const auto& a : geo.mefAttachments) {
                 std::string aname(a.name, strnlen(a.name, 16));
-                if (aname.empty() || !visited.insert(aname).second) continue;
-                if (familyModels.count(aname)) continue;
+                if (aname.empty()) continue;
+                // The dependency to pack is the model the engine spawns for this
+                // record (MagicObjectModelId); the log keeps the ATTA name.
+                const std::string spawnModelId = MagicObjectModelId(aname);
+                if (!visited.insert(spawnModelId).second) continue;
+                if (familyModels.count(spawnModelId)) continue;
 
-                std::string mefPath = GetOrExtractMefTemp(aname, /*isBuilding=*/false);
-                if (mefPath.empty()) mefPath = GetOrExtractMefTemp(aname, true);
+                std::string mefPath = GetOrExtractMefTemp(spawnModelId, /*isBuilding=*/false);
+                if (mefPath.empty()) mefPath = GetOrExtractMefTemp(spawnModelId, true);
                 if (mefPath.empty()) {
                     Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: ATTA dependency '" +
                         aname + "' (needed by '" + cur + "') not found anywhere; skipping");
                     continue;
                 }
-                familyModels.emplace(aname, mefPath);
-                worklist.push_back(aname);
+                familyModels.emplace(spawnModelId, mefPath);
+                worklist.push_back(spawnModelId);
                 Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: pulling in ATTA dependency '" +
                     aname + "' (needed by '" + cur + "')");
             }
@@ -1081,6 +1123,13 @@ void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool
         std::string aname(a.name, strnlen(a.name, 16));
         if (aname.empty()) continue;
 
+        // The mesh this spawn loads is the DEFINITION's model (see
+        // MagicObjectModelId). `info.modelId` stays the ATTA name: the editor's
+        // name-keyed paths -- rotor preview, death-zone filter, promoted ATTA
+        // records -- are keyed by the magic-object name, which is also what the
+        // level data references.
+        const std::string spawnModelId = MagicObjectModelId(aname);
+
         AttachInfo info;
         info.modelId = aname;
         info.px = a.px; info.py = a.py; info.pz = a.pz;
@@ -1091,14 +1140,14 @@ void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool
 
         // Pre-warm the sub-model mesh — try res cache first, disk fallback.
         std::string subKey = std::to_string(current_level_) + ":" +
-                             (isBuilding ? "building:" : "object:") + aname;
+                             (isBuilding ? "building:" : "object:") + spawnModelId;
         if (mesh_cache_.find(subKey) == mesh_cache_.end()) {
             bool loaded = false;
-            std::vector<uint8_t> subBytes = FindMeshData(aname);
+            std::vector<uint8_t> subBytes = FindMeshData(spawnModelId);
             if (!subBytes.empty()) {
                 try {
-                    Mesh subMesh = loadObjModelFromMemory(subBytes, aname);
-                    ApplyTexturesToMesh(subMesh, aname, modelId);
+                    Mesh subMesh = loadObjModelFromMemory(subBytes, spawnModelId);
+                    ApplyTexturesToMesh(subMesh, spawnModelId, modelId);
                     mesh_cache_[subKey] = subMesh;
                     Logger::Get().Log(LogLevel::INFO,
                         "[Renderer_Objects] ATTA sub-model loaded from ResCache: " + aname +
@@ -1110,16 +1159,16 @@ void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool
                 }
             }
             if (!loaded) {
-                std::string subFile = FindModelFile(aname, isBuilding);
+                std::string subFile = FindModelFile(spawnModelId, isBuilding);
                 if (subFile.empty()) {
                     // FindModelFile may have lazily indexed a cross-level .res as a side
                     // effect (its cross-level lookup block) -- retry the ResCache now that
                     // the owning level's models.res is indexed, before giving up.
-                    std::vector<uint8_t> lazyBytes = FindMeshData(aname);
+                    std::vector<uint8_t> lazyBytes = FindMeshData(spawnModelId);
                     if (!lazyBytes.empty()) {
                         try {
-                            Mesh subMesh = loadObjModelFromMemory(lazyBytes, aname);
-                            ApplyTexturesToMesh(subMesh, aname, modelId);
+                            Mesh subMesh = loadObjModelFromMemory(lazyBytes, spawnModelId);
+                            ApplyTexturesToMesh(subMesh, spawnModelId, modelId);
                             mesh_cache_[subKey] = subMesh;
                             Logger::Get().Log(LogLevel::INFO,
                                 "[Renderer_Objects] ATTA sub-model loaded from ResCache (lazy): " + aname +
@@ -1138,7 +1187,7 @@ void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool
                 } else {
                     try {
                         Mesh subMesh = loadObjModel(subFile, "");
-                        ApplyTexturesToMesh(subMesh, aname, modelId);
+                        ApplyTexturesToMesh(subMesh, spawnModelId, modelId);
                         mesh_cache_[subKey] = subMesh;
                         Logger::Get().Log(LogLevel::INFO,
                             "[Renderer_Objects] ATTA sub-model loaded from disk: " + aname +
@@ -1152,7 +1201,7 @@ void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool
             }
         }
         // Recurse: parse this child's own ATTA section
-        LoadAttachmentsRecursive(aname, isBuilding, visited);
+        LoadAttachmentsRecursive(spawnModelId, isBuilding, visited);
     }
 
     attachment_cache_[cacheKey] = std::move(attaches);
@@ -1182,11 +1231,14 @@ void Renderer_Objects::DrawAttachmentsRecursive(
     const auto& attsR = ait->second;
     for (size_t rri = 0; rri < attsR.size(); ++rri) {
         const auto &att = attsR[rri];
-        // Find the mesh
-        FillLevelModelKey(level_model_key_scratch_, current_level_, isBuilding, att.modelId);
+        // Find the mesh. The spawned model is the definition's model
+        // (MagicObjectModelId); the name-keyed checks further down (death zone,
+        // rotor preview, promoted records) keep using att.modelId.
+        const std::string spawnModelId = MagicObjectModelId(att.modelId);
+        FillLevelModelKey(level_model_key_scratch_, current_level_, isBuilding, spawnModelId);
         auto sit = mesh_cache_.find(level_model_key_scratch_);
         if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) {
-            FillLevelModelKey(level_model_key_scratch_, current_level_, false, att.modelId);
+            FillLevelModelKey(level_model_key_scratch_, current_level_, false, spawnModelId);
             sit = mesh_cache_.find(level_model_key_scratch_);
         }
         if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) continue;
@@ -1229,9 +1281,9 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         // the proxy renders it — but still recurse into children.
         if (IsAttaPromoted(att.modelId, worldPos) ||
             promoted_atta_records_.count(parentModelId + ":" + std::to_string(rri)) > 0) {
-            std::string childKey = parentModelId + ">" + att.modelId;
+            std::string childKey = parentModelId + ">" + spawnModelId;
             if (drawn.insert(childKey).second) {
-                DrawAttachmentsRecursive(topLevelModelId, att.modelId, isBuilding, childWorldMat, isTransparentPass,
+                DrawAttachmentsRecursive(topLevelModelId, spawnModelId, isBuilding, childWorldMat, isTransparentPass,
                                          loc_model, loc_dirlight, loc_ambient,
                                          loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
             }
@@ -1242,9 +1294,9 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         // vertices). These render as misshapen boxes with fabricated UVs.  Still recurse
         // into their children — those may have proper render geometry.
         if (!subMesh.fromRenderMesh) {
-            std::string childKey = parentModelId + ">" + att.modelId;
+            std::string childKey = parentModelId + ">" + spawnModelId;
             if (drawn.insert(childKey).second) {
-                DrawAttachmentsRecursive(topLevelModelId, att.modelId, isBuilding, childWorldMat, isTransparentPass,
+                DrawAttachmentsRecursive(topLevelModelId, spawnModelId, isBuilding, childWorldMat, isTransparentPass,
                                          loc_model, loc_dirlight, loc_ambient,
                                          loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
             }
@@ -1271,9 +1323,9 @@ void Renderer_Objects::DrawAttachmentsRecursive(
             EnsureAiModelIdsLoaded();
             const bool isAiModel = (ai_model_ids_.count(topLevelModelId) > 0);
             if (!subHasTex && (!isAiModel || isLargeSlab)) {
-                std::string childKey = parentModelId + ">" + att.modelId;
+                std::string childKey = parentModelId + ">" + spawnModelId;
                 if (drawn.insert(childKey).second) {
-                    DrawAttachmentsRecursive(topLevelModelId, att.modelId, isBuilding, childWorldMat, isTransparentPass,
+                    DrawAttachmentsRecursive(topLevelModelId, spawnModelId, isBuilding, childWorldMat, isTransparentPass,
                                              loc_model, loc_dirlight, loc_ambient,
                                              loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
                 }
@@ -1312,9 +1364,9 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         const bool drawInThisPass = !isTransparentPass || attHasAlpha;
         if (!drawInThisPass) {
             // Still recurse into children — they may need a different pass
-            std::string childKey = parentModelId + ">" + att.modelId;
+            std::string childKey = parentModelId + ">" + spawnModelId;
             if (drawn.insert(childKey).second) {
-                DrawAttachmentsRecursive(topLevelModelId, att.modelId, isBuilding, childWorldMat, isTransparentPass,
+                DrawAttachmentsRecursive(topLevelModelId, spawnModelId, isBuilding, childWorldMat, isTransparentPass,
                                           loc_model, loc_dirlight, loc_ambient,
                                           loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
             }
@@ -1395,9 +1447,9 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         }
 
         // Recurse into this attachment's own children
-        std::string childKey = parentModelId + ">" + att.modelId;
+        std::string childKey = parentModelId + ">" + spawnModelId;
         if (drawn.insert(childKey).second) {
-            DrawAttachmentsRecursive(topLevelModelId, att.modelId, isBuilding, childWorldMat, isTransparentPass,
+            DrawAttachmentsRecursive(topLevelModelId, spawnModelId, isBuilding, childWorldMat, isTransparentPass,
                                       loc_model, loc_dirlight, loc_ambient,
                                       loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
         }

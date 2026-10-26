@@ -402,6 +402,7 @@ add_executable(igi_tests
     tests/test_menu_text_res.cpp
     tests/test_menu_labels.cpp
     tests/test_menu_ui.cpp
+    tests/test_magic_object_expand.cpp
 )
 
 # Explicit runtime so igi_tests always matches igi-editor (/MDd Debug, /MD Release).
@@ -520,6 +521,7 @@ target_sources(igi_tests PRIVATE
     source/runtime/pause_menu_font.cpp
     source/runtime/human_player_config.cpp
     source/runtime/magic_object_registry.cpp
+    source/runtime/magic_object_expand.cpp
     source/runtime/map_computer_camera.cpp
     source/runtime/map_computer_projection.cpp
     source/runtime/level_weather.cpp
