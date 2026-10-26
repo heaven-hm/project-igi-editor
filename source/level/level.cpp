@@ -506,8 +506,26 @@ void Level::LoadFogInfo(const QSC* qsc_objects, IRenderResLoader* render_res_loa
 			bestFogColor[2] = curFogColor[2];
 			// Fog density of 0 is a valid "no fog at this keyframe" state
 			// (observed: level3's night keyframe) — keep the far/no-fog default.
-			// Factor 120: density=0.12 (level1 haze) → fog_far=1000m; density=0.5 → 240m.
-			bestFogFarMeters = (curFogDensity > 0.0f) ? (1.0f / curFogDensity) * 120.0f : fog_far_meters;
+			//
+			// The constant is the engine's e-folding distance, derived rather than chosen.
+			// IGI-RE src/glowmesh/terraind3d.c:164 attenuates by
+			//     1 / exp(vz * gWorldScale * gTerrainFogScale)
+			// with gWorldScale = 0.001f (src/d3d/direct3d.c:532) and gTerrainFogScale
+			// = authored_density * 0.0005 (src/animcam/globallight.c:125, the
+			// 0x1.0624dep-11 constant at :115). The exponent is therefore
+			// vz * density * 5e-7, which reaches 1 -- the e-folding point -- at
+			// vz = 2e6 / density world units. At the editor's 4096 units per metre that
+			// is 2e6 / 4096 = 488.28125 / density metres.
+			//
+			// This replaces an invented 120.0f, which made the fog 4.069x too thick on
+			// every level (LEVEL1: 63.5 m instead of 258.35 m). The old comment's example
+			// was also mis-attributed: density 0.12 is LEVEL5's, not level1's, which
+			// authors 1.89.
+			//
+			// HONEST LIMIT: the engine's fog is exponential and this renderer's is linear,
+			// so this is the honest bridge (the e-folding distance), not an equivalence.
+			// Matching retail exactly would need exponential fog in the shader.
+			bestFogFarMeters = (curFogDensity > 0.0f) ? (1.0f / curFogDensity) * 488.28125f : fog_far_meters;
 		}
 	}
 
