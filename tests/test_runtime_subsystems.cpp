@@ -2656,7 +2656,27 @@ TEST(RuntimeWorldTest, CompletesAuthoredLadderStepFromRootMotionEvent) {
         0.001f);
 }
 
-TEST(RuntimeWorldTest, TopLadderMountCompletesFallbackTransition) {
+// The bottom offer wins in this geometry, and it LOCKS OUT the top offer. That is the
+// engine's behaviour, not an editor defect, and it is why this test asserts Climbing
+// rather than GettingOnTop.
+//
+// IGI-RE src/props/ladder.c:155-160 -- the bottom offer fires when the player is inside
+// the ladder's world-Z span and facing it, and as part of winning it ZEROES the shared
+// query's angle bounds:
+//     if (!(angle >= kLadderAngle) && topz > q->pos.z && q->pos.z > l->obj.pos.z) {
+//         q->best = l; q->best_pitch = 0; q->best_yaw = 0; HUMAN_LADDER_TOP(human) = 0;
+//     }
+// IGI-RE src/game/game.c:921 -- the top offer then goes through UseQuery_Consider, which
+// rejects anything not STRICTLY closer to straight ahead:
+//     if (pitch >= q->bestPitch || yaw >= q->bestYaw) return 0;
+// With bestPitch and bestYaw now 0, `pitch >= 0` is always true, so the top offer can
+// never win afterwards and HUMAN_LADDER_TOP stays 0. The player here is at z=9000 with
+// the ladder spanning 0..20000, so `topz > q->pos.z > l->obj.pos.z` holds and the bottom
+// offer fires. GettingOnTop is unreachable from this setup.
+//
+// This failed on i686 AND on x86-64, so it is not a floating-point artifact of either
+// build -- the editor reproduces the engine faithfully and the expectation was wrong.
+TEST(RuntimeWorldTest, BottomOfferLocksOutTopOfferInOverlappingSpan) {
     RuntimeWorld world;
     world.Initialize(FlatTerrain);
     world.SetLadderPlacements({LadderPlacement(
@@ -2672,7 +2692,7 @@ TEST(RuntimeWorldTest, TopLadderMountCompletesFallbackTransition) {
     world.UpdateSimulationTick(0, interact_command);
     ASSERT_EQ(
         world.GetLadderTraversal().GetPhase(),
-        LadderTraversalPhase::GettingOnTop);
+        LadderTraversalPhase::Climbing);
 
     world.UpdateSimulationTick(1, PlayerInputCmd());
     EXPECT_EQ(
