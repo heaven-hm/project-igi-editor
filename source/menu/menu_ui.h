@@ -199,6 +199,20 @@ struct MenuUiEntry {
     bool is_container = false; // has children
     bool has_text = false;     // declares a text field with a non-empty value
 
+    // ── label text, resolved from the game's language .RES archives ──────────
+    // `label`/`item_label` above stay VERBATIM retail script data (the
+    // `Text Resource` key, e.g. "Restart Game").  The engine does not draw that
+    // key: `MenuManager_GetString` (HOOK 0x418EA0, src/menu/menumanager.c:832-852)
+    // builds "LOCAL:<LanguageName>/<key>" and draws the archive's text, which is
+    // frequently different -- the retail English archive answers "Restart Mission"
+    // for the "Restart Game" key.  These fields carry that resolution, and are left
+    // empty when the entry declares no text, so a consumer finding `display_label`
+    // empty must fall back to `label`.
+    // See docs/igi-re-parity/MENU_TEXT_RES.md.
+    std::string label_key;       // the raw key == `label`, kept for diagnostics
+    std::string display_label;   // resolved language text, or the engine's miss string
+    bool label_resolved = false; // display_label came from a language archive
+
     // Retail selectability.  `selectable` is what the retail window would set:
     // MenuFrame from "Is Selectable" (src/widget/menuframe.c:57, read by
     // `MenuFrame_Run` HOOK 0x422A50), MenuText/MenuTextConditional from a
@@ -381,12 +395,29 @@ inline constexpr char kRetailMenuRelativePath[] = "menusystem/ingamemenu.qvm";
 inline constexpr int kEditorOptionsScreenId = -2000;
 inline constexpr char kEditorOptionsLabel[] = "Editor Options";
 
+// How many of an `EditorMenu`'s labels resolved against the language archives.
+// Mirrors `menu_text::LookupCounters` as plain counts, so this header does not have
+// to pull in the .RES reader.
+struct EditorMenuLabelStats {
+    bool language_data_loaded = false; // at least one language archive was read
+    std::size_t labels = 0;            // entries carrying a `Text Resource` key
+    std::size_t resolved = 0;          // text came from an archive
+    std::size_t engine_path = 0;       // "LOCAL:<LanguageName>/<key>"
+    std::size_t final_component = 0;   // last path component only (documented deviation)
+    std::size_t engine_miss = 0;       // key absent -> "RM: <key>" (engine parity)
+    std::size_t no_language_data = 0;  // no archive -> the raw key
+};
+
 struct EditorMenu {
     MenuUiModel model;
     bool retail = false;      // built from the retail definition
     bool fallback = false;    // built from the editor's own row list
     std::string reason;       // why the retail definition was not used
     std::string reader;       // which reader produced the definition
+    // The language the labels were resolved against, and the outcome counts.
+    // Empty / all-zero when no language archive was found.
+    std::string language;
+    EditorMenuLabelStats label_stats;
 };
 
 // Loads `game_root/menusystem/ingamemenu.qvm` and builds the editor menu from it.

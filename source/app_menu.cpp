@@ -41,6 +41,7 @@
 #include <vector>
 
 #include "menu/qvm_image.h"
+#include "menu/menu_text_res.h"
 #include "runtime/pause_menu_layout.h"
 
 namespace igi {
@@ -214,6 +215,9 @@ MenuUiModel BuildEditorFallbackMenu(bool terrain_expanded,
         entry.task_id = -1;
         entry.label = rows[i].label;
         entry.item_label = rows[i].label;
+        // These rows are the editor's own, so they are already display text: there is
+        // no `Text Resource` key to resolve and nothing to look up in an archive.
+        entry.display_label = rows[i].label;
         entry.rect = MenuUiToRetail(viewport_rect, options.viewport_width,
                                     options.viewport_height);
         entry.has_text = true;
@@ -327,6 +331,9 @@ EditorMenu LoadEditorMenu(const std::string& game_root, bool terrain_expanded,
             entry.task_id = -1;
             entry.label = kEditorOptionsLabel;
             entry.item_label = kEditorOptionsLabel;
+            // The editor's own label, not a retail key: there is no archive entry to
+            // resolve, and pushing it through the lookup would yield "RM: Editor Options".
+            entry.display_label = kEditorOptionsLabel;
             entry.has_text = true;
             entry.selectable = true;
             entry.item_candidate = true;
@@ -362,6 +369,65 @@ EditorMenu LoadEditorMenu(const std::string& game_root, bool terrain_expanded,
         } else {
             model.warnings.push_back(
                 "editor options screen added but no retail main screen to hang its entry on");
+        }
+    }
+
+    // ── label text, from the game's language .RES archives ───────────────────
+    // A retail item's `Text Resource` is a KEY, not the string the game draws.
+    // The engine resolves it through `MenuManager_GetString` (HOOK 0x418EA0,
+    // src/menu/menumanager.c:832-852) against "LOCAL:<LanguageName>/<key>", and the
+    // English archive answers e.g. "Restart Mission" for the key "Restart Game".
+    // Resolving here is what makes the retail menu readable rather than a list of
+    // script keys.  It is deliberately additive: `label`/`item_label` keep the
+    // verbatim key and the resolved text goes in `display_label`, so no existing
+    // consumer's meaning changes.
+    //
+    // A missing install is not an error: with no archive every label falls back to
+    // `NoLanguageData` (the raw key), which is exactly what the editor drew before,
+    // and `label_stats.language_data_loaded` records that it happened.
+    {
+        menu_text::LanguageResources resources;
+        std::string res_error;
+        if (resources.AddLanguageDirectory(game_root, resources.language_name(), res_error)) {
+            result.language = resources.language_name();
+            result.label_stats.language_data_loaded = true;
+            menu_text::LookupCounters counters;
+
+            for (MenuUiScreen& screen : model.screens) {
+                for (MenuUiEntry& entry : screen.entries) {
+                    // Containers and the editor-added entry carry no `Text Resource`.
+                    // The editor's own rows are already display text and must NOT be
+                    // pushed through the archive, or "Save Level" would be replaced by
+                    // the engine's "RM: Save Level" miss string.
+                    if (!entry.has_text || entry.label.empty() || entry.editor_added) {
+                        continue;
+                    }
+                    const menu_text::TextResult r = resources.Lookup(entry.label);
+                    entry.label_key = entry.label;
+                    entry.display_label = r.text;
+                    entry.label_resolved = r.resolved();
+                    counters.Add(r);
+                    ++result.label_stats.labels;
+                }
+            }
+
+            result.label_stats.resolved = counters.resolved();
+            result.label_stats.engine_path = counters.engine_path;
+            result.label_stats.final_component = counters.final_component;
+            result.label_stats.engine_miss = counters.engine_miss;
+            result.label_stats.no_language_data = counters.no_language_data;
+
+            if (result.label_stats.engine_miss > 0) {
+                model.warnings.push_back(
+                    "language archive has no entry for " +
+                    std::to_string(result.label_stats.engine_miss) +
+                    " retail label(s); the engine draws its \"RM: <key>\" miss string");
+            }
+        } else {
+            model.warnings.push_back(
+                "no language archive under " + game_root + "/LANGUAGE (" +
+                (res_error.empty() ? std::string("not found") : res_error) +
+                "); retail labels stay as their script keys");
         }
     }
 

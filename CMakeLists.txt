@@ -400,6 +400,7 @@ add_executable(igi_tests
     tests/test_keybindings.cpp
     tests/test_menu_qvm.cpp
     tests/test_menu_text_res.cpp
+    tests/test_menu_labels.cpp
     tests/test_menu_ui.cpp
 )
 
