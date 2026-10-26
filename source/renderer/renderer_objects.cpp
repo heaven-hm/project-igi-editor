@@ -1017,12 +1017,19 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             model = glm::rotate(model, elapsed_time_secs_ * 1.0f, glm::vec3(0.0f, 0.0f, 1.0f));
         }
 
-        // Weapon/ammo pickups are authored with barrel along model +Y (standing upright).
-        // Rotate 90° around world Z so barrel maps to world +X — weapon lies flat on ground.
-        bool isWeapon = IsWeaponModel(obj.modelId) || obj.type == "GunPickup" || obj.type == "AmmoPickup" || obj.type == "GenericPickup";
-        if (isWeapon) {
-            model = glm::rotate(model, glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-        }
+        // A 90-degree Z turn for weapon/ammo pickups used to be applied here, on the
+        // theory that the authored model stands on its barrel.  It was invented: the
+        // engine draws a rigid object with the object's own matrix and scale only --
+        // scale_matrix(&rot, &o->matrix, o->scale) then
+        // Direct3D_MakeMatrix(&mat, rot.m, pos) (Direct3DRender_DrawRigidMesh
+        // HOOK 0x49DF60, src/render/render.c:965-966).  The +/-90-degree turn exists
+        // only in GunPickup_New HOOK 0x46C980 (src/comprun/pickup.c:423-429), which is
+        // the engine's *dropped* pickup path, not the placed one this draws.
+        //
+        // `isWeapon` is kept: it gates the attachment pass below, which pickups do not
+        // take part in.
+        const bool isWeapon = IsWeaponModel(obj.modelId) || obj.type == "GunPickup" ||
+                              obj.type == "AmmoPickup" || obj.type == "GenericPickup";
 
         // 3. Scale
         // Wire props are stretched between their two authored anchors by the game

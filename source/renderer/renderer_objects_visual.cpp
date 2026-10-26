@@ -863,9 +863,8 @@ void main() {
     // Authored IGI rotation: Rz * Ry * Rx, like the game (renderer/igi_transform.h).
     model = model * igi::IgiEulerRotationMatrix(obj.rot);
 
-    bool isWeapon = IsWeaponModel(obj.modelId) || obj.type == "GunPickup" || obj.type == "AmmoPickup" || obj.type == "GenericPickup";
-    if (isWeapon)
-        model = glm::rotate(model, glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    // No pickup-specific turn -- see renderer_objects.cpp for the engine citation
+    // (Direct3DRender_DrawRigidMesh HOOK 0x49DF60, src/render/render.c:965-966).
 
     model = glm::scale(model, glm::vec3(obj.scale * 1.2f));
 

@@ -215,9 +215,9 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, glm::vec3(obj.pos));
         model = model * igi::IgiEulerRotationMatrix(obj.rot);
-        if (IsWeaponModel(obj.modelId) || obj.type == "GunPickup" || obj.type == "AmmoPickup" || obj.type == "GenericPickup") {
-            model = glm::rotate(model, glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-        }
+        // No pickup-specific turn: the engine draws a rigid object with the object's
+        // own matrix and scale only (Direct3DRender_DrawRigidMesh HOOK 0x49DF60,
+        // src/render/render.c:965-966).  See renderer_objects.cpp for the full note.
         model = glm::scale(model, glm::vec3(BASE_SCALE * obj.scale));
 
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
@@ -429,9 +429,8 @@ Renderer_Objects::VisualEvidence Renderer_Objects::CaptureObjectVisualEvidence(
     glm::mat4 model(1.0f);
     model = glm::translate(model, glm::vec3(obj.pos));
     model = model * igi::IgiEulerRotationMatrix(obj.rot);
-    if (IsWeaponModel(obj.modelId) || obj.type == "GunPickup" || obj.type == "AmmoPickup" || obj.type == "GenericPickup") {
-        model = glm::rotate(model, glm::radians(90.0f), glm::vec3(0.f, 0.f, 1.f));
-    }
+    // No pickup-specific turn -- see renderer_objects.cpp for the engine citation
+    // (Direct3DRender_DrawRigidMesh HOOK 0x49DF60, src/render/render.c:965-966).
     model = glm::scale(model, glm::vec3(40.96f * obj.scale));
     glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
 
