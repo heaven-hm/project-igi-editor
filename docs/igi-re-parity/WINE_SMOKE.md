@@ -712,7 +712,74 @@ context.
 
 ---
 
-## 8. Artifacts
+## 8. Software OpenGL (Mesa llvmpipe): tried, and it does not work here
+
+§5 establishes that no *context configuration* Wine-on-macOS can create will run
+the editor. The remaining avenue is to stop asking Apple's GL for the context at
+all and supply a software rasteriser — Mesa's `llvmpipe`, which advertises a GL
+4.5 **compatibility** profile and would satisfy both halves of the requirement
+(the `#version 410` shaders and the fixed-function calls).
+
+**Result: it fails, and not for a fixable reason.**
+
+Test 1 — does Mesa work at all under this Wine? A minimal Win32 probe
+(`/tmp/glprobe/probe.c`, ~25 lines: `ChoosePixelFormat` → `SetPixelFormat` →
+`wglCreateContext` → `wglMakeCurrent` → `glGetString`) run both ways:
+
+| opengl32 | ChoosePixelFormat | wglCreateContext | GL_VERSION |
+| --- | --- | --- | --- |
+| Wine builtin (control) | 13 | `0x00011000` | `2.1 Metal - 89.3` (Apple) |
+| Mesa 26.2.4 x86 (native) | **0** | **NULL** | `(null)` |
+
+Mesa's `ChoosePixelFormat` returns 0 and `wglCreateContext` returns NULL, so no
+context exists to query. With `MESA_DEBUG=1` Mesa confirms it is the loaded
+implementation (`Mesa: error: GL User Error: glGetString called without a
+rendering context`), and `WINEDEBUG=+loaddll` confirms both `libgallium_wgl.dll`
+and `OPENGL32.DLL` load as `native` from the application directory — so the
+driver is present and active, and it is Mesa's WGL front-end (`stw`) that cannot
+initialise a display under Wine.
+
+Test 2 — is it a search-path problem? No. The same failure occurs with Mesa's
+`opengl32.dll` + `libgallium_wgl.dll` copied into the prefix's 32-bit system
+directory (`drive_c/windows/syswow64`, builtin backed up and restored), and with
+`libgallium_wgl.dll` loaded from the same directory as the executable.
+
+Test 3 — would a core profile alone be enough? No. A second probe
+(`probe2.c`) creating a context through `wglCreateContextAttribsARB`:
+
+```
+legacy  GL_VERSION=2.1 Metal - 89.3
+wglCreateContextAttribsARB=7B672180
+4.1 core ctx=00000000
+4.1 compat ctx=00000000
+```
+
+Wine exposes the entry point but returns NULL for **both** 4.1 core and 4.1
+compatibility. Only the legacy 2.1 context exists.
+
+**Why this is not worth retrying.** Mesa's Windows `opengl32` is built to replace
+Microsoft's ICD on real Windows, where it drives the display through GDI. Under
+Wine that path does not come up, and no `GALLIUM_DRIVER`/`MESA_*` setting changes
+a failure that happens in pixel-format enumeration, before any driver is chosen.
+The prefix was restored to its builtin `opengl32.dll` and the staged copy was
+removed, so nothing was left installed.
+
+**What would actually work**, in order of cost:
+
+1. A real Windows machine or VM with a GL 4.1+ **compatibility** driver.
+2. A GL 2.1 fallback renderer in the editor — port the `shaders/41` paths down to
+   GLSL 1.20 and remove the ~128 `glBegin`/`glEnd` call sites, which are what
+   force a compatibility profile in the first place. This is the only route to
+   the editor running on this Mac, and it is a renderer change, not a
+   configuration one.
+
+The editor's own diagnostic now names the requirement when it fails
+(`source/renderer/gl_helper.cpp`), and reports the specific GLEW code if
+`glewInit` is the step that fails.
+
+---
+
+## 9. Artifacts
 
 ```
 scripts/run-wine-smoke.sh                     the reproducible gate
