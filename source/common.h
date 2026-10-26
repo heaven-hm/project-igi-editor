@@ -120,6 +120,15 @@ enum class log_type_t {
 void	Log(log_type_t tp, const char * file, int line, const char * fmt, ...);
 
 /*
+Logs regardless of the configured filter. Use this for failures that happen before
+Config::Get() is usable -- i.e. during startup and renderer/shader initialisation --
+where the ordinary Log() would be silently dropped because logging is still disabled.
+See the empty-log fix: the shader compile and program link errors below were being
+written and then discarded, so a shader that failed to compile reported nothing.
+*/
+void	LogStartup(log_type_t tp, const char * file, int line, const char * fmt, ...);
+
+/*
 ================================================================================
  time
 ================================================================================

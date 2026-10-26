@@ -188,7 +188,7 @@ static GLuint LoadShaderFromFile(const char* filename, GLenum shader_type) {
 			memset(buf, 0, log_len);
 
 			glGetShaderInfoLog(shader, log_len, &log_len, buf);
-			Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "shader \"%s\" compile error: %s\n", filename, buf);
+			LogStartup(log_type_t::LOG_ERROR, __FILE__, __LINE__, "shader \"%s\" compile error: %s\n", filename, buf);
 		
 			MEM_FREE_(buf);
 		}
@@ -262,13 +262,13 @@ bool GL_CreateProgram(const char* shader_full_filenames[SUPPORT_SHADER_COUNT], g
 			memset(buf, 0, log_len);
 
 			glGetProgramInfoLog(program, log_len, &log_len, buf);
-			Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "program link error: %s,\n", buf);
+			LogStartup(log_type_t::LOG_ERROR, __FILE__, __LINE__, "program link error: %s,\n", buf);
 
 			MEM_FREE_(buf);
 
 			for (int i = 0; i < SUPPORT_SHADER_COUNT; ++i) {
 				if (shader_full_filenames[i]) {
-					Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "shader: %s\n", shader_full_filenames[i]);
+					LogStartup(log_type_t::LOG_ERROR, __FILE__, __LINE__, "shader: %s\n", shader_full_filenames[i]);
 				}
 			}
 		}

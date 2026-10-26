@@ -240,6 +240,33 @@ void Log(log_type_t tp, const char* file, int line, const char* fmt, ...) {
 }
 
 /*
+Same as Log(), but bypasses the configured filter. During startup Config::Get() still
+returns its defaults -- logging disabled -- so Log() writes nothing at all and the file
+is not even created. Any diagnostic emitted before the config is loaded must come
+through here or it is silently lost.
+*/
+void LogStartup(log_type_t tp, const char* file, int line, const char* fmt, ...) {
+	char buf[1024];
+
+	va_list argptr;
+	va_start(argptr, fmt);
+	Str_VSPrintf(buf, 1024, fmt, argptr);
+	va_end(argptr);
+
+	LogLevel level = LogLevel::INFO;
+	if (tp == log_type_t::LOG_FATAL) level = LogLevel::FATAL;
+	else if (tp == log_type_t::LOG_ERROR) level = LogLevel::ERR;
+
+	Logger::Get().LogAlways(level, buf);
+
+	if (tp == log_type_t::LOG_FATAL) {
+		char buf2[1024];
+		Str_SPrintf(buf2, 1024, "%s [%s:%d]", buf, file, line);
+		throw quit_exception(buf2);
+	}
+}
+
+/*
 ================================================================================
  time
 ================================================================================
