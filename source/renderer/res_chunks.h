@@ -1,3 +1,5 @@
+#pragma once
+
 /******************************************************************************
  * @file    res_chunks.h
  * @brief   ILFF chunk layer and resource-name identity, transcribed from IGI-RE.
@@ -210,19 +212,13 @@ inline bool ResourceNamesEqual(const std::string& a, const std::string& b) {
 
 // ---------------------------------------------------------------------------
 // "RESOURCE" packs — Resource_Add, src/res/resource.c:281-317, HOOK(0x4B5F80)
+//
+// A "RESOURCE" pack is an 8-byte magic, a member count at +8, and 32-byte
+// aligned member records starting at +0x20. Each record is
+//   { int unk0; int size; int namelen; char name[]; }   (resource.c:273-279)
+// with the body at p + ((namelen + 0x2B) & ~0x1F) and the next record at
+// body + ((size + 0x1F) & ~0x1F)                        (resource.c:307-308).
 // ---------------------------------------------------------------------------
-
-// The member headers of a "RESOURCE" pack — src/res/resource.c:273-279.
-struct PackEntryHeader {
-    int32_t unk0;
-    int32_t size;
-    int32_t namelen;
-};
-
-constexpr size_t kPackEntryHeaderSize = 12;   // unk0, size, namelen
-constexpr size_t kPackMemberAlign = 0x20;     // 32-byte member alignment
-constexpr size_t kPackHeaderSize = 0x20;      // first member header offset
-constexpr uint32_t kPackEntryAlignMask = 0x1F;
 
 // A "RESOURCE" pack is recognised by its 8-byte magic — resource.c:293.
 inline bool IsResourcePack(const uint8_t* data, size_t size) {
@@ -235,30 +231,6 @@ inline bool IsIlffIres(const uint8_t* data, size_t size) {
     ChunkHeader h;
     std::memcpy(&h, data, 20);
     return h.id == kChunkIlff && h.form == kChunkIres;
-}
-
-// Member layout of one "RESOURCE" pack entry — resource.c:299-311:
-//   body = p + ((namelen + 0x2B) & ~0x1F);   // 0x2B = 12 + 0x1F
-//   p    = body + ((size + 0x1F) & ~0x1F);
-// Returns false when the entry header or its body lies outside the buffer.
-inline bool PackMemberAt(const uint8_t* data, size_t size, size_t entryOffset,
-                         std::string& outName, size_t& outBody, size_t& outSize,
-                         size_t& outNext) {
-    if (entryOffset > size || size - entryOffset < kPackEntryHeaderSize) return false;
-    PackEntryHeader e;
-    std::memcpy(&e, data + entryOffset, kPackEntryHeaderSize);
-    if (e.namelen < 0 || e.size < 0) return false;
-    const size_t nameLen = static_cast<size_t>(e.namelen);
-    if (nameLen > size - entryOffset - kPackEntryHeaderSize) return false;
-    outName.assign(reinterpret_cast<const char*>(data + entryOffset + kPackEntryHeaderSize), nameLen);
-    const size_t body = entryOffset + ((nameLen + 0x2B) & ~kPackEntryAlignMask);
-    if (body > size) return false;
-    const size_t memberSize = static_cast<size_t>(e.size);
-    if (memberSize > size - body) return false;
-    outBody = body;
-    outSize = memberSize;
-    outNext = body + ((memberSize + kPackEntryAlignMask) & ~kPackEntryAlignMask);
-    return true;
 }
 
 // ---------------------------------------------------------------------------

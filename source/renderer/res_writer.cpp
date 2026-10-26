@@ -62,10 +62,6 @@ static uint32_t ReadU32LE(const uint8_t* p) {
         | ((uint32_t)p[3] << 24);
 }
 
-static uint32_t ReadFourCC(const uint8_t* p) {
-    return ReadU32LE(p);
-}
-
 namespace {
 
 // One member registered by Resource_AddChunks / the "RESOURCE" walk. `type` is
@@ -268,22 +264,25 @@ bool WalkFormMembers(const ResFileSource& src, uint64_t formOffset, const ChunkH
 bool WalkArchiveMembers(const ResFileSource& src, const std::string& path,
                         const std::function<bool(const MemberRecord&)>& emit,
                         std::string& error) {
-    ChunkHeader root;
-    if (!src.ReadHeader(0, root)) {
-        error = "File too small for an ILFF header: " + path;
+    // The first 0x20 bytes cover both pack headers: the 20-byte ILFF form
+    // header and the RESOURCE magic + member count (resource.c:287, :293).
+    std::vector<uint8_t> head(0x20);
+    if (src.Size() < head.size() || !src.ReadAt(0, head.data(), head.size())) {
+        error = "File too small for an archive header: " + path;
         Logger::Get().Log(LogLevel::ERR, "[RES] " + error);
         return false;
     }
-    if (root.id == FOURCC_ILFF && root.form == FOURCC_IRES) {
+
+    if (igi_res::IsIlffIres(head.data(), head.size())) {
+        ChunkHeader root;
+        std::memcpy(&root, head.data(), 20);
         return WalkFormMembers(src, 0, root, emit, path, error);
     }
 
     // "RESOURCE" pack: count at +8, member records from +0x20, each record a
     // 12-byte header + name, body at align32(12 + namelen), next record at
     // align32(body + size) (resource.c:293-313).
-    std::vector<uint8_t> head(0x20);
-    if (!src.ReadAt(0, head.data(), head.size()) ||
-        std::memcmp(head.data(), "RESOURCE", 8) != 0) {
+    if (!igi_res::IsResourcePack(head.data(), head.size())) {
         error = "Not an ILFF/IRES archive or a RESOURCE pack: " + path;
         Logger::Get().Log(LogLevel::ERR, "[RES] " + error);
         return false;
