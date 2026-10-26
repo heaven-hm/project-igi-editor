@@ -206,7 +206,13 @@ struct SplineObjParams {
     bool auto_orient = false;     // "Automatic Orientation" -> SplineObj.autoOrient
     int max_segments = kSplineMaxSegments;  // -> SplineObj.maxSegments
     int collision_lod = 0;        // "Collision LOD"      -> SplineObj.unk20
-    double pos[3] = {0.0, 0.0, 0.0};        // -> SplineObj.pos
+    // -> SplineObj.pos, which the engine declares `Vec3f pos;` (src/editobj/
+    // editobjtypes.h:32) - the authored "Position" is Real32x3. Kept as double
+    // here because the editor's token reader is double-typed; a delta of two
+    // float-representable values narrows to the same float either way, which is
+    // what SplineObj_Changed's `float dx = o->pos.x - o->oldPos.x;`
+    // (src/editobj/spline.c:299-301) computes.
+    double pos[3] = {0.0, 0.0, 0.0};
     float angle = kSplinePi;      // "Gamma Orientation"  -> SplineObj.angle
     float colour1[3] = {1.0f, 1.0f, 1.0f};  // -> SplineObj.color1
     float colour2[3] = {0.0f, 0.0f, 0.0f};  // -> SplineObj.color2
@@ -540,7 +546,10 @@ int SplineTruncateToInt(long double value);
 // (`*(float *)(LOD_INFO(*models) + 0x78)`, walked BACKWARD - `for (k =
 // LOD_COUNT; k > 0; k--, models++)` - with the NaN-swallowing `if (!(best >= r))`
 // form so a NaN radius never wins), and the result is `best * radius *
-// kRadiusScale`, left to right. `best` is model data, so the caller supplies it.
+// kRadiusScale`, left to right, evaluated in LONG DOUBLE because the oracle
+// declares `long double best = kZero;` (:295) while `radius` is a float - the
+// single narrowing happens on the assignment to the float field `o->radius`
+// (:326). `best` is model data, so the caller supplies it.
 float SplineRigidRadius(float best_lod_radius, float longest_frame_column);
 
 // Curved (:307-322): for each of the first two mesh parts, bend the part's own

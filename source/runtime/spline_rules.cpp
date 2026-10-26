@@ -504,14 +504,25 @@ void SplineNewWaypointPoint(const SplineObjWaypointParams& neighbour, SplineNewW
     out_point[1] = neighbour.point[1];
     out_point[2] = neighbour.point[2];
 
+    // SplineObjWaypoint_Create declares the first column's X as `long double` in
+    // the FORWARD branch (:464) but as `float` in the BACKWARD one (:502), so the
+    // sum of squares handed to x87_sqrt is a long-double expression forward and a
+    // FLOAT one backward, and the normalised X is narrowed to float backward but
+    // not forward. Both are reproduced; unifying them would change the axis in the
+    // last bits.
     long double x = rot[0];
     float y = rot[3];
     float z = rot[6];
     if (!IsZero(rot[0]) || !IsZero(y) || !IsZero(z)) {
-        const long double inv = 1.0L / X87Sqrt(x * x + y * y + z * z);
+        const long double sq = step_forward
+                                   ? (x * x + y * y + z * z)
+                                   : static_cast<long double>(
+                                         static_cast<float>(rot[0]) * rot[0] + y * y + z * z);
+        const long double inv = 1.0L / X87Sqrt(sq);
         x = x * inv;
         y = static_cast<float>(y * inv);
         z = static_cast<float>(z * inv);
+        if (!step_forward) x = static_cast<float>(x);  // the backward branch's x is a float
     }
 
     long double step_x;
@@ -878,13 +889,19 @@ SplineSpanJoints BuildSplineSpanJoints(const SplineSpan& span) {
     EngineMatrixGetEuler(span.rot_from, &ax0, &ay0, &az0);  // :101
     EngineMatrixGetEuler(span.rot_to, &ax1, &ay1, &az1);    // :102
 
-    // `inv = kOne / (long double)o->segments` (:107). For segments == 0 this is
-    // an infinity and every joint collapses; the engine does not guard it and
-    // neither does this port.
-    const long double inv = 1.0L / static_cast<long double>(segments);
+    // `inv` is a FLOAT: the oracle declares it `float inv;` (src/sound/segsetup.c:94)
+    // and assigns it the LONG DOUBLE quotient `inv = kOne / (long double)o->segments`
+    // (:107), which narrows to float. The loop then widens that float again for
+    // `long double t = i * (long double)inv;` (:109). The narrowing is load-bearing:
+    // for segments 10 and 20 it moves `tf = t` in the last bits, and `tf` feeds the
+    // interpolated roll `ax = (a1f - a0f) * tf + a0f` (:188). Keeping the quotient
+    // in long double here - as this port did - is not what the engine computes.
+    // For segments == 0 the quotient is an infinity and every joint collapses; the
+    // engine does not guard it and neither does this port.
+    const float inv = static_cast<float>(1.0L / static_cast<long double>(segments));
 
     for (int i = 0; i <= segments; i++) {
-        const long double t = i * inv;
+        const long double t = i * static_cast<long double>(inv);
         const float tf = static_cast<float>(t);
         float* pos = out.joints[static_cast<std::size_t>(i)].pos;
         float* rot = out.joints[static_cast<std::size_t>(i)].rot;
@@ -1011,36 +1028,42 @@ float BuildSplineRigidFrame(const double from[3], const double to[3], float min_
         d[2] = 0.0f;
     }
 
-    // `k = kOne / ((long double)o->maxX - o->minX)` (:224): a LONG DOUBLE
+    // `k = kOne / ((long double)o->maxX - o->minX)` (:219): a LONG DOUBLE
     // reciprocal with no zero guard - maxX == minX gives an infinity.
     const long double k = 1.0L / (static_cast<long double>(max_x) - min_x);
     float pitch = 0.0f;
     float yaw = 0.0f;
-    Vec3ToAngles(d, &pitch, &yaw);  // :221-223
+    // The engine does NOT call Vec3_ToAngles here: it starts from
+    // `transpose10(o->rot, SEG_ROT(o, 0))` (:220), the joint-0 frame that
+    // setup_segments wrote for this same chord. That frame is RotZ(yaw) of this
+    // same direction (:135), so recomputing it is equivalent - and for the
+    // all-zero direction the engine's `pitch = yaw = 0` shortcut (:129-134) gives
+    // the same yaw that Vec3_ToAngles' `IsZero(v[0])` guard yields.
+    Vec3ToAngles(d, &pitch, &yaw);
     (void)pitch;
 
     float rot[10];
     EngineSetRotZ(yaw, rot);      // the joint-0 frame from setup_segments
-    Transpose10(out_rot, rot);    // :226
+    Transpose10(out_rot, rot);    // :220
     // The chord direction becomes the first ROW of the transposed frame...
-    out_rot[0] = d[0];
+    out_rot[0] = d[0];            // :221-223
     out_rot[1] = d[1];
     out_rot[2] = d[2];
-    const float r0 = static_cast<float>(k * out_rot[0]);
+    const float r0 = static_cast<float>(k * out_rot[0]);  // :224-229
     out_rot[0] = r0;
     const float r1 = static_cast<float>(k * out_rot[1]);
     out_rot[1] = r1;
     const float r2 = static_cast<float>(k * out_rot[2]);
     out_rot[2] = r2;
-    if (reversed) {
+    if (reversed) {               // :230-235
         out_rot[0] = -r0;
         out_rot[1] = -r1;
         out_rot[2] = -r2;
     }
-    Transpose10(out_rot, out_rot);  // :242 - ...and the second transpose makes it
+    Transpose10(out_rot, out_rot);  // :236 - ...and the second transpose makes it
                                     // the first COLUMN, i.e. the tangent.
 
-    // :243-247: the bound is the longest ROW of the transposed frame, which is
+    // :237-247: the bound is the longest ROW of the transposed frame, which is
     // the longest column of the frame itself.
     const long double n0 = X87Sqrt(static_cast<long double>(out_rot[0]) * out_rot[0] +
                                    static_cast<long double>(out_rot[1]) * out_rot[1] +
@@ -1192,8 +1215,14 @@ float SplineRigidRadius(float best_lod_radius, float longest_frame_column) {
     //   radius = setup_rigid(...);      // the longest frame column
     //   best   = max over LODs of *(float *)(LOD_INFO(*models) + 0x78);
     //   radius = best * radius * kRadiusScale;
-    // The product is left to right in C, so ((best * column) * kRadiusScale).
-    return (best_lod_radius * longest_frame_column) * kSplineRadiusScale;
+    // `best` is declared `long double best = kZero;` (:295) while `radius` is a
+    // float, so the product is evaluated in LONG DOUBLE, left to right, and
+    // narrowed once on the assignment to the float field `o->radius`. Computing
+    // it in float rounds twice instead of once.
+    const long double product = static_cast<long double>(best_lod_radius) *
+                                static_cast<long double>(longest_frame_column) *
+                                static_cast<long double>(kSplineRadiusScale);
+    return static_cast<float>(product);
 }
 
 float SplineBentRadius(const SplineSpanJoints& joints, const SplineMeshBend& bend,
