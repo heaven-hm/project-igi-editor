@@ -56,7 +56,14 @@ ModelSourceArchiveIndex MakeArchive(
     archive.resPath = resPath;
     size_t offset = 0;
     for (const auto& entry : entries) {
-        archive.entries[entry.first] = ResEntryInfo{offset, entry.second.size()};
+        // The reader's index is keyed by the engine's own resource identity: the full
+        // "LOCAL:textures/<id>.tex" member name (ModelFile_LoadTextures,
+        // src/model/model.c:467, HOOK 0x4CF790), upper-cased and backslash-folded
+        // (String_ToUpper 0x4B5AF0, src/res/resource.c:98-104, compared by
+        // Resource_IsLoaded at :136-138).  These fixtures used to key by the bare leaf,
+        // which no engine lookup ever produces.
+        archive.entries[igi_res::NormalizeResourceName("LOCAL:textures/" + entry.first)] =
+            ResEntryInfo{offset, entry.second.size()};
         FakeEntries()[FakeKey(resPath, offset)] = entry.second;
         offset += entry.second.size() + 1;
     }

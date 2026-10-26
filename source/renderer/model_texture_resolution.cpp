@@ -184,7 +184,9 @@ std::vector<uint8_t> FindPreviewTextureEntry(
     const std::function<std::vector<uint8_t>(const std::string& resPath,
                                               const ResEntryInfo& info)>& readEntry) {
     auto tryId = [&](const std::string& id) -> std::vector<uint8_t> {
-        const std::string entryName = id + ".tex";
+        // Same engine identity as FindModelSourceEntry below.
+        const std::string entryName =
+            igi_res::NormalizeResourceName(igi_res::TextureMemberName(id));
         for (const bool common : {false, true}) {
             for (const auto& archive : archives) {
                 if (IsSharedCommonTextureArchive(archive.resPath) != common) continue;
@@ -231,22 +233,19 @@ std::vector<uint8_t> FindModelSourceEntry(
     bool isTexture,
     const std::function<std::vector<uint8_t>(const std::string& resPath,
                                               const ResEntryInfo& info)>& readEntry) {
-    auto equalsCI = [](const std::string& a, const std::string& b) {
-        if (a.size() != b.size()) return false;
-        for (size_t i = 0; i < a.size(); ++i) {
-            if (std::tolower(static_cast<unsigned char>(a[i])) !=
-                std::tolower(static_cast<unsigned char>(b[i]))) return false;
-        }
-        return true;
-    };
+    // The index is keyed by the engine's own resource identity -- upper-cased and
+    // backslash-folded (String_ToUpper 0x4B5AF0, src/res/resource.c:98-104, compared
+    // by Resource_IsLoaded at :136-138) -- so the member name has to be built the way
+    // the engine builds it: Mesh_Load uses "LOCAL:models/%s.mef" (src/model/model.c:364,
+    // HOOK 0x4CF390) and ModelFile_LoadTextures "LOCAL:textures/%s.tex" (:467,
+    // HOOK 0x4CF790).  Comparing a bare leaf name against those keys never matched.
     auto lookup = [&](const ModelSourceArchiveIndex& archive,
                       const std::string& id) -> std::vector<uint8_t> {
-        const std::string entryName =
-            id + (isTexture ? ".tex" : ".mef");
-        for (const auto& item : archive.entries) {
-            if (equalsCI(item.first, entryName))
-                return readEntry(archive.resPath, item.second);
-        }
+        const std::string entryName = igi_res::NormalizeResourceName(
+            isTexture ? igi_res::TextureMemberName(id) : igi_res::ModelMemberName(id));
+        const auto found = archive.entries.find(entryName);
+        if (found != archive.entries.end())
+            return readEntry(archive.resPath, found->second);
         return {};
     };
     for (size_t i = 0; i < 2; ++i) {
