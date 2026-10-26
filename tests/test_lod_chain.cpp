@@ -463,21 +463,29 @@ TEST(LodSelectTest, NoChainIsNeverDrawn) {
 // retail corpus, so the wiring cannot invent or drop a level.
 
 // Exact `.mef` stems of a packed level model archive.
+//
+// The reader's streaming pass is used rather than RES_BuildIndex: the index is keyed
+// by the engine's resource identity, which is upper-cased and backslash-folded
+// (String_ToUpper 0x4B5AF0, src/res/resource.c:98-104; Resource_IsLoaded compares
+// those at :136-138), while this test compares against the MTP's VNAM names in the
+// archive's own spelling.  Using the index made 19 lowercase model names (colbox66
+// and friends) look like names that exist in only one of the two sets.
 std::set<std::string> ResMefStems(const std::string& resPath) {
     std::set<std::string> stems;
-    std::unordered_map<std::string, ResEntryInfo> index;
     std::string error;
-    if (!RES_BuildIndex(resPath, index, error)) return stems;
-    for (const auto& kv : index) {
-        const std::string& entry = kv.first;
-        const size_t slash = entry.find_last_of("\\/");
-        std::string base = (slash == std::string::npos) ? entry : entry.substr(slash + 1);
-        if (base.size() < 4) continue;
-        std::string ext = base.substr(base.size() - 4);
-        for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (ext != ".mef") continue;
-        stems.insert(base.substr(0, base.size() - 4));
-    }
+    RES_ForEachEntry(
+        resPath,
+        [&stems](const std::string& raw_name, const uint8_t*, std::size_t) {
+            const size_t slash = raw_name.find_last_of("\\/");
+            const std::string base =
+                (slash == std::string::npos) ? raw_name : raw_name.substr(slash + 1);
+            if (base.size() < 4) return;
+            std::string ext = base.substr(base.size() - 4);
+            for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (ext != ".mef") return;
+            stems.insert(base.substr(0, base.size() - 4));
+        },
+        error);
     return stems;
 }
 
