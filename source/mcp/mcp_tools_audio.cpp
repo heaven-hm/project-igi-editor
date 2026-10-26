@@ -235,9 +235,15 @@ JsonValue CallAudioTool(GameDataService& service, std::string_view name,
     if (name != "audio_replace_sfx" && name != "audio_set_level_track")
         return Failure(error, "unknown_tool");
     const bool level_tool = name == "audio_set_level_track";
-    const auto allowed = level_tool
-        ? std::initializer_list<std::string_view>{"level", "source_path", "dry_run", "backup", "expected_revision"}
-        : std::initializer_list<std::string_view>{"source_path", "destination_path", "dry_run", "backup", "expected_revision"};
+    // Named, not built inside the conditional: an initializer_list does not own its
+    // backing array and the ternary does not extend that array's lifetime, so `allowed`
+    // used to dangle. See the note in mcp_tools_strings.cpp.
+    const std::initializer_list<std::string_view> level_track_keys = {
+        "level", "source_path", "dry_run", "backup", "expected_revision"};
+    const std::initializer_list<std::string_view> replace_sfx_keys = {
+        "source_path", "destination_path", "dry_run", "backup", "expected_revision"};
+    const std::initializer_list<std::string_view> allowed =
+        level_tool ? level_track_keys : replace_sfx_keys;
     if (!HasOnlyKeys(arguments, allowed) || !arguments.contains("source_path"))
         return Failure(error, "invalid_arguments");
     std::string source_text;

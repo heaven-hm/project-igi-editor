@@ -290,9 +290,18 @@ JsonValue CallStringTool(GameDataService& service, std::string_view name,
     const bool getter = name == "string_table_get" || name == "briefing_get_text";
     const bool setter = name == "string_table_set" || name == "briefing_set_text";
     if (!getter && !setter) return Failure(error, "unknown_tool");
-    const auto keys = setter
-        ? std::initializer_list<std::string_view>{"path", "key", "text", "dry_run", "backup", "expected_revision"}
-        : std::initializer_list<std::string_view>{"path", "key"};
+    // These must be NAMED objects. A std::initializer_list does not own its backing
+    // array, and initializing one from a braced list inside a conditional expression
+    // does not extend that array's lifetime -- it dies at the end of the statement, so
+    // `keys` dangled and HasOnlyKeys compared the caller's keys against freed stack
+    // memory. That rejected valid arguments as "invalid_arguments", which is why
+    // McpStringToolsTest.RejectsUnknownTableFormat reported invalid_arguments where it
+    // expected unsupported_format. Naming each list extends its array's lifetime to the
+    // lifetime of the named initializer_list, which is well-defined.
+    const std::initializer_list<std::string_view> setter_keys = {
+        "path", "key", "text", "dry_run", "backup", "expected_revision"};
+    const std::initializer_list<std::string_view> getter_keys = {"path", "key"};
+    const std::initializer_list<std::string_view> keys = setter ? setter_keys : getter_keys;
     if (!HasOnlyKeys(arguments, keys) || !arguments.contains("path") || !arguments.contains("key"))
         return Failure(error, "invalid_arguments");
     std::string path;

@@ -293,9 +293,13 @@ JsonValue CallGraphTool(GameDataService& service, std::string_view name,
             name == "lightmap_get") {
             int level = 0;
             const bool graph_with_optional_id = name == "graph_validate";
-            const auto allowed = graph_with_optional_id
-                ? std::initializer_list<std::string_view>{"level", "graph_id"}
-                : std::initializer_list<std::string_view>{"level"};
+            // Named, not built inside the conditional: an initializer_list does not own
+            // its backing array and the ternary does not extend that array's lifetime,
+            // so `allowed` used to dangle. See the note in mcp_tools_strings.cpp.
+            const std::initializer_list<std::string_view> with_id_keys = {"level", "graph_id"};
+            const std::initializer_list<std::string_view> level_only_keys = {"level"};
+            const std::initializer_list<std::string_view> allowed =
+                graph_with_optional_id ? with_id_keys : level_only_keys;
             if (!ReadLevel(service, arguments, allowed, level, error)) return JsonValue(nullptr);
 
             const JsonValue manifest = LoadManifest(service, level, error);
