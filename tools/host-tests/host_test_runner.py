@@ -233,7 +233,7 @@ class Builder:
                 return obj, ""
         cmd = [self.cxx, *self.flags, "-c", str(src), "-o", str(obj)]
         proc = subprocess.run(cmd, cwd=REPO, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, text=True)
+                              stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         if proc.returncode != 0:
             if obj.exists():
                 obj.unlink()
@@ -271,7 +271,7 @@ class Builder:
             o = self.obj_dir / "gtest" / (s.stem + ".o")
             o.parent.mkdir(parents=True, exist_ok=True)
             proc = subprocess.run([self.cxx, *gflags, "-c", str(s), "-o", str(o)],
-                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
             if proc.returncode != 0:
                 die(f"failed to build googletest object {s}:\n{proc.stdout}")
             objs.append(o)
@@ -299,13 +299,13 @@ class Builder:
         base = [self.cxx, str(obj), str(sources_lib), str(gtest_lib),
                 str(sources_lib), "-o", str(out)]
         proc = subprocess.run(base, cwd=REPO, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, text=True)
+                              stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         if proc.returncode == 0:
             return True, "strict", "", ""
         strict_err = proc.stdout
         lazy = base[:-2] + ["-Wl,-undefined,dynamic_lookup", "-o", str(out)]
         proc2 = subprocess.run(lazy, cwd=REPO, stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, text=True)
+                               stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         if proc2.returncode == 0:
             return True, "lazy", "", strict_err
         tail = "\n".join(proc2.stdout.strip().splitlines()[-6:])
@@ -340,7 +340,7 @@ def run_suite(binary: Path, timeout: int) -> dict:
     try:
         proc = subprocess.run([str(binary), "--gtest_color=no"], cwd=REPO,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                              text=True, timeout=timeout)
+                              text=True, encoding="utf-8", errors="replace", timeout=timeout)
         out, rc = proc.stdout, proc.returncode
     except subprocess.TimeoutExpired as exc:
         out = (exc.stdout or "") if isinstance(exc.stdout, str) else ""

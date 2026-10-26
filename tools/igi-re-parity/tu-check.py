@@ -102,7 +102,7 @@ def force_rebuild_pch(build_dir: Path, target_dir: str) -> None:
         ["ninja", "-C", str(build_dir), f"CMakeFiles/{target_dir}/cmake_pch.hxx.gch"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
     )
 
 
@@ -128,7 +128,7 @@ def refresh_pch(argv: list[str]) -> None:
         ["ninja", "-C", str(build_dir), f"CMakeFiles/{target_dir}/cmake_pch.hxx.gch"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
     )
     if ninja.returncode != 0:
         print(ninja.stdout)
@@ -141,7 +141,7 @@ def run_compile(argv: list[str], cwd: str) -> subprocess.CompletedProcess:
         cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
     )
 
 
