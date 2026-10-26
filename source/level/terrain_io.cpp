@@ -5,6 +5,49 @@
  *****************************************************************************/
 #include "terrain_internal.h"
 #include <memory>
+#include <cmath>
+
+/*
+================================================================================
+ Terrain child-task cell grid  (transcribed from IGI-RE, retail IGI.exe)
+================================================================================
+
+ Every terrain child task is placed by snapping its script position to a
+ power-of-two cell grid and using the cell's *centre* as the object position;
+ the cell minimum then becomes the origin of the task's map (bitmap / lightmap
+ / heightmap):
+
+     int cell2 = (0x40000000 >> shift) * 2;    // cell edge; shift = QSC "Level"
+     min.x     = fistp(pos.x) & -cell2;        // pos already includes w->offset[]
+     max.x     = min.x + cell2;
+     centre.x  = min.x + cell2 / 2;
+     ...
+     <map>->x  = <task>->pos.x - (0x40000000 >> shift);    // == min.x
+
+   * TextureModifier_Changed   HOOK 0x5062A0  src/editcam/texmod.c:235-464
+   * TerrainLightMap_Changed   HOOK 0x4F8780  src/graphnode/lightmap.c:325-431
+   * HeightMap_Changed         HOOK 0x507410  src/editcam/heightmap.c:265-505
+   * DiscardTerrain_Changed    HOOK 0x52C290  src/terredit/discard.c:200-248
+
+ The engine's fistp (src/graphnode/lightmap.c:108-112) is `fistpll`, i.e. round
+ to nearest even, which is what `std::nearbyint` does in the default rounding
+ mode (the x87 asm itself is not portable off i686). `w->offset[]` is zero for a
+ freshly loaded world (World_New, HOOK 0x4C5B20, src/magicobj/world.c:183-185).
+*/
+static int Terrain_EngineFistp(double v) {
+	return (int)std::nearbyint(v);
+}
+
+// out_min: the 3 snapped cell minima; out_center: the engine's object position.
+static void Terrain_SnapCell(const double pos[3], int shift, double out_min[3], double out_center[3]) {
+	const int cell2 = (0x40000000 >> (shift & 31)) * 2;
+
+	for (int i = 0; i < 3; ++i) {
+		const int cell_min = Terrain_EngineFistp(pos[i]) & -cell2;
+		out_min[i] = (double)cell_min;
+		out_center[i] = (double)cell_min + (double)cell2 * 0.5;
+	}
+}
 
 bool Terrain::Load(load_params_s & params) {
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] ==========================================");
@@ -628,16 +671,24 @@ void Terrain::LoadTextureModifier(ILevelDynCube* level_dyn_cube, const QSC* qsc_
 	for (int i = 0; i < num_texture_modifier_; ++i) {
 		qtask_texture_modifier_s* qtask = qtask_texture_modifiers_ + i;
 
+		// TextureModifier_Changed 0x5062A0 (src/editcam/texmod.c:289-296) snaps
+		// the task to the cell grid; the engine's DynCube position is the cell
+		// centre, never the raw script point.
+		double cell_min[3];
+		double cell_center[3];
+		Terrain_SnapCell(qtask->script_defined_pos_, (int)qtask->lod_level_, cell_min, cell_center);
+
 		glm::ivec3 cube_ctr;
-		dyn_cube_s* dyn_cube = level_dyn_cube->GetDynCube(qtask->script_defined_pos_, qtask->lod_level_, cube_ctr);
+		dyn_cube_s* dyn_cube = level_dyn_cube->GetDynCube(cell_center, (int)qtask->lod_level_, cube_ctr);
 		if (dyn_cube) {
 			level_dyn_cube->AddQTaskToDynCube(dyn_cube, qtask);
 
 			texture_modifier_s * texture_modifier = texture_modifiers_ + qtask->idx_in_array_;
 
-			int cube_half_size = ROOT_CUBE_HALF_SIZE >> qtask->lod_level_;
-			texture_modifier->cube_min_x_ = cube_ctr[0] - cube_half_size;
-			texture_modifier->cube_min_y_ = cube_ctr[1] - cube_half_size;
+			// texmod.c:459-460: hole->x = tm->obj.pos.x - (0x40000000 >> shift)
+			// i.e. the snapped cell minimum, not the ctr bit-walk centre.
+			texture_modifier->cube_min_x_ = cell_min[0];
+			texture_modifier->cube_min_y_ = cell_min[1];
 		}
 	}
 }
@@ -725,17 +776,25 @@ void Terrain::LoadTerrainLightMapInfo(ILevelDynCube* level_dyn_cube, const QSC* 
 	for (int i = 0; i < num_terrain_light_map_; ++i) {
 		qtask_terrain_light_map_s * qtask = qtask_terrain_light_maps_ + i;
 
+		// TerrainLightMap_Changed 0x4F8780 (src/graphnode/lightmap.c:335-370):
+		// half = (0x40000000 >> shift) * 2; min = fistp(place) & -half; the box is
+		// [min, min + half) and its centre is what DynCube_AddBox/MoveBox store.
+		double cell_min[3];
+		double cell_center[3];
+		Terrain_SnapCell(qtask->script_defined_pos_, (int)qtask->lod_level_, cell_min, cell_center);
+
 		glm::ivec3 cube_ctr;	// return the cube center
 
-		dyn_cube_s* dyn_cube = level_dyn_cube->GetDynCube(qtask->script_defined_pos_, qtask->lod_level_, cube_ctr);
+		dyn_cube_s* dyn_cube = level_dyn_cube->GetDynCube(cell_center, (int)qtask->lod_level_, cube_ctr);
 		if (dyn_cube) {
 			level_dyn_cube->AddQTaskToDynCube(dyn_cube, qtask);
 
 			terrain_light_map_s * terrain_light_map = terrain_light_maps_ + qtask->idx_in_array_;
 
-			int cube_half_size = ROOT_CUBE_HALF_SIZE >> qtask->lod_level_;
-			terrain_light_map->cube_min_x_ = cube_ctr[0] - cube_half_size;
-			terrain_light_map->cube_min_y_ = cube_ctr[1] - cube_half_size;
+			// TerrainLightMap_SetDrawInfo 0x4F8EF0 (src/graphnode/lightmap.c:434-437):
+			// d->x = lm->pos.x - (0x40000000 >> shift) == the snapped cell minimum.
+			terrain_light_map->cube_min_x_ = cell_min[0];
+			terrain_light_map->cube_min_y_ = cell_min[1];
 
 		}
 	}
@@ -847,17 +906,25 @@ void Terrain::LoadHeightMapInfo(ILevelDynCube* level_dyn_cube, const QSC* qsc_ob
 	for (int i = 0; i < num_height_map_; ++i) {
 		qtask_height_map_s * qtask_height_map = qtask_height_maps_ + i;
 
+		// HeightMap_Changed 0x507410 (src/editcam/heightmap.c:267-310): cell2 =
+		// (0x40000000 >> shift) * 2; min = fistp(place) & -cell2; the box is
+		// [min, min + cell2) and its centre is the DynCube position.
+		double cell_min[3];
+		double cell_center[3];
+		Terrain_SnapCell(qtask_height_map->script_defined_pos_, (int)qtask_height_map->lod_level_, cell_min, cell_center);
+
 		glm::ivec3 cube_ctr;
 
-		dyn_cube_s* dyn_cube = level_dyn_cube->GetDynCube(qtask_height_map->script_defined_pos_, qtask_height_map->lod_level_, cube_ctr);
+		dyn_cube_s* dyn_cube = level_dyn_cube->GetDynCube(cell_center, (int)qtask_height_map->lod_level_, cube_ctr);
 		if (dyn_cube) {
 			level_dyn_cube->AddQTaskToDynCube(dyn_cube, (qtask_s*)qtask_height_map);
 
 			height_map_s * height_map = height_maps_ + qtask_height_map->idx_in_array_;
 
-			int cube_half_size = ROOT_CUBE_HALF_SIZE >> qtask_height_map->lod_level_;
-			height_map->cube_min_x_ = cube_ctr[0] - cube_half_size;
-			height_map->cube_min_y_ = cube_ctr[1] - cube_half_size;
+			// heightmap.c:459-460: bump->x = hm->obj.pos.x - (0x40000000 >> shift)
+			// == the snapped cell minimum.
+			height_map->cube_min_x_ = cell_min[0];
+			height_map->cube_min_y_ = cell_min[1];
 		}
 	}
 }
@@ -915,9 +982,21 @@ void Terrain::LoadDiscardTerrainInfo(ILevelDynCube* level_dyn_cube, const QSC* q
 	for (int i = 0; i < num_discard_terrain_; ++i) {
 		qtask_discard_terrain_s* qtask_discard_terrain = qtask_discard_terrains_ + i;
 
+		// DiscardTerrain_Changed 0x52C290 (src/terredit/discard.c:203-247):
+		// size = (0x40000000 >> (shift & 31)) * 2; min = fistp(pos) & -size;
+		// max = min + size; DynCube_MoveBox(w, dt, &centre, &min, &max).
+		// The walk drops the terrain of every cell inside that box
+		// (DiscardTerrain_Visit 0x52C0B0 sets gQCubeSkipCells, src/lod/qcubewalk.c:294),
+		// which is the cube at lod == shift and everything under it — the same
+		// subtree the editor marks with CUBE_FLAG_DISCARD_TERRAIN.
+		double cell_min[3];
+		double cell_center[3];
+		Terrain_SnapCell(qtask_discard_terrain->script_defined_pos_, (int)qtask_discard_terrain->lod_level_,
+			cell_min, cell_center);
+
 		glm::ivec3 cube_ctr;
 
-		dyn_cube_s* dyn_cube = level_dyn_cube->GetDynCube(qtask_discard_terrain->script_defined_pos_, qtask_discard_terrain->lod_level_, cube_ctr);
+		dyn_cube_s* dyn_cube = level_dyn_cube->GetDynCube(cell_center, (int)qtask_discard_terrain->lod_level_, cube_ctr);
 		if (dyn_cube) {
 			level_dyn_cube->AddQTaskToDynCube(dyn_cube, qtask_discard_terrain);
 			dyn_cube->flags_ |= CUBE_FLAG_DISCARD_TERRAIN;
