@@ -47,7 +47,10 @@ TEST(AnimationPlaybackTest, AdvancesWhilePlaying) {
 
     playback.Update(125.0f);
 
-    EXPECT_FLOAT_EQ(playback.currentTimeMs, 125.0f);
+    // 125 ms of real time is 125 * (4800/1000) = 600 engine ticks: the clip's own
+    // times are ticks at 4800 a second (`kTicksPerSecond`, src/boneobj/anim.c:9), so
+    // `currentTimeMs` counts ticks despite its name.
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 600.0f);
     EXPECT_TRUE(playback.playing);
 }
 
@@ -59,7 +62,10 @@ TEST(AnimationPlaybackTest, ForceLoopKeepsNonLoopingAiAnimationAlive) {
 
     playback.Update(2250.0f);
 
-    EXPECT_FLOAT_EQ(playback.currentTimeMs, 250.0f);
+    // 2250 ms -> 10800 ticks, wrapped against the 1000-tick clip.  NEAR rather than
+    // FLOAT_EQ: the wrap subtracts the duration repeatedly, so the result carries a
+    // few hundred micro-ticks of float accumulation.
+    EXPECT_NEAR(playback.currentTimeMs, 800.0f, 0.01f);
     EXPECT_TRUE(playback.playing);
 }
 
