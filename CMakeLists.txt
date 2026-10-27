@@ -418,6 +418,7 @@ add_executable(igi_tests
     tests/test_menu_text_res.cpp
     tests/test_menu_labels.cpp
     tests/test_menu_ui.cpp
+    tests/test_pause_menu_style.cpp
     tests/test_magic_object_expand.cpp
     tests/test_mission_fog.cpp
     tests/test_spline_rules.cpp

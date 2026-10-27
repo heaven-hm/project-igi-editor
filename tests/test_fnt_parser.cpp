@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "../source/renderer/fnt_parser.h"
+#include "../source/renderer/res_writer.h"
 #include "support/temp_directory.h"
 #include "utils.h"
 #include <string>
@@ -211,4 +212,55 @@ TEST(FntParserFuzzSmokeTest, DeterministicMalformedBuffersNeverProduceValidFont)
         for (uint8_t& value : input) value = static_cast<uint8_t>(byte(generator));
         EXPECT_FALSE(FNT_ParseBytes(input).valid) << "seed=0xF17F00D sample=" << sample;
     }
+}
+
+// ============================================================
+//  The retail in-game menu's font: font3.fnt inside
+//  menusystem/ingamemenu.res, the font the pause menu's style is
+//  measured against (source/runtime/pause_menu_style.h).
+// ============================================================
+
+// The engine's own width for a string: `Sprite_StringWidth` (HOOK 0x4B7050,
+// src/res/sprite.c:315-328) adds `frames[c - 1].advance` for a mapped character
+// and `Sprite_Advance` for one the TRAN map leaves empty.
+static int EngineStringWidth(const FntFont& font, const std::string& text) {
+    int width = 0;
+    for (char c : text) {
+        const auto it = font.glyphs.find(static_cast<unsigned char>(c));
+        width += it == font.glyphs.end() ? font.defaultAdvance : it->second.advance;
+    }
+    return width;
+}
+
+TEST(FntParserRetailMenuFontTest, Font3MetricsAreThePauseMenuStylesSource) {
+    // `menusystem/ingamemenu.qvm` screen 900 names "font3.fnt" for its title and
+    // for all five items; the engine resolves it through
+    // `MenuManager_AddResource` (HOOK 0x417E20, src/menu/menumanager.c:260-296),
+    // which turns the archive entry's "FNT" extension into a font.
+    const std::filesystem::path archive =
+        std::filesystem::path(Utils::GetIGIRootPath()) / "menusystem" / "ingamemenu.res";
+    if (!std::filesystem::is_regular_file(archive)) {
+        GTEST_SKIP() << "no retail in-game menu archive at " << archive;
+    }
+
+    const std::vector<uint8_t> bytes =
+        RES_Extract(archive.string(), "LOCAL:menusystem/font3.fnt");
+    ASSERT_FALSE(bytes.empty()) << "font3.fnt not found inside " << archive;
+    const FntFont font = FNT_ParseBytes(bytes);
+    ASSERT_TRUE(font.valid);
+
+    // FontHeader::h is the line height the engine measures text with:
+    // `Grid_Height` (HOOK 0x4B7C20, src/res/grid.c:209-213) is
+    // `Sprite_Height(sprite) * rows` and `Text_New` builds one row
+    // (HOOK 0x4B6EC0, src/res/text.c:76-93).  It is the pause menu's row height
+    // before the frame's Y-Spacing is added.
+    EXPECT_EQ(font.lineHeight, 21);
+    // FontHeader::advance is the blank-cell advance (`Grid_UpdateRow`,
+    // HOOK 0x4B7730, src/res/grid.c:93-105).
+    EXPECT_EQ(font.defaultAdvance, 6);
+
+    // The engine's own width for one of screen 900's labels, which pins the
+    // per-glyph advances the layout and the renderer share to the real file.
+    EXPECT_EQ(EngineStringWidth(font, "Resume Game"), 104);
+    EXPECT_EQ(EngineStringWidth(font, " "), font.defaultAdvance);
 }
