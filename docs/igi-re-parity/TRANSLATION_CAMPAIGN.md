@@ -67,6 +67,15 @@ use the engine's method on those paths:
    own `BendSegmentMesh`. The engine's normals differ by ~22 degrees. The span inputs the
    engine's path needs are now parsed and round-tripping.
 
+   **De-risked for the swap:** no build change is needed. `source/level/spline_geometry.cpp`
+   is already compiled into `igi-editor` through the `source/level/*.*` glob
+   (`CMakeLists.txt:76`, `:145`; its object file exists under
+   `build-mingw/CMakeFiles/igi-editor.dir/`), and `${PROJECT_SOURCE_DIR}/source` is on the
+   include path (`:220`), so `#include "level/spline_geometry.h"` works from the renderer.
+   What remains is purely the code change: build a `SplineSpanInput` from the two waypoints,
+   call `BuildSplineSpanGeometry` / `PackSplineMeshSource` / `FillSplineSpanVertices`, and
+   feed the result to the existing GPU upload in place of `BendSegmentMesh`.
+
    Verified from the retail data, so this part is not guesswork. The shipped declaration is
    in `MISSIONS/location0/level1/objects.qsc`:
 
