@@ -109,3 +109,27 @@ TEST(SplineWaypointParamsTest, Arg14IsAutoOrient) {
     EXPECT_FALSE(obj.splineReversed);
     EXPECT_TRUE(obj.splineAutoOrient);
 }
+
+// A save must write the four parameters back.  Without the writes they were dropped,
+// so an authored span silently lost its count and its Align/Flip/Orientation flags the
+// first time the level was saved.
+TEST(SplineWaypointParamsTest, SaveRoundTripsTheAuthoredParameters) {
+    LevelObjects level;
+    LevelObject obj;
+    level.ParseTaskLine(kFlipOnly, obj);  // segments 10, FALSE, TRUE, FALSE
+    ASSERT_TRUE(obj.isSplineWaypoint);
+
+    const std::string saved = level.GenerateTaskLine(obj);
+    ASSERT_FALSE(saved.empty());
+
+    LevelObject reloaded;
+    level.ParseTaskLine(saved, reloaded);
+    EXPECT_EQ(reloaded.splineSegments, 10);
+    EXPECT_FALSE(reloaded.splineStraight);
+    EXPECT_TRUE(reloaded.splineReversed);
+    EXPECT_FALSE(reloaded.splineAutoOrient);
+
+    // And the text the game reads carries QSC's own boolean spelling.
+    EXPECT_NE(saved.find("TRUE"), std::string::npos) << saved;
+    EXPECT_NE(saved.find("10"), std::string::npos) << saved;
+}

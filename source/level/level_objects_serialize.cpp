@@ -395,6 +395,22 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
             setToken(8, FormatQscDouble(saveZ));
             if (!obj.modelId.empty() || obj.argTokens.size() > 9) setStringToken(9, obj.modelId.empty() ? "waypoint" : obj.modelId);
             if (!obj.segmentModelId.empty() || obj.argTokens.size() > 10) setStringToken(10, obj.segmentModelId);
+            // The remaining authored parameters (SplineObj_Open HOOK 0x502250,
+            // src/editobj/spline.c:215-223).  The load path reads them; without these
+            // writes a save dropped them, which is the other half of the defect the
+            // waypoint parameter test found.
+            if (obj.splineSegments != 0 || obj.argTokens.size() > 11) {
+                setToken(11, std::to_string(obj.splineSegments));
+            }
+            if (obj.splineStraight || obj.argTokens.size() > 12) {
+                setToken(12, obj.splineStraight ? "TRUE" : "FALSE");
+            }
+            if (obj.splineReversed || obj.argTokens.size() > 13) {
+                setToken(13, obj.splineReversed ? "TRUE" : "FALSE");
+            }
+            if (obj.splineAutoOrient || obj.argTokens.size() > 14) {
+                setToken(14, obj.splineAutoOrient ? "TRUE" : "FALSE");
+            }
         } else if (obj.type == "SplineObj") {
             // SplineObj container: the position belongs at args 9-11, not 3-5
             // (IGI-RE SplineObj_Open, HOOK 0x502250, src/editobj/spline.c:204-214;
