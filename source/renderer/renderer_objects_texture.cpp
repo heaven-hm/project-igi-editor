@@ -699,29 +699,34 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
     std::vector<std::string> textureIds = GetTextureIdsForModel(modelId, &modelFoundInDat);
     bool isDatMiss = textureIds.empty();
 
-    // The model whose DAT entry supplied the list above. Inherited lists belong
-    // to the model they were copied from, and that model's level owns the
-    // archive that must supply the images (see the owner-archive block below).
+    // The model whose DAT entry supplied the list above. A borrowed list belongs
+    // to the model it was copied from, and that model's level owns the archive
+    // that must supply the images (see the owner-archive block below).
     std::string textureSourceModelId = modelId;
 
-    // When a sub-model has no DAT entry, IGI ATTA sub-models commonly share material slots with their
-    // parent building, so inherit the parent's texture list in that case.
-    if (!parentModelId.empty() && isDatMiss) {
-        const std::vector<std::string> parentIds = GetTextureIdsForModel(parentModelId);
-        const bool parentHasRealEntry = !parentIds.empty();
-        if (parentHasRealEntry) {
-            Logger::Get().Log(LogLevel::INFO,
-                "[TEX Native] Sub-model '" + modelId + "' has no DAT entry; inheriting " +
-                std::to_string(parentIds.size()) + " texture(s) from parent '" + parentModelId + "'");
-            textureIds = parentIds;
-            textureSourceModelId = parentModelId;
-            isDatMiss = false;
-        }
-    }
-
-    // Conversely, some vehicles or magic models (_01_1) have no textures in DAT, but their interior 
-    // attachments (_02_1) DO have textures. If we still have a DAT miss, inherit from the typical child.
-    if (isDatMiss) {
+    // A model's texture list is its OWN, never another model's — not its ATTA
+    // parent's ("sub-models share material slots with the parent building" was an
+    // invention) and not a sibling variant's. The engine gives every MTP INST
+    // record its own ModelLod with its own GTT-indexed array
+    // (ModelFile_Setup, HOOK 0x4CF080, src/model/model.c:275-314) and the draw
+    // binds that array by the group's own index (lod_texture,
+    // src/render/render.c:216-219; draw_group, :524-531). An ATTA child is
+    // spawned as its own task and resolved through its own VirModel_Find
+    // (src/shadow/sector.c:667-672; src/magicobj/rigidcoll.c:484-485), so it has
+    // its own ModelLod and its own INST record; no engine code assigns one
+    // ModelLod's textures from another's. See ModelTextureInheritanceAllowed
+    // (model_texture_resolution.h) for the full citation set.
+    //
+    // This matters most for the case that used to reach the deleted parent-hull
+    // branch: a sub-model whose own DAT entry is EMPTY. An empty entry is the
+    // engine's answer, not a gap — INST n == 0 means the model has no textures
+    // and every one of its REND groups carries g->texture == 0xFFFF, which the
+    // engine draws with the texture stage off (src/render/render.c:524-531).
+    // Only a model the DAT did not answer for at all may fall back to a guess.
+    if (isDatMiss && ModelTextureInheritanceAllowed(modelFoundInDat)) {
+        // Some vehicles or magic models (_01_1) have no DAT entry of their own
+        // while their interior attachment (_02_1) does. This is an editor-only
+        // guess made when the DAT supplies nothing, not an engine mapping.
         size_t p1 = modelId.find("_01_1");
         if (p1 != std::string::npos) {
             std::string childId = modelId.substr(0, p1) + "_02_1";
@@ -756,9 +761,13 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
             // Correct outcome, not a gap: the engine binds nothing for a model whose
             // texture table is empty (see above). Logged at INFO so it is
             // distinguishable from a texture that really is absent from the data.
+            // `parentModelId` is reported only as provenance — an ATTA child is
+            // never textured from its parent (ModelTextureInheritanceAllowed).
             Logger::Get().Log(LogLevel::INFO,
                 "[TEX Native] Model '" + modelId + "' has no textures in the DAT "
-                "(engine: empty MTP INST record) — binding nothing");
+                "(engine: empty MTP INST record) — binding nothing" +
+                (parentModelId.empty() ? std::string()
+                                       : " [ATTA child of '" + parentModelId + "']"));
         } else {
             Logger::Get().Log(LogLevel::INFO, "[TEX Native] No textures mapped for modelId=" + modelId);
         }

@@ -145,6 +145,44 @@ std::string ResolveAiModelTextureId(
 // out of a model name, which is a lookup the game never performs.
 bool ModelNameIsTextureIdFallbackAllowed(bool modelFoundInDat);
 
+// Whether the editor may fill a model's EMPTY texture list with ANOTHER model's
+// list — its ATTA parent hull's, or a "_02_1" sibling variant's.
+//
+// IGI-RE: it may not, and an empty list the DAT answered for is not a gap at all.
+//
+//  * A model's textures are its own MTP INST record's GTT list and nothing else:
+//    ModelFile_Setup walks the INST chunk one record per ModelLod, `n = *inst++`,
+//    and fills that LOD's own array with the GTT-indexed TEXF entries
+//    (HOOK 0x4CF080, src/model/model.c:275-289,296-314). ModelFile_LoadTextures
+//    turns each TEXF name into "LOCAL:textures/<name>.tex" (HOOK 0x4CF790,
+//    src/model/model.c:452-470).
+//  * The draw binds that array by the group's own index and nothing else:
+//    lod_texture(l,i) => ((Texture *)l->textures[i])->surface
+//    (src/render/render.c:216-219), used as
+//    `if (g->texture != 0xFFFF) SetTexture(dev,0,lod_texture(ml,g->texture))`
+//    (src/render/render.c:524-525; the same in the spline, lightmapped and sorted
+//    paths at :733-734, :1029-1033/:1061-1062, :1210-1211). 0xFFFF means
+//    UNTEXTURED: SetTexture(NULL) + COLOROP=SELECTARG2 (:526-531).
+//  * An ATTA child is spawned as its own task and resolved with its own
+//    VirModel_Find(def->model) (src/shadow/sector.c:667-672;
+//    src/magicobj/rigidcoll.c:484-485), so it owns its own ModelLod and its own
+//    INST record. No engine code assigns one ModelLod's textures from another's:
+//    the only writes to a LOD's texture array are ModelFile_Setup
+//    (src/model/model.c:312) and the NAXT texture-animation swap inside a single
+//    LOD (src/lod/mesh3d.c:558-581). The one cross-file convention that exists is
+//    data-driven, not parent->child: an index >= 0x2000 addresses the FIRST loaded
+//    ModelFile (src/model/model.c:281-306), which is the common model file
+//    (src/game/game.c:414-418).
+//
+// So an INST record with n == 0 is the engine stating "this model has no
+// textures" — every one of its REND groups carries 0xFFFF and it is drawn with
+// the texture stage off — and the editor must bind nothing there (at INFO)
+// instead of borrowing a parent's list.
+//
+// Returns true only when the DAT did NOT answer for this model (a genuine miss,
+// where the editor has no list at all and its historical guesses may run).
+bool ModelTextureInheritanceAllowed(bool modelFoundInDat);
+
 // True for the shared location0 texture archive.
 bool IsSharedCommonTextureArchive(const std::string& resPath);
 

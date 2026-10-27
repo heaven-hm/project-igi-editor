@@ -200,6 +200,23 @@ bool ModelNameIsTextureIdFallbackAllowed(bool modelFoundInDat) {
     return !modelFoundInDat;
 }
 
+bool ModelTextureInheritanceAllowed(bool modelFoundInDat) {
+    // A model's textures are its own MTP INST record's GTT list, per ModelLod,
+    // and the engine never copies one ModelLod's array into another's: the only
+    // writers are ModelFile_Setup (src/model/model.c:312) and the NAXT
+    // texture-animation swap within one LOD (src/lod/mesh3d.c:558-581). An ATTA
+    // child gets its own ModelLod through its own VirModel_Find
+    // (src/shadow/sector.c:667-672; src/magicobj/rigidcoll.c:484-485), so there
+    // is no parent->child texture relationship to reproduce. See the header for
+    // the full citation set.
+    //
+    // When the DAT answered — even with an empty list — the editor has the
+    // engine's own answer and must not substitute another model's list. Only a
+    // genuine miss (no entry anywhere) leaves the editor without data, which is
+    // the single case its historical guesses may cover.
+    return !modelFoundInDat;
+}
+
 bool IsSharedCommonTextureArchive(const std::string& resPath) {
     std::string path = resPath;
     for (char& c : path) {
