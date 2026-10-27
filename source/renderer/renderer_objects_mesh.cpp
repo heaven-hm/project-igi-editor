@@ -571,15 +571,21 @@ std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isB
 }
 
 std::string Renderer_Objects::GetOrExtractMefTemp(const std::string& modelId, bool isBuilding) {
-    // Try disk first (fast path).
-    std::string diskPath = FindModelFile(modelId, isBuilding);
-    if (!diskPath.empty()) return diskPath;
+    // The game resolves a model from the MOUNTED ARCHIVE, by resource identity: Mesh_Load
+    // (HOOK 0x4CF390) asks for "LOCAL:models/%s.mef" (src/model/model.c:364), and the
+    // resource system matches the folded full name (Resource_IsLoaded 0x4B5B90,
+    // src/res/resource.c:136-138).  The engine has no directory scan at all.
+    //
+    // So the archive lookup runs FIRST.  The on-disk search is a convenience for content
+    // extracted by --extract-level and must not decide whether a model exists: it used to
+    // run first and logged an ERROR for every model the archive resolved perfectly well
+    // (the run log shows "Model NOT FOUND: 001_02_1" immediately followed by
+    // "Extracted MEF to temp: igi1ed_001_02_1.mef" -- the same model).
 
-    // Check if already extracted this session.
+    // 1. The engine's path: the member out of the level's own archive, then cross-level.
     std::string tmpPath = (std::filesystem::temp_directory_path() / ("igi1ed_" + modelId + ".mef")).string();
     if (std::filesystem::exists(tmpPath)) return tmpPath;
 
-    // Extract from res cache to temp.
     std::vector<uint8_t> bytes = FindMeshData(modelId);
     if (bytes.empty()) {
         EnsureGlobalTextureMapLoaded();
@@ -598,14 +604,18 @@ std::string Renderer_Objects::GetOrExtractMefTemp(const std::string& modelId, bo
             }
         }
     }
-    if (bytes.empty()) return "";
+
+    // 2. Only if no archive has it, fall back to a loose .mef on disk.
+    if (bytes.empty()) {
+        return FindModelFile(modelId, isBuilding);
+    }
 
     std::ofstream f(tmpPath, std::ios::binary);
     if (!f) return "";
     f.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     f.close();
     tmp_mef_paths_.push_back(tmpPath);
-    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Extracted MEF to temp: " + tmpPath);
+    Logger::Get().Log(LogLevel::DEBUG, "[Renderer_Objects] Extracted MEF to temp: " + tmpPath);
     return tmpPath;
 }
 
