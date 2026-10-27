@@ -144,50 +144,38 @@ says "not wired".
 
 ## Open judgement calls (need the user, not a guess)
 
-### The two parse paths still disagree for 33 types -- LOAD side, not yet investigated
+### The two parse paths still disagree for 15 types -- LOAD side
 
-`LoadRecursive` (`level_objects.cpp`) handles 23 types; `ParseTaskLine`
-(`level_objects_serialize.cpp`) handles 54.  The line parser's extra 33 are:
+`LoadRecursive` (`level_objects.cpp`) handles **56** types; `ParseTaskLine`
+(`level_objects_serialize.cpp`) handles 54.  The 15 the line parser has and the load path
+does not are:
 
-    AlarmLight AmmoPickup AnimTask Cabinet CutScene Dirlight DirlightKeyframe
-    DiscardTerrain Dynamic Elevator FlatSky FlatSkyLayer Generator GenericPickup
-    GenericTBA GlobalLight GlobalLightKeyframe HeightMap HumanPlayer
-    HumanSoldierFemale HumanSoldierRPG LODSettings Level MipMapControl Plane Radio
-    RotatingObject Siren SoundSource Static StationaryGun TerrainLightMap
-    TextureModifier
+    AnimTask CutScene Dirlight DirlightKeyframe DiscardTerrain FlatSky FlatSkyLayer
+    GlobalLight GlobalLightKeyframe HeightMap LODSettings MipMapControl SoundSource
+    TerrainLightMap TextureModifier
 
-Four defects have already come out of this drift (see the parse-path test file), so this
-list is the obvious place to look next.  But it is NOT a mechanical fix, and that is the
-point of recording it rather than doing it: `LoadRecursive`'s fallback treats args 3/4/5 as
-a *candidate* position and reverts it unless the level's own `Task_DeclareParameters`
-agrees (`level_objects.cpp:540-558`), precisely because the layout is not uniform across
-types.  `ParseTaskLine` reads pos@3-5 and rot@6-8 unconditionally for the group
-AIStationaryGunHolder / AlarmLight / Elevator / Generator / GenericPickup / GenericTBA /
-Plane / Radio / RotatingObject / Siren / StationaryGun
-(`level_objects_serialize.cpp:307-312`) -- so mirroring that group into the load path
-would assert a layout for ten types at once, and if any of them differs it would corrupt
-their placement.  Verify each against its retail declaration first.
+**Correction.** An earlier revision of this note said 33 types and listed AlarmLight,
+Elevator, Generator, GenericPickup, GenericTBA, Plane, Radio, RotatingObject, Siren,
+StationaryGun, HumanPlayer and others.  That was wrong, and the error was in the
+measurement, not the code: the extraction regex
+(`is[A-Za-z]+ = \(typeStr == "X"`) captured only the FIRST name of an OR-chain, so every
+type after the first in a predicate like
 
-Consequence today: at load those types get a position (via the candidate) but no rotation,
-so e.g. a `RotatingObject` is drawn unrotated.
+    bool isSoldier = (typeStr == "HumanSoldier" || typeStr == "HumanSoldierFemale" ||
+                      typeStr == "HumanPlayer" || typeStr == "HumanSoldierRPG" ||
+                      typeStr == "Cabinet");
 
-**Verification started for the shared group.** The engine's ParamTables confirm the layout
-the line parser assumes -- `ObjectPos` at args 3/4/5 then `Real32x9` at 6/7/8 -- for two of
-the eleven:
+was counted as missing when it was handled.  Extracting every `typeStr == "X"` instead of
+the first per predicate gives 56, and the true gap of 15.  The round-22 fix for the
+rotating-placement group was still correct and still needed -- those types really were
+absent -- but the size of the remaining problem was overstated by more than half.
 
-    RotatingObject  src/fxobj/rotating.c:81-82   start ObjectPos, base Real32x9
-    AlarmLight      src/fxobj/alarm.c:109-110    place ObjectPos, placeMatrix Real32x9
-
-Both then continue with String16 model/sound fields at args 9/10, matching the line
-parser's extra-argument loop.  The other nine (AIStationaryGunHolder, Elevator, Generator,
-GenericPickup, GenericTBA, Plane, Radio, Siren, StationaryGun) still need the same check
-before the group can be mirrored into the load path -- and AIStationaryGunHolder already
-has its own load branch, so it may not belong in the group at all.
-
-Note also that `RotatingObject` has no retail declaration and no shipped instance anywhere
-under `MISSIONS/` in the local install, so its editor-side handling cannot be checked
-against authored data -- only against the engine's ParamTable.
-
+Four defects have come out of this drift (see the parse-path test files), so the 15 are
+still the place to look.  But it is NOT a mechanical fix: `LoadRecursive`'s fallback treats
+args 3/4/5 as a *candidate* position and reverts it unless the level's own
+`Task_DeclareParameters` agrees (`level_objects.cpp:540-558`), precisely because the layout
+is not uniform across types.  Verify each against its retail declaration and its engine
+ParamTable before adding a branch.
 * **`renderer_terrain.cpp:230`** binds `mat_tex_.texs_[rc->tex_idx_]` unguarded, and
   `LEVEL12/TERRAIN.TEX` holds 12 textures while level 12's tile maps reference 12, 13 and
   14. The engine over-reads there too - `new_set` allocates `count*0x24+0x30`
