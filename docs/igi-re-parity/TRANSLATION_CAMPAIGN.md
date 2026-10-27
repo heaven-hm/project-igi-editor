@@ -51,6 +51,35 @@ Corrections and reconciliations:
 upper-cased, slash-folded resource identity) silently broke three consumers - menu
 labels, the LOD corpus test, and the texture preview. All three were the same defect.
 
+## The parse-path drift thread is closed
+
+Five defects came out of comparing the functions that dispatch on `obj.type`, and all five
+are fixed with tests:
+
+1. `ParseTaskLine` never set `isSplineWaypoint` and never read the waypoint's args 11-14.
+2. The save path wrote only args 3-10, dropping the same four parameters.
+3. `AIGraph` and `HumanAI` were handled by `LoadRecursive` only, so a line parsed through
+   `ParseTaskLine` had no graph origin, node count or graph id.
+4. Eleven types in the rotating-placement group had no `LoadRecursive` branch, so they
+   loaded with a position and no rotation.
+5. `UpdateCoordinatesInLine` has no generic fallback and did not name `AIGraph`, so a moved
+   graph silently reverted to its old origin on save.
+
+The comparisons that closed it, for anyone tempted to redo them:
+`LoadRecursive` handles 56 types and `ParseTaskLine` 54, with a true gap of 15 -- of which 3
+are already covered by the confirmed-candidate fallback, 10 declare no position at all, and
+`AnimTask`/`CutScene` were the only two needing a branch (both fixed).  `AIGraph` was the
+only one of the six parser-types missing from the coordinate writer with coordinates to
+write; `HumanAI` declares none and `Container`/`Dynamic`/`Level`/`Static` are engine
+grouping types with no retail declaration.  `SerializeObjectRecursive` has no type branches
+at all.
+
+Also note, since it looks like an inconsistency and is not: the coordinate writer uses
+`saveZ = obj.pos.z - obj.snap_z_offset` for types that snap to terrain.  `AIGraph` writes
+`obj.pos.z` because its origin is an abstract world origin that the parse and load paths
+both read directly, with no snap offset.
+
+
 ## Still to do - the wiring, which is the point of the objective
 
 The modules are transcribed but several have **no caller**, so the editor does not yet
