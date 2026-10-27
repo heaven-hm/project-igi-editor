@@ -1,6 +1,9 @@
 #include "renderer_objects_internal.h"
 #include "igi_transform.h"
 #include "object_lightmap.h"
+#include "lightmap_ref_index.h"
+#include "../lod/lod_select.h"
+#include "../lod/mef_mesh_header.h"
 #include "../capture_camera.h"
 
 
@@ -792,7 +795,7 @@ void Renderer_Objects::Shutdown() {
 void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                             const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts,
                             const glm::vec3& camera_pos, bool show_magic_obj_spheres, const std::unordered_set<int>* skip_static_draw_indices,
-                            const glm::vec3& camera_forward, bool fast_preview)
+                            const glm::vec3& camera_forward, bool fast_preview, float tan_half_fovx)
 {
     // Define the flags (must match renderer.h)
     const int DRAW_OBJECTS = 4;
@@ -968,7 +971,47 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             continue;
         }
 
-        const Mesh& mesh = GetOrLoadMesh(obj.modelId, obj.isBuilding);
+        // Per-frame LOD switch.  ModelObj_GetLOD (HOOK 0x4CFCB0, src/lod/mesh3d.c:209-227)
+        // feeds lod_select (src/lod/mesh3d.c:161-208), and the draw then uses
+        // vm->lods[lod] (src/render/render.c:957).  A negative result is the engine's
+        // "culled this frame" (render.c:955-956), not an error.
+        const Mesh* meshPtr = &GetOrLoadMesh(obj.modelId, obj.isBuilding);
+        int drawnLod = 0;
+        if (meshPtr->vertexCount != 0 && tan_half_fovx > 0.0f) {
+            const igi::lod::MefMeshHeader lod0h =
+                igi::lod::ReadMefMeshHeader(FindMeshData(obj.modelId));
+            if (lod0h.valid) {
+                igi::lod::RigidLodQuery q;
+                q.hasModel = true;
+                q.objPos[0] = obj.pos.x;
+                q.objPos[1] = obj.pos.y;
+                q.objPos[2] = obj.pos.z;
+                q.camPos[0] = camera_pos.x;
+                q.camPos[1] = camera_pos.y;
+                q.camPos[2] = camera_pos.z;
+                // gTransContext.matrix.m[6..8]: the view matrix's Z row.
+                q.viewZ[0] = cameraFwd.x;
+                q.viewZ[1] = cameraFwd.y;
+                q.viewZ[2] = cameraFwd.z;
+                q.lod0Center[0] = lod0h.center[0];
+                q.lod0Center[1] = lod0h.center[1];
+                q.lod0Center[2] = lod0h.center[2];
+                q.lod0Sphere = lod0h.sphere;
+                q.objScale[0] = q.objScale[1] = q.objScale[2] = static_cast<float>(obj.scale);
+                q.fov = tan_half_fovx;
+                const int lod = SelectLodForDistance(
+                    obj.modelId, obj.isBuilding, tan_half_fovx,
+                    static_cast<float>(igi::lod::RigidViewDepth(q)),
+                    static_cast<float>(igi::lod::MaxScale(q.objScale) * lod0h.sphere), 1.0f);
+                if (lod < 0) continue;  // render.c:955-956
+                drawnLod = lod;
+                const std::string lodName = GetLodMeshName(obj.modelId, obj.isBuilding, lod);
+                if (!lodName.empty() && lodName != obj.modelId) {
+                    meshPtr = &GetOrLoadMesh(lodName, obj.isBuilding);
+                }
+            }
+        }
+        const Mesh& mesh = *meshPtr;
         if (mesh.vertexCount == 0) continue;
 
         const glm::vec3 toObject = glm::vec3(obj.pos) - camera_pos;
@@ -1273,15 +1316,24 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                         glUniform1i(loc_useTex, 0);
                     }
 
-                    // Lightmap: bind unit 1 if this submesh has a baked lightmap and mode is not Off.
+                    // Lightmap: bind unit 1 if the DRAWN LOD has a baked lightmap and
+                    // mode is not Off.  The index follows the drawn LOD, not the LOD-0
+                    // submesh: fill_refs (src/sector/sector.c:544-563) gives the object
+                    // one LightmapRef per LOD and the draw binds
+                    // o->lightmaps[lod].lightmaps (src/render/render.c:1019,1033).  A LOD
+                    // with no bake is drawn with no atlas (render.c:1052-1054) -- the
+                    // engine never falls back to another LOD's.
                     const auto curMode = lightmapMode;
-                    if (curMode != igi::LightmapRenderMode::Off && hasWorkingLightmap && si < lightmaps->size() && (*lightmaps)[si] != 0) {
+                    const int lmEntry = igi::lightmap::OwnerLightmapEntryForDrawnLod(drawnLod);
+                    if (curMode != igi::LightmapRenderMode::Off && hasWorkingLightmap &&
+                        lmEntry >= 0 && lmEntry < static_cast<int>(lightmaps->size()) &&
+                        (*lightmaps)[lmEntry] != 0) {
                         // Baked mode reproduces the original engine exactly: the bake is
                         // used verbatim, with no live sun re-light modulation.
                         const bool authentic = (curMode == igi::LightmapRenderMode::Baked);
                         glm::vec3 scale = authentic ? glm::vec3(1.0f) : blockScale(sub.avgNormal);
                         glActiveTexture(GL_TEXTURE1);
-                        glBindTexture(GL_TEXTURE_2D, (*lightmaps)[si]);
+                        glBindTexture(GL_TEXTURE_2D, (*lightmaps)[lmEntry]);
                         glUniform1i(loc_lightmap, 1);
                         glUniform1i(loc_useLightmap, 1);
                         glUniform1i(loc_lm_authentic, authentic ? 1 : 0);

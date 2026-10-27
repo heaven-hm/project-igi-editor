@@ -109,7 +109,10 @@ public:
     size_t GetMeshCacheCount() const { return mesh_cache_.size(); }
     size_t GetTextureCacheCount() const { return texture_cache_.size(); }
 
-    void Draw(GLuint ubo_mats, bool overlay_wireframe, const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts, const glm::vec3& camera_pos, bool show_magic_obj_spheres = false, const std::unordered_set<int>* skip_static_draw_indices = nullptr, const glm::vec3& camera_forward = glm::vec3(0.0f), bool fast_preview = false);
+    // tan_half_fovx is the frame's `gTransContext.fov` (view_define_.tan_half_fovx_,
+    // set in app.cpp): lod_select needs it to turn a view-space depth into the
+    // engine's distance test (src/lod/mesh3d.c:216-222).
+    void Draw(GLuint ubo_mats, bool overlay_wireframe, const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts, const glm::vec3& camera_pos, bool show_magic_obj_spheres = false, const std::unordered_set<int>* skip_static_draw_indices = nullptr, const glm::vec3& camera_forward = glm::vec3(0.0f), bool fast_preview = false, float tan_half_fovx = 0.0f);
     int PickObjectAtScreen(int x, int y, int w, int h,
                            GLuint ubo_mats,
                            const std::vector<LevelObject>& objects,

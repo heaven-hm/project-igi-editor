@@ -449,7 +449,8 @@ void Renderer::Draw(const draw_params_s &params,
                   params.selected_object_index_, task_tree_view.hover_object_index_,
                   params.draw_parts_, params.view_define_->pos_,
                   params.show_magic_obj_spheres_, params.skip_static_draw_indices_,
-                  params.view_define_->forward_, params.fast_scene_preview_);
+                  params.view_define_->forward_, params.fast_scene_preview_,
+                  params.view_define_->tan_half_fovx_);
     if (profileRenderer) objectsEnd = ProfileClock::now();
     if (profileRenderer) splinesStart = ProfileClock::now();
     splines_.Draw(params.level_objects_->GetObjects(), ubo_mats_,
