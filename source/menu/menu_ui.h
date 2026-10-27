@@ -435,6 +435,26 @@ struct EditorMenu {
 EditorMenu LoadEditorMenu(const std::string& game_root, bool terrain_expanded,
                           const MenuUiBuildOptions& options);
 
+// Saves an edited retail menu back to its container: the editor's entry point to
+// the write half of issue #74 (`menu/menu_qvm_writer.h`).
+//
+// ORACLE: the engine's own producer chain, which `menu/menu_qvm_writer.h`
+// translates -- `QscGen_Compile` HOOK 0x4BBCB0 (src/qvm/qscgen.c:86-142) ->
+// `QvmAsm_OpPush` HOOK 0x4C0A10 (src/qasm/asm.c:74-124) -> `QvmAsm_Assemble`
+// HOOK 0x4BB270 (src/qvm/qvmasm.c:103-276) -- and the loader that must accept the
+// result, `Qvm_Load` HOOK 0x4BD220 (src/qvm/qvm.c:433-486).
+//
+// `menu.definition` is what is written, so an edit made through the mutable
+// accessors of `MenuDefinition`/`MenuWidget` (`qvm_image.h`) is the edit that lands.
+// `path` empty means the file the definition was read from
+// (`MenuDefinition::source`).
+//
+// Refuses, with `*error` set and nothing written, when the menu was not built from
+// a retail container (`menu.definition.ok` is false, which is exactly the fallback
+// case) or when the path is empty.  A fallback menu therefore can never overwrite
+// `menusystem/ingamemenu.qvm`.
+bool SaveEditorMenu(const EditorMenu& menu, const std::string& path, std::string* error);
+
 // The documented fallback: the rows the pause menu has always drawn, in the same
 // order and with the same hit boxes, as a `MenuUiModel` so one code path can drive
 // the menu.  Labels are the rows' state-independent base names; the live state

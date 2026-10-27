@@ -7,7 +7,7 @@
 // producer is a three-stage chain, and this writer reproduces all three stages:
 //
 //   1. QSC source -> QVM assembler TEXT
-//      `QscGen_Compile`      HOOK 0x4BBCB0  src/qvm/qscgen.c:96-141 (HOOK at :145)
+//      `QscGen_Compile`      HOOK 0x4BBCB0  src/qvm/qscgen.c:86-142 (HOOK at :145)
 //        * every top-level statement is `QscGen_Statement` on a BLOCK_EXPR, which
 //          is `QscGen_Expression` then `OP_POP` (src/qvm/qscgen.c:259-264);
 //        * then ONE trailing `OP_BRK` ends the program (src/qvm/qscgen.c:134);
@@ -21,14 +21,17 @@
 //          over the whole installed corpus: 41497 `MINUS` opcodes, every one of
 //          them immediately preceded by a magnitude push, and `PUSHM` 0 times.
 //   2. assembler text -> instruction bytes
-//      `QvmAsm_OpPush`       HOOK 0x4C0A10  src/qasm/asm.c:74-123 (HOOK at :125)
-//        * integer (:83-98): 0 -> PUSH0, 1 -> PUSH1, 2..127 -> PUSHB,
-//          128..32767 -> PUSHW, else PUSH (4-byte);
-//        * float (:99-111): 0.0 -> PUSH0, 1.0 -> PUSH1, else PUSHF (4-byte);
+//      `QvmAsm_OpPush`       HOOK 0x4C0A10  src/qasm/asm.c:74-124 (HOOK at :125)
+//        * integer (:79-98): 0 -> PUSH0, 1 -> PUSH1, -1 -> PUSHM, else
+//          -128..127 -> PUSHB, -32768..32767 -> PUSHW, else PUSH (4-byte).  The
+//          writer only ever emits non-negative magnitudes (see the MINUS note
+//          above), so the -1 arm is never reached;
+//        * float (:99-111): 0.0 -> PUSH0, 1.0 -> PUSH1, -1.0 -> PUSHM, else
+//          PUSHF (4-byte);
 //        * string / name (:113-121): index < 0x100 -> PUSHSIB / PUSHIIB,
 //          index < 0x10000 -> PUSHSIW / PUSHIIW, else PUSHSI / PUSHII.
 //      The pool INDEX is assigned on first use and de-duplicated:
-//      `Asm_AddString` HOOK 0x4BB030 (src/script/asm.c:137-157) and `Asm_AddName`
+//      `Asm_AddString` HOOK 0x4BB030 (src/script/asm.c:138-157) and `Asm_AddName`
 //      HOOK 0x4BB180 (src/script/asm.c:183-200).
 //   3. bytes + tables -> the "LOOP" container
 //      `QvmAsm_Assemble`     HOOK 0x4BB270  src/qvm/qvmasm.c:103-276 (HOOK at :277)

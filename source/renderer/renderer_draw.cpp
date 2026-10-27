@@ -468,9 +468,24 @@ void Renderer::Draw(const draw_params_s &params,
       params.level_objects_ &&
       objects_.IsCameraInsideBuildingBounds(params.level_objects_->GetObjects(),
                                              params.view_define_->pos_);
-  if (!params.fast_scene_preview_)
-    rain_.Draw(ubo_mats_, params.view_define_->pos_, params.view_define_->right_,
-               params.view_define_->up_, cameraIsSheltered,
+  if (!params.fast_scene_preview_) {
+    // The engine's camera, for Rain_ClipCells (rain.c:508-534) and
+    // Rain_FillVB's snow billboard (rain.c:337-342): gTransContext.matrix is
+    // the camera's right/down/forward axes and its projection is
+    // half_viewport / tan(half fov) with the viewport centre as the origin
+    // (TransContext_Create, src/transctx/transctx.c:198-201).
+    Renderer_Rain::Camera weather_camera;
+    weather_camera.pos = params.view_define_->pos_;
+    weather_camera.right = params.view_define_->right_;
+    weather_camera.up = params.view_define_->up_;
+    weather_camera.forward = params.view_define_->forward_;
+    weather_camera.scale_x = params.view_define_->half_viewport_width_div_tan_half_fovx_;
+    weather_camera.scale_y = params.view_define_->half_viewport_height_div_tan_half_fovy_;
+    weather_camera.center_x = params.view_define_->viewport_width_ * 0.5;
+    weather_camera.center_y = params.view_define_->viewport_height_ * 0.5;
+    weather_camera.viewport_width = params.view_define_->viewport_width_;
+    weather_camera.viewport_height = params.view_define_->viewport_height_;
+    rain_.Draw(ubo_mats_, weather_camera, cameraIsSheltered,
                // RainEffect_Init registers the texture once, for BOTH modes
                // (Game_AddTexture("snow.tex"), src/fxobj/rain.c:82); only the snow
                // branch of Rain_DrawCell binds it (src/dxinit/rain.c:430-434), and
@@ -481,6 +496,7 @@ void Renderer::Draw(const draw_params_s &params,
                rain_.IsSnow()
                    ? objects_.GetOrLoadGameTexture(igi::rain::SnowTextureName())
                    : 0u);
+  }
 
   if (profileRenderer) {
     static int frames = 0;

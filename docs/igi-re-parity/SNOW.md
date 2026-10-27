@@ -470,3 +470,34 @@ path, which `Rain_*` never touches. The editor therefore converts with `/255`
 **Unverified:** the rendered pixels. This host offers OpenGL 2.1 and the editor
 needs 4.1, so nothing here was seen on screen; the binding is proven by the
 corpus test and the citations above, not by a frame.
+
+## 10. The rain half is now the same code path (WIRED)
+
+The snow port left rain as its own invented field. It no longer is: both modes
+are one object, `Renderer_Rain`, with one pool, one tile lattice, one cell window
+and one vertex buffer, exactly as `r->snow` (`rain.c:153`) makes them one object
+in the engine. The differences are only the branches the engine itself branches
+on:
+
+| Branch | Rain | Snow | Citation |
+|---|---|---|---|
+| speed | 2048 u/tick | 204.8 u/tick | `rain.c:122-123,572` |
+| spawn z | `kLayer - 2048` | `kLayer - 204.8` | `rain.c:631` |
+| horizontal motion | none | the sway/wrap random walk | `rain.c:592-617` |
+| vertices | 2, a LINE | 6, a camera-facing quad | `rain.c:337-372` |
+| primitive / mult | `D3DPT_LINELIST` / 2 | `D3DPT_TRIANGLELIST` / 6 | `rain.c:446-458` |
+| stage 0 | texture NULL, SELECTARG2 (`k = 3`) | `snow.tex`, MODULATE (`k = 4`) | `rain.c:430-459` |
+| world rotation | identity (pure scale) | the camera basis | `rain.c:382-391` |
+
+Everything else is shared and was already described above: the 80-drop pool, the
+spawn accumulator, the 6 m wrap band, the 18 m draw band, the fade, the four
+`kind` vertex groups, the `Rain_UpdateGrid` ground probe (now wired to the
+level's terrain query) and `Rain_ClipCells`' outcodes with `Rain_DrawCell`'s
+per-layer clip. The snow's own geometry changed in one respect: the flake quad is
+now expanded on the CPU in the engine's own view axes (`vx/vy/vz` from
+`gTransContext.matrix`, `rain.c:337-342`) rather than in the vertex shader from
+`right_`/`up_`, so its `+y` is the engine's *down* axis and the texture's `(0,0)`
+corner is the flake's top-left, as `rain.c:344-361` has it.
+
+See [`RAIN.md`](RAIN.md) section 7 for the port's step-by-step table and its
+verification.

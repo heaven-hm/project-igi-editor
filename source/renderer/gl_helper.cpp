@@ -192,6 +192,9 @@ static void LegacyBindAttribLocations(const char* vs_filename, GLuint program) {
 	glBindAttribLocation(program, 3, "a_uv2");
 	glBindAttribLocation(program, 0, "a_seed");
 	glBindAttribLocation(program, 1, "a_corner");
+	// The weather particles' D3DFVF_DIFFUSE word (renderer_rain.cpp), which the
+	// 330 originals declare at location 1 alongside a_pos and a_uv.
+	glBindAttribLocation(program, 1, "a_diffuse");
 
 	// The file-based tier, dispatched by vertex filename because vs_in_clr is
 	// index 1 in the skydome pair and index 2 in the flat-sky pair.

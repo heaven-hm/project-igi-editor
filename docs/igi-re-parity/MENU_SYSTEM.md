@@ -433,3 +433,89 @@ corpus shows its own numbers:
 The corpus is `$IGI_GAME_PATH` (`scripts/run-host-tests.sh` exports it, default
 `/Users/haseeb-mir/Downloads/IGI`); the corpus tests skip cleanly when
 `menusystem/ingamemenu.qvm` or `menusystem/MAINMENU.QVM` is absent.
+
+## 11. The write side — `source/menu/menu_qvm_writer.*` (issue #74)
+
+The reader above turns a container into `MenuDefinition`; the writer turns an edited
+`MenuDefinition` back into the container. It adds no format of its own: it builds the
+QSC syntax tree the retail scripts have and hands it to `qvm::Compile`
+(`source/level/qvm_compiler.cpp`), which is this repository's translation of the
+engine's last two producer stages.
+
+| stage | engine | where |
+| --- | --- | --- |
+| QSC -> assembler text | `QscGen_Compile` HOOK 0x4BBCB0 | `src/qvm/qscgen.c:86-142`; statements at `:199-272`, calls at `:322-345`, the single trailing `BRK` at `:134` |
+| text -> bytes | `QvmAsm_OpPush` HOOK 0x4C0A10 | `src/qasm/asm.c:74-124`; pool indices from `Asm_AddString`/`Asm_AddName` HOOK 0x4BB030/0x4BB180 (`src/script/asm.c:138-157`, `:183-200`) |
+| bytes + tables -> "LOOP" | `QvmAsm_Assemble` HOOK 0x4BB270 | `src/qvm/qvmasm.c:103-276`, header at `:227-251` |
+| the loader that must accept it | `Qvm_Load` HOOK 0x4BD220 | `src/qvm/qvm.c:433-486` — "LOOP", version 8, `unk08 >= 5` |
+
+Two rules the writer inherits from the engine and that an editor edit can disturb:
+
+* **The argument layout is the file's, not the tree's.** `Task_New(id, type, name,
+  <declared parameters in ParamTable order>, <children>)` is what `Level_NewTask`
+  HOOK 0x4F0780 parses (`src/level/level.c:187-190`, `:214-221`, `:234-239`), and the
+  declared-parameter list comes from the file's own `Task_DeclareParameters`
+  statements. `MenuDefinition::declarations` therefore carries those statements in
+  file order; without them a save reorders the string pool (measured: same 11308
+  bytes, first difference at offset 151).
+* **A negative literal is a magnitude push plus `MINUS`.** The QSC parser never hands
+  `QscGen_WriteInt` (HOOK 0x4BC880, `src/qvm/qscgen.c:441-448`) a negative value —
+  measured over the installed corpus: 41497 `MINUS` opcodes, each immediately preceded
+  by a magnitude push, and `PUSHM` (which `QvmAsm_OpPush` emits only for a literal
+  -1, `src/qasm/asm.c:79-83`) exactly 0 times. The writer therefore emits unary minus
+  on the magnitude, and applies `QvmAsm_OpPush`'s PUSH0/PUSH1 shortening to that
+  magnitude as well, so `-1.0` is `PUSH1 + MINUS` exactly as the engine's compiler
+  would emit it.
+
+`MenuQvmDocumentFromDefinition` uses `MenuDefinition::declarations` verbatim, so the
+ordinary save is byte-faithful; when a definition was built by hand and carries no
+declaration list, the writer recovers one from the widgets' own fields in depth-first
+first-use order (complete for both retail files, but not the file's statement order,
+so the bytes then differ inside the string pool).
+
+`MenuQvmWrite` refuses, with a message, a document the engine could not have produced:
+a widget whose field count disagrees with its declaration, a declared parameter with
+no value or more than one, a call in a parameter position (`Level_NewTask` disables
+the `Task_New` symbol while it parses parameters, `src/level/level.c:182-185`, `:209`),
+an undeclared type carrying fields, a duplicate declaration, a `bool8` that is neither
+`TRUE` nor `FALSE`, and an integer whose magnitude does not fit the assembler's 32-bit
+literal.
+
+The editor's entry point is `app_menu::SaveEditorMenu` (`source/menu/menu_ui.h`,
+implemented in `source/app_menu.cpp`): it writes `menu.definition` to the given path,
+or to the definition's own `source` when the path is empty, and refuses a menu that
+was not built from a retail container — a fallback menu can never overwrite
+`ingamemenu.qvm`.
+
+### What is verified
+
+`tests/test_menu_qvm.cpp` (suite `MenuQvmWrite`, 8 tests) and `tests/test_menu_ui.cpp`
+(suite `MenuUiSave`, 3 tests) hold the writer to the shipped files:
+
+* both retail containers round-trip **byte for byte** (11308 and 25549 bytes, zero
+  differing bytes);
+* the written container satisfies the loader's rules and `QvmAsm_Assemble`'s layout
+  (`symOffsets == 60`, every section abutting the next, `code + codeSize == size`);
+* it decodes, through the repository's own reader, to the shipped file's structure
+  field for field — including screen 900's authored geometry (85, 80 -> 555, 410;
+  title frame 100, 77, 440x26 LineUpMode 0; item frame 100, 97, 440x200 LineUpMode 1);
+* an edit (a `Text Resource` and a `LineUpMode`) survives save + reload, with the
+  widget count and ids unchanged and the replaced game text gone from the container;
+* a hand-built definition (no declaration list) still round-trips through the reader;
+* every refusal above is exercised, and a refused save leaves no file behind.
+
+**Not verified here:** that retail `igi.exe` loads the editor's file. This host cannot
+run the game or the editor's GUI; the strongest available claim is that the written
+bytes are identical to the shipped container's for an unedited save, and that they
+pass the engine's own loader validation and the repository's reader.
+
+| check | command | result |
+| --- | --- | --- |
+| build gate | `bash scripts/build-windows.sh` | **exit 0** — x64 link gate OK, i686 compile gate OK |
+| host lane | `bash scripts/run-host-tests.sh` | **exit 0** — 1197 tests passed in 69 suites, 0 failed |
+| write suites (host) | `IGI_HOST_TESTS=tests/test_menu_qvm.cpp bash scripts/run-host-tests.sh` | 20 passed, 0 failed (8 of them `MenuQvmWrite`) |
+| write suites (host) | `IGI_HOST_TESTS=tests/test_menu_ui.cpp bash scripts/run-host-tests.sh` | 34 passed, 0 failed (3 of them `MenuUiSave`) |
+| Windows suite | i686 rebuild, then `wine bin/igi_tests.exe '--gtest_filter=-*VerifyLevel*'` with `WINEPATH` and `IGI_GAME_PATH` set | **exit 0** — 1641 tests ran, 1629 passed, 0 failed, 12 skipped; all 8 `MenuQvmWrite` and 3 `MenuUiSave` tests pass |
+
+The Windows suite must be rebuilt as i686 *after* `build-windows.sh`, because the
+gate's x64 half relinks `bin/igi_tests.exe` as PE32+.

@@ -2,7 +2,7 @@
 
 #include "../source/runtime/level_weather.h"
 #include "../source/runtime/weather_visibility.h"
-#include "../source/runtime/weather_particle_style.h"
+#include "../source/runtime/rain_rules.h"
 #include "../source/level/level_common.h"
 #include "../source/level/level_objects.h"
 #include "../source/level/qsc_lexer.h"
@@ -267,9 +267,14 @@ TEST(LevelWeatherTest, BuildingShelterFootprintCoversUpperFloors) {
         -10.0f, 10.0f));
 }
 
-TEST(LevelWeatherTest, SnowUsesGroundVisibleParticleLength) {
-    EXPECT_GT(igi::WeatherParticleLengthMeters(true),
-              igi::WeatherParticleLengthMeters(false));
+TEST(LevelWeatherTest, WeatherParticleExtentsAreTheEngineOnes) {
+    // rain.c:309-311,671,685 - the streak is a 0.5 m line (kStreak = 2048 units)
+    // and the flake a 0.04 m quad (kFlakeSize = 81.92 units is its HALF extent).
+    // The engine's flake is the smaller of the two; the previous editor constant
+    // (0.045 m half-extent, i.e. 0.09 m across) came from OpenIGI and is gone.
+    EXPECT_FLOAT_EQ(igi::rain::RainStreakLengthUnits() / igi::rain::kUnitsPerMetre, 0.5f);
+    EXPECT_FLOAT_EQ(igi::rain::SnowFlakeWidthUnits() / igi::rain::kUnitsPerMetre, 0.04f);
+    EXPECT_LT(igi::rain::SnowFlakeWidthUnits(), igi::rain::RainStreakLengthUnits());
 }
 
 TEST(LevelWeatherTest, ActiveAuthoredWeatherDoesNotDependOnObjectRenderFlags) {

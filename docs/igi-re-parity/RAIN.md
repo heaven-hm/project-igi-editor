@@ -230,18 +230,27 @@ per-second figure below is an illustration at 60 Hz, not an engine constant.
 
 Editor-side entry points, all read, none modified:
 
-* `source/renderer/renderer_rain.{h,cpp}` — the GPU particle field
-  (`Renderer_Rain::Init/Draw/DrawSnow`).
-* `source/renderer/weather_math.h` — the editor's particle constants.
-* `source/runtime/weather_particle_style.h`, `weather_visibility.h`,
-  `weather_mode.{h,cpp}` — the editor's own policy layer.
+* `source/renderer/renderer_rain.{h,cpp}` — the weather renderer. **Since section 7
+  it is the engine's `Rain` task**, not a GPU field: the pool, the tile lattice,
+  the vertex groups, the clipping and the two primitives all come from
+  `rain_rules.h`.
+* `source/runtime/weather_visibility.h`, `weather_mode.{h,cpp}` — the editor's own
+  policy layer (the only part with no oracle counterpart).
 * `source/runtime/level_weather.{h,cpp}` — the `RainEffect` parser.
 * `source/app_level.cpp:478-489,137-141,237`, `source/renderer/renderer.h:783-788`,
   `source/renderer/renderer.cpp:163-164`, `source/renderer/renderer_draw.cpp:461-468`.
 
+The two invented constant headers this audit named —
+`source/renderer/weather_math.h` and `source/runtime/weather_particle_style.h` —
+**were deleted with the port** (section 7).
+
 ### 3.1 Diverges from retail (defects)
 
-| # | Rule | Editor behaviour | Editor file:line | Oracle |
+**Status: every row except D12–D15 was closed by the rain port in section 7.**
+D12–D15 are parser/policy defects in `source/runtime/level_weather.cpp` and
+`source/runtime/weather_mode.cpp`; they are untouched.
+
+| # | Rule | Editor behaviour (as audited) | Editor file:line | Oracle |
 |---|---|---|---|---|
 | D1 | R1 pool | 1200 rain drops / 900 snow flakes, a static vertex buffer, no spawn accumulator, no pool cap | `renderer/weather_math.h:7-8`; `renderer/renderer_rain.cpp:147-163,176-190` | `drops[80]` + accumulator, `Rain_Update` `0x499CF0` `dxinit/rain.c:65,619-636` |
 | D2 | R2 footprint | a 50 m box centred on the camera, wrapped with `mod()`, so it slides continuously | `renderer/weather_math.h:9`; `renderer/renderer_rain.cpp:35` | 9×9 tile window (23.94 m) from tile `(ix+1, iy+1)`, snapped to a 12-tile lattice, `Rain_UpdateGrid` `0x498BD0` `dxinit/rain.c:223-236,249,282,288-289` |
@@ -257,7 +266,7 @@ Editor-side entry points, all read, none modified:
 | D12 | R7 `Is Active` | parsed once as a boolean; a non-literal token makes the object unusable | `runtime/level_weather.cpp:77,81-83` | re-evaluated every tick as a `VarString` expression, `RainEffect_Run` `0x436990` `fxobj/rain.c:102-103` |
 | D13 | R7 alpha default | `LevelWeatherSettings::alpha` defaults to `0.0` | `runtime/level_weather.h:18` | `RainEffect_Create` sets `level = 0.3125`, `0x436950` `fxobj/rain.c:92` |
 | D14 | R7 object selection | takes the **first** `RainEffect` with ≥8 tokens and returns "no weather" if that one is inactive, ignoring any later active object | `runtime/level_weather.cpp:72-89` | one `Rain` per authored `RainEffect` task; each runs, `RainEffect_Create`/`Changed` `0x436950`/`0x436A50` `fxobj/rain.c:86-146` |
-| D15 | R7 alpha substitution | the editor's weather-mode override replaces a missing/zero authored alpha with `0.5` (rain) or `0.25` (snow) and a missing band with 10 m / 2 m | `runtime/weather_mode.cpp:14-18`; `renderer/renderer_rain.h:37-38` | no such substitution exists; the authored value is the only source (`fxobj/rain.c:92-93,143`) |
+| D15 | R7 alpha substitution | the editor's weather-mode override replaces a missing/zero authored alpha with `0.5` (rain) or `0.25` (snow) and a missing band with 10 m / 2 m | `runtime/weather_mode.cpp:14-18` | no such substitution exists; the authored value is the only source (`fxobj/rain.c:92-93,143`) |
 
 D14 and D12 are **latent**: every retail level authors at most one `RainEffect`
 and every retail `Is Active` is a literal (`tests/test_level_weather.cpp:93-101`),
@@ -266,7 +275,9 @@ the schema.
 
 ### 3.2 Not implemented (feature gaps)
 
-| # | Rule | Editor status | Oracle |
+**Status: N1–N4 were implemented by the rain port in section 7.**
+
+| # | Rule | Editor status (as audited) | Oracle |
 |---|---|---|---|
 | N1 | R4/R5 terrain clipping: drops that fall below the ground are not drawn | not implemented — the editor has no ground interaction at all | `Rain_DrawCell` `0x499430` `dxinit/rain.c:403,465-483` |
 | N2 | R6 fade in/out over 60 ticks, scaling streak length and flake size | not implemented — precipitation appears and disappears instantly | `Rain_Update` `0x499CF0` `dxinit/rain.c:574-583`; `Rain_Render` `0x498B80` `dxinit/rain.c:209-212`; `Rain_FillVB` `0x499090` `dxinit/rain.c:309,311` |
@@ -275,8 +286,10 @@ the schema.
 | N5 | R2 `Rain_CreateVB` re-creates the vertex buffer on device restore (0x780 vertices) | not implemented — irrelevant to a GL 3.3 core path, listed for completeness only | `Rain_CreateVB` `dxinit/rain.c:133-142`; `Rain_Restore` `0x498B00` `dxinit/rain.c:192-201` |
 | N6 | R8 `RainObj_*` world-space rain volume (`RainDynCubeObj`, 11 authored parameters) | not implemented, and **out of scope for #58** | `src/cutscene/rain.c:568-596` |
 
-N4 and N5 are batching/back-end details with no rule the editor could diverge
-from; they are recorded so the family is covered, not as work items.
+N5 is a batching/back-end detail with no rule the editor could diverge from; it
+is recorded so the family is covered, not as a work item. N4 was closed: the
+four vertex groups and the tile-parity `kind` are now the engine's
+(`CellVertexGroup`, `FillWeatherVertices`).
 
 ### 3.3 Matches
 
@@ -294,37 +307,34 @@ unfaithful. It is listed so the shelter rule is not mistaken for parity work.
 
 ---
 
-## 4. The extracted module (not wired)
+## 4. The extracted module (wired)
 
-`source/runtime/rain_rules.{h,cpp}` ports the rules that are pure arithmetic and
-that the editor has (or should have) a corresponding path for:
+`source/runtime/rain_rules.{h,cpp}` holds the pure arithmetic of the `Rain` task,
+and since section 7 it is what `source/renderer/renderer_rain.cpp` runs on:
 
 | Rule | API |
 |---|---|
 | R1 | `kDropCapacity`, `kSpawnStep`, `SpawnCountForTick` |
 | R2 | `PlaceGrid`, `DrawTileX`, `DrawTileY`, `kTileUnits`, `kGridOriginUnits` |
 | R3 | `SpeedUnitsPerTick`, `SnowSwayHalfRangeUnits`, `SnowSwayTicksMin/Max` |
-| R4 | `LifetimeTicks`, `WrapZ`, `LayerBaseZUnits`, `FallDistanceUnits`, `ProbeTopUnits` |
+| R4 | `LifetimeTicks`, `WrapZ`, `LayerBaseZUnits`, `FallDistanceUnits`, `ProbeTopUnits`, `SnapLayerZ` |
 | R6 | `AlphaByte`, `RainStreakLengthUnits`, `SnowFlakeSizeUnits`, `DropKindCount` |
 | R7 | `ParseRainEffect` + `AuthoredRainEffect` (the five-parameter schema, the oracle defaults, the `Is Rain` inversion, the `Is Active` expression) |
+| R8 (draw path) | `ClipCell`, `ViewBasis`, `ClipViewport`, `kClipWindowTiles`, `LayerClipBase`, `LayerClipVertexCount`, `ProbeBudgetForFrame`, `RainStreakBottomDiffuse`, `RainStageArgCount`, `RainBindsTexture` |
 | snow (the module's R7 block) | `SnowFromAuthoredIsRain`, `SpawnRatePerTick`, `SpawnZUnits`, `SnowSwayDisplacementUnits`, `SnowSwayReloadTicks`, `SnowSwayTimerAfterReload`, `SnowSwayFirstRollTick`, `SnowWrapTileX/Y`, `SnowFlakeWidthUnits`, `SnowVerticesPerParticle`, `SnowFlakeDiffuse`, `SnowTextureName`, `SnowRuleDifferences` — see [`SNOW.md`](SNOW.md) |
 
-**It is not called by anything.** `Renderer_Rain` is a GPU vertex-shader field
-that computes positions from `u_time` and a per-drop seed
-(`renderer/renderer_rain.cpp:31-40`); its state lives in the shader, not in C++,
-so wiring the CPU-side rules in would mean rewriting the weather renderer, which
-is outside this task's write scope. The module's value now is that the audit's
-numbers are executable and regression-guarded, and that a future rewrite has a
-cited reference implementation.
+`Renderer_Rain` is now the engine's object rather than a GPU field: it owns the
+80-drop pool, the 10×10 cell window, the four vertex groups and the two
+primitives, and every constant it uses comes from this module.
 
 Explicitly **not** ported, with reasons:
 
-* The D3D render states, the `SortRender_Add` ordering key and the outcode
-  clipping in `Rain_ClipCells` (`rain.c:495-555`) — they are per-back-end
-  plumbing, and the editor's camera-relative band makes them inapplicable.
+* The `SortRender_Add` back-to-front ordering of the visible cells
+  (`rain.c:293-296`, `src/res/sortrender.c:41-42`): the editor draws the window in
+  lattice order with the z-test on and z-write off. The cells' `depth` is
+  computed (and tested) but not yet used as a sort key.
 * `Rain_CreateVB` / `Rain_Restore` (device-lost handling) — no GL analogue here.
-* The `RainObj_*` world-space volume (`src/cutscene/rain.c`) — a different
-  feature (N6).
+* `RainObj_*` world-space volume (`src/cutscene/rain.c`) — a different feature (N6).
 
 ---
 
@@ -332,25 +342,38 @@ Explicitly **not** ported, with reasons:
 
 * **No frame was rendered.** The editor needs GL 4.1+ compatibility; this host
   offers GL 2.1. Every visual statement above is read from source, not observed.
-  No performance claim is made.
+  No performance claim is made. The weather GLSL was not compiled either: there
+  is no GLSL validator on this host, so the shaders were reviewed by hand.
 * **The 9×9 / `+1`-tile draw window** (R2) is a derivation from the decompiled
   indices and constants. It is pinned by a test, but the derivation itself has
   not been checked against a running game, and the window's one-sidedness in
   +x/+y is unexplained.
 * **`Rain::falling` is never initialised** by `RainEffect_Create`
-  (`fxobj/rain.c:86-96`) or `Rain_New` (`rain.c:144-166`) in IGI-RE. The module's
-  default (`true`) is a choice, not evidence. `Task_New` may or may not zero the
-  allocation.
+  (`fxobj/rain.c:86-96`) or `Rain_New` (`rain.c:144-166`) in IGI-RE. The editor
+  sets it from the authored `Is Active` value every frame (which is what
+  `RainEffect_Run` does, `fxobj/rain.c:102-103`), so no default is invented.
 * **Tick rate.** `Rain_Update` runs from a task handler; IGI-RE does not pin the
   call rate, so the "30 m/s at 60 Hz" figures are illustrations. The
   per-tick-vs-per-second divergence (D3) holds regardless of the rate.
 * **The declared parameter ranges** (5..150, 0..1) are stored by `ParamTable_Add`
   and never read back in `src/param/param.c`; whether the QSC loader or the
   editor UI clamps is not established, so the module does not clamp.
-* **The editor's divergences are read from its source**, not demonstrated by
-  running it (no frame can be rendered here).
-* **Only the host lane was run** (`tests/test_rain_rules.cpp`, 30 tests). The
-  Windows `igi_tests` binary was not built or run for this change.
+* **The ground probe is the editor's terrain query, not the engine's drop.** The
+  engine drops each cell's point over `fallDist` with `Coll_DropPointsMat`
+  (`rain.c:258-265`), which stops on static collision geometry as well as terrain;
+  the editor asks `Level::GetTerrainZ`, so a cell under a building is probed at
+  the terrain beneath it rather than at the roof. A cell the query cannot answer
+  is left unprobed and is not drawn — the engine's own state for a cell
+  `Rain_UpdateGrid` skipped (`rain.c:255,290`) — and what `Coll_Drop` leaves in
+  `hit` when its ray hits nothing is not established (it is not decompiled, and
+  `Rain_UpdateGrid` reads `hit.pos.z` without testing `hit.found`).
+* **`Rain_UpdateGrid` is re-indexed.** The engine walks its 24×24 mirrored array
+  and spends its per-frame budget there; the editor walks the 10×10 window the
+  clip and the draw consume and spends the same budget in that order. The world
+  cells are the same; the probe order and the budget's exact consumption are not.
+* **The probe budget's float reciprocal** makes an exact tile-aligned camera move
+  cost one cell more than the exact tile count (`kTileInvF`, `rain.c:676`); that
+  is the engine's own arithmetic and is pinned by a test.
 * Retail corpus coverage is one level: only `LEVEL4/objects.qsc` ships a
   decompiled text form, so only its declaration and instance are cross-checked
   in `tests/test_rain_rules.cpp`. The per-level authored values are already
@@ -360,19 +383,57 @@ Explicitly **not** ported, with reasons:
 
 ## 6. Recommended follow-up (for the Lead, not done here)
 
-1. **D1, D2, D3, D5, D6 are one decision, not five.** The editor's rain is a
-   per-frame GPU field with invented constants; the oracle's is an 80-drop pool
-   with a 6 m wrap band and a 23.94 m ground-projected footprint. Bringing it to
-   parity means replacing the shader's position model, which is
-   `source/renderer/renderer_rain.cpp` — outside this task's write scope.
-2. **D7/N1 (terrain interaction) is the cheapest visible win**: the editor
-   already has the level's collision/height data for the camera path, and
-   `LayerBaseZUnits` + the probe extent are ported and tested.
-3. **D8/D11 (alpha and extents) are one-line constant changes** in
-   `renderer/weather_math.h`, but they would make the editor's rain nearly
-   invisible at retail alphas (`trunc(0.06 * 255)` = 15/255), which suggests the
-   boost was added to compensate for a missing fade/streak geometry. Fix D9/N3
-   first, or the constant change will look like a regression.
-4. **D12/D14 are parser bugs** in `source/runtime/level_weather.cpp` and can be
-   fixed without touching the renderer. `ParseRainEffect` in `rain_rules.h`
-   already returns the faithful shape if you want to swap the parser.
+1. **D12–D15 are the remaining rain defects**, all in the parser/policy layer
+   (`source/runtime/level_weather.cpp`, `source/runtime/weather_mode.cpp`).
+   `ParseRainEffect` in `rain_rules.h` already returns the faithful shape if you
+   want to swap the parser.
+2. **The cell sort** (`rain.c:293-296`) is the one part of `Rain_Draw` still not
+   transcribed. It only affects the blend order of overlapping streaks, and the
+   clip already computes each block's depth key.
+3. **The ground probe could be upgraded** to the engine's ray (a drop over
+   `fallDist` against the level's collision world) rather than a terrain height
+   lookup, which would also stop rain on roofs.
+4. **`RainObj_*`** (N6, the cutscene world-space rain volume) is still a separate
+   unported feature.
+
+---
+
+## 7. The rain port (the invented field is gone)
+
+The editor's rain was a GPU vertex-shader field: 1200 drops in a 50 m box, a
+streak colour of `(0.8, 0.85, 0.9, clamp(a*1.25, 0, 0.28))`, per-second speeds
+as fractions of the authored band. None of that exists any more. Rain is now the
+engine's own object, built from the same code path as snow, and the two invented
+constant headers (`renderer/weather_math.h`, `runtime/weather_particle_style.h`)
+are deleted.
+
+What `source/renderer/renderer_rain.cpp` now does, in `Rain_Render`'s order
+(`0x498B80`, `rain.c:207-217`):
+
+| Step | Engine | Editor |
+|---|---|---|
+| per-tick update | `RainEffect_Run` `0x436990` (`fxobj/rain.c:98-105`): `Rain_SetFalling`, then `Rain_Update` `0x499CF0` | `Renderer_Rain::Draw` → `UpdateWeather` (fade, fall, snow sway/wrap, spawn accumulator) |
+| ground probe | `Rain_UpdateGrid` `0x498BD0` (`rain.c:220-278`): `Coll_DropPointsMat` per cell, budgeted | `Renderer_Rain::UpdateGrid` → `Level::GetTerrainZ` through `Renderer_Rain::GroundQuery` |
+| vertex fill | `Rain_FillVB` `0x499090` (`rain.c:307-393`): 2-vertex LINE for rain, 6-vertex camera-facing quad for snow, into four `kind` groups | `FillWeatherVertices` (one `RainVertex` layout, `u_local_basis` = identity for rain / camera basis for snow) |
+| layer snap | `Rain_Draw` `0x498F10` (`rain.c:283`): `floor((pos.z - kLayerOrigin)*kLayerInv + 0.5)*kLayer` | `igi::rain::SnapLayerZ` |
+| cell clip | `Rain_ClipCells` `0x499910` (`rain.c:493-554`): outcodes from the ground point and the point `kTop` above it | `igi::rain::ClipCell` + `Renderer_Rain::ClipCells` |
+| block test | `Rain_Draw` (`rain.c:290`): `(c[0].flags & c[1].flags & c[25].flags & c[24].flags) == 0x20` | the same test on the 10×10 window's 2×2 blocks |
+| per-layer clip | `Rain_DrawCell` `0x499430` (`rain.c:401-402,464-484`): `h = max(block z) - it->z - kTopF`, then three `kLayer` steps | `igi::rain::LayerClipBase` / `LayerClipVertexCount` |
+| draw | `D3DPT_LINELIST`, `mult = 2`, `SetTexture(0, NULL)`, SELECTARG2 (`rain.c:448-459`) | `glDrawArrays(GL_LINES, group*stride, n*2)` with the vertex diffuse (no texture) |
+
+The colours are the engine's: the rain line's top vertex is the literal
+`0x00FFFFFF` and its bottom vertex is `r->color`, i.e. white RGB with
+`trunc(alpha*255)` in the top byte (`rain.c:366-367,646-649`), so the streak
+fades from transparent to the authored alpha instead of using one boosted
+constant.
+
+**Verified:** the build gate (x64 link + i686 compile) exits 0; the host lane is
+`OK: 1206 tests passed in 69 suites`; the Windows suite is `1641 ran / 1629
+passed / 12 skipped / 0 failed`, exit 0. `tests/test_rain_rules.cpp` (58 tests,
++9 `RainDrawRules` and +8 `RainClipRules`) pins the clip outcodes, the per-layer
+count, the layer snap, the probe budget, the colour word and the stage-0 rule.
+
+**Unverified:** see section 5. In particular no pixel was rendered (the host has
+GL 2.1, the editor needs 4.1), the weather GLSL was never compiled (no validator
+on this host), and the ground probe is a terrain height lookup rather than the
+engine's ray.

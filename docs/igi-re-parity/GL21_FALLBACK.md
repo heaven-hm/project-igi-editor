@@ -155,9 +155,11 @@ is affected.
 ### 5.2 The inline tier
 
 Twelve `#version 330 core` shaders are embedded in C++ (`renderer_objects.cpp`,
-`renderer_objects_visual.cpp`, `renderer_rain.cpp` — two vertex/fragment pairs
-each). The file tier does not cover them, and they were the second startup failure
-after the file tier was fixed. Each has a 1.20 variant selected by the same flag.
+`renderer_objects_visual.cpp`, `renderer_rain.cpp` — the weather renderer now has
+ONE vertex shader shared by its rain and snow fragment shaders, where it used to
+have two vertex/fragment pairs). The file tier does not cover them, and they were
+the second startup failure after the file tier was fixed. Each has a 1.20 variant
+selected by the same flag.
 Their `uniform Matrices` block becomes a plain `uniform mat4 u_mvp` (§4), and the
 programs call `GL_LegacyBindInlineAttribLocations()` before linking.
 

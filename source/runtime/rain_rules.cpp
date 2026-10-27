@@ -353,4 +353,155 @@ std::span<const SnowRuleDifference> SnowRuleDifferences() {
     return kDifferences;
 }
 
+// ---------------------------------------------------------------------------
+// R8 - Rain_ClipCells / Rain_DrawCell's cell clipping
+// ---------------------------------------------------------------------------
+
+CellClip ClipCell(bool probed, double cell_x, double cell_y, double z,
+                  double camera_x, double camera_y, double camera_z,
+                  const ViewBasis& basis, const ClipViewport& viewport) {
+    CellClip out;
+    // rain.c:504 `unsigned flags = 0x1F;` then rain.c:506 `if (c->flags & 0x20)`.
+    // A cell Rain_UpdateGrid never probed keeps the seeded word, whose bit 5 is
+    // clear, so the block test at rain.c:290 can never pass for it.
+    if (!probed) return out;
+
+    // TransContext_ProjectView HOOK 0x498000 (src/transctx/transctx.c:272-278):
+    //   k = 1 / v[2];  out[0] = v[0]*scaleX*k + centerX; out[1] = v[1]*scaleY*k + centerY.
+    // The engine passes a FLOAT v[3] (rain.c:507) although the values were
+    // computed in long double, so the reciprocal sees the rounded depth; the
+    // casts below reproduce that (the cull is coarse, but the boundary cases
+    // are the same).
+    const auto project = [&viewport](double view_x, double view_y, double depth,
+                                     double* sx, double* sy) {
+        const double k = 1.0 / static_cast<double>(static_cast<float>(depth));
+        *sx = static_cast<double>(static_cast<float>(view_x)) * viewport.scale_x * k +
+              viewport.center_x;
+        *sy = static_cast<double>(static_cast<float>(view_y)) * viewport.scale_y * k +
+              viewport.center_y;
+    };
+
+    unsigned flags;
+    double ground_depth;
+    double top_depth;
+
+    // The ground point: rain.c:508-527.
+    {
+        const double px = cell_x - camera_x;
+        const double py = cell_y - camera_y;
+        const double pz = z - camera_z;
+        const double view_x = basis.m[0] * px + basis.m[1] * py + basis.m[2] * pz;
+        const double view_y = basis.m[3] * px + basis.m[4] * py + basis.m[5] * pz;
+        ground_depth = basis.m[6] * px + basis.m[7] * py + basis.m[8] * pz;
+
+        if (ground_depth > 0.0) {
+            double sx = 0.0, sy = 0.0;
+            project(view_x, view_y, ground_depth, &sx, &sy);
+            // rain.c:518-523. The first statement ASSIGNS (0x3F-based), so bit 5
+            // survives; the rest AND.
+            flags = (sx > 0.0 ? ~1u : ~0u) & 0x3Fu;
+            if (sy > 0.0) flags &= ~2u;
+            if (!(sx >= viewport.width)) flags &= ~4u;
+            flags &= !(sy >= viewport.height) ? ~0x18u : ~0x10u;
+        } else {
+            // rain.c:525-526 - behind the camera: the horizontal test mirrors
+            // onto the opposite edge and bit 4 (behind) stays set.
+            flags = (view_x > 0.0 ? ~1u : ~4u) & 0x3Fu;
+            flags &= view_y > 0.0 ? ~2u : ~8u;
+        }
+    }
+
+    // The point kTop above it: rain.c:528-548. These tests only AND, so both
+    // points must be inside for the word to reach 0x20.
+    {
+        const double z2 = z + kTopUnits;
+        const double px = cell_x - camera_x;
+        const double py = cell_y - camera_y;
+        const double pz = z2 - camera_z;
+        const double view_x = basis.m[0] * px + basis.m[1] * py + basis.m[2] * pz;
+        const double view_y = basis.m[3] * px + basis.m[4] * py + basis.m[5] * pz;
+        top_depth = basis.m[6] * px + basis.m[7] * py + basis.m[8] * pz;
+
+        if (top_depth > 0.0) {
+            double sx = 0.0, sy = 0.0;
+            project(view_x, view_y, top_depth, &sx, &sy);
+            if (sx > 0.0) flags &= ~1u;
+            if (sy > 0.0) flags &= ~2u;
+            if (!(sx >= viewport.width)) flags &= ~4u;
+            flags &= !(sy >= viewport.height) ? ~0x18u : ~0x10u;
+        } else {
+            flags &= view_x > 0.0 ? ~1u : ~4u;
+            flags &= view_y > 0.0 ? ~2u : ~8u;
+        }
+    }
+
+    out.flags = flags;
+    // rain.c:549 `c->depth = (u[2] + v[2]) * kHalfF` - the mean view depth of
+    // the two points, the key Rain_Draw sorts the cells by (rain.c:293-296).
+    out.depth = (top_depth + ground_depth) * 0.5;
+    return out;
+}
+
+double SnapLayerZ(double camera_z) {
+    // rain.c:283 `crt_floor((pos.z - kLayerOrigin) * kLayerInv + kHalfD) * kLayer`
+    // with kLayerOrigin = 36864.0, kLayerInv = 4.0690104166666664e-05 and
+    // kLayer = 24576.0 (rain.c:681-684).
+    return std::floor((camera_z - kLayerOrigin) * kLayerInv + 0.5) *
+           static_cast<double>(kLayerUnits);
+}
+
+double LayerClipBase(double max_cell_z, double snapped_layer_z) {
+    // rain.c:402 `float h = (a > b ? a : b) - it->z - kTopF;` where it->z is the
+    // snapped camera z Rain_Draw passed in (rain.c:283,293).
+    return max_cell_z - snapped_layer_z - static_cast<double>(kTopUnits);
+}
+
+int LayerClipVertexCount(double hl, const float* drop_z, int count) {
+    // rain.c:466-484, verbatim:
+    //   r->matrix[14] -= gWorldScale * kLayer;  hl = h + kLayer;  h = hl;
+    //   if (!(hl >= 0))            n = list->count;
+    //   else if (!(h > kLayer))    for (n = 0; n < list->count; n++)
+    //                                  if (!(list->z[n] > h)) break;
+    //   else                       n = 0;
+    // `hl` is already h + kLayer for this layer. The negated comparisons keep
+    // the engine's NaN behaviour (a NaN hl falls into the `n = count` arm).
+    if (!(hl >= 0.0)) return count;
+    if (!(hl > static_cast<double>(kLayerUnits))) {
+        int n = 0;
+        while (n < count && !(static_cast<double>(drop_z[n]) > hl)) ++n;
+        return n;
+    }
+    return 0;
+}
+
+int ProbeBudgetForFrame(bool has_last, double camera_x, double camera_y,
+                        double last_x, double last_y) {
+    // rain.c:245-253. `budget` bounds how many cells Rain_UpdateGrid may drop a
+    // ray through this frame; the first update probes everything it can.
+    if (!has_last) return 10000;
+    // dx is long double, dy is truncated to float - the engine's own types
+    // (rain.c:249-252).
+    const double dx = std::fabs(static_cast<long double>(camera_x) - last_x);
+    const float dy = static_cast<float>(std::fabs(static_cast<long double>(camera_y) - last_y));
+    int budget = static_cast<int>(static_cast<long long>(std::ceil(
+        dx * static_cast<double>(kTileInvUnitsF) * static_cast<double>(kGridHalfTiles))));
+    budget += static_cast<int>(static_cast<long long>(std::ceil(
+        static_cast<double>(dy) * static_cast<double>(kTileInvUnitsF) *
+        static_cast<double>(kGridHalfTiles))));
+    return budget;
+}
+
+std::uint32_t RainStreakBottomDiffuse(float authored_alpha) {
+    // rain.c:648 `r->color = 0xFFFFFF - ((unsigned)x87_fistp(alpha * kAlphaScale) << 24)`,
+    // with kAlphaScale = -255.0f (rain.c:691, polylist.c:432-434) and FISTP
+    // truncating (FPU_SetTruncate, dxinit.c:75-80). The subtraction is the
+    // 32-bit word: the top byte becomes trunc(alpha * 255), the RGB stays white.
+    const int n = static_cast<int>(authored_alpha * kAlphaScale);
+    const std::uint32_t shifted = static_cast<std::uint32_t>(n) << 24;
+    return 0x00FFFFFFu - shifted;
+}
+
+int RainStageArgCount() { return 3; }   // rain.c:454-455, SELECTARG2
+bool RainBindsTexture() { return false; }  // rain.c:448-449, SetTexture(device, 0, NULL)
+
 }  // namespace igi::rain

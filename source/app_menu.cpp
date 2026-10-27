@@ -41,6 +41,7 @@
 #include <vector>
 
 #include "menu/qvm_image.h"
+#include "menu/menu_qvm_writer.h"
 #include "menu/menu_text_res.h"
 #include "runtime/pause_menu_layout.h"
 
@@ -442,6 +443,36 @@ EditorMenu LoadEditorMenu(const std::string& game_root, bool terrain_expanded,
     result.retail = true;
     result.fallback = false;
     return result;
+}
+
+bool SaveEditorMenu(const EditorMenu& menu, const std::string& path, std::string* error) {
+    // A fallback menu has no definition (`definition.ok` is false exactly then), so
+    // this refuses before the writer is reached: the retail file cannot be replaced
+    // by the editor's own row list.
+    if (!menu.definition.ok) {
+        if (error != nullptr) {
+            *error = "the menu was not built from a retail container (" +
+                     (menu.reason.empty() ? std::string("no definition") : menu.reason) + ")";
+        }
+        return false;
+    }
+
+    const std::string target = path.empty() ? menu.definition.source : path;
+    if (target.empty()) {
+        if (error != nullptr) {
+            *error = "no path to save the menu to, and the definition has no source file";
+        }
+        return false;
+    }
+
+    const MenuQvmDocument document = MenuQvmDocumentFromDefinition(menu.definition);
+    if (!document.ok) {
+        if (error != nullptr) {
+            *error = document.error;
+        }
+        return false;
+    }
+    return MenuQvmWriteFile(document, target, error);
 }
 
 }  // namespace app_menu

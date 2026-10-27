@@ -92,7 +92,7 @@ std::string Quote(const std::string& s) {
 // ─── values ──────────────────────────────────────────────────────────────────
 
 // A literal the engine's assembler can encode. The ranges are `QvmAsm_OpPush`'s
-// (src/qasm/asm.c:83-111) as the engine's compiler reaches them: it never passes a
+// (src/qasm/asm.c:79-111) as the engine's compiler reaches them: it never passes a
 // negative token, so a negative value is `PUSH <magnitude>` + `MINUS` and the
 // magnitude must fit the 32-bit literal the assembler's `crt_atoi` reads.
 bool ValueToNode(const MenuValue& value, const std::string& where, std::unique_ptr<Node>* out,
@@ -138,7 +138,12 @@ bool ValueToNode(const MenuValue& value, const std::string& where, std::unique_p
             return true;
         }
         if (f < 0.0f) {
-            *out = Negate(FloatLit(-f));
+            // The magnitude goes through the same shortening the engine's
+            // assembler applies to the token `QscGen_WriteFloat` printed for it,
+            // so -1.0 is PUSH1 + MINUS exactly as the engine's own compiler emits
+            // it (a PUSHF 1.0 would be the same value but not the same bytes).
+            const float magnitude = -f;
+            *out = magnitude == 1.0f ? Negate(IntLit(1)) : Negate(FloatLit(magnitude));
             return true;
         }
         *out = FloatLit(f);

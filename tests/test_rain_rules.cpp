@@ -15,18 +15,18 @@
 //   fxobj/rain.c:60-96         RainEffect_Init HOOK 0x436780 / _Create HOOK 0x436950
 //   fxobj/rain.c:131-146       RainEffect_Changed HOOK 0x436A50
 //
-// The second half of the file pins the editor's CURRENT behaviour against those
-// rules, so docs/igi-re-parity/RAIN.md's "diverges" column is executable rather
-// than asserted. Nothing here renders a frame: the editor's rain path is a GL
-// 3.3 vertex shader and this host cannot run the editor (GL 2.1 only).
+// The second half of the file asserts the rules the editor's weather renderer
+// (source/renderer/renderer_rain.cpp) now runs on: the engine's 80-drop pool and
+// tile window, its per-tick speeds, its vertex colours and its cell clipping.
+// Nothing here renders a frame: the editor's weather path needs a GL 4.1 context
+// and this host offers 2.1, so the geometry is proven by these rules and the
+// citations, not by a frame.
 //
 // The corpus half reads the retail LEVEL4/objects.qsc, the only shipped level
 // that carries a decompiled text form, and cross-checks the five-parameter
 // declaration against the ParamTable order.
 
-#include "../source/renderer/weather_math.h"
 #include "../source/runtime/rain_rules.h"
-#include "../source/runtime/weather_particle_style.h"
 #include "../source/level/qvm_decompiler.h"
 #include "../source/level/qvm_parser.h"
 
@@ -123,6 +123,41 @@ std::string Unquote(const std::string& s) {
 // The editor's own units constant (common.h:40) - repeated here because common.h
 // pulls in windows.h and is not host-portable.
 constexpr float kEditorUnitsPerMetre = 4096.0f;
+
+// ---------------------------------------------------------------------------
+// the clip fixtures
+// ---------------------------------------------------------------------------
+
+// A camera at the world origin looking along +Y with +Z up, so the engine's
+// view-space rows (gTransContext.matrix, rain.c:508-534) are +X, -Z and +Y.
+igi::rain::ViewBasis TestBasis() {
+    igi::rain::ViewBasis basis;
+    const double rows[3][3] = {
+        {1.0, 0.0, 0.0},   // right
+        {0.0, 0.0, -1.0},  // down
+        {0.0, 1.0, 0.0},   // forward
+    };
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) basis.m[i * 3 + j] = rows[i][j];
+    return basis;
+}
+
+// TransContext_Create's projection for a 1000x800 viewport with a 1000-unit
+// half-width over the half-FOV tangent (transctx.c:198-201).
+igi::rain::ClipViewport TestViewport() {
+    igi::rain::ClipViewport viewport;
+    viewport.scale_x = 1000.0;
+    viewport.scale_y = 1000.0;
+    viewport.center_x = 500.0;
+    viewport.center_y = 400.0;
+    viewport.width = 1000.0;
+    viewport.height = 800.0;
+    return viewport;
+}
+
+// The layer base Rain_Draw hands Rain_ClipCells for a camera at the origin
+// (rain.c:283): SnapLayerZ(0) == -24576.
+constexpr double kTestLayerZ = -24576.0;
 
 }  // namespace
 
@@ -624,104 +659,255 @@ TEST(RainRules, SnowRuleDifferenceTableCoversEverySnowBranch) {
 }
 
 // ===========================================================================
-// Divergence pins: the editor's current behaviour, for docs/igi-re-parity/RAIN.md
+// The editor's weather renderer runs on these rules (source/renderer/
+// renderer_rain.cpp). The divergence pins that used to live here described the
+// invented OpenIGI-derived field (1200 rain drops / 900 flakes, a boosted and
+// clamped streak alpha, a 50 m box, per-second speeds) in
+// source/renderer/weather_math.h and source/runtime/weather_particle_style.h.
+// Both headers were deleted with the port, so those pins no longer describe
+// anything the editor does; each one below replaces the pin with the engine rule
+// the renderer now runs on.
 // ===========================================================================
 
-TEST(RainRulesDivergence, ParticleCountsDoNotMatch) {
-    // Oracle: a fixed 80-drop pool (rain.c:65,624).
+TEST(RainDrawRules, PoolIsEightyDropsForBothModes) {
+    // rain.c:65 `RainDrop drops[80]` and rain.c:624 `if (r->dropCount == 80)
+    // return;` - one pool, one capacity, for rain and snow alike.
     EXPECT_EQ(igi::rain::kDropCapacity, 80);
-    // Editor: renderer/weather_math.h:7-8.
-    EXPECT_EQ(igi::weather::kRainDrops, 1200);
-    EXPECT_EQ(igi::weather::kSnowFlakes, 900);
-    EXPECT_NE(igi::weather::kRainDrops, igi::rain::kDropCapacity);
+    // rain.c:632 `d->kind = Random_Int(gDxRainRandom, 4)` - four vertex groups.
+    EXPECT_EQ(igi::rain::DropKindCount(), 4);
+    // rain.c:364,447 / rain.c:372,458 - six vertices for a flake, two for a line.
+    EXPECT_EQ(igi::rain::SnowVerticesPerParticle(), 6);
+    EXPECT_EQ(igi::rain::RainVerticesPerParticle(), 2);
 }
 
-TEST(RainRulesDivergence, AlphaIsBoostedAndClampedInsteadOfPacked) {
-    // Oracle: alpha is a vertex byte, trunc(a * 255) (rain.c:646-649).
-    EXPECT_EQ(igi::rain::AlphaByte(0.3125f), 79);
-    // Editor: renderer/weather_math.h:17-21,24-30, and renderer_rain.cpp:49,89.
-    EXPECT_FLOAT_EQ(igi::weather::RainStreakAlpha(0.3125f), 0.28f);   // 0.3125 * 1.25 clamped
-    EXPECT_FLOAT_EQ(igi::weather::SnowFlakeAlpha(0.3125f), 0.42f);
-    EXPECT_FLOAT_EQ(igi::weather::RainStreakAlpha(0.13f), 0.1625f);
-    EXPECT_NE(igi::weather::RainStreakAlpha(0.3125f) * 255.0f,
-              static_cast<float>(igi::rain::AlphaByte(0.3125f)));
+TEST(RainDrawRules, RainLineIsTheAlphaWordOverWhite) {
+    // rain.c:366-367 - the rain branch of Rain_FillVB gives the top vertex the
+    // literal 0x00FFFFFF and the bottom one r->color, which Rain_SetAlpha packs
+    // as trunc(alpha * 255) in the top byte (rain.c:646-649).
+    EXPECT_EQ(igi::rain::RainStreakTopDiffuse(), 0x00FFFFFFu);
+    const std::uint32_t word = igi::rain::RainStreakBottomDiffuse(0.3125f);
+    EXPECT_EQ((word >> 24) & 0xFFu, static_cast<std::uint32_t>(igi::rain::AlphaByte(0.3125f)));
+    EXPECT_EQ((word >> 24) & 0xFFu, 79u);
+    EXPECT_EQ(word & 0x00FFFFFFu, 0x00FFFFFFu);   // RGB stays white
+    // The authored alpha reaches the fragment as a vertex byte, not as a boost
+    // and a clamp: alpha 1.0 saturates the byte, alpha 0 leaves it clear.
+    EXPECT_EQ((igi::rain::RainStreakBottomDiffuse(1.0f) >> 24) & 0xFFu, 255u);
+    EXPECT_EQ((igi::rain::RainStreakBottomDiffuse(0.0f) >> 24) & 0xFFu, 0u);
 }
 
-TEST(RainRulesDivergence, FootprintIsFiftyMetresNotTwentyFour) {
-    // Editor: renderer/weather_math.h:9 - a 50 m box, i.e. +/-25 m.
-    EXPECT_FLOAT_EQ(igi::weather::kBoxMeters, 50.0f);
-    // Oracle: a 9-tile drawn window == 23.9400 m.
-    const double oracle_span = 9.0 * igi::rain::kTileUnits / igi::rain::kUnitsPerMetre;
-    EXPECT_NEAR(oracle_span, 23.94, 1e-6);
-    EXPECT_GT(igi::weather::kBoxMeters, oracle_span);
+TEST(RainDrawRules, RainStageIsSelectArgTwoWithNoTexture) {
+    // rain.c:448-459 - the rain branch binds NULL at stage 0 and sets
+    // COLOROP/ALPHAOP to SELECTARG2 (`k = 3`), with D3DPT_LINELIST and
+    // `mult = 2`; only the snow branch binds the flake texture (rain.c:430-447).
+    EXPECT_EQ(igi::rain::RainStageArgCount(), 3);
+    EXPECT_FALSE(igi::rain::RainBindsTexture());
+    EXPECT_EQ(igi::rain::SnowTextureStageArgCountWithTexture(), 4);
+    EXPECT_EQ(igi::rain::SnowTextureStageArgCountWithoutTexture(), 3);
 }
 
-TEST(RainRulesDivergence, VerticalBandIsAuthoredNotFixed) {
-    // Editor: renderer_rain.cpp:248-249 spans camera.z + start .. camera.z - end,
-    // i.e. start + end metres (70 m for the retail 50/20).
-    const float editor_band_metres = 50.0f + 20.0f;
-    EXPECT_FLOAT_EQ(editor_band_metres, 70.0f);
-    // Oracle: a fixed 18 m band (kTop), independent of the authored values.
-    const float oracle_band_metres = igi::rain::kTopUnits / igi::rain::kUnitsPerMetre;
-    EXPECT_FLOAT_EQ(oracle_band_metres, 18.0f);
-    EXPECT_NE(editor_band_metres, oracle_band_metres);
+TEST(RainDrawRules, DrawnWindowIsTheEngineTileWindow) {
+    // rain.c:282,288-289 - Rain_Draw walks a 9x9 window of 10895.36-unit tiles
+    // (rain.c:678,690) starting one tile past the camera's own tile.
+    EXPECT_EQ(igi::rain::kDrawWindowOffsetTiles, 1);
+    EXPECT_EQ(igi::rain::kDrawWindowTiles, 9);
+    const double span = 9.0 * igi::rain::kTileUnits / igi::rain::kUnitsPerMetre;
+    EXPECT_NEAR(span, 23.94, 1e-6);
+    // rain.c:502-503 - Rain_ClipCells walks one cell further on both axes,
+    // because the 2x2 block test (rain.c:290) reads past the drawn window.
+    EXPECT_EQ(igi::rain::kClipWindowTiles, igi::rain::kDrawWindowTiles + 1);
 }
 
-TEST(RainRulesDivergence, SpeedIsPerSecondNotPerTick) {
-    // Oracle: 2048 units per Rain_Update call == 0.5 m/tick.
-    EXPECT_FLOAT_EQ(igi::rain::kRainSpeedUnitsPerTick / igi::rain::kUnitsPerMetre, 0.5f);
-    // Editor: renderer_rain.cpp:33 speeds are fractions of the authored band per
-    // SECOND; for the retail 50/20 band that is 5.6 .. 12.6 m/s.
-    const float editor_fall_range_metres = 70.0f;
-    const float editor_min = igi::weather::kRainMinSpeedMul * editor_fall_range_metres;
-    const float editor_max = igi::weather::kRainMaxSpeedMul * editor_fall_range_metres;
-    EXPECT_NEAR(editor_min, 5.6f, 1e-4f);
-    EXPECT_NEAR(editor_max, 12.6f, 1e-4f);
-    // The oracle's rain is 30 m/s if a tick is a 60 Hz frame.
-    const float oracle_metres_per_second = 0.5f * 60.0f;
-    EXPECT_FLOAT_EQ(oracle_metres_per_second, 30.0f);
-    EXPECT_GT(oracle_metres_per_second, editor_max);
+TEST(RainDrawRules, VerticalBandIsTheEngineLayerLattice) {
+    // rain.c:687 kTop = 73728 == 18 m == 3 layers of kLayer = 24576 (rain.c:681).
+    EXPECT_FLOAT_EQ(igi::rain::kTopUnits / igi::rain::kUnitsPerMetre, 18.0f);
+    EXPECT_FLOAT_EQ(igi::rain::kLayerUnits / igi::rain::kUnitsPerMetre, 6.0f);
+    EXPECT_EQ(igi::rain::kLayerCount, 3);
+    // rain.c:283 - Rain_Draw snaps the camera z to the layer lattice, and
+    // rain.c:464-468 puts the three layers at snapped + kTop - k*kLayer, so the
+    // band is fixed and independent of the authored Traceline values.
+    EXPECT_DOUBLE_EQ(igi::rain::SnapLayerZ(0.0), -24576.0);
+    EXPECT_DOUBLE_EQ(igi::rain::SnapLayerZ(36864.0), 0.0);
+    EXPECT_DOUBLE_EQ(igi::rain::SnapLayerZ(61440.0), 24576.0);
+    const double camera_z = 100000.0;
+    const double low = camera_z + igi::rain::LayerBaseZUnits(camera_z, 0);
+    const double high = camera_z + igi::rain::LayerBaseZUnits(camera_z, 2);
+    EXPECT_DOUBLE_EQ(high - low, static_cast<double>(igi::rain::kTopUnits) -
+                                     static_cast<double>(igi::rain::kLayerUnits));
 }
 
-TEST(RainRulesDivergence, StreakAndFlakeExtentsDiffer) {
-    // Oracle: 0.5 m streak (rain.c:671), 0.04 m flake quad (rain.c:685).
+TEST(RainDrawRules, SpeedsArePerTickNotPerSecond) {
+    // rain.c:122-123 and rain.c:572 - the only vertical motion term is a fixed
+    // step per Rain_Update call: 2048 units (0.5 m) for rain, 204.8 for snow.
+    EXPECT_FLOAT_EQ(igi::rain::SpeedUnitsPerTick(false), 2048.0f);
+    EXPECT_FLOAT_EQ(igi::rain::SpeedUnitsPerTick(false) / igi::rain::kUnitsPerMetre, 0.5f);
+    EXPECT_FLOAT_EQ(igi::rain::SpeedUnitsPerTick(true), 204.8f);
+    // rain.c:619-636 - the accumulator emits speed / kSpawnStep particles per
+    // tick in steady state (kSpawnStep = 307.2, rain.c:689).
+    EXPECT_NEAR(igi::rain::SpawnRatePerTick(false), 6.6666667f, 1e-5f);
+    EXPECT_NEAR(igi::rain::SpawnRatePerTick(true), 0.6666667f, 1e-5f);
+}
+
+TEST(RainDrawRules, ParticleExtentsAreTheEngineOnes) {
+    // rain.c:671 kStreak = 2048 units == 0.5 m, applied as `len = fade * kStreak`
+    // (rain.c:311); rain.c:685 kFlakeSize = 81.92 units is the quad's HALF
+    // extent (`size = fade * kFlakeSize`, rain.c:309), so the flake is 0.04 m.
     EXPECT_FLOAT_EQ(igi::rain::RainStreakLengthUnits() / igi::rain::kUnitsPerMetre, 0.5f);
-    EXPECT_FLOAT_EQ(2.0f * igi::rain::SnowFlakeSizeUnits() / igi::rain::kUnitsPerMetre, 0.04f);
-    // Editor: renderer/weather_math.h:10,12 and runtime/weather_particle_style.h:9-11.
-    EXPECT_FLOAT_EQ(igi::weather::kRainStreakMeters, 0.08f);
-    EXPECT_FLOAT_EQ(igi::weather::kSnowFlakeMeters, 0.045f);
-    EXPECT_FLOAT_EQ(igi::WeatherParticleLengthMeters(false), 0.08f);
-    EXPECT_FLOAT_EQ(igi::WeatherParticleLengthMeters(true), 0.09f);
-    EXPECT_NE(igi::weather::kRainStreakMeters,
-              igi::rain::RainStreakLengthUnits() / igi::rain::kUnitsPerMetre);
-}
-
-TEST(RainRulesDivergence, SnowDriftIsASinusoidNotARandomWalk) {
-    // Oracle: a constant per-tick displacement (dx, dy), re-rolled every 30..59
-    // ticks, each component in (-68.267, +68.267) units (rain.c:595-602, 691).
-    EXPECT_LT(igi::rain::SnowSwayHalfRangeUnits(),
-              igi::rain::kTileUnitsF);  // far smaller than a tile
-    EXPECT_GT(igi::rain::SnowSwayHalfRangeUnits(), 0.0f);
-    // Editor: one sine of amplitude kSnowDriftMeters (renderer/weather_math.h:22,
-    // renderer/renderer_rain.cpp:70-73) - a deterministic periodic path with no
-    // re-roll at all.
-    EXPECT_FLOAT_EQ(igi::weather::kSnowDriftMeters, 0.35f);
-    EXPECT_NE(igi::rain::SnowSwayHalfRangeUnits() / igi::rain::kUnitsPerMetre,
-              igi::weather::kSnowDriftMeters);
-}
-
-TEST(RainRulesDivergence, SnowFlakeSizeAndAlphaAreBoosted) {
-    // Oracle: a 0.04 m untextured-independent quad with a constant opaque-white
-    // diffuse (rain.c:341-342, 353, 685) and alpha byte trunc(a * 255).
+    EXPECT_FLOAT_EQ(igi::rain::SnowFlakeSizeUnits() / igi::rain::kUnitsPerMetre, 0.02f);
     EXPECT_FLOAT_EQ(igi::rain::SnowFlakeWidthUnits() / igi::rain::kUnitsPerMetre, 0.04f);
-    EXPECT_EQ(igi::rain::AlphaByte(0.3125f), 79);
-    // Editor: a 0.09 m ground-visible flake with a boosted, clamped alpha
-    // (renderer/weather_math.h:12,19-20,28-30; runtime/weather_particle_style.h:9-11).
-    EXPECT_FLOAT_EQ(igi::weather::kSnowFlakeMeters, 0.045f);
-    EXPECT_FLOAT_EQ(igi::WeatherParticleLengthMeters(true), 0.09f);
-    EXPECT_FLOAT_EQ(igi::weather::SnowFlakeAlpha(0.3125f), 0.42f);
-    EXPECT_NE(igi::weather::SnowFlakeAlpha(0.3125f) * 255.0f,
-              static_cast<float>(igi::rain::AlphaByte(0.3125f)));
+}
+
+TEST(RainDrawRules, SnowSwayIsTheEngineRandomWalk) {
+    // rain.c:595-602,691 - a constant per-tick displacement (dx, dy) re-rolled
+    // every Random_Int(30) + 30 ticks, each component in [-kSway/2, +kSway/2)
+    // with kSway = 136.53334 units. There is no sinusoid and no per-frame
+    // re-roll: the same dx/dy is applied every tick until the timer expires.
+    EXPECT_FLOAT_EQ(igi::rain::SnowSwayHalfRangeUnits(), 136.53334f * 0.5f);
+    EXPECT_EQ(igi::rain::SnowSwayTicksMin(), 30);
+    EXPECT_EQ(igi::rain::SnowSwayTicksMax(), 59);
+    EXPECT_FLOAT_EQ(igi::rain::SnowSwayDisplacementUnits(0.5f), 0.0f);
+    EXPECT_FLOAT_EQ(igi::rain::SnowSwayDisplacementUnits(0.0f), -68.26667f);
+    // The same displacement every tick until the reload (rain.c:600-602).
+    EXPECT_FLOAT_EQ(igi::rain::SnowSwayDisplacementUnits(0.25f),
+                    igi::rain::SnowSwayDisplacementUnits(0.25f));
+    EXPECT_LT(igi::rain::SnowSwayHalfRangeUnits(), igi::rain::kTileUnitsF);
+}
+
+TEST(RainDrawRules, SnowFlakeSizeAndDiffuseAreTheEngineOnes) {
+    // rain.c:341-342,353,685 - a 0.04 m quad whose six vertices all carry
+    // 0xFFFFFFFF (opaque white, raw 8-bit D3DCOLOR).
+    EXPECT_FLOAT_EQ(igi::rain::SnowFlakeWidthUnits() / igi::rain::kUnitsPerMetre, 0.04f);
+    EXPECT_EQ(igi::rain::SnowFlakeDiffuse(), 0xFFFFFFFFu);
+    EXPECT_EQ((igi::rain::SnowFlakeDiffuse() >> 24) & 0xFFu, 255u);
+}
+
+// ===========================================================================
+// Rain_ClipCells HOOK 0x499910 (rain.c:493-554) and Rain_DrawCell's per-layer
+// clip HOOK 0x499430 (rain.c:401-402,464-484)
+// ===========================================================================
+
+TEST(RainClipRules, ProbedCellInFrontOfTheCameraKeepsOnlyBitFive) {
+    // A cell 100 m ahead on the camera's axis, at the layer base z: both its
+    // ground point and the point kTop above it land inside the 1000x800 viewport
+    // (x = 500, y = 460 and 280), so every outcode bit is cleared and the word is
+    // exactly 0x20 - which is what Rain_Draw's 2x2 block test requires
+    // (rain.c:290).
+    const igi::rain::CellClip clip = igi::rain::ClipCell(
+        true, 0.0, 409600.0, kTestLayerZ, 0.0, 0.0, 0.0, TestBasis(), TestViewport());
+    EXPECT_EQ(clip.flags, 0x20u);
+    // rain.c:549 - the mean view depth of the two points (both 409600 here).
+    EXPECT_DOUBLE_EQ(clip.depth, 409600.0);
+}
+
+TEST(RainClipRules, UnprobedCellKeepsTheSeedWordAndIsNeverDrawable) {
+    // rain.c:504 seeds 0x1F and rain.c:506 only computes outcodes when bit 5 is
+    // already set, so a cell Rain_UpdateGrid never probed can never pass the
+    // block test. The block test is the AND of four such words.
+    const igi::rain::CellClip clip = igi::rain::ClipCell(
+        false, 0.0, 409600.0, kTestLayerZ, 0.0, 0.0, 0.0, TestBasis(), TestViewport());
+    EXPECT_EQ(clip.flags, 0x1Fu);
+    EXPECT_EQ(clip.flags & 0x20u, 0u);
+    EXPECT_EQ(clip.flags & clip.flags & clip.flags & clip.flags, 0x1Fu);
+}
+
+TEST(RainClipRules, CellsOutsideEachScreenEdgeLoseTheBlockTest) {
+    const igi::rain::ViewBasis basis = TestBasis();
+    const igi::rain::ClipViewport viewport = TestViewport();
+    // Right of the right edge: s[0] = 1476 >= width, so bit 2 stays set.
+    EXPECT_NE(igi::rain::ClipCell(true, 400000.0, 409600.0, kTestLayerZ, 0.0, 0.0, 0.0,
+                                  basis, viewport).flags,
+              0x20u);
+    // Left of the left edge: s[0] = -476 <= 0, so bit 0 stays set.
+    EXPECT_NE(igi::rain::ClipCell(true, -400000.0, 409600.0, kTestLayerZ, 0.0, 0.0, 0.0,
+                                  basis, viewport).flags,
+              0x20u);
+    // Behind the camera: both depths are negative, so bit 4 stays set.
+    EXPECT_NE(igi::rain::ClipCell(true, 0.0, -409600.0, kTestLayerZ, 0.0, 0.0, 0.0,
+                                  basis, viewport).flags,
+              0x20u);
+    // Well below the view axis, so BOTH the ground point and the point kTop
+    // above it project past the bottom edge (rain.c:523 sets bit 3 for the
+    // ground point and rain.c:544 only clears bits 3-4 when the top point is
+    // inside). A ground point alone is not enough: with the cell at the camera's
+    // own height the top point clears bit 3 again, which is the engine's own
+    // asymmetry.
+    EXPECT_NE(igi::rain::ClipCell(true, 0.0, 10000.0, -100000.0, 0.0, 0.0, 0.0,
+                                  basis, viewport).flags,
+              0x20u);
+    EXPECT_EQ(igi::rain::ClipCell(true, 0.0, 10000.0, kTestLayerZ, 0.0, 0.0, 0.0,
+                                  basis, viewport).flags,
+              0x20u);
+}
+
+TEST(RainClipRules, BlockTestIsTheAndOfFourWords) {
+    // rain.c:290 - `(c[0].flags & c[1].flags & c[25].flags & c[24].flags) == 0x20`.
+    // The AND only rejects the block when ALL FOUR cells share an outcode bit:
+    // one clipped cell still draws, which is what makes the 2x2 grouping the
+    // engine's coarse cull rather than a per-cell one.
+    const unsigned visible = 0x20u;
+    const unsigned clipped = 0x28u;  // one cell with the bottom outcode set
+    EXPECT_EQ(visible & visible & visible & visible, 0x20u);
+    EXPECT_EQ(visible & clipped & visible & visible, 0x20u);
+    EXPECT_NE(clipped & clipped & clipped & clipped, 0x20u);
+    EXPECT_NE(0x1Fu & visible & visible & visible, 0x20u);  // never probed
+}
+
+TEST(RainClipRules, LayerClipBaseIsTheHighestGroundPointAboveTheLattice) {
+    // rain.c:402 `h = max(a, b) - it->z - kTopF` with kTopF = 73728.
+    EXPECT_DOUBLE_EQ(igi::rain::LayerClipBase(100000.0, 24576.0), 1696.0);
+    EXPECT_DOUBLE_EQ(igi::rain::LayerClipBase(24576.0, 24576.0), -73728.0);
+}
+
+TEST(RainClipRules, LayerClipDrawsEverythingWhenTheGroundIsBelowTheBand) {
+    // rain.c:477-478 - `if (!(hl >= 0)) n = list->count`: hl < 0 means the
+    // block's ground sits below this layer's base, so nothing occludes it.
+    const float zs[3] = {100.0f, 200.0f, 300.0f};
+    EXPECT_EQ(igi::rain::LayerClipVertexCount(-1.0, zs, 3), 3);
+    EXPECT_EQ(igi::rain::LayerClipVertexCount(-24576.0, zs, 3), 3);
+    EXPECT_EQ(igi::rain::LayerClipVertexCount(-1.0, nullptr, 0), 0);
+}
+
+TEST(RainClipRules, LayerClipDrawsTheLeadingRunUpToTheGround) {
+    // rain.c:479-483 - `else if (!(h > kLayer)) for (n = 0; n < list->count;
+    // n++) if (!(list->z[n] > h)) break;` The list is in Rain_FillVB's write
+    // order, so the count is the leading run, not every entry below h.
+    const float zs[3] = {100.0f, 200.0f, 300.0f};
+    EXPECT_EQ(igi::rain::LayerClipVertexCount(250.0, zs, 3), 2);
+    EXPECT_EQ(igi::rain::LayerClipVertexCount(100.0, zs, 3), 1);
+    EXPECT_EQ(igi::rain::LayerClipVertexCount(0.0, zs, 3), 0);
+    EXPECT_EQ(igi::rain::LayerClipVertexCount(300.0, zs, 3), 3);
+    const float unsorted[3] = {500.0f, 100.0f, 200.0f};
+    EXPECT_EQ(igi::rain::LayerClipVertexCount(250.0, unsorted, 3), 0);
+}
+
+TEST(RainClipRules, LayerClipDrawsNothingWhenTheGroundIsAboveTheBand) {
+    // rain.c:484 - the final `else n = 0`.
+    const float zs[2] = {100.0f, 200.0f};
+    EXPECT_EQ(igi::rain::LayerClipVertexCount(24576.0 + 1.0, zs, 2), 0);
+    // The boundary itself is still in the middle arm (`!(h > kLayer)`).
+    EXPECT_EQ(igi::rain::LayerClipVertexCount(24576.0, zs, 2), 2);
+}
+
+TEST(RainClipRules, ProbeBudgetIsTheTilesTheCameraMoved) {
+    // rain.c:245-253 - 10000 on the first update, then
+    // ceil(|dx| * kTileInvF * kTwelve) + ceil(|dy| * kTileInvF * kTwelve).
+    EXPECT_EQ(igi::rain::ProbeBudgetForFrame(false, 0.0, 0.0, 0.0, 0.0), 10000);
+    EXPECT_EQ(igi::rain::ProbeBudgetForFrame(true, 0.0, 0.0, 0.0, 0.0), 0);
+    // kTileInvF is the engine's FLOAT reciprocal (rain.c:676, 9.178219e-05f),
+    // which is a hair larger than 1/kTile, so an exact tile-aligned move rounds
+    // up to one cell more than the exact tile count: 12 tiles -> 13 per axis.
+    EXPECT_EQ(igi::rain::ProbeBudgetForFrame(true, 1.0 * igi::rain::kTileUnits, 0.0, 0.0, 0.0),
+              13);
+    EXPECT_EQ(igi::rain::ProbeBudgetForFrame(true, 12.0 * igi::rain::kTileUnits, 0.0, 0.0, 0.0),
+              145);
+    EXPECT_EQ(igi::rain::ProbeBudgetForFrame(true, 0.0, 6.0 * igi::rain::kTileUnits, 0.0, 0.0),
+              73);
+    // The two axes add.
+    EXPECT_EQ(igi::rain::ProbeBudgetForFrame(true, 6.0 * igi::rain::kTileUnits,
+                                             6.0 * igi::rain::kTileUnits, 0.0, 0.0),
+              146);
+    // Negative movement counts the same as positive.
+    EXPECT_EQ(igi::rain::ProbeBudgetForFrame(true, -12.0 * igi::rain::kTileUnits, 0.0, 0.0, 0.0),
+              145);
 }
 
 // ===========================================================================

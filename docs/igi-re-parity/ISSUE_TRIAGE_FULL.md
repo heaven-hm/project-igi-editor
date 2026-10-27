@@ -358,7 +358,7 @@ that, do not "fix" it.
 
 ---
 
-### A8. #74 — QVM-driven in-game menu *(partial: the writer)*
+### A8. #74 — QVM-driven in-game menu *(write side landed; draw/navigate wiring still open)*
 
 **What the issue asks.** Parse `menusystem/ingamemenu.qvm`, draw the real screens,
 navigate them, **edit them and save back to the `.qvm`**, with a hand-drawn fallback.
@@ -374,13 +374,27 @@ navigate them, **edit them and save back to the `.qvm`**, with a hand-drawn fall
 containers and the reader. `source/menu/menu_ui.h:423` loads
 `game_root/menusystem/ingamemenu.qvm`, with a fallback when it is absent.
 
-**What remains.** The **write** half. `grep -rn "qvm_compiler\|SaveMenu\|WriteQvm" source/menu/ source/app_menu.cpp`
-returns nothing: the menu tree is not editable and does not round-trip to
-`ingamemenu.qvm`, so the issue's third acceptance criterion is unmet.
+The **write** half landed in `3b6605d5` (`source/menu/menu_qvm_writer.*`) and is now
+verified and reachable: `MenuQvmWrite` reproduces both retail containers **byte for
+byte** (11308 and 25549 bytes, zero differing bytes), the result passes the engine's
+loader rules (`Qvm_Load` HOOK 0x4BD220, `src/qvm/qvm.c:433-486`), it decodes through
+this repository's own reader to the shipped file's structure field for field, and an
+edit survives save + reload. `app_menu::SaveEditorMenu` (`source/menu/menu_ui.h`,
+`source/app_menu.cpp`) is the edit-action entry point; it refuses a fallback menu, so
+the retail file cannot be overwritten by the editor's own rows. Tests:
+`MenuQvmWrite` (8, `tests/test_menu_qvm.cpp`) and `MenuUiSave` (3,
+`tests/test_menu_ui.cpp`). See `MENU_SYSTEM.md` §11.
 
-**Next action.** Route the existing `qvm_compiler` round-trip behind a menu-tree edit
-action and add the save-back test. This is the smallest remaining item in the
-"partial with oracle" bucket.
+**What remains.** The issue's first two acceptance criteria: the *live* pause menu is
+still the hand-drawn one (`source/runtime/pause_menu_style.h`); `LoadEditorMenu` is
+reached only by tests, so no UI tree edits `EditorMenu::definition` yet. Acceptance
+criterion 3 ("the game loads the modified menu") cannot be run on this host — the
+strongest verified claim is byte-identity plus the engine's loader validation and the
+repository's reader round-trip.
+
+**Next action.** Wire `LoadEditorMenu`/`SaveEditorMenu` into the pause menu and give
+the editor options screen a menu-tree edit action that mutates `EditorMenu::definition`
+through the mutable accessors in `source/menu/qvm_image.h`.
 
 ---
 
@@ -740,7 +754,7 @@ direction. Each is verified above.
 | #73 | Port `MefSkinner` | `MefSkinner` is an open-igi class name; the retail equivalents are `BoneMesh_Skin` `0x49B700` (`src/dxinit/d3drender.c:313`) plus `Anim_Play` `0x4D61D0` |
 | #63 | Port `LightFixtureExtractor` | The class name does not exist in IGI-RE; the inference is new tooling |
 | #7 | `Waypoint*` navigation symbols exist | All 15 `Waypoint` matches are `SplineObjWaypoint_*` spline authoring; there is no nav-mesh. The retail NPC path system is `PatrolPath*`/`PatrolRoute*` |
-| #74 | The menu is "hand-drawn approximations" | Read/draw/navigate already come from the retail definition (`42a689bb`, `41d4d33a`); only the **write-back** is missing |
+| #74 | The menu is "hand-drawn approximations" | Read/draw/navigate come from the retail definition (`42a689bb`, `41d4d33a`) and the write-back now round-trips byte for byte (`3b6605d5` + tests, `MENU_SYSTEM.md` §11); the **live pause menu** is still the hand-drawn one |
 | #72 | The "Calculate Lightmaps" button does not exist | It exists and is wired (`renderer_draw.cpp:1836`, `app_input_mouse.cpp:560`, `app_editor.cpp:430-488`); what it does is recalculate `.olm`, not bake atlases |
 | #43 | Light data must be stored "in the format the IGI engine expects" | No point/spot/directional light task type exists in IGI-RE; only `AlarmLight` and `Smoke` are authored tasks |
 | #80 | `MenuManager_*` are the cutscene entry points | They are a menu screen switcher; the cutscene is `CutScene_*` (`0x4F4B00`) + `EditCamera_*` (`0x507F10`) |
@@ -765,10 +779,12 @@ Ordered by (verified oracle + user-visible effect + small remaining delta).
    `is_snow` flag are already wired; the ported `R7` rules and the missing
    `snow.tex` bind are the remaining delta, and the divergence list is already
    written.
-4. **#74 menu write-back** — `MenuManager_Create` `0x417260`
+4. **#74 menu live wiring** — `MenuManager_Create` `0x417260`
    `src/game/menumanager.c:160`, `MenuManager_GetString` `0x418EA0`
-   `src/ui/ui.h:61`. The reader is complete and documented; the editor already has a
-   `qvm_compiler` round-trip to reuse.
+   `src/ui/ui.h:61`. The reader is complete and documented and the write-back now
+   round-trips byte for byte with tests (`MENU_SYSTEM.md` §11); what is left is
+   pointing the pause menu at `LoadEditorMenu` and giving the options screen an edit
+   action that calls `SaveEditorMenu`.
 5. **#73 animation playback** — `Anim_Play` `0x4D61D0` `src/soldier/soldier.c:59`,
    `Human_PlayAnim` `0x489EA0` `src/soldier/soldier.c:180`, `BoneMesh_Skin`
    `0x49B700` `src/dxinit/d3drender.c:313`. 72 tests already pin the ported rules;

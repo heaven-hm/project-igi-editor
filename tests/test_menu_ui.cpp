@@ -28,6 +28,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 
 #include <string>
@@ -1239,4 +1240,127 @@ TEST(MenuUiRetail, EditorOptionsIsTheOnlyAddedEntry) {
     EXPECT_EQ(menu.model.CurrentScreen()->entries.size(), 21u);
     EXPECT_EQ(menu.model.SelectableCount(), 21);
     EXPECT_EQ(menu.model.FocusedEntryIndex(), 0);
+}
+
+// ── the save action: an edit back to a container the engine loads (#74) ──────
+//
+// `app_menu::SaveEditorMenu` is the editor's entry point to
+// `menu/menu_qvm_writer.h`.  The engine's producer chain it translates is
+// `QscGen_Compile` HOOK 0x4BBCB0 (src/qvm/qscgen.c:86-142) -> `QvmAsm_OpPush`
+// HOOK 0x4C0A10 (src/qasm/asm.c:74-124) -> `QvmAsm_Assemble` HOOK 0x4BB270
+// (src/qvm/qvmasm.c:103-276); the loader that has to accept the result is
+// `Qvm_Load` HOOK 0x4BD220 (src/qvm/qvm.c:433-486).
+
+TEST(MenuUiSave, AnEditSavesBackAndTheRepositoriesOwnReaderSeesIt) {
+    const std::string root = FindRetailRoot();
+    if (root.empty()) {
+        GTEST_SKIP() << "retail corpus not reachable (set IGI_GAME_PATH)";
+    }
+
+    igi::app_menu::EditorMenu menu =
+        igi::app_menu::LoadEditorMenu(root, false, MenuUiBuildOptions{});
+    ASSERT_TRUE(menu.retail) << "fell back: " << menu.reason;
+    ASSERT_TRUE(menu.definition.ok) << menu.definition.error;
+
+    // The edit a menu tree makes, through the mutable accessors `qvm_image.h`
+    // exposes for exactly this: the editor's own string, not the game's text.
+    MenuWidget* screen = menu.definition.FindById(900);
+    ASSERT_NE(screen, nullptr);
+    ASSERT_EQ(screen->children.size(), 2u);
+    ASSERT_EQ(screen->children[0].children.size(), 1u);
+    MenuValue* text = screen->children[0].children[0].FindValue("Text Resource");
+    ASSERT_NE(text, nullptr);
+    ASSERT_EQ(text->text, "Game Paused");
+    text->text = "IGI EDITOR";
+
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "igi_menu_ui_test_saved.qvm";
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+
+    std::string error;
+    ASSERT_TRUE(igi::app_menu::SaveEditorMenu(menu, path.string(), &error)) << error;
+    EXPECT_TRUE(error.empty());
+
+    // The repository's own reader — the same one `LoadEditorMenu` used — reads the
+    // saved container back with the edit in it.
+    const MenuDefinition reloaded = MenuDefinition::FromQvmFile(path.string());
+    ASSERT_TRUE(reloaded.ok) << reloaded.error;
+    EXPECT_EQ(reloaded.widget_count, menu.definition.widget_count);
+    const MenuWidget* reloaded_screen = reloaded.FindById(900);
+    ASSERT_NE(reloaded_screen, nullptr);
+    EXPECT_EQ(reloaded_screen->children[0].children[0].FieldText("Text Resource"), "IGI EDITOR");
+    // …and the rest of the retail menu is untouched.
+    EXPECT_EQ(reloaded_screen->FieldNumber("Frame x0"), 85.0);
+    EXPECT_EQ(reloaded_screen->FieldNumber("Frame x1"), 555.0);
+    EXPECT_EQ(reloaded_screen->children[1].children.size(), 5u);
+
+    // The written container passes the engine's loader rules (`Qvm_Load`,
+    // src/qvm/qvm.c:433-486): "LOOP", version 8, unk08 >= 5.
+    const QVMFile qvm = QVM_Parse(path.string());
+    ASSERT_TRUE(qvm.valid) << qvm.error;
+    EXPECT_EQ(std::string(qvm.header.magic, 4), "LOOP");
+    EXPECT_EQ(qvm.header.version, 8);
+    EXPECT_GE(qvm.header.unk08, 5);
+
+    std::filesystem::remove(path, ec);
+}
+
+TEST(MenuUiSave, AFallbackMenuIsNeverWritten) {
+    const igi::app_menu::EditorMenu fallback = igi::app_menu::LoadEditorMenu(
+        "/nonexistent/game/root", false, MenuUiBuildOptions{});
+    ASSERT_TRUE(fallback.fallback);
+    EXPECT_FALSE(fallback.definition.ok);
+
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "igi_menu_ui_test_fallback.qvm";
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+
+    std::string error;
+    EXPECT_FALSE(igi::app_menu::SaveEditorMenu(fallback, path.string(), &error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(std::filesystem::exists(path, ec));
+
+    // An empty path means "the definition's own source"; a fallback has none, so it
+    // is refused too rather than guessed.
+    std::string empty_error;
+    EXPECT_FALSE(igi::app_menu::SaveEditorMenu(fallback, "", &empty_error));
+    EXPECT_FALSE(empty_error.empty());
+}
+
+TEST(MenuUiSave, AnEmptyPathWritesTheFileTheMenuWasReadFrom) {
+    const std::string root = FindRetailRoot();
+    if (root.empty()) {
+        GTEST_SKIP() << "retail corpus not reachable (set IGI_GAME_PATH)";
+    }
+
+    // Load from a copy, so the empty-path save writes the copy and never the install.
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / "igi_menu_ui_save_source";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const std::filesystem::path copy = dir / "ingamemenu.qvm";
+    std::filesystem::copy_file(
+        std::filesystem::path(root) / "menusystem" / "ingamemenu.qvm", copy,
+        std::filesystem::copy_options::overwrite_existing, ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    const MenuDefinition definition = MenuDefinition::FromQvmFile(copy.string());
+    ASSERT_TRUE(definition.ok) << definition.error;
+
+    igi::app_menu::EditorMenu menu;
+    menu.definition = definition;
+    menu.retail = true;
+
+    std::string error;
+    ASSERT_TRUE(igi::app_menu::SaveEditorMenu(menu, "", &error)) << error;
+    // The unedited definition is byte-identical to what was read (the writer is
+    // byte-faithful), which is what proves the empty path resolved to `source`.
+    const MenuDefinition reread = MenuDefinition::FromQvmFile(copy.string());
+    ASSERT_TRUE(reread.ok) << reread.error;
+    EXPECT_EQ(reread.widget_count, definition.widget_count);
+    EXPECT_EQ(reread.Ids(), definition.Ids());
+
+    std::filesystem::remove_all(dir, ec);
 }

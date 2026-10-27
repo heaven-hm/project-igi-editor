@@ -5,8 +5,7 @@
 #include "../source/runtime/level_weather.h"
 #include "../source/runtime/weather_mode.h"
 #include "../source/runtime/weather_visibility.h"
-#include "../source/runtime/weather_particle_style.h"
-#include "../source/renderer/weather_math.h"
+#include "../source/runtime/rain_rules.h"
 
 namespace {
 
@@ -153,36 +152,52 @@ TEST(WeatherVisibility, AuthoredWeatherIsSuppressedByEditorBuildingBounds) {
 }
 
 // ============================================================
-// WeatherParticle — OpenIGI constant match
+// WeatherParticle — the engine's rain/snow extents and alpha
 // ============================================================
+//
+// These replace the "OpenIGI constant match" pins this file used to carry
+// (0.08 m rain streak, 0.012 m width, 0.045 m half-extent flake, 1200/900
+// particles, boosted-and-clamped alpha). Those came from
+// source/renderer/weather_math.h and source/runtime/weather_particle_style.h,
+// both deleted with the port; the renderer now draws the engine's own geometry
+// (source/renderer/renderer_rain.cpp, source/runtime/rain_rules.h).
 
-TEST(WeatherParticle, RainStreakIs0_08m) {
-    EXPECT_FLOAT_EQ(igi::WeatherParticleLengthMeters(false), 0.08f);
-}
-TEST(WeatherParticle, RainStreakHasRetail0_012mWorldWidth) {
-    EXPECT_FLOAT_EQ(igi::weather::kRainStreakWidthMeters, 0.012f);
-}
-TEST(WeatherParticle, SnowFlakeHasRetail0_09mDiameter) {
-    // OpenIGI's 0.045m FlakeSizeMeters is the half-extent of its quad, so
-    // the visible flake footprint is 0.09m across.
-    EXPECT_FLOAT_EQ(igi::WeatherParticleLengthMeters(true), 0.09f);
-}
-TEST(WeatherParticle, SnowFootprintUsesItsRetailFullDiameter) {
-    EXPECT_GT(igi::WeatherParticleLengthMeters(true),
-              igi::WeatherParticleLengthMeters(false));
-}
-
-TEST(WeatherParticle, RestoresRetailParticleCountsAndOpacity) {
-    EXPECT_EQ(igi::weather::kRainDrops, 1200);
-    EXPECT_EQ(igi::weather::kSnowFlakes, 900);
-    EXPECT_FLOAT_EQ(igi::weather::RainStreakAlpha(0.50f), 0.28f);
-    EXPECT_FLOAT_EQ(igi::weather::SnowFlakeAlpha(0.25f), 0.42f);
+TEST(WeatherParticle, RainStreakIsTheEngineHalfMetreLine) {
+    // rain.c:311,671 - `len = fade * kStreak` with kStreak = 2048 units == 0.5 m.
+    EXPECT_FLOAT_EQ(igi::rain::RainStreakLengthUnits() / igi::rain::kUnitsPerMetre, 0.5f);
+    // rain.c:366-372 - the streak is a 2-vertex LINE, so it has no world width
+    // of its own; the editor used to give it an invented 0.012 m one.
+    EXPECT_EQ(igi::rain::RainVerticesPerParticle(), 2);
 }
 
-TEST(WeatherParticle, SnowQuadUsesRetailHalfExtent) {
-    EXPECT_FLOAT_EQ(igi::weather::kSnowFlakeMeters, 0.045f);
-    EXPECT_FLOAT_EQ(igi::WeatherParticleLengthMeters(true),
-                    igi::weather::kSnowFlakeMeters * 2.0f);
+TEST(WeatherParticle, SnowFlakeIsTheEngineFortyMillimetreQuad) {
+    // rain.c:309,341-342,685 - `size = fade * kFlakeSize` with kFlakeSize =
+    // 81.92 units, applied as +/- size on both axes, so the quad is 0.04 m.
+    EXPECT_FLOAT_EQ(igi::rain::SnowFlakeSizeUnits() / igi::rain::kUnitsPerMetre, 0.02f);
+    EXPECT_FLOAT_EQ(igi::rain::SnowFlakeWidthUnits() / igi::rain::kUnitsPerMetre, 0.04f);
+    EXPECT_EQ(igi::rain::SnowVerticesPerParticle(), 6);
+}
+
+TEST(WeatherParticle, SnowIsNotLargerThanTheRainStreak) {
+    // The engine's flake is SMALLER than the rain streak: 0.04 m across against
+    // 0.5 m long (rain.c:685,671). The old editor pin asserted the opposite,
+    // because its snow quad (0.09 m) and rain streak (0.08 m) were both invented.
+    EXPECT_LT(igi::rain::SnowFlakeWidthUnits(), igi::rain::RainStreakLengthUnits());
+}
+
+TEST(WeatherParticle, AlphaIsAVertexByteNotABoost) {
+    // rain.c:646-649 - Rain_SetAlpha packs trunc(alpha * 255) into the top byte
+    // of the rain line's bottom vertex; there is no boost and no clamp, and the
+    // flake's diffuse is the opaque 0xFFFFFFFF literal (rain.c:353).
+    EXPECT_EQ(igi::rain::AlphaByte(0.50f), 127);
+    EXPECT_EQ((igi::rain::RainStreakBottomDiffuse(0.50f) >> 24) & 0xFFu, 127u);
+    EXPECT_EQ(igi::rain::SnowFlakeDiffuse(), 0xFFFFFFFFu);
+}
+
+TEST(WeatherParticle, PoolIsEightyDropsForBothModes) {
+    // rain.c:65,624 - one fixed pool of 80 for rain and snow alike.
+    EXPECT_EQ(igi::rain::kDropCapacity, 80);
+    EXPECT_EQ(igi::rain::DropKindCount(), 4);
 }
 
 } // namespace

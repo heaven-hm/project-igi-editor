@@ -1,12 +1,13 @@
 // rain_rules.h - the retail weather-particle rules of IGI's "Rain" task, extracted
 // from IGI-RE as pure arithmetic.
 //
-// NOT WIRED. Nothing in the editor calls this module yet. The editor's live rain
-// path is source/renderer/renderer_rain.cpp (a GPU vertex-shader particle field)
-// fed by source/runtime/level_weather.cpp; that path is owned elsewhere and was
-// deliberately not modified. This module exists so the retail rules are recorded
-// as executable, tested arithmetic instead of prose, and so the divergences in
-// docs/igi-re-parity/RAIN.md are pinned by tests rather than asserted.
+// WIRED. source/renderer/renderer_rain.cpp is the editor's transcription of the
+// engine's Rain task: the same 80-drop pool, the same tile lattice and cell
+// window, the same Rain_FillVB vertex groups, the same 2-vertex LINE for rain /
+// 6-vertex camera-facing quad for snow, and the same cell clipping. Every value
+// it uses comes from this module; nothing is recomputed from a second set of
+// invented constants. The rules are also executable, tested arithmetic rather
+// than prose, so the editor cannot silently drift back to a private model.
 //
 // Every constant and every rule below is cited to IGI-RE
 // (/Users/haseeb-mir/Documents/Code/IGI-RE), function + address + file:line.
@@ -76,8 +77,10 @@ constexpr double kGridOriginUnits = 59924.48193359375;
 // rain.c:679 DATA(534278) kTileInv = 9.178218688807207e-05 == 1/kTile. The
 // engine always MULTIPLIES a cell coordinate by this reciprocal (rain.c:223-224,
 // 404,408); dividing by kTileUnits is not the same expression at an exact tile
-// boundary, so the port keeps the multiply.
+// boundary, so the port keeps the multiply. rain.c:676 kTileInvF is the FLOAT
+// twin, and Rain_UpdateGrid's probe budget (rain.c:250-252) uses that one.
 constexpr double kTileInvUnits = 9.178218688807207e-05;
+constexpr float kTileInvUnitsF = 9.178219e-05f;
 
 // rain.c:674 DATA kTwelve = 12.0f and rain.c:675 kTwoTiles = 130744.32421875
 // (== 12 * kTile despite the name). The 24x24 cell array (rain.c:67) is a 2x2
@@ -416,5 +419,103 @@ struct SnowRuleDifference {
 };
 
 std::span<const SnowRuleDifference> SnowRuleDifferences();
+
+// ---------------------------------------------------------------------------
+// R8 - the draw path's cell clipping. Rain_ClipCells HOOK 0x499910
+//      (src/dxinit/rain.c:493-554) and Rain_DrawCell's per-layer vertex clip
+//      HOOK 0x499430 (src/dxinit/rain.c:401-402,464-484).
+// ---------------------------------------------------------------------------
+//
+// Rain_Render (HOOK 0x498B80, rain.c:207-217) runs Rain_UpdateGrid, then
+// Rain_Draw, which fills the vertex buffer, clips the cells and walks a 9x9
+// window of them; a 2x2 block is drawn only when all four of its clipped
+// outcode words are exactly 0x20.
+
+// rain.c:502-503. Rain_ClipCells walks a 10x10 window from the same origin as
+// Rain_Draw's 9x9 one (rain.c:282), because the block test (rain.c:290) reads
+// one cell past the drawn window on both axes.
+constexpr int kClipWindowTiles = 10;
+
+// gTransContext.matrix rows (rain.c:508-534): view_x = m[0]*x + m[1]*y + m[2]*z,
+// view_y = m[3]*x + m[4]*y + m[5]*z, depth = m[6]*x + m[7]*y + m[8]*z. The
+// editor's view_define_s::mat_rot_ IS this operator - its columns are right_,
+// -up_, forward_ (source/app_view.cpp:304-314), i.e. the engine's view space,
+// in which +y is down the screen (TransContext_Create's projection uses
+// m._22 = -1/fovY, transctx.c:143, while TransContext_ProjectView adds
+// +scaleY*view_y, transctx.c:276-277).
+struct ViewBasis {
+    double m[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+};
+
+// gTransContext.scaleX/scaleY/centerX/centerY (TransContext_Create,
+// transctx.c:198-201) and Display_GetMode()->width/height (rain.c:498-499).
+// scaleX is half the viewport width over the half-FOV tangent, i.e. the
+// editor's half_viewport_width_div_tan_half_fovx_ (source/app.cpp:462-463);
+// centerX/centerY are the viewport centre.
+struct ClipViewport {
+    double scale_x = 1.0;
+    double scale_y = 1.0;
+    double center_x = 0.0;
+    double center_y = 0.0;
+    double width = 1.0;
+    double height = 1.0;
+};
+
+// One cell's Rain_ClipCells output (rain.c:504-551). Bit 5 is Rain_UpdateGrid's
+// "this cell was ground-probed" marker (rain.c:266); bits 0-4 are the outcodes
+// the ground point and the point kTop above it share - 0: left, 1: top,
+// 2: right, 3: bottom, 4: behind (rain.c:493-494). A cell is drawable only when
+// the whole 2x2 block's AND is exactly 0x20 (rain.c:290).
+struct CellClip {
+    unsigned flags = 0x1F;
+    double depth = 0.0;
+};
+
+// Rain_ClipCells (rain.c:495-554) for one cell. `probed` is the incoming bit 5
+// (rain.c:506); a cell that was never probed keeps the 0x1F the engine seeds
+// (rain.c:504) and is therefore never drawn.
+CellClip ClipCell(bool probed, double cell_x, double cell_y, double z,
+                  double camera_x, double camera_y, double camera_z,
+                  const ViewBasis& basis, const ClipViewport& viewport);
+
+// rain.c:283 - Rain_Draw snaps the camera z to the layer lattice:
+// floor((pos.z - kLayerOrigin) * kLayerInv + 0.5) * kLayer, with
+// kLayerOrigin = 36864.0 and kLayerInv = 1/24576 (rain.c:683-684).
+double SnapLayerZ(double camera_z);
+
+// rain.c:402 - `h = max(c[24].z, c[0].z), max(c[25].z, c[1].z) - it->z - kTopF`:
+// the highest ground point of the 2x2 block, relative to the layer lattice.
+// `snapped_layer_z` is SnapLayerZ(camera_z); `max_cell_z` is the block's
+// highest probed cell z.
+double LayerClipBase(double max_cell_z, double snapped_layer_z);
+
+// rain.c:471-484 - the per-layer vertex clip. `hl` is the engine's `h + kLayer`
+// for the layer about to be drawn (rain.c:466-467); `drop_z` is the vertex
+// group's Rain_FillVB z list (rain.c:378) and `count` its length. Returns how
+// many LEADING vertices that layer draws: every one when hl < 0 (the ground is
+// below the band), none when hl > kLayer, otherwise the leading run with
+// z <= hl.
+int LayerClipVertexCount(double hl, const float* drop_z, int count);
+
+// rain.c:243-253 - Rain_UpdateGrid's per-frame probe budget. The first update
+// may probe everything (10000); afterwards only as many cells as the camera
+// moved: ceil(|dx| * kTileInvF * kTwelve) + ceil(|dy| * kTileInvF * kTwelve).
+int ProbeBudgetForFrame(bool has_last, double camera_x, double camera_y,
+                        double last_x, double last_y);
+
+// rain.c:646-649 - Rain_SetAlpha's colour word:
+//   r->color = 0x00FFFFFF - ((unsigned)fistp(alpha * kAlphaScale) << 24);
+// RGB is white and the top byte is AlphaByte(alpha) == trunc(alpha * 255).
+// This is the word Rain_FillVB gives the rain line's BOTTOM vertex
+// (rain.c:367); the top vertex is the literal 0xFFFFFF (rain.c:366), i.e.
+// RainStreakTopDiffuse() above.
+std::uint32_t RainStreakBottomDiffuse(float authored_alpha);
+
+// rain.c:448-459 - the rain branch of Rain_DrawCell binds NULL at stage 0 and
+// sets COLOROP/ALPHAOP to SELECTARG2 (`k = 3`), i.e. the vertex diffuse alone,
+// with D3DPT_LINELIST and `mult = 2`. Only the snow branch binds a texture
+// (rain.c:430-438, k = 4 with it and 3 without).
+int RainStageArgCount();
+bool RainBindsTexture();
 
 }  // namespace igi::rain

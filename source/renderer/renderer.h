@@ -797,6 +797,12 @@ public:
 	void SetRainEffect(bool active, bool is_snow, float startMeters, float endMeters, float alpha) {
 		rain_.SetParams(active, is_snow, startMeters, endMeters, alpha);
 	}
+	// The ground the weather's per-cell probe reads (Rain_UpdateGrid's
+	// Coll_DropPointsMat drop, src/dxinit/rain.c:258-265). The editor's level
+	// answers it with Level::GetTerrainZ, the same query the spline path uses.
+	void SetRainGroundQuery(Renderer_Rain::GroundQuery query) {
+		rain_.SetGroundQuery(std::move(query));
+	}
 	void SetWeatherEnabled(bool enabled) { rain_.SetWeatherEnabled(enabled); }
 	void ClearSuppressedAttas() { objects_.ClearSuppressedAttas(); }
 	bool SuppressAttachmentInMef(const std::string& parentModelId, const std::string& attModelId, const glm::vec3& localPos) {

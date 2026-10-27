@@ -244,6 +244,12 @@ void App::LoadLevel(int level_no) {
 		renderer_.SetSplineTerrainQuery([this](double x, double y, float& z) {
 			return level_.GetTerrainZ(x, y, z);
 		});
+		// Rain_UpdateGrid probes the ground under each weather cell before it is
+		// drawn (src/dxinit/rain.c:258-266); the level's terrain query is the
+		// editor's answer to that drop.
+		renderer_.SetRainGroundQuery([this](double x, double y, float& z) {
+			return level_.GetTerrainZ(x, y, z);
+		});
 
 		igi::ObjectLightmapManager::Get().LoadLevelLightmaps(level_no);
 
