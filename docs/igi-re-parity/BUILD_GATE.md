@@ -352,3 +352,138 @@ limits of running Windows source on macOS:
 | raw x64 link gate | `build-mingw-x64/build-windows.log` |
 | host lane transcript | `build-mingw/host-tests.log` |
 | host lane objects / binaries | `build-mingw/host-tests/{obj,bin}/` |
+| build-integrity verdict (in transcript) | `build-mingw/build-windows.log`, the `BUILD-INTEGRITY` block |
+
+---
+
+## 8. Build integrity — refusing to trust a stale tree
+
+### 8.1 The failure this prevents
+
+A binary shipped with a null write in `App::Input_OnMouse`. It was **not** a source bug.
+`build-mingw/CMakeFiles/igi-editor.dir/source/app_input_mouse.cpp.obj` had been built
+hours earlier and was never recompiled while `app.cpp.obj` and 33 others were rebuilt
+against a different `App` layout, because ninja had no dependency record for it:
+
+```
+$ <cached-ninja> -C build-mingw -t deps CMakeFiles/igi-editor.dir/source/app_input_mouse.cpp.obj
+...app_input_mouse.cpp.obj: #deps 0, deps mtime 1793108196720002110 (VALID)
+$ <cached-ninja> -C build-mingw -t deps CMakeFiles/igi-editor.dir/source/app.cpp.obj
+...app.cpp.obj: #deps 668, deps mtime 1793108207136698602 (VALID)
+```
+
+The stale object read a member at the old offset, landed in the zero-initialised SSO
+buffer of an empty `std::string`, and wrote through NULL. It looks exactly like a source
+bug, and it means **any gate run on such a tree may have validated a corrupted binary**.
+
+`scripts/check-build-integrity.sh` makes that state impossible to miss. It is wired into
+`scripts/build-windows.sh` immediately after gate 2 and before the summary, so it cannot
+be skipped; a FAIL fails the whole gate.
+
+### 8.2 Why header changes propagate through the PCH here
+
+This is the measurement that makes rule A load-bearing rather than decorative:
+
+```
+ai_events.cpp.obj:        #deps 1     (just the .cpp)
+animation_motion.cpp.obj: #deps 3
+cmake_pch.hxx.gch:        #deps 623   (includes source/renderer/renderer_rain.h)
+app_input_mouse.cpp.obj:  #deps 659   (this one is compiled WITHOUT the PCH)
+```
+
+An object compiled *through* the PCH never re-reads the headers, so its depfile lists only
+the `.cpp`; the PCH's own depfile carries the whole header closure. A normal object
+therefore has **no header in its dependency list at all**, and its only header-level
+dependency is the implicit edge in `build-mingw/build.ninja`:
+
+```
+build CMakeFiles/igi-editor.dir/source/ai_events.cpp.obj: CXX_COMPILER__... \
+    source/ai_events.cpp \
+    | CMakeFiles/igi-editor.dir/cmake_pch.hxx CMakeFiles/igi-editor.dir/cmake_pch.hxx.gch \
+    || cmake_object_order_depends_target_igi-editor
+```
+
+So a header change propagates as: header changes → `cmake_pch.hxx.gch` is rebuilt → the
+gch is newer than every object → ninja rebuilds every object through that implicit edge.
+
+**Not all objects use the PCH.** In this tree 69 of the 352 objects carry
+`FLAGS = -O3 -DNDEBUG -std=gnu++20` with no `-Winvalid-pch -include .../cmake_pch.hxx`
+and no `| cmake_pch.hxx.gch` implicit input, so they never read the PCH — and they carry
+the full ~650-entry header depfile instead. The check reads `build.ninja` to decide which
+is which. Without that distinction rule A reported 20 false positives (measured: every
+object older than its gch was a no-PCH object).
+
+### 8.3 The rules
+
+| rule | fires when | why it is evidence |
+| --- | --- | --- |
+| `STALE_PCH` | a `.obj` is older than the `cmake_pch.hxx.gch` it is compiled through | it was not recompiled after the last PCH regeneration, i.e. the tree is not in a post-build state. Applied only to PCH-compiled objects. |
+| `NO_RECORD` | a `.obj` has no entry in `ninja -t deps` | ninja knows nothing about its headers |
+| `EMPTY_DEPS` | a `.obj` has `#deps 0` | **the exact signature of the shipped bug**: ninja believes it includes no headers, so nothing can ever invalidate it. Scoped to `.obj` — `generated/igi-editor.rc.res` legitimately has `#deps 0`. |
+| `DEPS_DESYNC` | ninja prints `(STALE)`/`(MISSING)` instead of `(VALID)` | the dep log no longer matches the artifact |
+| `STALE_DEP` | a file in the object's own dependency list is newer than the object | the precise per-object rule; it is what catches a stale `.cpp` and the no-PCH objects |
+| `NINJA_VERSION` | `CMAKE_MAKE_PROGRAM` from `CMakeCache.txt` is a different **version** than `command -v ninja` | a build driven by the other ninja discards the dependency DB (`build log version is too old; starting over`), which is how objects end up with no dep record. Different paths with the *same* version are only a note. |
+
+The check uses the ninja **CMake has cached**, never a bare `ninja` from PATH:
+
+```bash
+grep '^CMAKE_MAKE_PROGRAM:' build-mingw/CMakeCache.txt
+# CMAKE_MAKE_PROGRAM:FILEPATH=/Library/Frameworks/Python.framework/Versions/3.12/bin/ninja
+```
+
+### 8.4 Running it
+
+```bash
+bash scripts/check-build-integrity.sh            # standalone; exit 0 = consistent
+bash scripts/check-build-integrity.sh --quiet
+bash scripts/check-build-integrity.sh --fix      # delete objects + PCHs, then rebuild
+bash scripts/check-build-integrity.sh --build-dir DIR
+```
+
+Exit codes: `0` consistent (or nothing built yet), `1` inconsistent, `2` environment error
+(no `CMakeCache.txt` / no cached ninja).
+
+PASS looks like this:
+
+```
+   objects      : 352
+   via PCH      : 283  (rule A applies to these only)
+   no PCH       : 69  (rule E applies; their depfile lists every header)
+   files stat'd : 1555
+===================================================================
+ BUILD INTEGRITY: PASS — all 352 objects are consistent with their
+                  dependencies, their PCH, and the ninja dependency log.
+```
+
+### 8.5 Recovery
+
+The check prints this on failure. Run it from the repository root:
+
+```bash
+find build-mingw/CMakeFiles/igi-editor.dir \
+     build-mingw/CMakeFiles/igi_tests.dir -name '*.obj' -delete
+rm -f build-mingw/CMakeFiles/igi-editor.dir/cmake_pch.hxx.gch \
+      build-mingw/CMakeFiles/igi_tests.dir/cmake_pch.hxx.gch
+cmake --build build-mingw --target igi_tests igi-editor --parallel
+```
+
+`bash scripts/check-build-integrity.sh --fix` performs exactly those three steps.
+
+### 8.6 What could not be made reliable
+
+* **"Older than the newest header under `source/`" is not usable as a global rule.** With
+  1–3 deps per PCH object there is no per-object include set to compare against, and the
+  coarse rule would flag all 352 objects the moment any single header is touched. It is
+  used only as a fallback for objects whose dep record is already broken (`NO_RECORD` /
+  `EMPTY_DEPS`), where the object is a FAIL regardless — there it is the strongest
+  available statement.
+* **`STALE_PCH` fires on interleaved builds, not only on real staleness.** In this build
+  dir `.ninja_log` shows the `igi-editor` PCH compiling 9344→26565 ms in one build while
+  `app_ui.cpp.obj` compiled 13530→26205 ms — overlapping work, which only happens when two
+  ninja processes share one build dir. That is reported as a FAIL on purpose: it is
+  exactly the condition under which the tree must not be trusted (and it is also how the
+  PCH gets corrupted, per §6.3). A plain rebuild clears it.
+* **The check cannot see a header that was edited and reverted** within one mtime tick,
+  and it does not verify struct layouts directly — it proves the artifacts are consistent
+  with the dependency information ninja holds, which is what the bug defeated.
+

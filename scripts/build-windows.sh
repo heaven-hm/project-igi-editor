@@ -25,6 +25,15 @@
 #      igi1ed.exe; the gate stays compile-only on purpose, so it passes on a
 #      machine that has only the tracked files.
 #
+#   3. build-integrity check — runs immediately after gate 2, before the summary.
+#      scripts/check-build-integrity.sh proves the i686 tree is internally
+#      consistent: no object predates the PCH it is compiled through, no object's
+#      ninja dependency record is missing or empty (`#deps 0`), no object is older
+#      than a header it includes, and the ninja CMake has cached is the one on
+#      PATH.  A FAIL here means a gate result on this tree cannot be trusted (a
+#      mixed-layout binary may have been validated); the check prints the exact
+#      rebuild command.  It cannot be skipped.
+#
 # Usage:
 #   bash scripts/build-windows.sh                 # both gates
 #   bash scripts/build-windows.sh --arch x64      # x64 link gate only
@@ -312,16 +321,49 @@ if [ "$ARCH" = "both" ] || [ "$ARCH" = "i686" ]; then
   fi
 fi
 
+# ── build-integrity check: is the i686 tree internally consistent? ───────────
+# A binary once shipped with a null write in App::Input_OnMouse that was NOT a
+# source bug: `app_input_mouse.cpp.obj` had been built hours earlier and was never
+# recompiled (ninja had `#deps 0` for it, so no header could invalidate it) while
+# `app.cpp.obj` and 33 others were rebuilt against a different `App` layout.  The
+# mixed-layout binary's stale object read a member at the old offset, landed in
+# the zero-initialised SSO buffer of an empty std::string, and wrote through NULL.
+# Any gate run on such a tree may have validated a corrupted binary.
+#
+# This check runs immediately AFTER the i686 build and BEFORE the summary, i.e.
+# on exactly the tree the Windows test suite is about to consume.  It must run
+# after the build, not before: an object that is merely older than a header the
+# gate is about to rebuild is not a defect, so a pre-build check would cry wolf.
+# See scripts/check-build-integrity.sh and docs/igi-re-parity/BUILD_GATE.md §8.
+INTEGRITY_RC=0
+if [ "$ARCH" != "x64" ] && [ "$I686_RC" -eq 0 ]; then
+  say ""
+  say "###################################################################"
+  say "# BUILD-INTEGRITY CHECK — i686 objects vs their dependencies + PCH"
+  say "###################################################################"
+  bash "$REPO_ROOT/scripts/check-build-integrity.sh" 2>&1 | tee -a "$COMBINED_LOG"
+  INTEGRITY_RC=${PIPESTATUS[0]}
+  if [ "$INTEGRITY_RC" -ne 0 ]; then
+    say "==> BUILD-INTEGRITY FAILED (exit $INTEGRITY_RC)"
+    say "    The i686 tree is NOT internally consistent. Do NOT trust this run:"
+    say "    a mixed-layout binary may have been validated. Rebuild from scratch"
+    say "    (the recovery command is printed above) and re-run this gate."
+  else
+    say "==> BUILD-INTEGRITY OK (exit 0)"
+  fi
+fi
+
 say ""
 say "==================================================================="
 say " build-windows.sh summary"
 if [ "$ARCH" != "i686" ]; then say "   x64  link gate      : exit $X64_RC"; fi
 if [ "$ARCH" != "x64" ];  then say "   i686 compile gate   : exit $I686_RC"; fi
+if [ "$ARCH" != "x64" ];  then say "   build integrity     : exit $INTEGRITY_RC"; fi
 say "   combined log        : $COMBINED_LOG"
 say "   finished            : $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 say "==================================================================="
 
-if [ "$X64_RC" -ne 0 ] || [ "$I686_RC" -ne 0 ]; then
+if [ "$X64_RC" -ne 0 ] || [ "$I686_RC" -ne 0 ] || [ "$INTEGRITY_RC" -ne 0 ]; then
   say "==> BUILD GATE FAILED"
   exit 1
 fi
