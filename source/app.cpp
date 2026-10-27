@@ -263,6 +263,19 @@ bool App::Init(int argc, char** argv) {
 			window_state_.old_viewport_width_ = window_state_.viewport_width_;
 			window_state_.old_viewport_height_ = window_state_.viewport_height_;
 			window_state_.full_screen_ = true;
+			// The Win32 window is now monitor-sized, but nothing has told GL about it.
+			// This path resizes the window directly with SetWindowPos and GLUT does not
+			// deliver a reshape for it, so the GL viewport keeps the pre-fullscreen size
+			// and the uncovered area is never painted -- reported as "in fullscreen on a
+			// small screen the rest of the area is black".  Re-apply the viewport from the
+			// monitor rectangle we just set, exactly as the reshape path would.
+			const int fs_w = monitor_info.rcMonitor.right - monitor_info.rcMonitor.left;
+			const int fs_h = monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top;
+			editor_viewport_width_ = (std::max)(1, fs_w);
+			editor_viewport_height_ = (std::max)(1, fs_h);
+			ApplyViewportSize(editor_viewport_width_, editor_viewport_height_);
+			Logger::Get().Log(LogLevel::INFO, "[App] borderless fullscreen: viewport reapplied as " +
+				std::to_string(editor_viewport_width_) + "x" + std::to_string(editor_viewport_height_));
 			Logger::Get().Log(LogLevel::INFO, "[App] Editor window switched to borderless fullscreen");
 		}
 	}
