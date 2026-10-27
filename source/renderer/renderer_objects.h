@@ -185,6 +185,13 @@ public:
     // (src/comprun/pickup.c:172-177). Cached per model id because the lookup
     // reads the .res entry off disk and the pickup pass runs every tick.
     float GetMeshHeaderRadius(const std::string& modelId, bool isBuilding);
+    // LOD-0 MeshHeader of `modelId` (`lod_header(vm->lods[0])`, IGI-RE
+    // src/lod/mesh3d.c:220-224), cached per (level, model id).  The draw path
+    // needs its center/sphere/valid words for every placement on every frame;
+    // reading them costs a .res entry read off disk, so it is done once per
+    // (level, model) instead of once per object per pass per frame.  Cleared
+    // with the .res indexes it is derived from (ClearResCache).
+    const igi::lod::MefMeshHeader& GetLod0MeshHeader(const std::string& modelId);
     glm::vec3 GetMeshCenter(const std::string& modelId, bool isBuilding);
     bool IsCameraInsideBuildingBounds(const std::vector<LevelObject>& objects,
                                       const glm::vec3& cameraPos);
@@ -489,6 +496,10 @@ private:
     // touch pass asks for it once per placed pickup per tick. Cleared with the
     // .res indexes it is derived from.
     std::unordered_map<std::string, float> mesh_header_radius_cache_;
+    // LOD-0 MeshHeader (center/sphere/valid) keyed by "<level>:<modelId>", the
+    // words the per-frame LOD switch reads.  Same lifetime as the .res indexes
+    // and the radius cache above: the header comes out of the .res entry.
+    std::unordered_map<std::string, igi::lod::MefMeshHeader> lod0_mesh_header_cache_;
     // Authored ModelLODSettings tables from lod.qvm, in world units (metres x
     // 4096), monotonized exactly as ModelLODSettings_Changed leaves
     // VirModel.unk28. Level-independent, like portal_distances_.

@@ -37,6 +37,48 @@ checks cannot be treated as a source regression until the corpus is restored.
 
 ---
 
+## Headless end-to-end lane (all 14 levels, under Wine)
+
+`igi_tests.exe` covers the parsers and the runtime subsystems, but it never loads a
+level's *objects* through the renderer's own resolution path. `scripts/e2e-headless.sh`
+does that with the editor's GL-free modes, across every level, and asserts the pinned
+baseline:
+
+```bash
+rm -f bin/Release/igi1ed.exe && cmake --build build-mingw --target igi-editor --parallel
+bash scripts/e2e-headless.sh              # smoke + --run-tests + 14 verify passes (~1-2 min)
+bash scripts/e2e-headless.sh --fast       # smoke + --run-tests only
+bash scripts/e2e-headless.sh --levels "1 7"
+```
+
+It stages its own run directory and a writable **copy** of the game under
+`scratch/e2e-headless/` (`Config::Init` recompiles `<IGI>/editor/qed/*.qsc` into `.qvm`
+at every start, so the retail tree must never be the game path), then runs:
+
+| Tier | Mode | What it proves |
+| --- | --- | --- |
+| smoke | `--smoke-level --level N ...` | every placement's model and every texture resolves through `Renderer_Objects`' own path |
+| tests | `--run-tests` | the editor's native parser assertions |
+| verify | `--verify-level --level N --skip-launch` | each level decompiles and its QSC parses to a non-empty object set |
+
+Asserted baseline, and the script exits non-zero on any change to it:
+
+* levels 1..14 load; **zero missing textures** anywhere;
+* **level 7 fails on exactly one id, `s332_02_1`** — a KNOWN RETAIL DEFECT: the shipped
+  `level7/objects.qvm` names a model that no shipped `.res` archive and no loose `.mef`
+  provides. It is asserted as a defect rather than tolerated, so a *second* missing id
+  (a new regression) is distinguishable from it, and level 7 starting to pass is also
+  reported as a change to the documented baseline.
+
+`--verify-level` without a game-run log cannot decide the AI comparison, so its per-level
+`Result:` is always FAIL; the script asserts what that mode *can* decide on its own
+(decompile + QSC parse counts) and says so in its output.
+
+This lane needs Wine, the retail install and a staged tree, so it is an acceptance step,
+not the inner loop — the inner loop stays `scripts/run-host-tests.sh`.
+
+---
+
 ## Controlling Which Levels Are Tested
 
 The `IGI_TEST_LEVEL` environment variable restricts the **verify-level integration test** to specific levels. The QVM round-trip tests always run all 14 levels (they are fast).

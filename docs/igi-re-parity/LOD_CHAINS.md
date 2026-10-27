@@ -362,3 +362,53 @@ duplicate the committed corpus tests or read live game data):
 The §5-§7 measurements are produced by the two corpus tests, which print their
 numbers (`[lod-res]`, `[lod-qvm]`) so the figures can be re-read without a
 scratch tool.
+
+## 9. The per-frame cost of the LOD switch (measured, then fixed)
+
+The per-frame switch **is** wired now (`Renderer_Objects::Draw` calls
+`SelectLodForDistance` per placement), and it had a cost that dominated the whole
+frame on a GL translation layer. §6 item 1's warning was about *lightmap*
+correctness; the cost was somewhere else entirely.
+
+`ModelObj_GetLOD` needs three words out of LOD 0's `MeshHeader` — `valid`,
+`center`, `sphere` (`src/lod/mesh3d.c:220-224`) — *before* it can call
+`lod_select`. The draw path read them with
+
+```cpp
+igi::lod::ReadMefMeshHeader(FindMeshData(obj.modelId))
+```
+
+per placement, per pass, per frame. `FindMeshData` builds the archive-identity key
+and walks the loaded indexes, and `RES_ReadEntry` (`source/renderer/res_writer.cpp:463`)
+**opens the `.res` file and reads the whole entry off disk** — so a level with 1416
+placements performed ~2832 file opens + full `.mef` reads every frame to obtain a
+value that cannot change while the level is loaded. `SelectLodForDistance` already
+memoized the same header in its LOD chain (`chain.header[]`, `renderer_objects_mesh.cpp:180`);
+the draw path simply did not use it.
+
+Fixed by `Renderer_Objects::GetLod0MeshHeader` (`renderer_objects_mesh.cpp:284`), a
+per-`(level, modelId)` memo of that exact call, cleared with the `.res` indexes it
+derives from (`ClearResCache`, and `RefreshTextureResCache` for the import path).
+It is pure memoization: the same `FindMeshData` + `ReadMefMeshHeader` inputs, read
+once instead of thousands of times, so the returned words are unchanged.
+
+Measured under Wine (i686, Apple GL 2.1 fallback), `IGI_PROFILE=1`, level 1,
+`[ObjectProfile]` counters from the same binary before and after:
+
+| Phase (per frame) | Before | After |
+| --- | --- | --- |
+| object resolve (mesh + LOD header + lightmap key) | 581 ms | 14 ms |
+| GL submission (721 submesh draws) | 25 ms | 19 ms |
+| attachments | 32 ms | 25 ms |
+| `[FrameProfile]` end-to-end | 2534-5339 ms/frame | 155-163 ms/frame |
+
+The GL submission column is the point worth keeping: 721 submesh draws cost
+~20-25 ms, i.e. Wine's GL thunking was **never** the bottleneck — the redundant
+per-object disk read was, by ~40x. On an idle host the same change takes the frame
+from 1415 ms to 32 ms (`[RenderProfile]`).
+
+**Not measured:** the ~18-40 ms/frame that remains outside the objects pass
+(`[FrameProfile]` minus `[RenderProfile] total`). The task-tree HUD
+(`renderer_draw.cpp:781+`) walks every object and draws immediate-mode text per
+visible row, and `App::Frame` rebuilds a large parameter struct per frame; neither
+is instrumented, and neither was changed.

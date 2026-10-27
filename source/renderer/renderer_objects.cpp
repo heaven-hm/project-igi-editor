@@ -554,6 +554,8 @@ void Renderer_Objects::ClearResCache() {
     // MeshHeader.radius (VirModel_GetRadius) is read through the same .res
     // indexes, so it is stale at the same moment.
     mesh_header_radius_cache_.clear();
+    // Same reason: the LOD-0 header words come out of the .res entry.
+    lod0_mesh_header_cache_.clear();
     for (const auto& p : tmp_mef_paths_) {
         std::error_code ec;
         std::filesystem::remove(p, ec);
@@ -565,6 +567,16 @@ void Renderer_Objects::ClearResCache() {
 void Renderer_Objects::RefreshTextureResCache() {
     res_tex_indexes_.clear();
     res_model_indexes_.clear();
+    // Everything derived from the model .res set is stale the moment those
+    // indexes are dropped: the LOD chains are built by asking whether each LOD
+    // name resolves in that set, and the two header caches hold words read out
+    // of the .res entries themselves.  The import path (AddModelToLevelRes)
+    // rewrites the level's models .res and refreshes through here, so without
+    // this an imported model would keep the previous header until the level was
+    // reloaded.  All three are pure caches and are rebuilt lazily.
+    lod_chain_cache_.clear();
+    mesh_header_radius_cache_.clear();
+    lod0_mesh_header_cache_.clear();
     LoadResCache(current_level_, Utils::GetIGIRootPath());
     Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Refreshed texture and model .res index for level " +
         std::to_string(current_level_));
@@ -863,6 +875,25 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
     if (!shader_program_) return;
 
+    // IGI_PROFILE instrumentation (opt-in, IGI_PROFILE=1).  The per-frame object
+    // pass is the whole frame on a slow GL translation layer, and "it is slow" is
+    // not a diagnosis: this splits it into CPU resolution, GL submission and
+    // attachment work so a fix can be aimed at the part that actually costs.
+    // Everything below is a no-op when the flag is unset (no clock reads, no
+    // counters), and the report is one log line per kProfileFrames frames.
+    const bool profileObjects = []() {
+        static const bool enabled = std::getenv("IGI_PROFILE") != nullptr;
+        return enabled;
+    }();
+    using ObjProfileClock = std::chrono::steady_clock;
+    constexpr int kProfileFrames = 5;
+    auto profMark = profileObjects ? ObjProfileClock::now() : ObjProfileClock::time_point{};
+    int64_t profResolveUs = 0, profDrawUs = 0, profAttaUs = 0;
+    int profObjects = 0, profSubmeshDraws = 0;
+    const auto profDeltaUs = [](ObjProfileClock::time_point a, ObjProfileClock::time_point b) {
+        return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
+    };
+
     // Rebuild EditRigidObj occupancy so any ATTA that has been promoted to (or is
     // duplicated by) a real EditRigidObj is suppressed in the attachment render —
     // otherwise the promoted object would draw on top of its original ATTA.
@@ -976,6 +1007,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
         for (const auto& obj : objects) {
             if (obj.deleted) continue;
+            if (profileObjects) profMark = ObjProfileClock::now();
 
             const int objIndex = static_cast<int>(&obj - &objects[0]);
             // This object's rigid mesh is being replaced by a live skinned/animated
@@ -1026,8 +1058,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         const Mesh* meshPtr = &GetOrLoadMesh(obj.modelId, obj.isBuilding);
         int drawnLod = 0;
         if (meshPtr->vertexCount != 0 && tan_half_fovx > 0.0f) {
-            const igi::lod::MefMeshHeader lod0h =
-                igi::lod::ReadMefMeshHeader(FindMeshData(obj.modelId));
+            const igi::lod::MefMeshHeader lod0h = GetLod0MeshHeader(obj.modelId);
             if (lod0h.valid) {
                 igi::lod::RigidLodQuery q;
                 q.hasModel = true;
@@ -1227,6 +1258,11 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             isTransparentObject == isTransparentPass ||
             (hasArgbSubMeshes && !isTransparentObject)
         );
+        if (profileObjects) {
+            const auto now = ObjProfileClock::now();
+            profResolveUs += profDeltaUs(profMark, now);
+            profMark = now;
+        }
         if (drawInThisPass) {
             if (isTransparentObject) {
                 glEnable(GL_BLEND);
@@ -1392,6 +1428,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
                     glBindVertexArray(sub.VAO);
                     glDrawArrays(GL_TRIANGLES, 0, sub.vertexCount);
+                    if (profileObjects) ++profSubmeshDraws;
 
                     if (isBlendSub) {
                         glDisable(GL_BLEND);
@@ -1432,6 +1469,11 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             }
 
             glDisable(GL_POLYGON_OFFSET_FILL);
+        }
+        if (profileObjects) {
+            const auto now = ObjProfileClock::now();
+            profDrawUs += profDeltaUs(profMark, now);
+            profMark = now;
         }
 
         // Only buildings with portal/ATTA sub-models need distance-based culling.
@@ -1485,11 +1527,40 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             }
         }
 
+        if (profileObjects) {
+            const auto now = ObjProfileClock::now();
+            profAttaUs += profDeltaUs(profMark, now);
+            ++profObjects;
+        }
+
         // Companion parts (_XX_2.._XX_5) are NOT rendered alongside the main body.
         // Main body models (_XX_1) already contain a complete character mesh including
         // the face. Companion parts duplicate the head geometry at a different depth,
         // which produces a visible double-face overdraw artifact.
     }
+    }
+
+    if (profileObjects) {
+        static int pframes = 0;
+        static int64_t pResolve = 0, pDraw = 0, pAtta = 0;
+        static int64_t pObjects = 0, pDraws = 0;
+        pResolve += profResolveUs;
+        pDraw += profDrawUs;
+        pAtta += profAttaUs;
+        pObjects += profObjects;
+        pDraws += profSubmeshDraws;
+        if (++pframes == kProfileFrames) {
+            const auto perFrame = [](int64_t total) {
+                return std::to_string(total / kProfileFrames / 1000) + "ms";
+            };
+            Logger::Get().Log(LogLevel::INFO,
+                "[ObjectProfile] " + std::to_string(kProfileFrames) + " frames: resolve=" +
+                perFrame(pResolve) + " draw=" + perFrame(pDraw) + " atta=" + perFrame(pAtta) +
+                " objects=" + std::to_string(pObjects / kProfileFrames) + "/frame" +
+                " submeshDraws=" + std::to_string(pDraws / kProfileFrames) + "/frame");
+            pframes = 0;
+            pResolve = pDraw = pAtta = pObjects = pDraws = 0;
+        }
     }
 
     // Always reset polygon mode after draw

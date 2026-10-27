@@ -281,6 +281,28 @@ float Renderer_Objects::GetMeshHeaderRadius(const std::string& modelId, bool isB
     return radius;
 }
 
+const igi::lod::MefMeshHeader& Renderer_Objects::GetLod0MeshHeader(const std::string& modelId) {
+    // The per-frame LOD switch in Renderer_Objects::Draw needs three words out of
+    // LOD 0's MeshHeader -- `valid`, `center` and `sphere` (the reference point
+    // and bounding radius of ModelObj_GetLOD, IGI-RE src/lod/mesh3d.c:220-224).
+    // Reading them is a .res entry read: FindMeshData builds the archive-identity
+    // key, walks the loaded indexes and RES_ReadEntry seeks and reads the whole
+    // .mef off disk.  The draw path did that once per object per pass per frame,
+    // so a level with 1416 placements paid ~2832 disk reads a frame for a value
+    // that cannot change while the level is loaded.  Memoize it per (level,
+    // model), exactly like the radius cache above and with the same lifetime.
+    FillLevelModelKey(level_model_key_scratch_, current_level_, /*isBuilding=*/false, modelId);
+    auto cached = lod0_mesh_header_cache_.find(level_model_key_scratch_);
+    if (cached != lod0_mesh_header_cache_.end()) {
+        return cached->second;
+    }
+    // Deliberately the same single-step read the draw path performed (no temp
+    // .mef extraction fallback): this is pure memoization, so the returned words
+    // are bit-identical to what the draw computed before.
+    const igi::lod::MefMeshHeader header = igi::lod::ReadMefMeshHeader(FindMeshData(modelId));
+    return lod0_mesh_header_cache_.emplace(level_model_key_scratch_, header).first->second;
+}
+
 glm::vec3 Renderer_Objects::GetMeshCenter(const std::string& modelId, bool isBuilding) {
     return GetOrLoadMesh(modelId, isBuilding).center;
 }
