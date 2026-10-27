@@ -7,6 +7,13 @@ struct SubMesh {
     GLuint VAO = 0;
     GLuint VBO = 0;
     int    vertexCount = 0;
+    // Indexed submeshes (the spline span draw path: the engine transforms the
+    // model's vertex buffer in place and draws it with the model's own indices,
+    // Direct3DRender_FillSplineVB HOOK 0x49CC80 + draw_group,
+    // src/render/render.c:613-670, :522-532). IBO is 0 for the triangle-expanded
+    // submeshes every other path builds, which draw with glDrawArrays.
+    GLuint IBO = 0;
+    int    indexCount = 0;
     GLuint textureID   = 0;
     int    alphaMode   = 0; // 0=OPAQUE, 1=MASK, 2=BLEND
     glm::vec4 baseColorFactor = glm::vec4(1.0f);

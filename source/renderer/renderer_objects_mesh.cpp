@@ -268,7 +268,9 @@ const Mesh& Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isB
 
     // ── 1. Try in-memory .res index first (no disk extraction needed) ────────────
     {
-        std::vector<uint8_t> meshBytes = FindMeshData(modelId);
+        std::string meshRes;
+        int meshResLevel = 0;
+        std::vector<uint8_t> meshBytes = FindMeshData(modelId, &meshRes);
         if (meshBytes.empty()) {
             EnsureGlobalTextureMapLoaded();
             int targetLvl = -1;
@@ -276,16 +278,20 @@ const Mesh& Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isB
             if (mit != model_level_map_.end() && mit->second != current_level_) {
                 targetLvl = mit->second;
                 LoadResCache(targetLvl, Utils::GetIGIRootPath());
-                meshBytes = FindMeshData(modelId);
+                meshBytes = FindMeshData(modelId, &meshRes);
+                if (!meshBytes.empty()) meshResLevel = targetLvl;
             }
             if (meshBytes.empty()) {
-                for (int lvl = 1; lvl <= 14 && meshBytes.empty(); ++lvl) {
+                for (int lvl = 1; lvl <= 14; ++lvl) {
                     if (lvl == current_level_ || lvl == targetLvl) continue;
                     LoadResCache(lvl, Utils::GetIGIRootPath());
-                    meshBytes = FindMeshData(modelId);
+                    meshBytes = FindMeshData(modelId, &meshRes);
+                    if (!meshBytes.empty()) { meshResLevel = lvl; break; }
                 }
             }
         }
+        // The cross-level fallback is the editor's, not the engine's: name it.
+        LogCrossLevelModelResolution(modelId, meshResLevel, meshRes);
         if (!meshBytes.empty()) {
             try {
                 // Pre-populate ATTA cache from the bytes we already have so
@@ -590,24 +596,38 @@ std::string Renderer_Objects::GetOrExtractMefTemp(const std::string& modelId, bo
     if (bytes.empty()) {
         EnsureGlobalTextureMapLoaded();
         int targetLvl = -1;
+        std::string meshRes;
+        int meshResLevel = 0;
         auto mit = model_level_map_.find(modelId);
         if (mit != model_level_map_.end() && mit->second != current_level_) {
             targetLvl = mit->second;
             LoadResCache(targetLvl, Utils::GetIGIRootPath());
-            bytes = FindMeshData(modelId);
+            bytes = FindMeshData(modelId, &meshRes);
+            if (!bytes.empty()) meshResLevel = targetLvl;
         }
         if (bytes.empty()) {
-            for (int lvl = 1; lvl <= 14 && bytes.empty(); ++lvl) {
+            for (int lvl = 1; lvl <= 14; ++lvl) {
                 if (lvl == current_level_ || lvl == targetLvl) continue;
                 LoadResCache(lvl, Utils::GetIGIRootPath());
-                bytes = FindMeshData(modelId);
+                bytes = FindMeshData(modelId, &meshRes);
+                if (!bytes.empty()) { meshResLevel = lvl; break; }
             }
         }
+        LogCrossLevelModelResolution(modelId, meshResLevel, meshRes);
     }
 
-    // 2. Only if no archive has it, fall back to a loose .mef on disk.
+    // 2. Only if no archive has it, fall back to a loose .mef on disk.  That
+    //    fallback is not something the engine can do at all (Mesh_Load HOOK
+    //    0x4CF390 resolves "LOCAL:models/%s.mef" out of the mounted archive,
+    //    src/model/model.c:364), so say which file answered.
     if (bytes.empty()) {
-        return FindModelFile(modelId, isBuilding);
+        const std::string loose = FindModelFile(modelId, isBuilding);
+        if (!loose.empty()) {
+            Logger::Get().Log(LogLevel::DEBUG,
+                "[Renderer_Objects] '" + modelId + "' not in any indexed archive; resolved from loose file " +
+                loose + " (the engine has no disk lookup: Mesh_Load HOOK 0x4CF390, src/model/model.c:364)");
+        }
+        return loose;
     }
 
     std::ofstream f(tmpPath, std::ios::binary);
@@ -630,19 +650,24 @@ const ParsedGeometry* Renderer_Objects::GetOrLoadParsedGeometry(const std::strin
     if (meshBytes.empty()) {
         EnsureGlobalTextureMapLoaded();
         int targetLvl = -1;
+        std::string meshRes;
+        int meshResLevel = 0;
         auto mit = model_level_map_.find(modelId);
         if (mit != model_level_map_.end() && mit->second != current_level_) {
             targetLvl = mit->second;
             LoadResCache(targetLvl, Utils::GetIGIRootPath());
-            meshBytes = FindMeshData(modelId);
+            meshBytes = FindMeshData(modelId, &meshRes);
+            if (!meshBytes.empty()) meshResLevel = targetLvl;
         }
         if (meshBytes.empty()) {
-            for (int lvl = 1; lvl <= 14 && meshBytes.empty(); ++lvl) {
+            for (int lvl = 1; lvl <= 14; ++lvl) {
                 if (lvl == current_level_ || lvl == targetLvl) continue;
                 LoadResCache(lvl, Utils::GetIGIRootPath());
-                meshBytes = FindMeshData(modelId);
+                meshBytes = FindMeshData(modelId, &meshRes);
+                if (!meshBytes.empty()) { meshResLevel = lvl; break; }
             }
         }
+        LogCrossLevelModelResolution(modelId, meshResLevel, meshRes);
     }
     if (!meshBytes.empty()) {
         try { geo = ParseMefFileFromMemory(meshBytes, modelId); } catch (...) {}
@@ -667,19 +692,24 @@ const ParsedGeometry* Renderer_Objects::GetOrLoadSkinGeometry(const std::string&
         if (mefBytes.empty()) {
             EnsureGlobalTextureMapLoaded();
             int targetLvl = -1;
+            std::string meshRes;
+            int meshResLevel = 0;
             auto mit = model_level_map_.find(modelId);
             if (mit != model_level_map_.end() && mit->second != current_level_) {
                 targetLvl = mit->second;
                 LoadResCache(targetLvl, Utils::GetIGIRootPath());
-                mefBytes = FindMeshData(modelId);
+                mefBytes = FindMeshData(modelId, &meshRes);
+                if (!mefBytes.empty()) meshResLevel = targetLvl;
             }
             if (mefBytes.empty()) {
-                for (int lvl = 1; lvl <= 14 && mefBytes.empty(); ++lvl) {
+                for (int lvl = 1; lvl <= 14; ++lvl) {
                     if (lvl == current_level_ || lvl == targetLvl) continue;
                     LoadResCache(lvl, Utils::GetIGIRootPath());
-                    mefBytes = FindMeshData(modelId);
+                    mefBytes = FindMeshData(modelId, &meshRes);
+                    if (!mefBytes.empty()) { meshResLevel = lvl; break; }
                 }
             }
+            LogCrossLevelModelResolution(modelId, meshResLevel, meshRes);
         }
         if (!mefBytes.empty()) {
             try { geo = ParseMefFileFromMemory(mefBytes, modelId); } catch (...) {}

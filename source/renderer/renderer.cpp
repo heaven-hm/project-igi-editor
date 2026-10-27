@@ -363,9 +363,9 @@ void Renderer::DrawAnimSkeleton(const std::vector<glm::mat4>& boneWorldTransform
 }
 
 void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
-                                const std::vector<glm::mat4>& boneWorldTransforms,
+                                const std::vector<igi::BoneTransform>& engineBoneTransforms,
                                 const glm::mat4& objWorldMat) {
-    if (boneWorldTransforms.empty()) return;
+    if (engineBoneTransforms.empty()) return;
     const ParsedGeometry* geo = objects_.GetOrLoadSkinGeometry(modelId, isBuilding);
     if (!geo || !HasRenderableSkinnedGeometry(*geo)) return;
 
@@ -378,13 +378,12 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
     // A draw-submission log alone cannot distinguish a frozen first frame from
     // a running animation.  Keep one cheap pose sample per model and record the
     // first frame-to-frame change; this is also consumed by the opt-in live
-    // integration test.  The full matrices remain local to this draw.
-    if (!boneWorldTransforms.empty()) {
-        const glm::mat4& sampleTransform = boneWorldTransforms[
-            boneWorldTransforms.size() > 1 ? 1U : 0U];
-        const float poseSample = sampleTransform[0][0] +
-            sampleTransform[1][1] + sampleTransform[2][2] +
-            sampleTransform[3][2];
+    // integration test.  The full bone records remain local to this draw.
+    {
+        const igi::BoneTransform& sampleBone = engineBoneTransforms[
+            engineBoneTransforms.size() > 1 ? 1U : 0U];
+        const float poseSample = sampleBone.matrix[0] + sampleBone.matrix[4] +
+            sampleBone.matrix[8] + sampleBone.pos[2];
         const auto sampleIt = skinned_pose_samples_.find(modelId);
         if (sampleIt == skinned_pose_samples_.end()) {
             skinned_pose_samples_.emplace(modelId, poseSample);
@@ -395,12 +394,42 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
         }
     }
 
-    // Format-1 stores base vertices followed by extra weighted influences.
-    // Use the same accumulation rule as OpenIGI rather than treating every
-    // record as an independent rigid vertex.
-    std::vector<glm::vec3> deformedPos;
-    std::vector<glm::vec3> deformedNormal;
-    SkinSkinnedVertices(*geo, &boneWorldTransforms, deformedPos, deformedNormal);
+    // The engine's own skinner, over the engine's own vertex records:
+    // BoneMesh_Skin HOOK 0x49B700 (src/dxinit/d3drender.c:226-313). It reads the
+    // mesh's two XTRV runs (base vertices at mesh+0x10, extra influences at
+    // mesh+0x0C), multiplies each vertex by its bone's row-major `matrix` and
+    // adds `Bone::pos`, and - on the non-rigid path - accumulates each extra
+    // influence's weighted share into its target base vertex.
+    //
+    // `rigid` is the caller's LOD argument, not a mesh property: the retail
+    // caller is `Direct3DRender_DrawBoneMesh` 0x49F700, which passes
+    // `n = Mesh3D_GetBoneMeshLOD(obj)` forced to 0 for a layer-0 object
+    // (src/bonemesh/d3drender.c:124-127), so the main view takes the WEIGHTED
+    // base+influence path. 0 is passed here for the same reason.
+    const EngineSkinVertices engine_vertices = BuildEngineSkinVertices(*geo);
+    if (engine_vertices.base_count <= 0) return;
+    std::vector<igi::SkinTransformOutput> skinned;
+    if (!igi::BoneMeshSkin(engine_vertices.records.data(), engine_vertices.base_count,
+                           engine_vertices.extra_count, engineBoneTransforms.data(),
+                           static_cast<int>(engineBoneTransforms.size()),
+                           /*rigid=*/false, skinned)) {
+        Logger::Get().Log(LogLevel::WARNING,
+            "[Anim] BoneMesh_Skin refused " + modelId + " (base vertex count out of range)");
+        return;
+    }
+
+    // BoneMesh_Skin writes NormalVertex records in RAW game units (the engine's
+    // world is raw units; D3D applies gWorldScale). The renderer works in metres,
+    // so scale the positions by kMefNativeScale = 1/40.96 and leave the normals
+    // as directions.
+    std::vector<glm::vec3> deformedPos(skinned.size());
+    std::vector<glm::vec3> deformedNormal(skinned.size());
+    for (size_t i = 0; i < skinned.size(); ++i) {
+        deformedPos[i] = glm::vec3(skinned[i].position[0], skinned[i].position[1],
+                                   skinned[i].position[2]) * kMefNativeScale;
+        deformedNormal[i] = glm::vec3(skinned[i].normal[0], skinned[i].normal[1],
+                                      skinned[i].normal[2]);
+    }
 
     // Resolve the same per-material textures the static (rigid) draw uses, so
     // the live-skinned mesh looks identical when not moving instead of a flat
@@ -437,7 +466,7 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
     // Fixed world-space light direction (biased upward/forward so characters are
     // well-lit from above, matching a simple sky-light approximation).
     // NOTE: deformedNormal[i] is already in bone-local/world space (it was
-    // transformed by boneWorldTransforms[b] during skinning above). Do NOT
+    // rotated by the bone's `matrix` inside BoneMesh_Skin above). Do NOT
     // multiply it by normalMat(objWorldMat) again — that is a double-transform
     // that makes normals point in wrong directions and renders the mesh black.
     const glm::vec3 lightDir = glm::normalize(glm::vec3(0.3f, 0.5f, 0.8f));

@@ -71,6 +71,20 @@ glm::dvec3 ProbeOffset(const spline_geometry::BentSegmentMesh& bent) {
         * 40.96;
 }
 
+// The engine's RENDER path (BuildEngineSpanMesh) stores the span-relative
+// position of vertex `i` at the same 1/40.96 render scale.
+glm::dvec3 EngineSpanOffset(const spline_geometry::EngineSpanMesh& mesh, size_t vertex) {
+    const float* v = mesh.interleaved.data() + vertex * 10;
+    return glm::dvec3(v[0], v[1], v[2]) * 40.96;
+}
+
+spline_geometry::EngineSpanInput EngineSpan(double fromX, double toX) {
+    spline_geometry::EngineSpanInput span;
+    span.from = glm::dvec3(fromX, 0.0, 0.0);
+    span.to = glm::dvec3(toX, 0.0, 0.0);
+    return span;
+}
+
 SplineSpan StraightSpan(double length, int segments) {
     SplineSpan span;
     span.from = glm::dvec3(0.0);
@@ -404,4 +418,250 @@ TEST(PlacementSplines, TrainDisplacementIsClampedToFiveMetresAndScaledBy4096) {
 
     const glm::dvec3 offset = placed.position - glm::dvec3(100000.0, 0.0, 0.0);
     EXPECT_NEAR(glm::length(offset), 5.0 * 4096.0, 1e-6);
+}
+
+// ---------------------------------------------------------------------------
+// The engine's RENDER path: Direct3DRender_FillSplineVB (HOOK 0x49CC80,
+// src/render/render.c:613-670) plus the INDEXED draw (draw_group, :522-532).
+//
+// `BendSegmentMesh` above is the collision twin and EXPANDS each indexed
+// triangle into its own vertices; the renderer used to draw spans that way. The
+// engine does not: it transforms the model's vertex buffer IN PLACE - output
+// vertex i is source vertex i - and draws it with the model's own index buffer.
+// ---------------------------------------------------------------------------
+
+TEST(PlacementSplines, EngineSpanMeshTransformsInPlaceAndKeepsTheModelIndices) {
+    const ParsedGeometry geometry = MakeBox(-200.0, 200.0, 25.0, 5.0);
+    const auto mesh = spline_geometry::BuildEngineSpanMesh(geometry, EngineSpan(0.0, 4000.0));
+
+    ASSERT_EQ(mesh.vertexCount, static_cast<int>(geometry.vertices.size()))
+        << "FillSplineVertices writes one vertex per source vertex";
+    ASSERT_EQ(mesh.interleaved.size(), geometry.vertices.size() * 10u);
+
+    // The model's own index buffer, per render block (the geometry has none, so
+    // the whole triangle list is one block).
+    ASSERT_EQ(mesh.indices.size(), 1u);
+    ASSERT_EQ(mesh.indices[0].size(), geometry.triangles.size() * 3u);
+    for (size_t t = 0; t < geometry.triangles.size(); ++t) {
+        EXPECT_EQ(mesh.indices[0][t * 3 + 0], geometry.triangles[t][0]);
+        EXPECT_EQ(mesh.indices[0][t * 3 + 1], geometry.triangles[t][1]);
+        EXPECT_EQ(mesh.indices[0][t * 3 + 2], geometry.triangles[t][2]);
+    }
+}
+
+TEST(PlacementSplines, EngineSpanMeshCarriesUv2FromTheSameSourceVertexAndFlipsV) {
+    ParsedGeometry geometry = MakeBox(-200.0, 200.0, 25.0, 5.0);
+    geometry.vertices[3].uv = glm::vec2(0.25f, 0.75f);
+    geometry.vertices[3].uv2 = glm::vec2(0.5f, 0.125f);
+
+    const auto mesh = spline_geometry::BuildEngineSpanMesh(geometry, EngineSpan(0.0, 4000.0));
+    ASSERT_EQ(mesh.vertexCount, 8);
+
+    // uv2 is the editor's own attribute - the engine's vertex is 8 floats
+    // (src/render/render.c:56-61) and has no second UV - and it comes from the
+    // source vertex at the same index. V is flipped for the GL texture origin.
+    const float* v3 = mesh.interleaved.data() + 3 * 10;
+    EXPECT_FLOAT_EQ(v3[6], 0.25f);
+    EXPECT_FLOAT_EQ(v3[7], 1.0f - 0.75f);
+    EXPECT_FLOAT_EQ(v3[8], 0.5f);
+    EXPECT_FLOAT_EQ(v3[9], 0.125f);
+
+    const float* v0 = mesh.interleaved.data();
+    EXPECT_FLOAT_EQ(v0[8], geometry.vertices[0].uv2.x);
+    EXPECT_FLOAT_EQ(v0[9], geometry.vertices[0].uv2.y);
+}
+
+// setup_rigid (src/sound/segsetup.c:203-251) scales the model's local X range
+// onto the chord; Direct3DRender_FillSplineVB's straight branch (:637-648)
+// applies that frame and copies the normal STRAIGHT THROUGH, without rotating it.
+TEST(PlacementSplines, EngineSpanMeshRigidSpanMapsTheModelXRangeOntoTheChordEnds) {
+    ParsedGeometry geometry = MakeBox(-200.0, 200.0, 25.0, 5.0);
+    geometry.vertices[0].normal = glm::vec3(1.0f, 0.0f, 0.0f);
+
+    spline_geometry::EngineSpanInput span;
+    span.from = glm::dvec3(1000.0, 2000.0, 3000.0);
+    span.to = glm::dvec3(3000.0, 2000.0, 3000.0);
+    span.rotFrom = glm::dvec3(0.0, 0.0, 0.7);   // rotated frames must not matter
+    span.rotTo = glm::dvec3(0.0, 0.0, 0.7);
+    span.rigid = true;
+
+    const auto mesh = spline_geometry::BuildEngineSpanMesh(geometry, span);
+    ASSERT_EQ(mesh.vertexCount, 8);
+    const glm::dvec3 mid = (span.from + span.to) * 0.5;
+
+    const glm::dvec3 first = mid + EngineSpanOffset(mesh, 0);
+    EXPECT_NEAR(first.x, span.from.x, 1e-3);
+    EXPECT_NEAR(first.y, span.from.y - 25.0, 1e-3);
+    EXPECT_NEAR(first.z, span.from.z - 5.0, 1e-3);
+
+    const glm::dvec3 last = mid + EngineSpanOffset(mesh, 4);
+    EXPECT_NEAR(last.x, span.to.x, 1e-3);
+    EXPECT_NEAR(last.y, span.to.y - 25.0, 1e-3);
+    EXPECT_NEAR(last.z, span.to.z - 5.0, 1e-3);
+
+    // The straight branch never touches dst[3..7]: the normal passes through.
+    const float* v0 = mesh.interleaved.data();
+    EXPECT_FLOAT_EQ(v0[3], 1.0f);
+    EXPECT_FLOAT_EQ(v0[4], 0.0f);
+    EXPECT_FLOAT_EQ(v0[5], 0.0f);
+}
+
+// The same rigid span with "Flip" set negates the chord direction, so the model's
+// minX end lands on the TO waypoint (setup_rigid, src/sound/segsetup.c:230-235).
+TEST(PlacementSplines, EngineSpanMeshRigidFlipPutsMinXOnTheToWaypoint) {
+    const ParsedGeometry geometry = MakeBox(-200.0, 200.0, 25.0, 5.0);
+
+    spline_geometry::EngineSpanInput span;
+    span.from = glm::dvec3(1000.0, 2000.0, 3000.0);
+    span.to = glm::dvec3(3000.0, 2000.0, 3000.0);
+    span.rigid = true;
+    span.reversed = true;
+
+    const auto mesh = spline_geometry::BuildEngineSpanMesh(geometry, span);
+    ASSERT_EQ(mesh.vertexCount, 8);
+    const glm::dvec3 mid = (span.from + span.to) * 0.5;
+
+    const glm::dvec3 first = mid + EngineSpanOffset(mesh, 0);
+    EXPECT_NEAR(first.x, span.to.x, 1e-3);
+    EXPECT_NEAR(first.y, span.to.y - 25.0, 1e-3);
+}
+
+// spline_point (src/render/render.c:286-317) blends the two joints around the
+// vertex's local X, so the model's own X extremes land exactly on the waypoints.
+TEST(PlacementSplines, EngineSpanMeshCurvedSpanEndsLandOnTheWaypoints) {
+    const ParsedGeometry geometry = MakeProbeBox(-2.0, 2.0, 0.0, 40.0, -20.0);
+    const auto mesh = spline_geometry::BuildEngineSpanMesh(geometry, EngineSpan(0.0, 100.0));
+
+    ASSERT_EQ(mesh.vertexCount, 3);
+    const glm::dvec3 mid(50.0, 0.0, 0.0);
+
+    const glm::dvec3 atMinX = mid + EngineSpanOffset(mesh, 0);
+    EXPECT_NEAR(atMinX.x, 0.0, 1e-3);
+    EXPECT_NEAR(atMinX.y, 40.0, 1e-3);
+    EXPECT_NEAR(atMinX.z, -20.0, 1e-3);
+
+    const glm::dvec3 atMaxX = mid + EngineSpanOffset(mesh, 1);
+    EXPECT_NEAR(atMaxX.x, 100.0, 1e-3);
+    EXPECT_NEAR(atMaxX.y, 40.0, 1e-3);
+    EXPECT_NEAR(atMaxX.z, -20.0, 1e-3);
+
+    // The probe at x = 0 sits on the chord's midpoint for this symmetric span.
+    const glm::dvec3 atMid = mid + EngineSpanOffset(mesh, 2);
+    EXPECT_NEAR(atMid.x, 50.0, 1e-3);
+}
+
+// SplineObjSegment_Setup seeds BOTH bounds at zero (`o->minX = 0; o->maxX = 0;`,
+// src/sound/segsetup.c:277-278), so the range always contains the model origin.
+// A model sitting entirely at x > 0 is therefore parameterised from 0, not from
+// its own minimum: the vertex at x = 10 of a 10..20 model lands mid-span.
+TEST(PlacementSplines, EngineSpanMeshExtentScanStartsAtTheModelOrigin) {
+    const ParsedGeometry geometry = MakeProbeBox(10.0, 20.0, 10.0, 40.0, -20.0);
+    const auto mesh = spline_geometry::BuildEngineSpanMesh(geometry, EngineSpan(0.0, 100.0));
+
+    ASSERT_EQ(mesh.vertexCount, 3);
+    const glm::dvec3 mid(50.0, 0.0, 0.0);
+    const glm::dvec3 probe = mid + EngineSpanOffset(mesh, 2);
+    EXPECT_NEAR(probe.x, 50.0, 1e-3)
+        << "a zero-seeded scan gives the 10..20 model the range 0..20";
+
+    // A model that extends below the origin keeps its own negative minimum.
+    const ParsedGeometry negative = MakeProbeBox(-10.0, 20.0, -10.0, 40.0, -20.0);
+    const auto negMesh =
+        spline_geometry::BuildEngineSpanMesh(negative, EngineSpan(0.0, 100.0));
+    ASSERT_EQ(negMesh.vertexCount, 3);
+    const glm::dvec3 negProbe = mid + EngineSpanOffset(negMesh, 2);
+    EXPECT_NEAR(negProbe.x, 0.0, 1e-3);
+}
+
+// SplineObjWaypoint_Changed (src/tagitem/spline.c:771-772) clamps the waypoint's
+// "NumAreas" against the container's "Number of Matrices/Segment" and against 20;
+// SplineObjSegment_Setup (src/sound/segsetup.c:268-270) forces ONE sub-segment for
+// a rigid span, whatever the authored count says.
+TEST(PlacementSplines, EngineSpanMeshUsesTheAuthoredSegmentCount) {
+    const ParsedGeometry geometry = MakeProbeBox(-50.0, 50.0, -37.5, 40.0, -20.0);
+
+    spline_geometry::EngineSpanInput four = EngineSpan(0.0, 100.0);
+    four.rotFrom = glm::dvec3(0.0, 0.0, 1.5707963267948966);  // local X along +Y
+    four.waypointSegments = 4;
+    spline_geometry::EngineSpanInput twenty = four;
+    twenty.waypointSegments = 20;
+
+    const auto meshFour = spline_geometry::BuildEngineSpanMesh(geometry, four);
+    const auto meshTwenty = spline_geometry::BuildEngineSpanMesh(geometry, twenty);
+    ASSERT_EQ(meshFour.vertexCount, 3);
+    ASSERT_EQ(meshTwenty.vertexCount, 3);
+    EXPECT_GT(glm::length(EngineSpanOffset(meshFour, 2) - EngineSpanOffset(meshTwenty, 2)), 0.1)
+        << "the joint count must change where a mid-span vertex is sampled";
+
+    // The container's count is the upper bound: min(waypoint, container).
+    spline_geometry::EngineSpanInput containerClamped = four;
+    containerClamped.waypointSegments = 20;
+    containerClamped.maxSegments = 4;
+    const auto meshClamped = spline_geometry::BuildEngineSpanMesh(geometry, containerClamped);
+    EXPECT_EQ(meshClamped.interleaved, meshFour.interleaved);
+
+    // A waypoint that declares no "NumAreas" keeps the container's count
+    // (SplineObjWaypoint_Create, src/tagitem/spline.c:544).
+    spline_geometry::EngineSpanInput undeclared = four;
+    undeclared.waypointSegments = 0;
+    undeclared.maxSegments = 20;
+    const auto meshUndeclared = spline_geometry::BuildEngineSpanMesh(geometry, undeclared);
+    EXPECT_EQ(meshUndeclared.interleaved, meshTwenty.interleaved);
+
+    // Rigid spans are a single sub-segment: 1, not 4 or 20.
+    spline_geometry::EngineSpanInput rigidFour = four;
+    rigidFour.rigid = true;
+    spline_geometry::EngineSpanInput rigidTwenty = twenty;
+    rigidTwenty.rigid = true;
+    const auto meshRigidFour = spline_geometry::BuildEngineSpanMesh(geometry, rigidFour);
+    const auto meshRigidTwenty = spline_geometry::BuildEngineSpanMesh(geometry, rigidTwenty);
+    ASSERT_EQ(meshRigidFour.vertexCount, 3);
+    EXPECT_EQ(meshRigidFour.interleaved, meshRigidTwenty.interleaved);
+    EXPECT_NE(meshRigidFour.interleaved, meshTwenty.interleaved);
+}
+
+// The swap must not move a rigid span. `BendSegmentMesh` is the collision twin
+// (SplineObj_BendVerts, HOOK 0x4E1440, src/shadow/spline.c:29-46) the renderer
+// used to draw with; its rigid branch applies the same setup_rigid frame the
+// engine's straight branch reads out of ModelObj.matrix, so the two must agree on
+// the bent POSITIONS (their normals differ on purpose: the straight branch copies
+// the normal through, :643-647, while the collision twin rotates it).
+TEST(PlacementSplines, EngineSpanMeshRigidPositionsMatchTheCollisionTwin) {
+    const ParsedGeometry geometry = MakeBox(-200.0, 200.0, 25.0, 5.0);
+
+    const glm::dvec3 from(1000.0, 2000.0, 3000.0);
+    const glm::dvec3 to(2400.0, 1300.0, 3120.0);
+    const glm::dvec3 rotFrom(0.0, 0.0, 0.7);
+    const glm::dvec3 rotTo(0.0, 0.0, 1.1);
+
+    spline_geometry::EngineSpanInput engineSpan;
+    engineSpan.from = from;
+    engineSpan.to = to;
+    engineSpan.rotFrom = rotFrom;
+    engineSpan.rotTo = rotTo;
+    engineSpan.rigid = true;
+
+    SplineSpan collisionSpan;
+    collisionSpan.from = from;
+    collisionSpan.to = to;
+    collisionSpan.rotFrom = EngineEulerMatrix(rotFrom);
+    collisionSpan.rotTo = EngineEulerMatrix(rotTo);
+    collisionSpan.rigid = true;
+
+    const auto mesh = spline_geometry::BuildEngineSpanMesh(geometry, engineSpan);
+    const auto bent = BendSegmentMesh(geometry, collisionSpan);
+    ASSERT_EQ(mesh.vertexCount, 8);
+    ASSERT_EQ(bent.submeshVertexCounts.size(), 1u);
+
+    // The collision twin expands each triangle, so its emitted vertex `t * 3 + k`
+    // is the source vertex `geometry.triangles[t][k]`.
+    for (size_t t = 0; t < geometry.triangles.size(); ++t) {
+        for (size_t k = 0; k < 3; ++k) {
+            const size_t source = geometry.triangles[t][k];
+            const float* emitted = bent.interleaved.data() + (t * 3 + k) * 10;
+            const glm::dvec3 twin(emitted[0], emitted[1], emitted[2]);
+            EXPECT_LT(glm::length(EngineSpanOffset(mesh, source) - twin * 40.96), 1e-3)
+                << "triangle " << t << " corner " << k;
+        }
+    }
 }

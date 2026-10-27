@@ -6,6 +6,8 @@
 #define GLM_FORCE_SWIZZLE
 #include <glm/glm.hpp>
 
+#include "runtime/anim_rules.h"   // igi::SkinTransformInput (the engine's SkinVertex)
+
 // Scale applied to raw MEF coordinates (game units -> world units)
 constexpr float kMefNativeScale = 1.0f / 40.96f;
 
@@ -214,6 +216,24 @@ ParsedGeometry ParseMefFileFromMemory(const std::vector<uint8_t>& bytes,
 // Cumulative parent-chain sum of each bone's (parent-relative) rest pivot,
 // giving each bone's absolute rest-pose position (raw, unscaled units).
 std::vector<glm::vec3> ComputeBoneWorldPositionsPublic(const std::vector<BoneInfo>& bones);
+
+// The mesh as the engine's own skinner wants it. `BoneMesh_Skin` (HOOK 0x49B700,
+// src/dxinit/d3drender.c:226-313) reads ONE array of SkinVertex records laid out
+// as `base_count` base vertices followed by `extra_count` extra weighted
+// influences (mesh+0x10 base, mesh+0x0C extra, mesh+0x18 the array), so the two
+// runs are kept in that order and the counts travel with the records.
+//
+// The conversion is a field-for-field copy: RenderVertex already carries the
+// engine's SkinVertex fields in the engine's own order (anim_rules.h:640-649 -
+// {p[3], n[3], uv[2], w, target, bone}). No transform is applied here; the
+// positions stay in RAW game units, which is the space `Bone::matrix`/`Bone::pos`
+// operate in.
+struct EngineSkinVertices {
+    std::vector<igi::SkinTransformInput> records;  // base run, then extra run
+    int base_count = 0;
+    int extra_count = 0;
+};
+EngineSkinVertices BuildEngineSkinVertices(const ParsedGeometry& geometry);
 
 // Pose type-1 vertices the way OpenIGI does: one bone per base vertex, then extra
 // influences accumulate into TargetVertex. boneWorldTransforms null means rest

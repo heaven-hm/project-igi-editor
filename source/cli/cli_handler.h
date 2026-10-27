@@ -20,6 +20,10 @@ struct VerifyLevelParams {
 struct SmokeLevelParams {
     std::vector<int> levels;
     std::string gamePath;   // empty = Utils::GetIGIRootPath()
+    // Print per-model resolution provenance on stdout.  The same lines always go
+    // to the log at DEBUG (deduplicated per model); this only decides whether the
+    // default one-screen-per-level stdout is widened.
+    bool verbose = false;
 };
 
 class CLIHandler {

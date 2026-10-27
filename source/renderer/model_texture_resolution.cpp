@@ -207,7 +207,9 @@ std::vector<uint8_t> FindPreviewTextureEntry(
     const std::vector<ModelSourceArchiveIndex>& archives,
     const std::string& textureId,
     const std::function<std::vector<uint8_t>(const std::string& resPath,
-                                              const ResEntryInfo& info)>& readEntry) {
+                                              const ResEntryInfo& info)>& readEntry,
+    std::string* sourceRes) {
+    if (sourceRes) sourceRes->clear();
     auto tryId = [&](const std::string& id) -> std::vector<uint8_t> {
         // Same engine identity as FindModelSourceEntry below.
         const std::string entryName =
@@ -216,8 +218,11 @@ std::vector<uint8_t> FindPreviewTextureEntry(
             for (const auto& archive : archives) {
                 if (IsSharedCommonTextureArchive(archive.resPath) != common) continue;
                 const auto found = archive.entries.find(entryName);
-                if (found != archive.entries.end())
-                    return readEntry(archive.resPath, found->second);
+                if (found == archive.entries.end()) continue;
+                std::vector<uint8_t> bytes = readEntry(archive.resPath, found->second);
+                if (bytes.empty()) continue;  // zero-length member: keep looking
+                if (sourceRes) *sourceRes = archive.resPath;
+                return bytes;
             }
         }
         return {};
@@ -227,6 +232,16 @@ std::vector<uint8_t> FindPreviewTextureEntry(
     if (!bytes.empty()) return bytes;
     const std::string strippedId = StripTextureFormatSuffix(textureId);
     return strippedId == textureId ? std::vector<uint8_t>{} : tryId(strippedId);
+}
+
+bool SameArchivePath(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        const int ca = std::tolower(static_cast<unsigned char>(a[i]));
+        const int cb = std::tolower(static_cast<unsigned char>(b[i]));
+        if (ca != cb) return false;
+    }
+    return true;
 }
 
 bool IsTextureMappingCompatible(const std::vector<int>& materialSlots,

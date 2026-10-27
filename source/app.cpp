@@ -1206,9 +1206,9 @@ void App::Frame(float delta_seconds) {
 	DrawGameplayPlayerWeapon();
 
     // Find the "right hand" bone index in modelId's parsed bone list (REIH+MANB
-    // names), cached per modelId. This is the same index space EvaluateWorld's
-    // worldTransforms and the rest-pose bone list use (both come from the same
-    // shared character rig), so one lookup serves both the animating and static
+    // names), cached per modelId. This is the same index space the engine pose's
+    // bone array and the rest-pose bone list use (both come from the same shared
+    // character rig), so one lookup serves both the animating and static
     // weapon-attachment paths below.
     auto findHandBoneIndex = [this](const std::string& modelId, const ParsedGeometry* geo) -> int {
         auto cached = handBoneIndexCache_.find(modelId);
@@ -1256,8 +1256,12 @@ void App::Frame(float delta_seconds) {
             auto playback_it = active_playbacks.find(idx);
             if (playback_it == active_playbacks.end()) continue;
             auto& pb = playback_it->second;
-            std::vector<glm::mat4> worldTransforms;
-            animRegistry_.EvaluateWorld(pb.clip, pb.currentTimeMs, worldTransforms);
+            // The pose comes out of the ENGINE, not out of the editor's own
+            // slerp: `AnimPlayback` owns an `igi::AnimPlayer` and this is the
+            // frame its last `BoneObj_Update` 0x4D38C0 produced (one glm matrix
+            // per engine bone, metres, model-local). No re-pose here — see
+            // `AnimPlayer::PoseFromLastStep`.
+            const std::vector<glm::mat4>& worldTransforms = pb.WorldTransforms();
             if (worldTransforms.empty()) continue;
 
             const auto& obj = objs[idx];
@@ -1270,12 +1274,16 @@ void App::Frame(float delta_seconds) {
             objMat = glm::rotate(objMat, (float)obj.rot.x, glm::vec3(1, 0, 0));
             objMat = glm::rotate(objMat, (float)obj.rot.y, glm::vec3(0, 1, 0));
             objMat = glm::scale(objMat, glm::vec3(40.96f * obj.scale));
-            renderer_.DrawSkinnedMesh(obj.modelId, obj.isBuilding, worldTransforms, objMat);
+            // The mesh is skinned by the engine's own BoneMesh_Skin 0x49B700
+            // over these same bone records (raw `Bone::matrix` + `Bone::pos`),
+            // which is what `Direct3DRender_DrawBoneMesh` 0x49F700 does.
+            renderer_.DrawSkinnedMesh(obj.modelId, obj.isBuilding, pb.RawBoneTransforms(), objMat);
 
             if (show_anim_skeleton_ && idx == selected_object_index_) {
-                // boneParents is indexed by bone ID (same indexing EvaluateWorld uses for
-                // worldTransforms), so DrawAnimSkeleton can connect each bone to its real
-                // parent instead of assuming a flat chain of consecutive array indices.
+                // boneParents is indexed by bone ID (the same engine-bone indexing
+                // the pose uses), so DrawAnimSkeleton can connect each bone to its
+                // real parent instead of assuming a flat chain of consecutive
+                // array indices.
                 std::vector<int> boneParents(worldTransforms.size(), -1);
                 for (const auto& b : pb.clip->bones) {
                     if (b.index >= 0 && (size_t)b.index < boneParents.size())
@@ -3288,7 +3296,10 @@ void App::UpdateAnimations(float dtSec) {
     // Skip if global pause is on
     // (renderer pause check is done in the renderer)
 
-    // For each active playback, update time
+    // Each playback drives the ENGINE's clock: `AnimPlayback::Update` hands the
+    // elapsed wall-clock time to `AnimPlayer::AdvanceSeconds`, which steps whole
+    // engine frames (gTicksPerFrame, src/lod/boneobj.c:86-90). The editor no
+    // longer accumulates ticks itself.
     for (auto& [idx, pb] : animPlaybacks_) {
         pb.Update(dtSec * 1000.f);
     }

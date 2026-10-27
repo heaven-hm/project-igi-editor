@@ -1,10 +1,14 @@
 #pragma once
 
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 #include <unordered_map>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+
+#include "runtime/anim_rules.h"   // igi::BoneTransform (the engine's Bone records)
 
 // `igi::AnimPlayer` lives in source/runtime/anim_player.h, which needs this
 // header for `AnimationClip`. Only a forward declaration can live here; a
@@ -157,6 +161,26 @@ std::vector<int> FindAiScriptAnimationIds(const std::string& qvmPath);
 int FindAiScriptPatrolPathId(const std::string& qvmPath);
 
 // ── Per-object animation playback state ─────────────────────────────────────
+// This is the editor's ONE playback path, and it is the engine's: the struct
+// owns an `igi::AnimPlayer` (source/runtime/anim_player.{h,cpp}) built from the
+// same clip, and every clock and pose it reports comes out of that player -
+// `Anim_Play` 0x4D61D0, `BoneObj_Update` 0x4D38C0, `BoneObj_GetEvents` 0x4D3210.
+// The implementation is in source/runtime/anim_playback.cpp, next to the engine
+// driver, so the host test lane can link it without this file's Windows
+// dependencies (animation.cpp pulls in utils.h).
+//
+// The fields below stay editor-owned because they are editor decisions:
+//   * `clip`      - which clip the editor chose for this object;
+//   * `playing`   - the editor's pause gate (the engine has no Pause);
+//   * `speed`     - handed to the engine through Anim_SetSpeed 0x4D6580;
+//   * `forceLoop` - keeps the preview running for a clip whose own tp_flag is
+//                   non-looping; it becomes Anim_Play's kAnimLoop instance flag.
+// `currentTimeMs` is a MIRROR of the engine clock (`Anim_GetTime` 0x4D6500),
+// which counts TICKS at 4800/second - the name is the editor's, the unit is the
+// engine's (src/boneobj/anim.c:9).
+//
+// Copying is deleted on purpose: a copy would duplicate the engine records and
+// silently give one object a second, independent clock. Move it instead.
 struct AnimPlayback {
     const AnimationClip* clip = nullptr;
     float currentTimeMs = 0.f;
@@ -164,36 +188,93 @@ struct AnimPlayback {
     float speed = 1.0f;
     bool  forceLoop = false;  // editor: keep looping even if clip's tp_flag is non-looping
 
-    void Reset() { currentTimeMs = 0.f; playing = false; }
-    void Start(const AnimationClip* c) { clip = c; currentTimeMs = 0.f; playing = true; }
+    // Constructed, destroyed and moved out of line: `igi::AnimPlayer` is
+    // incomplete in this header, and a defaulted constructor or destructor here
+    // would need its complete type for the member's cleanup path.
+    AnimPlayback();
+    ~AnimPlayback();
+    AnimPlayback(const AnimPlayback&) = delete;
+    AnimPlayback& operator=(const AnimPlayback&) = delete;
+    AnimPlayback(AnimPlayback&& other) noexcept;
+    AnimPlayback& operator=(AnimPlayback&& other) noexcept;
+
+    // Rewinds to the clip's first frame and stops the clock.
+    void Reset();
+    // Builds the engine player for `c` and starts it from tick 0.
+    void Start(const AnimationClip* c);
     void Stop() { playing = false; }
     void Pause() { playing = false; }
     void Resume() { if (clip) playing = true; }
+    // Advances the engine's own clock. `dtMs` is REAL elapsed milliseconds; the
+    // conversion to engine ticks happens inside the engine's frame arithmetic
+    // (one Step is gTicksPerFrame = 160 ticks, src/lod/boneobj.c:86-90), never
+    // by feeding a tick value into a millisecond parameter.
     void Update(float dtMs);
+    // The clip's end, in the engine's own terms: the BEF stores the engine length
+    // + 1 (`AnimInit`'s third field), and `BoneObj_AnimEventsCB` calls a
+    // non-looping clock finished once `time >= length`
+    // (src/boneobj/boneobj.c:873-941). So the test is `length_ms - 1`.
     bool IsFinished() const {
         if (!clip) return true;
-        return !playing && currentTimeMs >= (float)clip->duration_ms();
+        const int engine_length = clip->duration_ms() - 1;
+        return !playing && currentTimeMs >= (float)engine_length;
     }
+
+    // ── the engine path ─────────────────────────────────────────────────────
+    // True when the engine player was built and can pose this clip. A clip the
+    // engine cannot play (no bones, or no position track - retail faults on the
+    // second, boneobj.c:1014) is reported here instead of being faked. Out of
+    // line: `igi::AnimPlayer` is incomplete in this header.
+    bool EngineReady() const;
+
+    // The pose the engine produced for the frame it last stepped, in METRES and
+    // in the model's own frame - the space `Renderer::DrawAnimSkeleton` and the
+    // weapon-attachment matrix expect. Empty when `EngineReady()` is false.
+    const std::vector<glm::mat4>& WorldTransforms();
+
+    // The same bones in the engine's own form: `Bone::matrix` (row-major 3x3)
+    // and `Bone::pos` in RAW units, which is what `BoneMesh_Skin` reads. Valid
+    // after `WorldTransforms()`/`Update()`; both refresh the same records.
+    const std::vector<igi::BoneTransform>& RawBoneTransforms();
+
+private:
+    // Creates the engine player for `clip` and plays it with the current flags.
+    void BuildEnginePlayer();
+    // Re-plays when `forceLoop` changed and re-sets the speed when it changed:
+    // Anim_Play bakes the loop flag into the instance (src/boneobj/anim.c:38-58,
+    // stored by BoneObj_InitAnimInst, boneobj.c:1013) and InitAnimInst overwrites
+    // `inst.speed` with gTicksPerFrame, so both have to be re-applied after a
+    // (re)play rather than set once.
+    void SyncEngineFlags();
+
+    std::unique_ptr<igi::AnimPlayer> engine_;
+    uint32_t engine_flags_ = 0;   // the flags the player was last played with
+    float engine_speed_ = 1.0f;   // the multiplier the player was last set to
 };
 
-// The static mesh may only be replaced when playback is active and the
-// skeletal geometry was loaded. This keeps the render gate independently
-// testable and avoids making an object invisible on a skin-load failure.
+// The static mesh may only be replaced when playback is active, the engine can
+// actually pose the clip, and the skeletal geometry was loaded. This keeps the
+// render gate independently testable and avoids making an object invisible on a
+// skin-load failure OR on a clip the engine refuses to play (an empty pose would
+// suppress the static mesh and draw nothing at all).
 inline bool ShouldUseSkinnedReplacement(const AnimPlayback& playback,
                                         int object_index,
                                         size_t object_count,
                                         bool object_deleted,
                                         bool has_skin_geometry) {
-    return playback.clip != nullptr && playback.playing &&
+    return playback.clip != nullptr && playback.playing && playback.EngineReady() &&
            object_index >= 0 && static_cast<size_t>(object_index) < object_count &&
            !object_deleted && has_skin_geometry;
 }
 
 // ── The engine's own playback path (#73) ─────────────────────────────────────
 //
-// Everything above this line is the editor's own reconstruction from the BEF
-// text: `Evaluate`/`EvaluateWorld` slerp with glm and place each bone from a
-// local translation, and `AnimPlayback::Update` counts MILLISECONDS.
+// `AnimationRegistry::Evaluate`/`EvaluateWorld` above are the editor's own
+// reconstruction from the BEF text: they slerp with glm and place each bone from
+// a local translation. They are still used to answer "does this clip move at
+// all" and for offline inspection, but they are NO LONGER the editor's playback
+// path: `AnimPlayback` (above) owns an `igi::AnimPlayer` and every clock and
+// pose the editor renders comes from it.
 //
 // `igi::AnimPlayer` (source/runtime/anim_player.{h,cpp}, on top of the pure
 // translation in source/runtime/anim_rules.{h,cpp}) is the ENGINE's path
@@ -208,20 +289,21 @@ inline bool ShouldUseSkinnedReplacement(const AnimPlayback& playback,
 //   Anim_PrepareSlerps   0x4D6D40  src/haze/anim.c:40-84
 //   BoneMesh_Skin        0x49B700  src/dxinit/d3drender.c:226-313
 //
-// `AnimPlayer::PoseModelLocal()` is a drop-in for the `boneWorldTransforms`
-// argument of `Renderer::DrawSkinnedMesh` and `Renderer::DrawAnimSkeleton`:
+// `AnimPlayer::PoseFromLastStep()` is a drop-in for the pose the renderer wants:
 // one glm matrix per engine bone, in METRES and in the model's own frame.
-// `AnimPlayer::Skin` is `BoneMesh_Skin` itself, over the engine's vertex
-// records.
+// `BoneMesh_Skin` is called by `Renderer::DrawSkinnedMesh` over the engine's
+// vertex records (HOOK 0x49B700; the retail caller is
+// `Direct3DRender_DrawBoneMesh` 0x49F700, src/bonemesh/d3drender.c:164).
 //
 // TWO THINGS A CALLER MUST NOT MIX, both measured against the shipped data:
 //
 //   1. The BEF text's key times are engine TICKS (4800/second), NOT
 //      milliseconds - `AnimationClip::time_ms` and `AnimationClip::length_ms`
 //      are misnomers. `AnimPlayer` consumes ticks; `AnimPlayback::Update` takes
-//      real elapsed MILLISECONDS and converts to ticks (`kTicksPerMs`, from
-//      kTicksPerSecond at src/boneobj/anim.c:9), so `currentTimeMs` holds ticks
-//      despite its name. Never feed one clock's value to the other.
+//      real elapsed MILLISECONDS and hands them to `AnimPlayer::AdvanceSeconds`,
+//      which converts through gTicksPerFrame (src/lod/boneobj.c:86-90), so
+//      `currentTimeMs` holds ticks despite its name. Never feed one clock's
+//      value to the other.
 //   2. `AnimPlayer::Step()` is ONE engine frame (gTicksPerFrame = 160 ticks at
 //      the game's 30 fps), which is what the retail game loop does.
 //      `AdvanceSeconds` is the editor-side accumulator that calls it.

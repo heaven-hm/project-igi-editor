@@ -74,6 +74,50 @@ ModelEntryHit Renderer_Objects::FindMeshEntryAcrossLevels(const std::string& mod
     return hit;
 }
 
+// Provenance for the non-obvious mesh case.  GetOrLoadMesh / GetOrExtractMefTemp /
+// GetOrLoadParsedGeometry / GetOrLoadSkinGeometry all fall back across levels, and
+// that fallback used to be silent: the only line was a generic "Loaded 'X' from
+// ResCache" that named neither the archive nor the level.  The engine has no such
+// walk — Mesh_Load (HOOK 0x4CF390) resolves "LOCAL:models/%s.mef"
+// (src/model/model.c:364) from the mounted archive of the level that owns the model
+// — so when the editor answers from a different level's archive the log says so.
+void Renderer_Objects::LogCrossLevelModelResolution(const std::string& modelId,
+                                                    int resolvedFromLevel,
+                                                    const std::string& resPath) const {
+    if (modelId.empty()) return;
+    if (resolvedFromLevel <= 0 || resolvedFromLevel == current_level_) return;
+    Logger::Get().Log(LogLevel::DEBUG,
+        "[Renderer_Objects] '" + modelId + "' resolved from level" +
+        std::to_string(resolvedFromLevel) + "'s archive " + resPath +
+        ", not the level" + std::to_string(current_level_) +
+        " archive — engine rule is the owner level's archive (Mesh_Load HOOK 0x4CF390, src/model/model.c:364)");
+}
+
+// Every .res archive currently indexed, with the member count each index holds.
+// LoadResCache is append-only within a level pass, so diffing this before and after
+// the resolution walk shows exactly which foreign archives a fallback pulled in.
+std::vector<Renderer_Objects::SmokeArchiveInfo> Renderer_Objects::SmokeIndexedArchives() const {
+    std::vector<SmokeArchiveInfo> out;
+    out.reserve(res_tex_indexes_.size() + res_model_indexes_.size());
+    for (const auto& index : res_tex_indexes_) {
+        out.push_back({index.res_path, true, index.index.size()});
+    }
+    for (const auto& index : res_model_indexes_) {
+        out.push_back({index.res_path, false, index.index.size()});
+    }
+    return out;
+}
+
+// The level the global DAT map names as this model's owner (0 = no entry).  The
+// smoke check uses it to tell "the archive that owns the model answered" from "the
+// editor's cross-level fallback answered".
+int Renderer_Objects::SmokeModelOwnerLevel(const std::string& modelId) {
+    if (modelId.empty()) return 0;
+    EnsureGlobalTextureMapLoaded();
+    auto it = model_level_map_.find(modelId);
+    return it == model_level_map_.end() ? 0 : it->second;
+}
+
 // Resolution-only half of GetOrLoadTexture (its steps 1, 1b and 2): does this id
 // resolve to texture bytes, from the archive the owning level's DAT entry points
 // at, from any other indexed archive, or from a loose .tex on disk?  No decode,
@@ -130,6 +174,7 @@ Renderer_Objects::ResolveModelForSmoke(const std::string& modelId, bool isBuildi
         if (!path.empty()) {
             out.meshResolved = true;
             out.meshSource = path;
+            out.meshFromLooseFile = true;
         }
     }
 

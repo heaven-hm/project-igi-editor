@@ -117,34 +117,11 @@ int FindAiScriptPatrolPathId(const std::string& qvmPath) {
     return pathId;
 }
 
-// ── AnimPlayback::Update ─────────────────────────────────────────────────────
-
-void AnimPlayback::Update(float dtMs) {
-    if (!clip || !playing) return;
-    // The engine's animation clock counts TICKS at 4800 a second
-    // (`static const float kTicksPerSecond = 4800.0f`, src/boneobj/anim.c:9; the
-    // header comment at anim.c:1 and BoneObj::length, src/boneobj/boneobjtypes.h:45,
-    // both say "in ticks, 4800 per second").  AnimationClip::duration_ms() and the
-    // key times are those same tick values, so advancing the counter by elapsed
-    // MILLISECONDS ran every preview 4.8x slow.  Convert, then scale by `speed`.
-    constexpr float kTicksPerMs = 4800.0f / 1000.0f;
-    currentTimeMs += dtMs * kTicksPerMs * speed;
-    int dur = clip->duration_ms();
-    if (dur > 0) {
-        if (clip->loop() || forceLoop) {
-            // Loop: wrap around. forceLoop keeps editor auto-play running
-            // continuously even for clips whose own tp_flag is non-looping —
-            // so every AI animates forever instead of freezing after one cycle.
-            while (currentTimeMs >= (float)dur) currentTimeMs -= (float)dur;
-        } else {
-            // Clamp and stop
-            if (currentTimeMs >= (float)dur) {
-                currentTimeMs = (float)dur;
-                playing = false;
-            }
-        }
-    }
-}
+// ── AnimPlayback ────────────────────────────────────────────────────────────
+// The playback state is implemented in source/runtime/anim_playback.cpp, with
+// the engine driver it now delegates to (`igi::AnimPlayer`): this file pulls in
+// utils.h/windows.h, so a playback implementation here could not be linked by
+// the host test lane. See animation.h for the contract.
 
 bool AnimationClipHasTemporalMotion(const AnimationClip& clip) {
     constexpr float kEpsilon = 0.0001f;

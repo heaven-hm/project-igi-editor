@@ -48,8 +48,12 @@ void CLIHandler::PrintHelp() {
       << "  --smoke-level --level N [--level N ...]  Headless loader smoke check\n"
       << "      (loads the level's objects and resolves every model + texture\n"
       << "       through the renderer's own path; no GUI, no OpenGL context.\n"
-      << "       Exits non-zero and prints the names of anything missing.)\n"
+      << "       Prints which .res archives were indexed, where each resolved\n"
+      << "       model came from, distinct texture counts, per-level time and a\n"
+      << "       whole-run total.  Exits non-zero and prints the names of\n"
+      << "       anything missing.)\n"
       << "      --game-path <path>  IGI1 install path\n"
+      << "      --smoke-verbose     Also print per-model resolution provenance\n"
       << "  --extract-level <N> [outdir]  Extract level N resources\n\n"
       << "  --import-model <N> <model> [--source-level <N>]  Import a model family into level N\n\n"
       << "  --import-mef <in.obj> <out.mef>   Import an OBJ mesh as a static .mef model\n"
@@ -163,6 +167,8 @@ int CLIHandler::Process(int argc, char **argv) {
           params.levels.push_back(std::stoi(argv[i + 2])); i += 2;
         } else if (nx == "--game-path" && i + 2 < argc) {
           params.gamePath = argv[i + 2]; i += 2;
+        } else if (nx == "--smoke-verbose") {
+          params.verbose = true; ++i;
         } else {
           // Bare integer treated as a level number (--smoke-level 2)
           try { params.levels.push_back(std::stoi(nx)); ++i; }

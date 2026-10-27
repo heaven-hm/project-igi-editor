@@ -310,3 +310,129 @@ TEST(MefDualSetTest, CollisionChunksDoNotDriveRenderPartitions) {
     ASSERT_EQ(geo.tamcRecords.size(), 1u);
     EXPECT_EQ(geo.tamcRecords[0].matId, 7);
 }
+
+// ---------------------------------------------------------------------------
+// The engine's own skinner input
+//
+// `BoneMesh_Skin` (HOOK 0x49B700, src/dxinit/d3drender.c:226-313) is what the
+// editor's skinned draw now calls, through
+// `EngineSkinVertices BuildEngineSkinVertices(const ParsedGeometry&)`. These
+// tests pin the conversion, because a wrong field or a wrong run boundary is
+// invisible until a character renders wrong - and they pin the clamp, because
+// the engine reads `mesh[0x10]` base records and then `mesh[0x0C]` more from the
+// same pointer with NO bound check (d3drender.c:254-274).
+// ---------------------------------------------------------------------------
+
+TEST(MefEngineSkinVerticesTest, MapsEveryFieldAndKeepsTheEngineRunOrder) {
+    ParsedGeometry geometry;
+    geometry.baseVertexCount = 2;
+    geometry.extraInfluenceCount = 1;
+    geometry.vertices.resize(3);
+
+    geometry.vertices[0].rawPos = glm::vec3(40.96f, 1.5f, -2.25f);
+    geometry.vertices[0].normal = glm::vec3(0.0f, 0.0f, 1.0f);
+    geometry.vertices[0].uv = glm::vec2(0.25f, 0.5f);
+    geometry.vertices[0].weight = 1.0f;
+    geometry.vertices[0].boneIndex = 3;
+    geometry.vertices[0].localVertexId = 0;
+
+    geometry.vertices[1].rawPos = glm::vec3(-8.0f, 0.0f, 4.0f);
+    geometry.vertices[1].normal = glm::vec3(0.0f, 1.0f, 0.0f);
+    geometry.vertices[1].uv = glm::vec2(0.75f, 0.125f);
+    geometry.vertices[1].weight = 0.5f;
+    geometry.vertices[1].boneIndex = 5;
+    geometry.vertices[1].localVertexId = 1;
+
+    // The extra influence: its own bone/weight, and a target that names the BASE
+    // vertex it accumulates into (SkinVertex.target, anim_rules.h:647).
+    geometry.vertices[2].rawPos = glm::vec3(4.0f, 8.0f, 16.0f);
+    geometry.vertices[2].normal = glm::vec3(0.0f, 0.0f, -1.0f);
+    geometry.vertices[2].uv = glm::vec2(0.0f, 1.0f);
+    geometry.vertices[2].weight = 0.25f;
+    geometry.vertices[2].boneIndex = 7;
+    geometry.vertices[2].localVertexId = 1;
+
+    const EngineSkinVertices built = BuildEngineSkinVertices(geometry);
+
+    ASSERT_EQ(built.base_count, 2);
+    ASSERT_EQ(built.extra_count, 1);
+    ASSERT_EQ(built.records.size(), 3u);
+
+    const igi::SkinTransformInput& base0 = built.records[0];
+    EXPECT_FLOAT_EQ(base0.p[0], 40.96f);
+    EXPECT_FLOAT_EQ(base0.p[1], 1.5f);
+    EXPECT_FLOAT_EQ(base0.p[2], -2.25f);
+    EXPECT_FLOAT_EQ(base0.n[2], 1.0f);
+    EXPECT_FLOAT_EQ(base0.uv[0], 0.25f);
+    EXPECT_FLOAT_EQ(base0.uv[1], 0.5f);
+    EXPECT_FLOAT_EQ(base0.w, 1.0f);
+    EXPECT_EQ(base0.bone, 3);
+    EXPECT_EQ(base0.target, 0);
+
+    const igi::SkinTransformInput& base1 = built.records[1];
+    EXPECT_FLOAT_EQ(base1.p[0], -8.0f);
+    EXPECT_FLOAT_EQ(base1.w, 0.5f);
+    EXPECT_EQ(base1.bone, 5);
+    EXPECT_EQ(base1.target, 1);
+
+    // The extra run comes after the base run, and carries its own bone/weight.
+    const igi::SkinTransformInput& extra = built.records[2];
+    EXPECT_FLOAT_EQ(extra.p[2], 16.0f);
+    EXPECT_FLOAT_EQ(extra.w, 0.25f);
+    EXPECT_EQ(extra.bone, 7);
+    EXPECT_EQ(extra.target, 1) << "the extra influence must still name its base vertex";
+}
+
+TEST(MefEngineSkinVerticesTest, ClampsBothCountsToTheParsedArray) {
+    // A malformed MEF can over-declare either count. The engine would walk off
+    // the end of the array (d3drender.c:254-274 has no bound check); the port
+    // must not.
+    ParsedGeometry geometry;
+    geometry.baseVertexCount = 5;
+    geometry.extraInfluenceCount = 9;
+    geometry.vertices.resize(2);
+
+    const EngineSkinVertices built = BuildEngineSkinVertices(geometry);
+    EXPECT_EQ(built.base_count, 2);
+    EXPECT_EQ(built.extra_count, 0);
+    EXPECT_EQ(built.records.size(), 2u);
+}
+
+TEST(MefEngineSkinVerticesTest, AnEmptyMeshProducesNoRecords) {
+    ParsedGeometry geometry;
+    geometry.baseVertexCount = 0;
+    geometry.extraInfluenceCount = 0;
+
+    const EngineSkinVertices built = BuildEngineSkinVertices(geometry);
+    EXPECT_EQ(built.base_count, 0);
+    EXPECT_EQ(built.extra_count, 0);
+    EXPECT_TRUE(built.records.empty());
+}
+
+TEST(MefEngineSkinVerticesTest, DrivesTheEngineSkinnerOverTheParsedRuns) {
+    // End to end through the engine's own entry point: one base vertex bound to
+    // the identity bone plus one extra influence on the same bone must come out
+    // as the base pass plus the accumulated share
+    // (`t->x = w * X + t->x`, src/dxinit/d3drender.c:287-289).
+    ParsedGeometry geometry;
+    geometry.baseVertexCount = 1;
+    geometry.extraInfluenceCount = 1;
+    geometry.vertices.resize(2);
+    for (auto& vertex : geometry.vertices) {
+        vertex.rawPos = glm::vec3(40.96f, 0.0f, 0.0f);
+        vertex.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+        vertex.boneIndex = 0;
+        vertex.weight = 0.5f;
+    }
+    geometry.vertices[1].localVertexId = 0;
+
+    const EngineSkinVertices built = BuildEngineSkinVertices(geometry);
+    const igi::BoneTransform identity;
+    std::vector<igi::SkinTransformOutput> out;
+    ASSERT_TRUE(igi::BoneMeshSkin(built.records.data(), built.base_count, built.extra_count,
+                                  &identity, 1, /*rigid=*/false, out));
+    ASSERT_EQ(out.size(), 1u);
+    // base: 0.5 * 40.96, extra: 0.5 * 40.96 accumulated on top.
+    EXPECT_NEAR(out[0].position[0], 40.96f, 1e-4f);
+    EXPECT_NEAR(out[0].normal[2], 1.0f, 1e-6f);
+}

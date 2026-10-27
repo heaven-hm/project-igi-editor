@@ -21,11 +21,21 @@
 //   per-level totals.  Missing models/textures are printed by name and the command
 //   exits non-zero.
 //
+//   Beyond pass/fail it answers WHY: which .res archives were indexed for the
+//   level, which branch of the resolution path answered each model (the level's own
+//   archive, the owner level's archive, another level's archive, the shared common
+//   archive, or a loose file on disk), how many distinct textures were involved,
+//   how long the level took, and a whole-run total whose distinct counts are
+//   unions across levels.  Per-model provenance goes to the log at DEBUG (and to
+//   stdout under --smoke-verbose), deduplicated per model so the default output
+//   stays readable.
+//
 // WHAT IT DOES NOT PROVE
 //   Resolution only.  It does not parse the mesh, bind a texture, upload anything,
 //   or draw a frame — a model that resolves but fails to parse still passes here.
 //   It also mirrors the *editor's* search (which falls back across levels and to
-//   loose files on disk), not the game's single-archive lookup.
+//   loose files on disk), not the game's single-archive lookup: that is exactly why
+//   the per-model source breakdown is printed instead of one "resolved" number.
 #include "pch.h"
 #include "cli_handler.h"
 #include "config.h"
@@ -36,10 +46,13 @@
 #include "level/level_objects.h"
 #include "level/qvm_parser.h"
 #include "level/qvm_decompiler.h"
+#include "logger.h"
 
+#include <chrono>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -108,8 +121,79 @@ void PrintMissing(const char* title, const std::vector<SmokeMissingEntry>& entri
                   << " x" << entry.placements
                   << "  e.g. " << entry.exampleType;
         if (!entry.exampleName.empty()) std::cout << " \"" << entry.exampleName << "\"";
-        std::cout << "\n";
+        if (!entry.levels.empty()) {
+            std::cout << "  [level" << (entry.levels.size() > 1 ? "s " : " ");
+            for (size_t i = 0; i < entry.levels.size(); ++i) {
+                if (i) std::cout << ",";
+                std::cout << entry.levels[i];
+            }
+            std::cout << "]";
+        }
+        std::cout << std::right << "\n";
     }
+}
+
+// The mesh-source breakdown, keyed by the archive that answered.  The engine only
+// ever resolves from the level being played's archive (Mesh_Load HOOK 0x4CF390,
+// src/model/model.c:364), so a non-zero "other level" or "loose file" is the
+// editor's fallback answering where the game would find nothing.
+std::string DescribeMeshSources(int thisLevel, int ownerLevel, int otherLevel,
+                                int common, int loose) {
+    return "this level " + std::to_string(thisLevel) +
+           ", owner level " + std::to_string(ownerLevel) +
+           ", other level " + std::to_string(otherLevel) +
+           ", common archive " + std::to_string(common) +
+           ", loose file " + std::to_string(loose);
+}
+
+// "level7 textures (1234)" / "common models (800)" — which .res archive, the level
+// it belongs to, and how many members it contributed.
+std::string DescribeArchive(const Renderer_Objects::SmokeArchiveInfo& archive) {
+    const int level = SmokeSourceLevelFromPath(archive.resPath);
+    const std::string where = level > 0 ? ("level" + std::to_string(level)) : "common";
+    return where + (archive.isTexture ? " textures (" : " models (") +
+           std::to_string(archive.entries) + ")";
+}
+
+std::string JoinArchives(const std::vector<Renderer_Objects::SmokeArchiveInfo>& archives) {
+    std::string out;
+    for (size_t i = 0; i < archives.size(); ++i) {
+        if (i) out += ", ";
+        out += DescribeArchive(archives[i]);
+    }
+    return out;
+}
+
+// Archives the resolution walk indexed that were not there before it ran — i.e. the
+// foreign levels a cross-level fallback had to pull in.
+std::vector<Renderer_Objects::SmokeArchiveInfo> ArchivesAddedByResolution(
+    const std::vector<Renderer_Objects::SmokeArchiveInfo>& before,
+    const std::vector<Renderer_Objects::SmokeArchiveInfo>& after) {
+    std::vector<Renderer_Objects::SmokeArchiveInfo> added;
+    for (const auto& candidate : after) {
+        bool seen = false;
+        for (const auto& existing : before) {
+            if (SameArchivePath(existing.resPath, candidate.resPath)) { seen = true; break; }
+        }
+        if (!seen) added.push_back(candidate);
+    }
+    return added;
+}
+
+// One line naming the branch that answered, for the per-model DEBUG detail.  The
+// DAT owner is shown too: it is the renderer's "first level whose .dat lists the
+// model" (EnsureGlobalTextureMapLoaded, renderer_objects_texture.cpp:88-91), which
+// is a different fact from which archive holds the bytes.
+std::string DescribeModelSource(const SmokeModelResult& model) {
+    if (!model.meshResolved) return "UNRESOLVED";
+    std::string out = model.meshSource + " [";
+    out += SmokeMeshSourceLabel(model.meshSourceKind);
+    if (model.meshSourceLevel > 0) out += ", level " + std::to_string(model.meshSourceLevel);
+    out += "]";
+    if (model.meshOwnerLevel > 0 && model.meshOwnerLevel != model.meshSourceLevel) {
+        out += " (DAT owner level " + std::to_string(model.meshOwnerLevel) + ")";
+    }
+    return out;
 }
 
 }  // namespace
@@ -137,6 +221,10 @@ int CLIHandler::SmokeLevel(const SmokeLevelParams& params) {
     for (int n : params.levels) std::cout << " " << n;
     std::cout << "\n";
     std::cout << "  Renderer  : resolution only, no OpenGL context (Init() is never called)\n";
+    std::cout << "  Detail    : " << (params.verbose
+        ? "per-model provenance on stdout (--smoke-verbose)"
+        : "per-level summaries; --smoke-verbose for per-model provenance")
+              << "\n";
     std::cout.flush();
 
     // No Init(): the smoke path must not need a GL context.  Every call below is a
@@ -145,8 +233,13 @@ int CLIHandler::SmokeLevel(const SmokeLevelParams& params) {
     Renderer_Objects robj;
 
     int failedLevels = 0;
+    int cleanLevels = 0;
+    std::vector<SmokeTotals> perLevel;
+    perLevel.reserve(params.levels.size());
+
     for (size_t i = 0; i < params.levels.size(); ++i) {
         const int levelNo = params.levels[i];
+        const auto levelStart = std::chrono::steady_clock::now();
 
         std::cout << "\n";
         PrintSep();
@@ -159,6 +252,14 @@ int CLIHandler::SmokeLevel(const SmokeLevelParams& params) {
         robj.ClearCaches();
         robj.SetLevel(levelNo);
         robj.LoadResCache(levelNo, igiPath);
+
+        // The level's own four archives (textures+models for the level and for the
+        // shared common archive).  A cross-level fallback appends more later.
+        const std::vector<Renderer_Objects::SmokeArchiveInfo> archivesBefore =
+            robj.SmokeIndexedArchives();
+        std::cout << "  .res indexed      : " << archivesBefore.size() << " archive(s) — "
+                  << JoinArchives(archivesBefore) << "\n";
+        std::cout.flush();
 
         SmokeLevelResult result;
         result.levelNo = levelNo;
@@ -184,6 +285,9 @@ int CLIHandler::SmokeLevel(const SmokeLevelParams& params) {
         }
         if (!loaded) {
             std::cerr << "  [ERROR] " << error << "\n";
+            const long long elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - levelStart).count();
+            std::cout << "  Time              : " << FormatSmokeDurationMs(elapsedMs) << "\n";
             std::cout << "\n  Result: FAIL (" << error << ")\n";
             std::cout.flush();
             ++failedLevels;
@@ -200,6 +304,12 @@ int CLIHandler::SmokeLevel(const SmokeLevelParams& params) {
             [](const std::string& id) { return Renderer_Objects::IsSkippedModelId(id); },
             &stats);
 
+        // Per-model detail is deduplicated per level: the same model placed forty
+        // times answers the same question once.  (118 identical per-object warnings
+        // were already deleted from the renderer for exactly this reason.)
+        std::set<std::string> detailedModels;
+        std::vector<std::string> detailLines;
+
         result.models.reserve(refs.size());
         for (const auto& ref : refs) {
             SmokeModelResult model;
@@ -209,6 +319,7 @@ int CLIHandler::SmokeLevel(const SmokeLevelParams& params) {
                     robj.ResolveModelForSmoke(ref.modelId, ref.isBuilding);
                 model.meshResolved = resolved.meshResolved;
                 model.meshSource = resolved.meshSource;
+                model.meshFromLooseFile = resolved.meshFromLooseFile;
                 model.textureIds = resolved.textureIds;
                 model.resolvedTextureIds = resolved.resolvedTextureIds;
                 model.missingTextureIds = resolved.missingTextureIds;
@@ -220,10 +331,43 @@ int CLIHandler::SmokeLevel(const SmokeLevelParams& params) {
                 model.meshResolved = false;
                 model.meshSource = "unknown exception";
             }
+
+            // Which branch answered: archive hits carry a "res:<archive>" source,
+            // the disk fallback a path.  The owner level comes from the global DAT
+            // map the renderer itself uses for its cross-level walk.
+            const int sourceLevel = model.meshFromLooseFile
+                ? SmokeSourceLevelFromPath(model.meshSource)
+                : SmokeSourceLevelFromPath(SmokeArchivePathFromSource(model.meshSource));
+            const int ownerLevel = robj.SmokeModelOwnerLevel(ref.modelId);
+            model.meshSourceLevel = sourceLevel;
+            model.meshOwnerLevel = ownerLevel;
+            model.meshSourceKind = ClassifySmokeMeshSource(
+                model.meshResolved, model.meshFromLooseFile, sourceLevel, ownerLevel, levelNo);
+
+            if (detailedModels.insert(ref.modelId).second) {
+                const std::string detail = ref.modelId + " (" +
+                    std::string(ref.isBuilding ? "building" : "object") + ") <- " +
+                    DescribeModelSource(model);
+                // Log gets every distinct model at DEBUG (the default INFO threshold
+                // drops it, so a normal run's log is unchanged).
+                Logger::Get().Log(LogLevel::DEBUG, "[SmokeLevel " + std::to_string(levelNo) +
+                    "] " + detail);
+                if (params.verbose) detailLines.push_back("    " + detail);
+            }
+
             result.models.push_back(std::move(model));
         }
 
         const SmokeTotals totals = SummarizeSmokeLevel(result);
+        perLevel.push_back(totals);
+
+        const std::vector<Renderer_Objects::SmokeArchiveInfo> archivesAfter =
+            robj.SmokeIndexedArchives();
+        const std::vector<Renderer_Objects::SmokeArchiveInfo> archivesAdded =
+            ArchivesAddedByResolution(archivesBefore, archivesAfter);
+
+        const long long elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - levelStart).count();
 
         std::cout << "  Objects loaded    : " << stats.totalObjects
                   << " (deleted " << stats.deleted
@@ -235,22 +379,73 @@ int CLIHandler::SmokeLevel(const SmokeLevelParams& params) {
                   << totals.distinctResolved << " distinct\n";
         std::cout << "  Models MISSING    : " << totals.modelsMissing << " placement(s), "
                   << totals.distinctMissing << " distinct\n";
-        std::cout << "  Textures resolved : " << totals.texturesResolved << "\n";
-        std::cout << "  Textures MISSING  : " << totals.texturesMissing << "\n";
+        std::cout << "  Textures resolved : " << totals.texturesResolved << " placement(s), "
+                  << totals.distinctTexturesResolved << " distinct\n";
+        std::cout << "  Textures MISSING  : " << totals.texturesMissing << " placement(s), "
+                  << totals.distinctTexturesMissing << " distinct\n";
+        std::cout << "  Mesh sources      : "
+                  << DescribeMeshSources(totals.resolvedFromThisLevel,
+                                         totals.resolvedFromOwnerLevel,
+                                         totals.resolvedFromOtherLevel,
+                                         totals.resolvedFromCommonArchive,
+                                         totals.resolvedFromLooseFile) << "\n";
+        if (!archivesAdded.empty()) {
+            std::cout << "  .res added by walk: " << archivesAdded.size() << " archive(s) — "
+                      << JoinArchives(archivesAdded) << "\n";
+        }
+        if (!detailLines.empty()) {
+            std::cout << "  Per-model         : " << detailLines.size() << " distinct\n";
+            for (const auto& line : detailLines) std::cout << line << "\n";
+        }
         PrintMissing("MISSING MODELS", totals.missingModelIds);
         PrintMissing("MISSING TEXTURES", totals.missingTextureIds);
+        std::cout << "  Time              : " << FormatSmokeDurationMs(elapsedMs) << "\n";
 
         if (totals.clean()) {
             std::cout << "\n  Result: PASS\n";
+            ++cleanLevels;
         } else {
             std::cout << "\n  Result: FAIL (" << totals.distinctMissing
                       << " distinct missing model(s), "
-                      << totals.missingTextureIds.size()
+                      << totals.distinctTexturesMissing
                       << " distinct missing texture(s))\n";
             ++failedLevels;
         }
         std::cout.flush();
     }
+
+    // Whole-run picture: distinct counts are unions across levels, so one model
+    // missing on three levels reads as one missing model, not three.
+    const SmokeRunTotals run = SummarizeSmokeRun(perLevel);
+
+    PrintSep();
+    std::cout << " SMOKE TOTALS — " << params.levels.size() << " level(s) requested\n";
+    PrintSep();
+    std::cout << "  Levels            : " << params.levels.size() << " requested, "
+              << run.levelsCounted << " counted, " << cleanLevels << " clean, "
+              << failedLevels << " failed\n";
+    std::cout << "  Objects examined  : " << run.objectsExamined << "\n";
+    std::cout << "  Models resolved   : " << run.objectsResolved << " placement(s), "
+              << run.distinctResolved << " distinct\n";
+    std::cout << "  Models MISSING    : " << run.modelsMissing << " placement(s), "
+              << run.distinctMissing << " distinct\n";
+    std::cout << "  Textures resolved : " << run.texturesResolved << " placement(s), "
+              << run.distinctTexturesResolved << " distinct\n";
+    std::cout << "  Textures MISSING  : " << run.texturesMissing << " placement(s), "
+              << run.distinctTexturesMissing << " distinct\n";
+    std::cout << "  Distinct models   : " << run.distinctModels << " examined ("
+              << run.distinctResolved << " resolved, " << run.distinctMissing << " missing)\n";
+    std::cout << "  Distinct textures : " << run.distinctTextures << " examined ("
+              << run.distinctTexturesResolved << " resolved, "
+              << run.distinctTexturesMissing << " missing)\n";
+    std::cout << "  Mesh sources      : "
+              << DescribeMeshSources(run.resolvedFromThisLevel,
+                                     run.resolvedFromOwnerLevel,
+                                     run.resolvedFromOtherLevel,
+                                     run.resolvedFromCommonArchive,
+                                     run.resolvedFromLooseFile) << "\n";
+    PrintMissing("MISSING MODELS", run.missingModelIds);
+    PrintMissing("MISSING TEXTURES", run.missingTextureIds);
 
     PrintSep();
     if (failedLevels == 0) {

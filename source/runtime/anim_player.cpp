@@ -478,15 +478,7 @@ const std::vector<glm::mat4>& AnimPlayer::PoseModelLocal() {
     // `AnimationRegistry::EvaluateWorld` emits, which is what the caller's
     // `objMat` expects.
     BoneObjUpdate(data_.state, kIdentity3x3, kFreshMatrixCount);
-    FillPoseFromBones(data_.state.bones, pose_);
-    raw_bones_.assign(data_.state.bones.size(), BoneTransform{});
-    for (std::size_t i = 0; i < data_.state.bones.size(); ++i) {
-        std::memcpy(raw_bones_[i].matrix, data_.state.bones[i].matrix, sizeof(raw_bones_[i].matrix));
-        raw_bones_[i].pos[0] = data_.state.bones[i].pos[0];
-        raw_bones_[i].pos[1] = data_.state.bones[i].pos[1];
-        raw_bones_[i].pos[2] = data_.state.bones[i].pos[2];
-    }
-    pose_dirty_ = false;
+    CapturePose(pose_);
     return pose_;
 }
 
@@ -496,7 +488,21 @@ const std::vector<glm::mat4>& AnimPlayer::PoseWithObjectRotation(const float m[9
         return pose_object_;
     }
     BoneObjUpdate(data_.state, m, kFreshMatrixCount);
-    FillPoseFromBones(data_.state.bones, pose_object_);
+    CapturePose(pose_object_);
+    return pose_object_;
+}
+
+const std::vector<glm::mat4>& AnimPlayer::PoseFromLastStep() {
+    if (!data_.valid()) {
+        pose_.clear();
+        return pose_;
+    }
+    CapturePose(pose_);
+    return pose_;
+}
+
+void AnimPlayer::CapturePose(std::vector<glm::mat4>& out) {
+    FillPoseFromBones(data_.state.bones, out);
     raw_bones_.assign(data_.state.bones.size(), BoneTransform{});
     for (std::size_t i = 0; i < data_.state.bones.size(); ++i) {
         std::memcpy(raw_bones_[i].matrix, data_.state.bones[i].matrix, sizeof(raw_bones_[i].matrix));
@@ -505,7 +511,6 @@ const std::vector<glm::mat4>& AnimPlayer::PoseWithObjectRotation(const float m[9
         raw_bones_[i].pos[2] = data_.state.bones[i].pos[2];
     }
     pose_dirty_ = false;
-    return pose_object_;
 }
 
 // ---------------------------------------------------------------------------
@@ -529,10 +534,11 @@ bool AnimPlayer::Skin(const SkinTransformInput* vertices, int base_vertex_count,
 // The editor's entry point
 // ---------------------------------------------------------------------------
 
-// Declared in source/animation.h, next to the editor's own `AnimationClip` and
-// `AnimPlayback`. The definition lives HERE, with the engine records, so the
-// test target - which compiles source/animation.cpp but not this file - does not
-// acquire a link dependency on the engine playback path.
+// Declared in source/animation.h, next to the editor's own `AnimationClip`.
+// `AnimPlayback` (source/runtime/anim_playback.cpp) builds its player through
+// `AnimPlayer::Build` directly, so this convenience wrapper has no caller in the
+// editor; it is kept for the engine-side tests and for a caller that just wants
+// one player for one clip.
 AnimPlayer MakeEngineAnimPlayer(const AnimationClip& clip) {
     AnimPlayer player;
     player.Build(clip, clip.animId);

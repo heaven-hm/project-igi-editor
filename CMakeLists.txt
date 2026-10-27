@@ -371,6 +371,7 @@ add_executable(igi_tests
     tests/test_graph_parser.cpp
     tests/test_graph_overlay.cpp
     tests/test_animation.cpp
+    tests/test_anim_playback.cpp
     tests/test_res_parser.cpp
     tests/test_res_stream_append.cpp
     tests/test_tex_parser.cpp
@@ -559,7 +560,18 @@ target_sources(igi_tests PRIVATE
     source/runtime/level_weather.cpp
     source/runtime/mission_fog.cpp
     source/runtime/spline_rules.cpp
+    # The engine's own span render path (`igi::spline`). The renderer's
+    # BuildEngineSpanMesh adapter calls it, so the host lane needs it to link
+    # tests/test_placement_splines.cpp; igi-editor picks it up through the
+    # source/level/*.* glob.
+    source/level/spline_geometry.cpp
     source/runtime/anim_rules.cpp
+    # The engine's animation driver and the editor playback state built on it.
+    # `AnimPlayback` (animation.h) is implemented in runtime/anim_playback.cpp,
+    # so the host lane needs both to link tests/test_anim_playback.cpp;
+    # igi-editor picks them up through the source/runtime/*.* glob.
+    source/runtime/anim_player.cpp
+    source/runtime/anim_playback.cpp
     source/runtime/lightmap_rules.cpp
     source/runtime/smoke.cpp
     source/runtime/heli_rules.cpp

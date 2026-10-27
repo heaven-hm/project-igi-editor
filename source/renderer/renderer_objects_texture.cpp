@@ -417,14 +417,32 @@ GLuint Renderer_Objects::GetOrLoadTexture(const std::string& textureId) {
         }
         archives = OrderTextureArchivesByOwner(archives, ownerRes);
 
+        std::string srcRes;
         std::vector<uint8_t> bytes = FindPreviewTextureEntry(archives, textureId,
             [](const std::string& resPath, const ResEntryInfo& info) {
                 return RES_ReadEntry(resPath, info);
-            });
+            },
+            &srcRes);
         if (!bytes.empty()) {
             pics_s pics{};
             if (Tex_LoadFromMemory(bytes.data(), bytes.size(), pics) && pics.pics_ && pics.num_pic_ > 0) {
                 const pic_s* pic = pics.pics_;
+                // Provenance only for the non-obvious case: the bytes came from an
+                // archive that is not this level's own texture archive. The engine
+                // resolves a model's textures from exactly one archive — the one of
+                // the level that owns the model file (ModelFile_LoadTextures HOOK
+                // 0x4CF790, src/model/model.c:467) — so a hit anywhere else is the
+                // editor's fallback and has to be nameable from the log.
+                const std::string levelTexRes = Utils::GetIGIRootPath() +
+                    "\\missions\\location0\\level" + std::to_string(current_level_) +
+                    "\\textures\\level" + std::to_string(current_level_) + ".res";
+                if (!srcRes.empty() && !SameArchivePath(srcRes, levelTexRes)) {
+                    Logger::Get().Log(LogLevel::DEBUG,
+                        "[TEX] '" + textureId + "' resolved from archive " + srcRes +
+                        ", not this level's own archive " + levelTexRes +
+                        (ownerRes.empty() ? std::string() : (" (owner archive " + ownerRes + ")")) +
+                        " — engine rule is the owner level's archive (ModelFile_LoadTextures HOOK 0x4CF790, src/model/model.c:467)");
+                }
                 Logger::Get().Log(LogLevel::INFO,
                     "[TEX] ResCache loaded " + textureId +
                     " " + std::to_string(pic->width_) + "x" + std::to_string(pic->height_));
@@ -453,14 +471,34 @@ GLuint Renderer_Objects::GetOrLoadTexture(const std::string& textureId) {
             LoadResCache(targetLvl, Utils::GetIGIRootPath());
         }
 
-        std::vector<uint8_t> xBytes = FindTextureData(textureId);
+        std::string xSrcRes;
+        std::vector<uint8_t> xBytes = FindTextureData(textureId, &xSrcRes);
         if (xBytes.empty()) {
             // DAT files are not guaranteed to provide a complete owner map.
             // Search all other packed texture archives using the indexed reader.
             for (int lvl = 1; lvl <= 14 && xBytes.empty(); ++lvl) {
                 if (lvl == current_level_ || lvl == targetLvl) continue;
                 LoadResCache(lvl, Utils::GetIGIRootPath());
-                xBytes = FindTextureData(textureId);
+                xBytes = FindTextureData(textureId, &xSrcRes);
+            }
+        }
+
+        // Provenance for the non-obvious case: the bytes came from an archive that
+        // is not this level's own texture archive. The engine never does that — a
+        // model's textures come from the archive of the level that owns the model
+        // file (ModelFile_LoadTextures HOOK 0x4CF790, src/model/model.c:467;
+        // ModelFile_Setup loads "%stextures/%s.res" for that level, :261, HOOK
+        // 0x4CF080) — so name the archive that answered instead of leaving the
+        // fallback silent.
+        if (!xBytes.empty()) {
+            const std::string levelTexRes = Utils::GetIGIRootPath() +
+                "\\missions\\location0\\level" + std::to_string(current_level_) +
+                "\\textures\\level" + std::to_string(current_level_) + ".res";
+            if (!xSrcRes.empty() && !SameArchivePath(xSrcRes, levelTexRes)) {
+                Logger::Get().Log(LogLevel::DEBUG,
+                    "[TEX] '" + textureId + "' resolved from archive " + xSrcRes +
+                    ", not this level's own archive " + levelTexRes +
+                    " — engine rule is the owner level's archive (ModelFile_LoadTextures HOOK 0x4CF790, src/model/model.c:467)");
             }
         }
 

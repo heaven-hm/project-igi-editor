@@ -608,7 +608,11 @@ void Renderer_Objects::LoadResCache(int levelNo, const std::string& igi_path) {
 }
 
 // Try to find texture bytes in the in-memory .res index.
-std::vector<uint8_t> Renderer_Objects::FindTextureData(const std::string& textureId) const {
+// `sourceRes` (optional) receives the archive the bytes came from, so a caller can
+// tell the level's own archive from a cross-level or shared-common hit.
+std::vector<uint8_t> Renderer_Objects::FindTextureData(const std::string& textureId,
+                                                       std::string* sourceRes) const {
+    if (sourceRes) sourceRes->clear();
     std::vector<ModelSourceArchiveIndex> archives;
     archives.reserve(res_tex_indexes_.size());
     for (const auto& index : res_tex_indexes_) {
@@ -617,7 +621,8 @@ std::vector<uint8_t> Renderer_Objects::FindTextureData(const std::string& textur
     return FindPreviewTextureEntry(archives, textureId,
         [](const std::string& resPath, const ResEntryInfo& info) {
             return RES_ReadEntry(resPath, info);
-        });
+        },
+        sourceRes);
 }
 
 std::vector<uint8_t> Renderer_Objects::FindTextureDataFromLevel(

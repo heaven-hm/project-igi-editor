@@ -1250,3 +1250,42 @@ void SkinSkinnedVertices(const ParsedGeometry& geometry,
             outPos[target] += poseVertex(influence) * influence.weight;
     }
 }
+
+EngineSkinVertices BuildEngineSkinVertices(const ParsedGeometry& geometry)
+{
+    // The engine's SkinVertex array, in the engine's own order: `mesh[0x10]`
+    // base vertices first, then `mesh[0x0C]` extra influences
+    // (src/dxinit/d3drender.c:230-245,275). The editor's parser already stores
+    // the two runs that way (mef_native.cpp:1009-1010).
+    //
+    // BOTH COUNTS ARE CLAMPED TO WHAT THE ARRAY ACTUALLY HOLDS. `BoneMesh_Skin`
+    // does not bound-check either run - it walks `count` records and then
+    // `mesh[0x0C]` more from the same pointer (d3drender.c:254-274) - so an
+    // over-declared count in a malformed MEF would read past the parse. The
+    // engine has no guard to reproduce here; the port refuses the read instead.
+    EngineSkinVertices out;
+    const int total = static_cast<int>(geometry.vertices.size());
+    const int declared_base = static_cast<int>(geometry.baseVertexCount);
+    out.base_count = std::min(std::max(declared_base, 0), total);
+    out.extra_count = std::min(std::max(static_cast<int>(geometry.extraInfluenceCount), 0),
+                               total - out.base_count);
+
+    const int record_count = out.base_count + out.extra_count;
+    out.records.resize(static_cast<size_t>(record_count));
+    for (int i = 0; i < record_count; ++i) {
+        const RenderVertex& v = geometry.vertices[static_cast<size_t>(i)];
+        igi::SkinTransformInput& rec = out.records[static_cast<size_t>(i)];
+        rec.p[0] = v.rawPos.x;      // RAW units, exactly as XTRV stores them
+        rec.p[1] = v.rawPos.y;
+        rec.p[2] = v.rawPos.z;
+        rec.n[0] = v.normal.x;
+        rec.n[1] = v.normal.y;
+        rec.n[2] = v.normal.z;
+        rec.uv[0] = v.uv.x;
+        rec.uv[1] = v.uv.y;
+        rec.w = v.weight;
+        rec.bone = static_cast<int>(v.boneIndex);
+        rec.target = static_cast<int>(v.localVertexId);
+    }
+    return out;
+}

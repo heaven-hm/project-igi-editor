@@ -29,6 +29,22 @@ AnimationClip Clip(int duration, bool loop = false) {
     return clip;
 }
 
+// A clip the ENGINE can play: `AnimPlayback` now owns an `igi::AnimPlayer`, and
+// `AnimPlayer::Build` refuses a clip with no bones or no position track exactly
+// as retail faults on it (src/boneobj/boneobj.c:1014). The clock/loop/end rules
+// themselves are covered by the host-portable tests/test_anim_playback.cpp.
+AnimationClip PlayableClip(int engine_length_ticks, bool loop = false) {
+    AnimationClip clip = Clip(engine_length_ticks + 1, loop);
+    clip.bones = {AnimBone{0, "root", -1, glm::vec3(0.0f)}};
+    clip.translationKeys = {AnimTranslationKey{0, 0, glm::vec3(0.0f)}};
+    AnimRotationKey key;
+    key.bone = 0;
+    key.time_ms = 0;
+    key.q0 = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    clip.rotationKeys = {key};
+    return clip;
+}
+
 GraphNode Node(int id, double x, double y, double z) {
     GraphNode node;
     node.id = id;
@@ -40,45 +56,13 @@ GraphNode Node(int id, double x, double y, double z) {
 
 }  // namespace
 
-TEST(AnimationPlaybackTest, AdvancesWhilePlaying) {
-    const AnimationClip clip = Clip(1000);
-    AnimPlayback playback;
-    playback.Start(&clip);
-
-    playback.Update(125.0f);
-
-    // 125 ms of real time is 125 * (4800/1000) = 600 engine ticks: the clip's own
-    // times are ticks at 4800 a second (`kTicksPerSecond`, src/boneobj/anim.c:9), so
-    // `currentTimeMs` counts ticks despite its name.
-    EXPECT_FLOAT_EQ(playback.currentTimeMs, 600.0f);
-    EXPECT_TRUE(playback.playing);
-}
-
-TEST(AnimationPlaybackTest, ForceLoopKeepsNonLoopingAiAnimationAlive) {
-    const AnimationClip clip = Clip(1000);
-    AnimPlayback playback;
-    playback.Start(&clip);
-    playback.forceLoop = true;
-
-    playback.Update(2250.0f);
-
-    // 2250 ms -> 10800 ticks, wrapped against the 1000-tick clip.  NEAR rather than
-    // FLOAT_EQ: the wrap subtracts the duration repeatedly, so the result carries a
-    // few hundred micro-ticks of float accumulation.
-    EXPECT_NEAR(playback.currentTimeMs, 800.0f, 0.01f);
-    EXPECT_TRUE(playback.playing);
-}
-
-TEST(AnimationPlaybackTest, NonLoopingClipStopsAtItsEnd) {
-    const AnimationClip clip = Clip(1000);
-    AnimPlayback playback;
-    playback.Start(&clip);
-
-    playback.Update(1250.0f);
-
-    EXPECT_FLOAT_EQ(playback.currentTimeMs, 1000.0f);
-    EXPECT_FALSE(playback.playing);
-}
+// The three playback-clock tests that used to live here (AdvancesWhilePlaying,
+// ForceLoopKeepsNonLoopingAiAnimationAlive, NonLoopingClipStopsAtItsEnd) asserted
+// the editor's OWN tick arithmetic. That path is gone: `AnimPlayback` drives
+// `igi::AnimPlayer` now, and the clock rules are pinned - with the engine's own
+// whole-frame stepping and its own end test - in tests/test_anim_playback.cpp,
+// which the host lane links and runs. Kept here: the clip/gate/skinning rules
+// that do not need the engine player.
 
 TEST(AnimationEvaluationTest, DistinguishesSingleFrameActionFromMovingClip) {
     AnimationClip pose = Clip(801);
@@ -94,7 +78,9 @@ TEST(AnimationEvaluationTest, DistinguishesSingleFrameActionFromMovingClip) {
 }
 
 TEST(AnimationRenderGateTest, RequiresActivePlaybackAndSkinGeometry) {
-    const AnimationClip clip = Clip(1000);
+    // The gate also requires the ENGINE to be able to pose the clip, so the
+    // fixture has to be a clip `AnimPlayer::Build` accepts.
+    const AnimationClip clip = PlayableClip(800);
     AnimPlayback playback;
     playback.Start(&clip);
 
@@ -104,6 +90,15 @@ TEST(AnimationRenderGateTest, RequiresActivePlaybackAndSkinGeometry) {
     EXPECT_FALSE(ShouldUseSkinnedReplacement(playback, 2, 5, false, true));
     EXPECT_FALSE(ShouldUseSkinnedReplacement(playback, 5, 5, false, true));
     EXPECT_FALSE(ShouldUseSkinnedReplacement(playback, 2, 5, true, true));
+}
+
+TEST(AnimationRenderGateTest, RejectsAClipTheEngineCannotPlay) {
+    // A clip with no skeleton cannot be posed, so the static mesh must stay.
+    const AnimationClip clip = Clip(1000);
+    AnimPlayback playback;
+    playback.Start(&clip);
+    EXPECT_FALSE(playback.EngineReady());
+    EXPECT_FALSE(ShouldUseSkinnedReplacement(playback, 2, 5, false, true));
 }
 
 TEST(AnimationRenderGateTest, RejectsIncompleteSkinnedGeometry) {

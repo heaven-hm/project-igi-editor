@@ -675,14 +675,22 @@ public:
     void                    DrawAnimSkeleton(const std::vector<glm::mat4>& boneWorldTransforms,
                                              const std::vector<int>& boneParents,
                                              const glm::mat4& objWorldMat);
-    // CPU-skins the model's rest-pose mesh against the given (BEF) bone world
-    // transforms and draws it as a solid mesh — the actual visible alternative
-    // to the wireframe overlay above. boneWorldTransforms come from
-    // AnimationRegistry::EvaluateWorld (BEF skeleton indexing); the model's own
-    // .mef bone list is assumed to share that same indexing (true for the
-    // shared character rigs — see GetIgi1HardcodedBones).
+    // CPU-skins the model's rest-pose mesh with the ENGINE's own skinner and
+    // draws it as a solid mesh — the actual visible alternative to the wireframe
+    // overlay above.
+    //
+    // `engineBoneTransforms` is `AnimPlayer::RawBoneTransforms()` /
+    // `AnimPlayback::RawBoneTransforms()`: the engine's `Bone::matrix` (row-major
+    // 3x3) and `Bone::pos` in RAW game units, one per engine bone. They are fed
+    // straight to `BoneMesh_Skin` (HOOK 0x49B700, src/dxinit/d3drender.c:226-313)
+    // over the mesh's own SkinVertex records, which is the whole of the engine's
+    // skinned draw: `Direct3DRender_DrawBoneMesh` 0x49F700 calls
+    // `BoneMesh_Skin(r, model, &obj->bones, n)` with `n = 0` for a layer-0 object
+    // (src/bonemesh/d3drender.c:124-127,164), i.e. the weighted base+influence
+    // path. The model's own .mef bone list is assumed to share the clip's bone
+    // indexing (true for the shared character rigs — see GetIgi1HardcodedBones).
     void                    DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
-                                            const std::vector<glm::mat4>& boneWorldTransforms,
+                                            const std::vector<igi::BoneTransform>& engineBoneTransforms,
                                             const glm::mat4& objWorldMat);
     // True if DrawSkinnedMesh can actually render modelId (skin geometry loads and has
     // vertices/triangles). Callers must check this before skipping an object's static

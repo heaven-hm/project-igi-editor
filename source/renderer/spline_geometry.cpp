@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
+#include <utility>
 
 namespace spline_geometry {
 namespace {
@@ -259,6 +262,103 @@ void AppendBentVertex(std::vector<float>& out,
     out.push_back(uv2.y);
 }
 
+// ---------------------------------------------------------------------------
+// The engine's RENDER path (Direct3DRender_FillSplineVB, HOOK 0x49CC80)
+// ---------------------------------------------------------------------------
+
+// The engine's source vertex is `RigidMesh.vertices`: 8 floats - position xyz,
+// normal xyz, uv (src/render/render.c:56-61), the layout the extent scan
+// (src/sound/segsetup.c:277-293) and Direct3DRender_FillSplineVB (:637-668) both
+// read. The editor's parsed vertex carries the same three attributes plus uv2,
+// so it is read in place with its own stride; the asserts keep that true.
+constexpr int kRenderVertexFloats = static_cast<int>(sizeof(RenderVertex) / sizeof(float));
+static_assert(sizeof(RenderVertex) == 15 * sizeof(float),
+              "RenderVertex must stay 15 contiguous floats: the engine's source "
+              "vertex is read straight out of it");
+static_assert(offsetof(RenderVertex, rawPos) == 3 * sizeof(float),
+              "RenderVertex::rawPos must stay the second attribute");
+static_assert(offsetof(RenderVertex, normal) == 6 * sizeof(float),
+              "RenderVertex::normal must stay the third attribute");
+static_assert(offsetof(RenderVertex, uv) == 9 * sizeof(float),
+              "RenderVertex::uv must stay the fourth attribute");
+
+// setup_rigid, src/sound/segsetup.c:203-251. The frame maps the model's local X
+// range onto the chord:
+//
+//   d     = to - from                       (1,0,0) when the chord is zero
+//   k     = 1 / (maxX - minX)
+//   yaw   = Vec3_ToAngles(d).yaw            (0 when d.x == 0)
+//   row 0 = d * k                           (negated when the span is reversed)
+//   row 1 = (-sin yaw, cos yaw, 0)
+//   row 2 = (0, 0, 1)
+//
+// Rows 1 and 2 come from the RotZ(yaw) frame setup_segments wrote into joint 0
+// (src/sound/segsetup.c:129-135): setup_rigid transposes that joint into the
+// segment frame, overwrites its row 0 with the scaled chord, and transposes
+// back. The result is row-major, which is what Direct3DRender_FillSplineVB's
+// straight branch multiplies by - `dst[0] = (z * m[2] + y * m[1]) + x * m[0]`
+// (src/render/render.c:641-643).
+//
+// The engine reads this frame out of `ModelObj.matrix` (:635), and nothing in
+// IGI-RE writes a spline ModelObj's spline state, so the copy itself has no
+// oracle. What the oracle does prove is which transform a rigid span gets:
+// SplineObj_BendVerts' rigid branch (src/shadow/spline.c:29-46) applies `s->rot`
+// - the frame setup_rigid built - to the same vertex array, and the rigid joints
+// setup_segments writes carry only RotZ(yaw), which cannot map the model's X
+// range onto the chord.
+void BuildRigidSpanFrame(const glm::dvec3& from, const glm::dvec3& to, float min_x, float max_x,
+                         bool reversed, float out_matrix[10]) {
+    float d[3] = {static_cast<float>(to.x - from.x), static_cast<float>(to.y - from.y),
+                  static_cast<float>(to.z - from.z)};
+    if (d[0] == 0.0f && d[1] == 0.0f && d[2] == 0.0f) {
+        d[0] = 1.0f;
+        d[1] = 0.0f;
+        d[2] = 0.0f;
+    }
+    // `k = kOne / ((long double)o->maxX - o->minX)` (:219): a long-double
+    // quotient, narrowed once per component on assignment.
+    const long double k = 1.0L / (static_cast<long double>(max_x) - min_x);
+    float pitch = 0.0f;
+    float yaw = 0.0f;
+    igi::Vec3ToAngles(d, &pitch, &yaw);
+    (void)pitch;
+    float c0 = static_cast<float>(k * static_cast<long double>(d[0]));
+    float c1 = static_cast<float>(k * static_cast<long double>(d[1]));
+    float c2 = static_cast<float>(k * static_cast<long double>(d[2]));
+    if (reversed) {
+        c0 = -c0;
+        c1 = -c1;
+        c2 = -c2;
+    }
+    const double s = std::sin(static_cast<double>(yaw));
+    const double c = std::cos(static_cast<double>(yaw));
+    out_matrix[0] = c0;                       out_matrix[1] = static_cast<float>(-s);
+    out_matrix[2] = 0.0f;
+    out_matrix[3] = c1;                       out_matrix[4] = static_cast<float>(c);
+    out_matrix[5] = 0.0f;
+    out_matrix[6] = c2;                       out_matrix[7] = 0.0f;
+    out_matrix[8] = 1.0f;                     out_matrix[9] = 0.0f;
+}
+
+// One render block's triangles as the model's own index list. The engine adds
+// the group's vertex base at draw time (`start + g->base`, src/render/render.c:530),
+// which is why the indices are not rewritten here.
+void AppendBlockIndices(const ParsedGeometry& geometry, size_t triangleStart, size_t triangleCount,
+                        EngineSpanMesh& out) {
+    const uint32_t vertexCount = static_cast<uint32_t>(geometry.vertices.size());
+    std::vector<uint32_t> indices;
+    indices.reserve(triangleCount * 3);
+    for (size_t t = triangleStart; t < triangleStart + triangleCount; ++t) {
+        if (t >= geometry.triangles.size()) break;
+        const std::array<uint32_t, 3>& tri = geometry.triangles[t];
+        if (tri[0] >= vertexCount || tri[1] >= vertexCount || tri[2] >= vertexCount) continue;
+        indices.push_back(tri[0]);
+        indices.push_back(tri[1]);
+        indices.push_back(tri[2]);
+    }
+    if (!indices.empty()) out.indices.push_back(std::move(indices));
+}
+
 } // namespace
 
 BentSegmentMesh BendSegmentMesh(
@@ -380,6 +480,120 @@ BentSegmentMesh BendSegmentMesh(
         }
     } else {
         buildRange(0, geometry.triangles.size());
+    }
+
+    return result;
+}
+
+EngineSpanMesh BuildEngineSpanMesh(
+    const ParsedGeometry& geometry,
+    const EngineSpanInput& span) {
+    EngineSpanMesh result;
+    const int vertexCount = static_cast<int>(geometry.vertices.size());
+    if (vertexCount <= 0 || geometry.triangles.empty()) return result;
+
+    // The engine's source mesh, `RigidMesh.vertices` (8 floats per vertex:
+    // position xyz, normal xyz, uv - src/render/render.c:56-61). The parsed
+    // vertex stores the unscaled XTRV position in `rawPos`, which is what the
+    // engine's extent scan and bend read as v[0..2].
+    std::vector<float> packed(static_cast<size_t>(vertexCount) * 8);
+    igi::spline::PackSplineMeshSource(
+        &geometry.vertices[0].rawPos.x, kRenderVertexFloats,
+        &geometry.vertices[0].normal.x, kRenderVertexFloats,
+        &geometry.vertices[0].uv.x, kRenderVertexFloats,
+        vertexCount, packed.data());
+
+    // The model's local X range: SplineObjSegment_Setup, src/sound/segsetup.c:277-293.
+    // Both bounds START AT ZERO (`o->minX = 0; o->maxX = 0;`), so the range
+    // always contains the model origin - a model that sits entirely at x > 0
+    // still gets minX = 0 and its far end lands mid-span.
+    float min_x = 0.0f;
+    float max_x = 0.0f;
+    igi::SplineExtentSource lods[1];
+    lods[0].verts = packed.data();
+    lods[0].vert_count = vertexCount;
+    igi::SplineScanModelExtent(lods, 1, 8, &min_x, &max_x);
+    // setup_rigid divides by `maxX - minX` (src/sound/segsetup.c:219) and
+    // spline_params by the same range (src/render/render.c:325); a zero range has
+    // no meaningful parameterisation. Refused rather than reproduced.
+    if (!(max_x > min_x)) return result;
+
+    igi::spline::SplineSpanInput input;
+    input.from.point[0] = span.from.x;
+    input.from.point[1] = span.from.y;
+    input.from.point[2] = span.from.z;
+    input.to.point[0] = span.to.x;
+    input.to.point[1] = span.to.y;
+    input.to.point[2] = span.to.z;
+    // ParamReal32x9_Parse, HOOK 0x4EFBA0, src/physobj/paramops.c:423-435: the
+    // three authored angles go through Matrix_SetEuler, in float.
+    igi::SplineObjWaypointParams from_params;
+    from_params.orientation[0] = static_cast<float>(span.rotFrom.x);
+    from_params.orientation[1] = static_cast<float>(span.rotFrom.y);
+    from_params.orientation[2] = static_cast<float>(span.rotFrom.z);
+    igi::SplineWaypointFrame(from_params, input.from.rot);
+    igi::SplineObjWaypointParams to_params;
+    to_params.orientation[0] = static_cast<float>(span.rotTo.x);
+    to_params.orientation[1] = static_cast<float>(span.rotTo.y);
+    to_params.orientation[2] = static_cast<float>(span.rotTo.z);
+    igi::SplineWaypointFrame(to_params, input.to.rot);
+
+    // A waypoint that declares no "NumAreas" keeps the container's count
+    // (SplineObjWaypoint_Create, src/tagitem/spline.c:544), which the editor
+    // stores as 0.
+    const int waypointSegments =
+        span.waypointSegments > 0 ? span.waypointSegments : span.maxSegments;
+    input.segments =
+        igi::SplineEffectiveSegmentCount(waypointSegments, span.maxSegments, span.rigid);
+    input.rigid = span.rigid;
+    input.reversed = span.reversed;
+    input.spline_min = min_x;
+    input.spline_max = max_x;
+    // `ModelObj.matrix`, read by the straight branch only (src/render/render.c:635-646).
+    if (span.rigid) {
+        BuildRigidSpanFrame(span.from, span.to, min_x, max_x, span.reversed, input.matrix);
+    }
+
+    const igi::spline::SplineSpanGeometry built = igi::spline::BuildSplineSpanGeometry(input);
+    const igi::spline::SplineMeshSource source{packed.data(), vertexCount, 8};
+    std::vector<igi::spline::SplineRenderVertex> transformed(static_cast<size_t>(vertexCount));
+    if (igi::spline::FillSplineSpanVertices(built, source, transformed.data(), vertexCount) !=
+        vertexCount) {
+        return result;
+    }
+
+    // The renderer's own vertex: the engine's 8 floats, at the editor's render
+    // scale, plus uv2. Output vertex i IS source vertex i (the engine transforms
+    // in place and never reindexes), so uv2 comes from the same source vertex.
+    result.interleaved.resize(static_cast<size_t>(vertexCount) * 10);
+    const double invScale = 1.0 / 40.96;
+    for (int i = 0; i < vertexCount; i++) {
+        const igi::spline::SplineRenderVertex& v = transformed[static_cast<size_t>(i)];
+        float* out = result.interleaved.data() + static_cast<size_t>(i) * 10;
+        out[0] = static_cast<float>(static_cast<double>(v.pos[0]) * invScale);
+        out[1] = static_cast<float>(static_cast<double>(v.pos[1]) * invScale);
+        out[2] = static_cast<float>(static_cast<double>(v.pos[2]) * invScale);
+        out[3] = v.normal[0];
+        out[4] = v.normal[1];
+        out[5] = v.normal[2];
+        // MEF UVs use image-space V and the GL texture upload uses the opposite
+        // origin, so V is flipped at the model sampling boundary - the same rule
+        // AppendBentVertex and model.cpp apply.
+        out[6] = v.uv[0];
+        out[7] = 1.0f - v.uv[1];
+        // uv2 is the editor's own attribute: the engine's vertex is 8 floats
+        // (src/render/render.c:56-61) and never carries a second UV.
+        out[8] = geometry.vertices[static_cast<size_t>(i)].uv2.x;
+        out[9] = geometry.vertices[static_cast<size_t>(i)].uv2.y;
+    }
+    result.vertexCount = vertexCount;
+
+    if (!geometry.renderBlocks.empty()) {
+        for (const auto& block : geometry.renderBlocks) {
+            AppendBlockIndices(geometry, block.triangleStart, block.triangleCount, result);
+        }
+    } else {
+        AppendBlockIndices(geometry, 0, geometry.triangles.size(), result);
     }
 
     return result;

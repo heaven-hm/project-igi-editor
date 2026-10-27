@@ -62,9 +62,10 @@ invariants from the corpus fingerprint.
 **Still not done, in the order I would take them:** (1) the `BendSegmentMesh` -> `igi::spline`
 draw-path swap -- it is a rewrite, not a swap, because the engine draws INDEXED over a
 transformed vertex buffer while the editor expands triangles and draws `glDrawArrays`; the
-full recipe is in the spline section above; (2) the animation driver (`app.cpp:1259-1261`,
-`renderer.cpp:403`); (3) the `snow.tex` binding; (4) the pickup proximity grant
-(`app.cpp:2729-2790`); (5) the tails of the PARTIAL issues.
+full recipe is in the spline section above; (2) the `snow.tex` binding; (3) the pickup
+proximity grant (`app.cpp:2729-2790`); (4) the tails of the PARTIAL issues.
+The animation driver that used to be item 2 is wired -- see item 3 of "Still to do - the
+wiring" below.
 
 **Unverifiable here, needs the user:** every rendered pixel. This host offers OpenGL 2.1 and
 the editor needs 4.1, so the pause menu, the loading bar and the texture fixes are proven by
@@ -286,8 +287,19 @@ use the engine's method on those paths:
    the selected LOD at `renderer_objects.cpp:971`, AND the lightmap index changed from
    `(*lightmaps)[si]` to the drawn LOD's entry at `:1271/1277`. Do not do the first
    without the second: a lower LOD without its own bake binds the wrong atlas.
-3. **Animation driver** - no consumer. `app.cpp:1259-1261` still evaluates through
-   `animRegistry_.EvaluateWorld`; `renderer.cpp:403` still calls `SkinSkinnedVertices`.
+3. **Animation driver** - WIRED. `AnimPlayback` (declared in `source/animation.h`,
+   implemented in `source/runtime/anim_playback.cpp`) now owns an `igi::AnimPlayer`, and
+   both call sites go through it: `app.cpp` takes the pose from
+   `AnimPlayback::WorldTransforms()` (the frame `BoneObj_Update` 0x4D38C0 posed, not a
+   re-sample at the advanced clock) and hands `RawBoneTransforms()` to
+   `Renderer::DrawSkinnedMesh`, which calls `BoneMesh_Skin` 0x49B700 over the mesh's own
+   XTRV records (`EngineSkinVertices BuildEngineSkinVertices(const ParsedGeometry&)`,
+   `source/renderer/mef_native.cpp`). `animRegistry_.EvaluateWorld` has no caller in the
+   render path any more, and `SkinSkinnedVertices` is only the rest-pose bake in
+   `mef_native.cpp:1124`. The clock is the engine's: `Update` passes real milliseconds to
+   `AnimPlayer::AdvanceSeconds`, which steps whole 160-tick frames. Covered by the
+   host-portable `tests/test_anim_playback.cpp` (11 tests) and the new
+   `MefEngineSkinVerticesTest` cases in `tests/test_mef_dual_set.cpp`.
 4. **`snow.tex`** - `Renderer_Objects::GetOrLoadTexture` and `objects_` are private, so
    `Renderer_Rain` cannot reach the game's `.tex` decode. Until bound, snow renders as the
    engine's own null-texture branch (opaque white quads).

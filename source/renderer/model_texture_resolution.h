@@ -144,11 +144,23 @@ ModelEntryHit FindModelEntryByIdentity(
 
 // Resolve a scene-preview texture. Level entries are authoritative over
 // same-named common entries; explicit source imports use FindModelSourceEntry.
+//
+// `sourceRes` (optional) receives the archive the bytes came from, so a caller can
+// report provenance — the editor's cross-level fallback must be visible, because
+// the engine resolves a model's textures from exactly one archive, the one of the
+// level the model file belongs to (ModelFile_LoadTextures HOOK 0x4CF790,
+// src/model/model.c:467; ModelFile_Setup loads "%stextures/%s.res" for that level,
+// :261, HOOK 0x4CF080).
 std::vector<uint8_t> FindPreviewTextureEntry(
     const std::vector<ModelSourceArchiveIndex>& archives,
     const std::string& textureId,
     const std::function<std::vector<uint8_t>(const std::string& resPath,
-                                              const ResEntryInfo& info)>& readEntry);
+                                              const ResEntryInfo& info)>& readEntry,
+    std::string* sourceRes = nullptr);
+
+// Case-insensitive equality for two archive paths, the way the editor compares
+// them ("...\LEVEL7\textures\level7.res" == "...\level7\textures\level7.res").
+bool SameArchivePath(const std::string& a, const std::string& b);
 
 // Resolve one entry from a source bundle. Callers pass bundle[0] = selected
 // level archive and bundle[1] = shared common archive. The level archive is

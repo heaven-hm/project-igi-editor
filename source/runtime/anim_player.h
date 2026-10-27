@@ -208,6 +208,16 @@ public:
     // ROW-MAJOR 3x3 (src/types.h:13-17), which is what a task's `matrix.m` is.
     const std::vector<glm::mat4>& PoseWithObjectRotation(const float m[9]);
 
+    // The pose the LAST Step() produced, converted to the same glm form as
+    // `PoseModelLocal` but WITHOUT re-running `BoneObj_Update`. This is the pose
+    // retail actually draws: `BoneMagicObj_Run` (src/freecam/bonemagic.c:101-112)
+    // poses at :105 and only then advances the clock at :110, so the bones hold
+    // the frame that was posed while `inst.time` has already moved on. Calling
+    // `PoseModelLocal` at draw time instead would sample the sampler at the
+    // ALREADY-ADVANCED time and show every frame one engine frame late.
+    // Before the first Step() this returns what `Play()` posed.
+    const std::vector<glm::mat4>& PoseFromLastStep();
+
     // The bones as `BoneMesh_Skin` wants them: `Bone::matrix` (row-major 3x3)
     // and `Bone::pos`, in RAW units.
     const std::vector<BoneTransform>& RawBoneTransforms() const { return raw_bones_; }
@@ -234,6 +244,11 @@ public:
     const EngineClipData& Data() const { return data_; }
 
 private:
+    // Converts the CURRENT `data_.state.bones` (whatever posed them last) into
+    // `out` and `raw_bones_`. No engine call: `BoneObj_Update` is the caller's
+    // decision, because posing twice at two different clock values is exactly
+    // the one-frame shift `PoseFromLastStep` exists to avoid.
+    void CapturePose(std::vector<glm::mat4>& out);
     // The engine's records are POINTER-linked: `EngineClip::pos/rot/events`,
     // every `RotTrack::keys/slerp/slerp2`, and the source's `clip`. `Build`
     // links them once; a copy or a move must link them again, at the new

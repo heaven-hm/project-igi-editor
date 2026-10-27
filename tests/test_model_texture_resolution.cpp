@@ -228,6 +228,60 @@ TEST(ModelTextureResolution, IdentifiesSharedCommonTextureArchivePaths) {
         "D:\\IGI1\\missions\\location0\\common\\models\\location0.res"));
 }
 
+TEST(ModelTextureResolution, PreviewTextureReportsTheArchiveThatAnswered) {
+    test_support::TempDirectory temp;
+    const auto levelDir = temp.path() / "level12" / "textures";
+    const auto commonDir = temp.path() / "common" / "textures";
+    std::filesystem::create_directories(levelDir);
+    std::filesystem::create_directories(commonDir);
+    const std::string levelRes = (levelDir / "level12.res").string();
+    const std::string commonRes = (commonDir / "location0.res").string();
+    const std::vector<uint8_t> levelBytes = {128, 128};
+    const std::vector<uint8_t> commonBytes = {128, 32};
+    std::string error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:textures/level_only.tex", levelBytes},
+         RESEntry{"LOCAL:textures/both.tex", levelBytes}}, levelRes, error)) << error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:textures/shared_only.tex", commonBytes},
+         RESEntry{"LOCAL:textures/both.tex", commonBytes}}, commonRes, error)) << error;
+
+    const auto bundle = IndexSyntheticBundle(levelRes, commonRes);
+    const std::vector<ModelSourceArchiveIndex> archives(bundle.begin(), bundle.end());
+
+    // The provenance must name the archive the bytes came from, not just the bytes:
+    // that is what lets the loader log a cross-level/fallback resolution instead of
+    // leaving it silent.
+    std::string source;
+    EXPECT_EQ(FindPreviewTextureEntry(archives, "level_only", ReadFromDisk, &source), levelBytes);
+    EXPECT_TRUE(SameArchivePath(source, levelRes));
+
+    source.clear();
+    EXPECT_EQ(FindPreviewTextureEntry(archives, "shared_only", ReadFromDisk, &source), commonBytes);
+    EXPECT_TRUE(SameArchivePath(source, commonRes));
+
+    // Level entries win over same-named common entries, and the report says so.
+    source.clear();
+    EXPECT_EQ(FindPreviewTextureEntry(archives, "both", ReadFromDisk, &source), levelBytes);
+    EXPECT_TRUE(SameArchivePath(source, levelRes));
+
+    // A miss reports no source at all.
+    source = "stale";
+    EXPECT_TRUE(FindPreviewTextureEntry(archives, "missing_tex", ReadFromDisk, &source).empty());
+    EXPECT_TRUE(source.empty());
+}
+
+TEST(ModelTextureResolution, ArchivePathsCompareCaseInsensitively) {
+    EXPECT_TRUE(SameArchivePath(
+        "D:\\IGI1\\missions\\location0\\level7\\textures\\level7.res",
+        "d:\\igi1\\MISSIONS\\location0\\LEVEL7\\textures\\level7.RES"));
+    EXPECT_FALSE(SameArchivePath(
+        "D:\\IGI1\\missions\\location0\\level7\\textures\\level7.res",
+        "D:\\IGI1\\missions\\location0\\level8\\textures\\level8.res"));
+    EXPECT_FALSE(SameArchivePath("", "D:\\IGI1\\x.res"));
+    EXPECT_TRUE(SameArchivePath("", ""));
+}
+
 TEST(ModelTextureResolution, PreviewTextureKeepsLevelSpecificOverride) {
     test_support::TempDirectory temp;
     const auto levelDir = temp.path() / "level12" / "textures";

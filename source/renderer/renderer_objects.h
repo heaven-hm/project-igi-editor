@@ -92,7 +92,8 @@ public:
     // Find texture/mesh bytes from the in-memory .res index.
     // Returns empty vector if not found (callers fall back to on-disk paths).
     // `sourceRes` (optional) receives the archive a mesh came from.
-    std::vector<uint8_t> FindTextureData(const std::string& textureId) const;
+    std::vector<uint8_t> FindTextureData(const std::string& textureId,
+                                         std::string* sourceRes = nullptr) const;
     // Resolve texture bytes from one explicit level archive, preserving source
     // provenance when a foreign destination contains the same texture name.
     std::vector<uint8_t> FindTextureDataFromLevel(const std::string& textureId,
@@ -310,11 +311,31 @@ public:
     struct SmokeModelResolution {
         bool meshResolved = false;
         std::string meshSource;                 // "res:<archive>" or an on-disk path
+        bool meshFromLooseFile = false;         // meshSource is a disk path, not "res:..."
         std::vector<std::string> textureIds;    // DAT list, or the model id itself
         std::vector<std::string> resolvedTextureIds;
         std::vector<std::string> missingTextureIds;
     };
     SmokeModelResolution ResolveModelForSmoke(const std::string& modelId, bool isBuilding);
+
+    // ── Smoke probe diagnostics (CLI `--smoke-level`) ────────────────────────
+    // One indexed .res archive: which file, whether it is the texture or the model
+    // archive, and how many members it holds.  `--smoke-level` prints the set so a
+    // resolution can be traced to the archive that answered it, and the level each
+    // archive belongs to.
+    struct SmokeArchiveInfo {
+        std::string resPath;
+        bool isTexture = false;
+        size_t entries = 0;
+    };
+    // Every .res archive currently indexed.  LoadResCache is append-only, so this
+    // is the level's own four plus anything a cross-level lookup pulled in; the
+    // caller diffs before/after to show which ones the resolution walk added.
+    std::vector<SmokeArchiveInfo> SmokeIndexedArchives() const;
+    // The level the global DAT map names as this model's owner; 0 when the map has
+    // no entry.  The smoke check uses it to tell "resolved from the archive that
+    // owns it" from "resolved from some other level's archive".
+    int SmokeModelOwnerLevel(const std::string& modelId);
     glm::vec3 GetSunDir() const { return sun_dir_; }
     glm::vec3 GetSunFrontColor() const { return sun_front_color_; }
     glm::vec3 GetSunBackColor() const { return sun_back_color_; }
@@ -498,6 +519,14 @@ private:
     // Resolution-only halves of the load path, shared with ResolveModelForSmoke so
     // the smoke check and the draw path resolve through the same code (no GL).
     ModelEntryHit FindMeshEntryAcrossLevels(const std::string& modelId);
+    // DEBUG provenance for a model that resolved from an archive other than the
+    // level's own: the engine resolves a model only from the archive of the level
+    // that owns it (Mesh_Load HOOK 0x4CF390, src/model/model.c:364, matched on the
+    // folded full resource name, String_ToUpper 0x4B5AF0, src/res/resource.c:98-104,
+    // Resource_IsLoaded 0x4B5B90, :136-138), so a cross-level hit is the editor's
+    // fallback and must be nameable from the log instead of silent.
+    void LogCrossLevelModelResolution(const std::string& modelId, int resolvedFromLevel,
+                                      const std::string& resPath) const;
     bool TextureResolvesForSmoke(const std::string& textureId);
     std::string FindTextureFile(const std::string& textureId) const;
     std::string FindTextureFileInLevel(const std::string& textureId, int levelNo) const;

@@ -602,7 +602,9 @@ void App::LoadLevel(int level_no) {
 				AnimPlayback pb;
 				pb.Start(r.clip);
 				pb.forceLoop = true;  // every AI animates continuously, not just once
-				animPlaybacks_[r.objIndex] = pb;
+				// Moved, not copied: a playback owns the engine's animation
+				// records and its clock, so a copy would be a second player.
+				animPlaybacks_[r.objIndex] = std::move(pb);
 				Logger::Get().Log(LogLevel::INFO, "[Anim] Auto-playing '" + r.clip->name + "'" +
 					(r.usedDefault ? " (DEFAULT fallback — no referenced animation)" : "") +
 					" for object " + std::to_string(r.objIndex) + " (" + objects[r.objIndex].type + ")");
