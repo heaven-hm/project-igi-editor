@@ -183,6 +183,25 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
     bool isTrain = (typeStr == "Train");
     bool isGraph = (typeStr == "AIGraph");  // Task_New(id,"AIGraph",name,x,y,z,...)
     bool isHumanAI = (typeStr == "HumanAI");  // Task_New(id,"HumanAI",name,aiType,graphId)
+    // Types whose authored layout is ObjectPos at args 3/4/5 then Real32x9 at 6/7/8.
+    // Verified against the engine's own ParamTables for every member of the group:
+    //   RotatingObject      src/fxobj/rotating.c:81-82
+    //   AlarmLight          src/fxobj/alarm.c:109-110
+    //   AIStationaryGunHolder src/comprun/gunholder.c:158-159
+    //   Elevator            src/elevator/elevator.c:63-64
+    //   GenericPickup       src/comprun/pickup.c:269-270
+    //   Plane               src/plane/plane.c:155-156
+    //   StationaryGun       src/statgun/statgun.c:143-144
+    //   Generator, GenericTBA, Radio, Siren extend ExplodeObject, whose table opens with
+    //   place (ObjectPos) then placeMatrix (Real32x9): src/camera/explodeobject.c:204-205.
+    // The line parser reads this group the same way (level_objects_serialize.cpp:307-312);
+    // the load path had no branch for it, so these objects loaded with a position from the
+    // generic candidate and no rotation at all.
+    bool isPlacementMatrixGroup =
+        (typeStr == "AIStationaryGunHolder" || typeStr == "AlarmLight" || typeStr == "Elevator" ||
+         typeStr == "Generator" || typeStr == "GenericPickup" || typeStr == "GenericTBA" ||
+         typeStr == "Plane" || typeStr == "Radio" || typeStr == "RotatingObject" ||
+         typeStr == "Siren" || typeStr == "StationaryGun");
     bool isWeaponChild = (typeStr.rfind("Gun", 0) == 0);  // Task_New(id,"Gun<Name>",name,"WEAPON_ID_*",count) — HumanSoldier weapon child
 
     bool isDecl = (typeStr == "Task_DeclareParameters");
@@ -536,6 +555,21 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
             switch (arg_idx) {
                 case 0: obj.taskId = TaskIdFromArg(cur_a); break;
                 case 3: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.weaponEnumId = Utils::Trim(cur_a->str_); break;
+            }
+        } else if (isPlacementMatrixGroup) {
+            // ObjectPos @3/4/5 then Real32x9 @6/7/8, exactly as the line parser reads
+            // them and as the engine's ParamTables declare (see the note where
+            // isPlacementMatrixGroup is set).  The remaining arguments from 9 on are
+            // type-specific (String16 models/sounds, then Real32/Bool8/Int fields) and
+            // are left to the generic handling below.
+            switch (arg_idx) {
+                case 0: obj.taskId = TaskIdFromArg(cur_a); break;
+                case 3: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.x = cur_a->dbl_; obj.original_pos.x = cur_a->dbl_; } break;
+                case 4: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.y = cur_a->dbl_; obj.original_pos.y = cur_a->dbl_; } break;
+                case 5: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.pos.z = cur_a->dbl_; obj.original_pos.z = cur_a->dbl_; } break;
+                case 6: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.x = cur_a->dbl_; obj.original_rot.x = cur_a->dbl_; } break;
+                case 7: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
+                case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
             }
         } else {
             // No explicit branch for this type. IGI's own convention for the task types
