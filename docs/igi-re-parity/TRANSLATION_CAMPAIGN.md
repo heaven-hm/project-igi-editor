@@ -171,6 +171,23 @@ their placement.  Verify each against its retail declaration first.
 Consequence today: at load those types get a position (via the candidate) but no rotation,
 so e.g. a `RotatingObject` is drawn unrotated.
 
+**Verification started for the shared group.** The engine's ParamTables confirm the layout
+the line parser assumes -- `ObjectPos` at args 3/4/5 then `Real32x9` at 6/7/8 -- for two of
+the eleven:
+
+    RotatingObject  src/fxobj/rotating.c:81-82   start ObjectPos, base Real32x9
+    AlarmLight      src/fxobj/alarm.c:109-110    place ObjectPos, placeMatrix Real32x9
+
+Both then continue with String16 model/sound fields at args 9/10, matching the line
+parser's extra-argument loop.  The other nine (AIStationaryGunHolder, Elevator, Generator,
+GenericPickup, GenericTBA, Plane, Radio, Siren, StationaryGun) still need the same check
+before the group can be mirrored into the load path -- and AIStationaryGunHolder already
+has its own load branch, so it may not belong in the group at all.
+
+Note also that `RotatingObject` has no retail declaration and no shipped instance anywhere
+under `MISSIONS/` in the local install, so its editor-side handling cannot be checked
+against authored data -- only against the engine's ParamTable.
+
 * **`renderer_terrain.cpp:230`** binds `mat_tex_.texs_[rc->tex_idx_]` unguarded, and
   `LEVEL12/TERRAIN.TEX` holds 12 textures while level 12's tile maps reference 12, 13 and
   14. The engine over-reads there too - `new_set` allocates `count*0x24+0x30`
