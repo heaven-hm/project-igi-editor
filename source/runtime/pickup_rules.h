@@ -219,6 +219,40 @@ bool PickupTouches(double range, const double pickup_pos[3], const double touche
 bool PickupTouchesFromModel(float model_radius, float max_scale, const double pickup_pos[3],
                             const double toucher_pos[3]);
 
+// The engine's whole per-frame acquisition test for one PLACED pickup: the
+// player is the toucher, and proximity alone acquires.
+//
+// HumanPlayer_SendPosition 0x410F70 (src/humanplayer/humanplayer.c:1467-1484) is
+// the ONLY dispatcher of the touch event. Every frame the live player copies its
+// position into a `Toucher` (`msg.pos = h->pos`, :1476-1477) and calls the
+// Game_GetEvent1 handler of EVERY task in task list 2 (:1478-1482). The pickup
+// types register their touch handler on exactly that event -- GenericPickup
+// pickup.c:264, GunPickup :475, AmmoPickup :657 -- and each handler re-tests
+// `touches()` (pickup.c:363, :605-606, :739-740). Nothing in the path reads the
+// player's facing, and no key is pressed.
+//
+// The player's explicit "use" action cannot acquire a pickup: Human_UpdateUse
+// 0x460EE0 (src/humanbase/human.c:1269-1312) dispatches Game_GetEvent2 to task
+// list 0, and the pickups live in task list 2 and register nothing on Event2.
+// Their Event8/Event13 slots are Task_FalseHandler (pickup.c:262-263, :473-474,
+// :655-656), i.e. collision no-ops, not a use handler.
+//
+// A placed pickup's scale is always 1.0: RigidDynCubeObj_Init 0x4C5710 is the
+// only writer of RigidDynCubeObj::scale and sets all three factors to 1.0f
+// (src/magicobj/magicobj.c:340-342). The range is therefore the model radius
+// (VirModel_GetRadius 0x4D0950, src/lod/mesh3d.c:381-387) clamped up to
+// kPickupMinTouchUnits. Pass kPickupNoModelRadius when the model never
+// resolved, exactly as the engine's NULL model does.
+bool PickupTouchesPlayer(float model_radius, const double pickup_pos[3],
+                         const double player_pos[3]);
+
+// The three task types a level PLACES that the engine's touch broadcast can
+// acquire. AddAmmo is deliberately excluded: it is created by the weapon code as
+// a child of a human, never authored into a level (AddAmmo_Create
+// 0x46DC20, src/comprun/pickup.c:782-788), and it declares no Position
+// parameter (pickup.c:776-777).
+bool IsPlacedPickupType(const std::string& task_type);
+
 // ---------------------------------------------------------------------------
 // What a pickup grants
 // ---------------------------------------------------------------------------

@@ -284,6 +284,10 @@ bool App::Init(int argc, char** argv) {
 		[this](const glm::vec3& origin, const glm::vec3& direction) {
 			return HandleGameplayInteraction(origin, direction);
 		});
+	gameplay_host_.GetWorld().SetPickupTouchQuery(
+		[this](const glm::vec3& player_position) {
+			ApplyPickupTouches(player_position);
+		});
 
 	return true;
 }
@@ -2654,8 +2658,7 @@ igi::RuntimeInteractionResult App::HandleGameplayInteraction(
 		const bool is_interactable =
 			object.type == "Door" || object.type == "Terminal" ||
 			object.type == "Switch" || object.type == "Generator" ||
-			object.type == "GunPickup" || object.type == "AmmoPickup" ||
-			object.type == "GenericPickup" || object.type == "GenericTBA" ||
+			object.type == "GenericTBA" ||
 			object.type == "Car";
 		if (object.deleted || !is_interactable) {
 			continue;
@@ -2734,65 +2737,14 @@ igi::RuntimeInteractionResult App::HandleGameplayInteraction(
 		return {true, !current_objective_requires_authored_state()};
 	}
 
-	if (target.type == "GunPickup") {
-		if (gameplay_host_.GetWorld().GetWeapons().SelectWeaponByScriptId(target.weaponEnumId)) {
-			// IGI-RE src/comprun/pickup.c:202-213 register_flag builds the flag
-			// with Task_GetName (src/param/task.c:123-135), which composes
-			// "<type>_<id>" because no level name handler is installed for
-			// pickups -- Level_GetNameEvent (0x4F1200) returns gLevelNameEvent
-			// and the only TaskType_SetHandler callers on it are the
-			// Sound_GetNameEvent types. A GunPickup therefore publishes
-			// "GunPickup_<id>.isPickedUp" and nothing else; the extra
-			// "GenericPickup_<id>.isPickedUp" this used to set as well was a
-			// phantom flag no level script can observe.
-			gameplay_host_.GetWorld().SetMissionStateBoolean(
-				"GunPickup_" + target.taskId + ".isPickedUp",
-				true);
-			target.deleted = true;
-			status_message_ = "Weapon acquired: " +
-				gameplay_host_.GetWorld().GetWeapons().GetActiveWeapon().name;
-			return {true, false};
-		}
-		return {};
-	}
-
-	if (target.type == "AmmoPickup") {
-		// IGI-RE src/comprun/pickup.c:744 AmmoPickup_Touch (0x46D990) hands the
-		// toucher `msg.count = t->count` -- the authored fourth parameter,
-		// truncated to the field's int16_t by ParamInt16_Parse 0x4F0110
-		// (src/physobj/paramops.c:627-633). The engine never substitutes the
-		// touching weapon's clip size, and AmmoPickup_Create zeroes the field
-		// (pickup.c:676), so a pickup whose count token is absent or malformed
-		// grants nothing rather than the clip size of whatever the player
-		// happens to be holding. The truncation comes from the ported rule
-		// (igi::TruncatePickupCount) so the two cannot drift.
-		uint32_t rounds = 0;
-		if (target.argTokens.size() > 10) {
-			const std::string text = StripQuotes(target.argTokens[10]);
-			char* end = nullptr;
-			const long value = std::strtol(text.c_str(), &end, 10);
-			if (end != text.c_str() && end != nullptr && *end == '\0') {
-				rounds = static_cast<uint32_t>(
-					igi::TruncatePickupCount(static_cast<int>(value)));
-			}
-		}
-		gameplay_host_.GetWorld().GetWeapons().AddReserveAmmo(rounds);
-		gameplay_host_.GetWorld().SetMissionStateBoolean(
-			"AmmoPickup_" + target.taskId + ".isPickedUp",
-			true);
-		target.deleted = true;
-		status_message_ = "Ammunition acquired";
-		return {true, false};
-	}
-
-	if (target.type == "GenericPickup") {
-		gameplay_host_.GetWorld().SetMissionStateBoolean(
-			"GenericPickup_" + target.taskId + ".isPickedUp",
-			true);
-		target.deleted = true;
-		status_message_ = "Item acquired";
-		return {true, !current_objective_requires_authored_state()};
-	}
+	// Pickups are deliberately absent from this function. The engine acquires
+	// them on PROXIMITY, never on the player's use action: Human_UpdateUse
+	// 0x460EE0 (src/humanbase/human.c:1269-1312) dispatches Game_GetEvent2 to
+	// task list 0, while the pickups live in task list 2 and register nothing on
+	// Event2. Their acquisition path is HumanPlayer_SendPosition 0x410F70
+	// (src/humanplayer/humanplayer.c:1467-1484) -> Game_GetEvent1 ->
+	// GenericPickup_Touch/GunPickup_Touch/AmmoPickup_Touch. See
+	// App::ApplyPickupTouches.
 
 	if (target.type == "GenericTBA") {
 		const std::string generic_prefix = "GenericTBA_" + target.taskId;
@@ -2819,6 +2771,160 @@ igi::RuntimeInteractionResult App::HandleGameplayInteraction(
 
 	status_message_ = "Objective interaction complete";
 	return {true, true};
+}
+
+void App::ApplyPickupTouches(const glm::vec3& player_position) {
+	// The engine's touch broadcast, ported. HumanPlayer_SendPosition 0x410F70
+	// (src/humanplayer/humanplayer.c:1467-1484) is the ONLY dispatcher of
+	// Game_GetEvent1 in the whole engine, and it runs once per player update:
+	//     if (Human_IsDead(h)) return;                        /* :1474-1475 */
+	//     msg.h = h; memcpy(msg.pos, h->pos, sizeof(msg.pos)); /* :1476-1477 */
+	//     for (i = 0; i < Game_GetTaskList2()->count; i++)
+	//         TASK_HANDLER(Game_GetEvent1(), type)(task, &msg); /* :1478-1482 */
+	// GenericPickup/GunPickup/AmmoPickup each register their touch handler on
+	// exactly that event (Game_GetEvent1 0x4167E0 = gGameEvents[1],
+	// src/game/game.c:714-718; pickup.c:264, :475, :657) and each handler
+	// re-tests `touches()` before acting (pickup.c:363, :605-606, :739-740).
+	// Nothing reads the player's facing; no key is pressed.
+	//
+	// The candidate set is exactly the placed pickups: task list 2 is populated
+	// by the pickups' own create handlers (GenericPickup_Create adds itself at
+	// pickup.c:293; GunPickup/AmmoPickup do it through pickup_create,
+	// pickup.c:489) and no other task type registers an Event1 handler.
+	//
+	// Only the player is a toucher. AI humans call Human_SendPosition 0x463080
+	// (src/viewcam/human.c:249-264), which dispatches Game_GetEvent0 to task
+	// list 1 -- a different event and a different list, and no pickup registers
+	// on either.
+	//
+	// `player_position` is the engine's `Toucher::pos` (comprun/comprun.h:17-21),
+	// copied from `h->pos`, i.e. the body position Human_SetPosition 0x4631A0
+	// moves with DynCube_Move (src/viewcam/human.c:314-326) -- not the eye.
+
+	const bool use_gameplay_snapshot =
+		igi::ResolveRuntimeAssetTarget(
+			in_game_mode_,
+			runtime_level_objects_.has_value()) ==
+		igi::RuntimeAssetTarget::GameplaySnapshot;
+	LevelObjects& gameplay_level_objects = use_gameplay_snapshot &&
+			runtime_level_objects_.has_value()
+		? runtime_level_objects_.value()
+		: GetActiveRenderLevelObjects();
+
+	for (LevelObject& object : gameplay_level_objects.GetObjects()) {
+		if (object.deleted || !igi::IsPlacedPickupType(object.type)) {
+			continue;
+		}
+
+		// radius() pickup.c:172-177 is `VirModel_GetRadius(o->model) *
+		// max_scale(o)`. A placed pickup's scale is always 1.0 -- the only
+		// writer of RigidDynCubeObj::scale is RigidDynCubeObj_Init 0x4C5710,
+		// which sets all three factors to 1.0f (src/magicobj/magicobj.c:340-342)
+		// -- so the range is the model's own radius, clamped up to 2867.2 by
+		// `if (!(r >= kMinTouch)) range = kMinTouch;` (pickup.c:187-188).
+		//
+		// The model is the one GunPickup_Changed 0x46D050 / AmmoPickup_Changed
+		// 0x46D7D0 / GenericPickup_Changed 0x46C490 resolved for the object
+		// (pickup.c:580-581, :716-717, :334); the editor already maps the
+		// WEAPON_ID_*/AMMO_ID_* enum to that model id in ResolvePickupModelId,
+		// and a model that never resolved keeps radius kOne = 1.0f
+		// (VirModel_GetRadius 0x4D0950, src/lod/mesh3d.c:381-387), which the
+		// clamp then raises to the 0.7 m minimum.
+		const float model_radius =
+			renderer_.GetMeshHeaderRadius(object.modelId, object.isBuilding);
+
+		const double pickup_pos[3] = {
+			object.pos.x, object.pos.y, object.pos.z};
+		const double player_pos[3] = {
+			player_position.x, player_position.y, player_position.z};
+		if (!igi::PickupTouchesPlayer(model_radius, pickup_pos, player_pos)) {
+			continue;
+		}
+
+		GrantPickup(object);
+	}
+}
+
+void App::GrantPickup(LevelObject& target) {
+	// The three touch handlers, ported. Each sets `pickedUp` and the pickup is
+	// consumed exactly once: the flag is never cleared (pickup.c:364, :612,
+	// :746) and the next run tick removes the pickup -- GunPickup_Run 0x46CEA0
+	// and AmmoPickup_Run 0x46D740 `Task_Delete(t)` (pickup.c:555-556, :682-683),
+	// GenericPickup_Run 0x46C3C0 removes it from the sector and dynamic cube but
+	// keeps the task (pickup.c:306-314). The editor's equivalent of both is
+	// `deleted`, and the run tick is the same tick here.
+	//
+	// The flags are the task's OWN type: register_flag (pickup.c:203-213) names
+	// the symbol with Task_GetName (src/param/task.c:123-135), which falls back
+	// to "<TaskType name>_<id>" because no task type installs a level name
+	// handler. So a GunPickup owns "GunPickup_<id>.isPickedUp" and nothing else.
+
+	if (target.type == "GunPickup") {
+		// GunPickup_Touch 0x46D230 (pickup.c:599-616): msg.id = t->weapon,
+		// msg.count = t->ammo, delivered to the toucher's type handler
+		// (WeaponGunPickup 0x45FFC0, src/humanbase/human.c:698-728) which adds
+		// msg[1] to a carried gun of the same id or creates one with
+		// Gun_New(h, 0, msg[0], msg[1], 1); then `t->pickedUp = 1` and the
+		// "PICKEDUPWEAPON<name>" status message (:613-614).
+		//
+		// t->ammo is the weapon's clipSize, `*(int *)(w + 0x648)`
+		// (GunPickup_Changed pickup.c:583; WeaponType.clipSize,
+		// src/weapon/weapontypes.h:18-73). The editor's stand-in for that grant
+		// is SelectWeaponByScriptId + RestoreOrInitializeAmmoState
+		// (source/weapon_system.cpp:291-293).
+		if (gameplay_host_.GetWorld().GetWeapons().SelectWeaponByScriptId(
+				target.weaponEnumId)) {
+			gameplay_host_.GetWorld().SetMissionStateBoolean(
+				"GunPickup_" + target.taskId + ".isPickedUp",
+				true);
+			target.deleted = true;
+			status_message_ = "Weapon acquired: " +
+				gameplay_host_.GetWorld().GetWeapons().GetActiveWeapon().name;
+		}
+		return;
+	}
+
+	if (target.type == "AmmoPickup") {
+		// AmmoPickup_Touch 0x46D990 (pickup.c:734-749): msg.id = t->ammo,
+		// msg.count = t->count, delivered to WeaponAmmoPickup 0x45FF80
+		// (src/humanbase/human.c:687-694), which does
+		// `AmmoList_Add(h->ammo, msg[0], msg[1])`; then `t->pickedUp = 1` and
+		// the "PICKEDUPAMMO" status message (:747-748).
+		//
+		// `t->count` is the authored fourth parameter, truncated to the field's
+		// int16_t by ParamInt16_Parse 0x4F0110 (src/physobj/paramops.c:627-633).
+		// The engine never substitutes the touching weapon's clip size, and
+		// AmmoPickup_Create zeroes the field (pickup.c:676), so a pickup whose
+		// count token is absent or malformed grants nothing. The truncation comes
+		// from the ported rule (igi::TruncatePickupCount) so the two cannot drift.
+		uint32_t rounds = 0;
+		if (target.argTokens.size() > 10) {
+			const std::string text = StripQuotes(target.argTokens[10]);
+			char* end = nullptr;
+			const long value = std::strtol(text.c_str(), &end, 10);
+			if (end != text.c_str() && end != nullptr && *end == '\0') {
+				rounds = static_cast<uint32_t>(
+					igi::TruncatePickupCount(static_cast<int>(value)));
+			}
+		}
+		gameplay_host_.GetWorld().GetWeapons().AddReserveAmmo(rounds);
+		gameplay_host_.GetWorld().SetMissionStateBoolean(
+			"AmmoPickup_" + target.taskId + ".isPickedUp",
+			true);
+		target.deleted = true;
+		status_message_ = "Ammunition acquired";
+		return;
+	}
+
+	// GenericPickup_Touch 0x46C630 (pickup.c:361-366) is the whole handler:
+	//     if (touches(&t->obj, by)) t->pickedUp = 1;
+	// It delivers no message and shows no status message; the pickup simply
+	// disappears and publishes isPickedUp.
+	gameplay_host_.GetWorld().SetMissionStateBoolean(
+		"GenericPickup_" + target.taskId + ".isPickedUp",
+		true);
+	target.deleted = true;
+	status_message_ = "Item acquired";
 }
 
 // Registers every in-level enemy (soldier family) into the runtime AiSystem so

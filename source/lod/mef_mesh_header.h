@@ -1,7 +1,9 @@
 #ifndef IGI_LOD_MEF_MESH_HEADER_H
 #define IGI_LOD_MEF_MESH_HEADER_H
 
-// The three `MeshHeader` words `lod_select` reads, taken straight out of a .mef.
+// The `MeshHeader` words the editor reads, taken straight out of a .mef:
+// `lod_select`'s format/sphere/complexity, plus the `radius` that
+// VirModel_GetRadius returns and the pickup touch range is built from.
 //
 // IGI-RE (faithful decompilation of retail IGI.exe):
 //
@@ -54,6 +56,14 @@ struct MefMeshHeader {
     float center[3] = {0.0f, 0.0f, 0.0f};  // MeshHeader.center
     float sphere = 0.0f;         // MeshHeader.sphere
     int complexity = 0;          // MeshHeader.complexity
+    // MeshHeader.radius (0x78, src/model/modeltypes.h:21). This is a DIFFERENT
+    // word from `sphere`: `sphere` is the bounding sphere around `center` (used
+    // by the LOD distance test, src/lod/mesh3d.c:224), while `radius` is the
+    // value VirModel_GetRadius 0x4D0950 returns (src/lod/mesh3d.c:381-387) and
+    // is therefore what the pickup touch range is built from
+    // (src/comprun/pickup.c:172-177). Measured in the retail install: the UZI
+    // model 111_01_1 has radius 1268.1 but sphere 973.1.
+    float radius = 0.0f;         // MeshHeader.radius
 };
 
 namespace mef_detail {
@@ -64,6 +74,7 @@ constexpr size_t kMeshFormat = 0x20;
 constexpr size_t kMeshCenter = 0x30;
 constexpr size_t kMeshSphere = 0x3C;
 constexpr size_t kMeshComplexity = 0x60;
+constexpr size_t kMeshRadius = 0x78;
 constexpr size_t kMeshSize = 0x90;
 
 inline uint32_t ReadU32(const uint8_t* p) {
@@ -137,6 +148,7 @@ inline MefMeshHeader ReadMefMeshHeader(const std::vector<uint8_t>& bytes) {
         for (int i = 0; i < 3; ++i) out.center[i] = ReadF32(bytes.data() + d + kMeshCenter + 4 * i);
         out.sphere = ReadF32(bytes.data() + d + kMeshSphere);
         out.complexity = static_cast<int>(ReadU32(bytes.data() + d + kMeshComplexity));
+        out.radius = ReadF32(bytes.data() + d + kMeshRadius);
         out.valid = true;
         return out;
     }

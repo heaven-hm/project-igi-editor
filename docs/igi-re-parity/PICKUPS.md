@@ -1,16 +1,14 @@
 # Weapon / ammo pickup parity (#75)
 
-Status: **audit + extracted rule module, not wired.**
+Status: **rule module + WIRED. The editor now acquires a pickup on proximity, not
+on an explicit action.**
 
 * Audit: this document.
-* Extracted, tested retail rules: `source/runtime/pickup_rules.{h,cpp}`
-  (**no editor code calls it**), tests in `tests/test_pickup_rules.cpp`
-  (14 unit tests + 5 retail-corpus tests).
-* The editor's live pickup paths (`source/level/task_schema.cpp`,
-  `source/level/level_objects.cpp`, `source/app.cpp`,
-  `source/weapon_system.cpp`) were read and are cited below, but **not
-  modified** — they are owned elsewhere. Two divergences found there are
-  reported in §8 rather than fixed here.
+* Extracted, tested retail rules: `source/runtime/pickup_rules.{h,cpp}`,
+  tests in `tests/test_pickup_rules.cpp` (17 unit tests + 5 retail-corpus tests).
+* The acquisition path is wired: `RuntimeWorld::SetPickupTouchQuery` +
+  `App::ApplyPickupTouches` / `App::GrantPickup` replace the old explicit-action
+  grant. See §3 "Where the toucher comes from" and §8.4.
 
 Every claim about engine behaviour is cited to IGI-RE
 (`/Users/haseeb-mir/Documents/Code/IGI-RE`) as function + address + file:line.
@@ -217,13 +215,100 @@ The clamp is `if (!(r >= kMinTouch)) range = kMinTouch;`. A NaN `r` fails `>=`,
 so a NaN radius **falls back to 2867.2** instead of producing a NaN range. The
 module reproduces this deliberately and a unit test pins it.
 
-### Where the toucher comes from
+### Where the toucher comes from — the per-frame broadcast
 
-`Game_GetEvent1()` is the touch event slot (`pickup.c:264, 475, 659`). The engine
-walks touching pairs and dispatches `GenericPickup_Touch` / `GunPickup_Touch` /
-`AmmoPickup_Touch`. The **touch handler re-tests** `touches()` before acting
-(`pickup.c:605-606`, `739-740`, `363`), so the range test is the gate, not an
-advisory.
+`Game_GetEvent1()` is the touch event slot (`pickup.c:264, 475, 657`), and it has
+exactly **one dispatcher in the whole engine**: `HumanPlayer_SendPosition`
+`0x410F70` (`src/humanplayer/humanplayer.c:1467-1484`).
+
+```c
+void HumanPlayer_SendPosition(HumanPlayer *h)
+{
+    PositionMsg msg;
+    TaskHandler fn;
+    uint16_t type;
+    int i;
+
+    if (Human_IsDead(h))                 /* :1474-1475 */
+        return;
+    msg.h = h;
+    memcpy(msg.pos, h->pos, sizeof(msg.pos));   /* :1476-1477 */
+    for (i = 0; i < Game_GetTaskList2()->count; i++) {
+        type = Game_GetTaskList2()->items[i]->type;
+        fn = (TaskHandler)TASK_HANDLER(Game_GetEvent1(), type);
+        fn(Game_GetTaskList2()->items[i], &msg);  /* :1478-1482 */
+    }
+}
+```
+
+So acquisition is **pure proximity, once per frame, for the live player only**:
+
+* **No key.** Nothing in the path reads an input; the pickup's `Game_GetEvent8`
+  and `Game_GetEvent13` slots are `Task_FalseHandler` (`pickup.c:262-263`,
+  `:473-474`, `:655-656`), i.e. collision no-ops, not a use handler.
+* **No facing test.** The message carries the player's position and nothing
+  else.
+* **The player's "use" action cannot acquire a pickup.**
+  `Human_UpdateUse` `0x460EE0` (`src/humanbase/human.c:1269-1312`) dispatches
+  `Game_GetEvent2` to **task list 0**, which holds doors, switches, ladders,
+  wires, fences, terminals, cabinets and TBAs (`door/door.c:238`,
+  `door/switch.c:110`, `props/ladder.c:112`, `props/wire.c:99`,
+  `props/fence.c:111`, `scamera/terminal.c:78`, `scamera/cabinet.c:88`,
+  `glass/tba.c:85`, `statgun/statgun.c:131`). The pickups are in **task list 2**
+  (`pickup.c:293`, `:489`) and register nothing on Event2.
+* **Only the player is a toucher.** AI humans call `Human_SendPosition`
+  `0x463080` (`src/viewcam/human.c:249-264`), which dispatches
+  `Game_GetEvent0` to **task list 1** — a different event and a different list.
+* **Dead players do not pick anything up** (`:1474-1475`).
+
+`by->pos` is `Toucher::pos` (`comprun/comprun.h:17-21`) copied from `h->pos`,
+the body position `Human_SetPosition` `0x4631A0` moves with `DynCube_Move`
+(`src/viewcam/human.c:314-326`) — not the eye.
+
+The **touch handler re-tests** `touches()` before acting (`pickup.c:605-606`,
+`739-740`, `363`), so the range test is the gate, not an advisory: the broadcast
+hands the position to every task in the list and each pickup decides.
+
+### Where the radius comes from
+
+`radius()` is `VirModel_GetRadius(o->model) * max_scale(o)`
+(`pickup.c:172-177`). For a **placed** pickup `max_scale` is always `1.0`:
+`RigidDynCubeObj_Init` `0x4C5710` is the only writer of `RigidDynCubeObj::scale`
+and sets all three factors to `1.0f` (`src/magicobj/magicobj.c:340-342`).
+`VirModel_GetRadius` `0x4D0950` (`src/lod/mesh3d.c:381-387`) is
+`lod_header(vm->lods[0])->radius`, i.e. **`MeshHeader.radius` at 0x78**
+(`src/model/modeltypes.h:21`) — *not* the `sphere` at 0x3C that the LOD distance
+test uses (`mesh3d.c:224`).
+
+The two are genuinely different words. Measured in the retail install:
+
+| model | id | `radius` (0x78) | `sphere` (0x3C) |
+|---|---|---|---|
+| UZI | `111_01_1` | 1268.1 | 973.1 |
+| DRAGUNOV | `105_01_1` | 4059.7 | 2733.0 |
+| M2HB | `123_01_1` | 5102.5 | 3623.8 |
+| APC | `601_05_1` | 16594.1 | 8553.4 |
+
+Every pickup the **retail** levels place is below the 2867.2 minimum, so on the
+shipped campaign the clamp hides the distinction:
+
+| enum | model | radius |
+|---|---|---|
+| `WEAPON_ID_GRENADE` | `135_01_1` | 356.6 |
+| `WEAPON_ID_MEDIPACK` | `121_01_1` | 544.3 |
+| `AMMO_ID_MEDIPACK` | `104_01_1` | 551.1 |
+| `WEAPON_ID_FLASHBANG` | `137_01_1` | 609.2 |
+| `AMMO_ID_919` | `116_01_1` | 721.9 |
+| `AMMO_ID_556` | `115_01_1` | 759.7 |
+| `WEAPON_ID_PROXIMITYMINE` | `136_01_1` | 944.4 |
+| `AMMO_ID_M203` | `108_05_1` | 991.2 |
+| `WEAPON_ID_UZI` | `111_01_1` | 1268.1 |
+| `WEAPON_ID_M16A2` | `108_01_1` | 2183.2 |
+| `WEAPON_ID_MINIMI` | `107_01_1` | 2648.8 |
+
+A level the editor builds can place a DRAGUNOV, M2HB or APC pickup, where the
+radius — not the minimum — is the reach, which is why the editor reads the real
+value (`Renderer_Objects::GetMeshHeaderRadius`) rather than assuming 2867.2.
 
 ---
 
@@ -791,6 +876,58 @@ reference.
 
 ---
 
+### 8.4 The acquisition trigger — FIXED (was an explicit action)
+
+Original defect: `source/app.cpp:2729-2790` granted a `GunPickup`/`AmmoPickup`/
+`GenericPickup` from `HandleGameplayInteraction`, i.e. only when the player
+pressed the interaction key while inside a 2.5 m cone in front of the object
+(`interaction_range`, `minimum_facing_dot = 0.2`). The engine has neither the key
+nor the cone.
+
+Engine rule (see §3): `HumanPlayer_SendPosition` `0x410F70`
+(`src/humanplayer/humanplayer.c:1467-1484`) broadcasts the live player's
+position to every task in task list 2 once per frame; the three pickup types
+registered their touch handler on `Game_GetEvent1` (`pickup.c:264`, `:475`,
+`:657`) and each re-tests the cylinder of §3.
+
+What changed:
+
+| file | change |
+|---|---|
+| `source/runtime/runtime_world.{h,cpp}` | `SetPickupTouchQuery` — the task-list loop, called from `UpdateSimulationTick` immediately after the player's movement, gated on `player_.IsAlive()` (the engine's `Human_IsDead` return). |
+| `source/app.cpp` | `ApplyPickupTouches` (the walk over the level's placed pickups + the touch test) and `GrantPickup` (the three touch handlers' grant half, moved verbatim from the interaction handler). Pickups removed from `is_interactable` and from `HandleGameplayInteraction`. |
+| `source/runtime/pickup_rules.{h,cpp}` | `PickupTouchesPlayer` (the whole placed-pickup test: `max_scale` = 1.0) and `IsPlacedPickupType` (the three authored types). |
+| `source/lod/mef_mesh_header.h` | `MefMeshHeader.radius` — `MeshHeader` + 0x78, the word `VirModel_GetRadius` returns. |
+| `source/renderer/renderer_objects{,_mesh}.{h,cpp}`, `renderer.h` | `GetMeshHeaderRadius` (cached per level+model; cleared with the `.res` indexes), the engine's `radius()` input. |
+
+**Divergences left in place, named rather than hidden:**
+
+1. **The status message text.** The engine shows a resource string:
+   `GunPickup_Touch` `crt_sprintf(buf, "PICKEDUPWEAPON%s", WeaponType_Find(t->weapon) + 0x110)`
+   then `StatusMessageShow(Level_GetDynamic(), buf, gEmptyString, gEmptyString)`
+   (`pickup.c:613-614`), and `AmmoPickup_Touch` shows `"PICKEDUPAMMO"` with the
+   `STATUSSCREEN:ammo.spr` portrait (`:747-748`). The editor's HUD takes a literal
+   string, not a status-screen resource id, so it keeps "Weapon acquired: <name>"
+   / "Ammunition acquired" / "Item acquired". `GenericPickup_Touch` shows no
+   message at all (`:361-366`), which the editor's "Item acquired" does not match.
+2. **An unknown `WEAPON_ID_*`.** The editor grants nothing when
+   `SelectWeaponByScriptId` fails. The engine still sets `pickedUp` and then
+   formats the message from `WeaponType_Find(t->weapon) + 0x110`, which is a
+   NULL-relative read for an id the weapon table does not know — not something to
+   reproduce.
+3. **`Toucher::pos` origin.** The engine's `h->pos` is the body position
+   `Human_SetPosition`/`DynCube_Move` maintains; the editor passes
+   `PlayerController::GetPosition()`, its feet position. The vertical half-height
+   is 1.0 m, so a ground-level pickup is inside either reading; a pickup placed
+   more than 1 m above or below the player's feet would distinguish them, and that
+   was not traced (see §11).
+4. **Tick alignment.** The engine sets `pickedUp` in the touch and deletes the
+   pickup on its next run tick (`GunPickup_Run` `pickup.c:555-556`). The editor
+   marks the object deleted in the same tick it is touched. One tick is not
+   observable through the level script, because the `isPickedUp` flag is set in
+   the same tick either way.
+
+---
 
 ## 9. Not modelled
 
@@ -810,12 +947,15 @@ reference.
 
 * `source/runtime/pickup_rules.h` — constants, `PickupKind`, `PickupParamType`,
   `PickupLayout` tables, `PickupTouchRange`, `PickupTouches`,
+  `PickupTouchesFromModel`, `PickupTouchesPlayer`, `IsPlacedPickupType`,
   `GunPickupGrant`/`AmmoPickupGrant`/`GenericPickupGrant`, `AddAmmoApplies`,
   `PickupDispositionFor`, `PickupIsOneShot`, `PickupScriptFlagName`,
   `CheckPickupArgs`, `TruncatePickupCount`.
 * `source/runtime/pickup_rules.cpp` — the implementation; every branch carries
   the `pickup.c` line it mirrors.
-* `tests/test_pickup_rules.cpp` — 14 `PickupRulesTest` unit tests and 5
+* `source/lod/mef_mesh_header.h` — the `MeshHeader` reader, including the
+  `radius` (0x78) `VirModel_GetRadius` returns.
+* `tests/test_pickup_rules.cpp` — 17 `PickupRulesTest` unit tests and 5
   `PickupCorpusTest` retail tests.
 
 Run:
@@ -824,44 +964,50 @@ Run:
 IGI_HOST_NO_CACHE=1 IGI_HOST_TESTS=tests/test_pickup_rules.cpp bash scripts/run-host-tests.sh
 ```
 
-Result: **19 tests, 19 passed, 0 failed, exit 0**; 0 skipped, so the retail
+Result: **22 tests, 22 passed, 0 failed, exit 0**; 0 skipped, so the retail
 corpus at `/Users/haseeb-mir/Downloads/IGI` was actually read (the suite
 `GTEST_SKIP`s with an `IGI_GAME_PATH` hint when it is absent).
 
-The full lane (`IGI_HOST_NO_CACHE=1 bash scripts/run-host-tests.sh`) exits **1**
-in this shared worktree, but **not because of this change**: the five failing
-suites are other agents' in-flight work in the same checkout —
+The three tests added with the wiring are
+`OnlyThePlacedPickupTypesAreTouchTargets`,
+`PlayerTouchUsesTheModelRadiusClampedUp` (including the DRAGUNOV case the
+2867.2 minimum alone gets wrong) and `MeshHeaderRadiusIsReadFromOffset0x78`
+(a synthetic ILFF/HSEM container pinning radius 0x78 against sphere 0x3C).
 
-| Suite | Failing | Cause |
-|---|---|---|
-| `test_menu_qvm` | 4 | `source/level/qvm_parser.cpp` is being rewritten (PUSHA/BLK/JSR opcode layout); the suite's hard-coded menu-QVM string/instruction counts are now stale (172 vs 139, 3006 vs 2225) |
-| `test_menu_text_res` | 2 | same parser rewrite |
-| `test_menu_ui` | 3 | same parser rewrite |
-| `test_qvm_roundtrip` | 1 | the same agent's own suite, mid-edit |
-| `test_sound_rules` | 5 | a brand-new untracked suite (`source/runtime/sound_emitter.cpp`) from a third agent |
+The full lane (`IGI_HOST_NO_CACHE=1 bash scripts/run-host-tests.sh`) has other
+agents' in-flight suites in this shared worktree; `test_pickup_rules` is green in
+isolation and the change touches only `source/runtime/pickup_rules.{h,cpp}`,
+`source/runtime/runtime_world.{h,cpp}`, `source/lod/mef_mesh_header.h`,
+`source/renderer/renderer_objects{,_mesh}.{h,cpp}`,
+`source/renderer/renderer.h`, `source/app.{h,cpp}` and
+`tests/test_pickup_rules.cpp`.
 
-`test_pickup_rules` reports `PASS test_pickup_rules 19 passed 0 failed (19
-tests, exit 0)` inside that same run. This change touches only
-`source/runtime/pickup_rules.{h,cpp}`, `tests/test_pickup_rules.cpp`,
-`docs/igi-re-parity/PICKUPS.md` and two additive lines in `CMakeLists.txt`; it
-does not link against or call the QVM parser rewrite or the sound emitter.
-
-No editor code calls the module yet.
+The editor now calls the module: `App::ApplyPickupTouches` /
+`App::GrantPickup`, reached from `RuntimeWorld::UpdateSimulationTick` through
+`SetPickupTouchQuery`.
 
 ---
 
 ## 11. What remains unverified
 
-* **Nothing visual.** The editor needs GL 4.1+ and this host offers GL 2.1, so
-  no pickup was rendered and no in-game touch was performed. All 19 tests are
-  host-lane pure-logic and corpus tests.
-* The Windows `igi_tests` suite was not run for this change; the host lane is
-  the inner loop, not the gate (`AGENTS.md`).
+* **Nothing visual, and no pickup has been walked over in a running editor.**
+  The editor needs GL 4.1+ and this host offers GL 2.1, so no pickup was rendered
+  and no in-game touch was performed. The 22 tests are host-lane pure-logic and
+  corpus tests; `ApplyPickupTouches` itself is editor-side code that no host test
+  exercises.
+* The Windows `igi_tests` suite is the gate for the editor-side code; see the
+  campaign checkpoint for its result.
 * The exact value `Script_EvalExpr("")` returns for `LEVEL1`'s empty ID — only
   that the parse-failure path yields `0` (`src/script/script.c:264-265`) and that
   no weapon has id 0.
 * The `Toucher::pos` origin actually used at runtime (centre vs feet) was not
-  traced; the module takes the position as an argument and does not assume.
+  traced. The engine's `h->pos` is the body position `Human_SetPosition` moves;
+  the editor passes `PlayerController::GetPosition()`. The module takes the
+  position as an argument and does not assume.
+* The engine's per-frame order between `HumanPlayer_SendPosition` and the task
+  list's run slot is not reconstructed in IGI-RE (the top-level frame loop is not
+  in the decompilation), so whether a touched pickup is deleted in the same frame
+  or the next is not established. The editor deletes in the tick it touches.
 * `WeaponGunPickup`'s behaviour for a **negative** ammo count (the retail
   `KNIFE` case) was not traced into `Gun_New` `0x45C0xx`; the module reports the
   engine value and stops there.

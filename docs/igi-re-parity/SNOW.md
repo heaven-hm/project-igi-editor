@@ -1,13 +1,15 @@
 # Snow particles audit (#57)
 
-Status: **audit + extracted rules, not wired.**
+Status: **audit + extracted rules; the snow half is WIRED, the `snow.tex` binding
+included. See §9.**
 
 * Audit: this document.
 * Retail rules: `source/runtime/rain_rules.{h,cpp}` — the **snow-specific**
   additions are the `R7` block (header) and the `R7 - snow is rain's snow flag`
-  block (implementation). **No editor code calls the module.**
+  block (implementation).
 * Tests: `tests/test_rain_rules.cpp`, the `R7` section plus
-  `RainRulesCorpus.LevelsSevenAndTwelveAuthorSnow`.
+  `RainRulesCorpus.LevelsSevenAndTwelveAuthorSnow`, and
+  `tests/test_weather_texture.cpp` for the texture binding.
 * Rain's own audit: [`RAIN.md`](RAIN.md) — this file is the snow half and
   repeats only what differs.
 
@@ -289,10 +291,19 @@ Consequences pinned by the tests:
 
 ## 5. What the editor does instead
 
+> **Status note (revision after the wiring).** The table in §5.1 records the
+> renderer as it stood when this audit was written: a vertex-shader particle field
+> with sinusoidal drift and no texture. `source/renderer/renderer_rain.cpp` has
+> since been rewritten onto `rain_rules` (the pool, the tick, the tile wrap, the
+> sway, the four vertex groups, the layer walk and the fade are the engine's now),
+> and the `snow.tex` binding — S-D8 — is wired (§9). The rows still true are S-D3
+> (the editor's **rain** buffer is still the invented 1200-drop field) and S-D10
+> (no `Rain_ClipCells` outcodes, and the per-layer `n` clip of `rain.c:465-484` is
+> not applied). The rest describe code that no longer exists and are kept only as
+> the record of what the audit found.
+
 The editor has no snow *system* either — it takes the same shortcut as the
-engine, by treating `Is Rain` FALSE as "snow" — but it implements the snow
-motion and material from invented constants rather than the retail branches.
-Entry points (all read, **none modified** by this task):
+engine, by treating `Is Rain` FALSE as "snow". Entry points:
 
 * `source/renderer/renderer_rain.{h,cpp}` — the GPU particle field
   (`Renderer_Rain::SetParams`, `Draw`, `DrawSnow`, and the `SNOW_VERT_SRC` /
@@ -314,7 +325,7 @@ Entry points (all read, **none modified** by this task):
 | S-D5 | S5 wrap | the box is wrapped with `mod()` in the shader, so flakes slide continuously and never jump a tile or change vertex group | `renderer/renderer_rain.cpp:70-73`; `renderer/weather_math.h:9` | a single ±`kTileF` step that XORs the `kind` bit, `rain.c:603-616` |
 | S-D6 | S6 extent | 0.045 m half-extent ⇒ a 0.09 m quad; also used as the "ground visible particle length" | `renderer/weather_math.h:12`; `runtime/weather_particle_style.h:8-10` | `kFlakeSize = 81.92` half-extent ⇒ **0.04 m across**, `rain.c:341-342,685` |
 | S-D7 | S6 material | hardcoded `vec4(0.92, 0.97, 1.0, clamp(u_alpha*1.75, 0.10, 0.42))`, one constant alpha per quad | `renderer/renderer_rain.cpp:84-91`; `renderer/weather_math.h:19-20,28-30` | opaque-white vertex diffuse, alpha byte `trunc(a*255)`, `rain.c:353,646-649` |
-| S-D8 | S7 texture | **`snow.tex` is never loaded or bound**; `grep -rn "snow\.tex" source/renderer source/runtime` is empty | (absent) | `Game_AddTexture("snow.tex")` `fxobj/rain.c:82`, bound at `rain.c:431-432` |
+| S-D8 | S7 texture | **WIRED — see §9.** `snow.tex` is resolved as `LOCAL:common/textures/snow.tex` out of the mounted pack, its UVs are the engine's and the shader reproduces stage 0's MODULATE / SELECTARG2 pair | `source/renderer/renderer_objects_texture.cpp` (`GetOrLoadGameTexture`); `source/renderer/renderer_rain.cpp` (`SNOW_VERT_SRC`, `SNOW_FRAG_SRC`, `DrawSnow`) | `Game_AddTexture("snow.tex")` `fxobj/rain.c:82`, bound at `rain.c:431-432` |
 | S-D9 | S7 billboard | the flake quad is axis-aligned in world space with a `z + a_corner.x * u_halfExtent` skew, not a camera-facing billboard | `renderer/renderer_rain.cpp:77-79` | corners are the local position rotated by the camera basis, `rain.c:338-342,382-388` |
 | S-D10 | S8 vertex budget | one draw call, `GL_TRIANGLES`, 6 vertices per flake, no four-group split | `renderer/renderer_rain.cpp:280,317` | four 480-vertex groups selected by tile parity, `rain.c:328,404,408,446-447` |
 | S-D11 | S6 fade | no fade: snow appears and disappears instantly | (absent) | `fade` ramps by 1/60 per tick and scales the flake, `rain.c:309,574-583` |
@@ -405,10 +416,8 @@ deliberately not ported — they are per-back-end plumbing with no GL analogue.
 
 ## 8. Recommended follow-up (for the Lead, not done here)
 
-1. **S-D8 is the cheapest visible win.** The engine always samples `snow.tex`
-   (`fxobj/rain.c:82`) and the editor has no snow texture at all; loading
-   `LOCAL:common/textures/snow.tex` and binding it in `SNOW_FRAG_SRC` is a
-   renderer-local change with no rule rewrite.
+1. **S-D8 is DONE** — see §9. `LOCAL:common/textures/snow.tex` is resolved through
+   the engine's own identity and pack and bound in the snow fragment shader.
 2. **S-D6/S-D7 (0.09 m → 0.04 m, boosted alpha → `trunc(a*255)`) are one-line
    constant changes**, but they must be done *after* S-D11 (fade) and S-D7
    (vertex-diffuse alpha), exactly as RAIN.md §6.3 says for rain: at LEVEL7's
@@ -418,8 +427,46 @@ deliberately not ported — they are per-back-end plumbing with no GL analogue.
    sinusoid in world space; the oracle's is a CPU random walk in a tile-local
    frame with a camera-facing billboard. Bringing snow to parity means replacing
    the `SNOW_VERT_SRC` position model in `source/renderer/renderer_rain.cpp` —
-   outside this task's write scope.
+   outside this task's write scope. **Done since:** the snow position model *is*
+   the engine's random walk now (it comes from `rain_rules`), so this item now
+   describes the RAIN half only.
 4. **The editor's snow shader cites OpenIGI in its comments**
    (`renderer_rain.cpp:74-76`, `weather_particle_style.h:5-7`). OpenIGI is not
    an authority; those comments should point at `fxobj/rain.c` / `dxinit/rain.c`
    instead, so the next reader does not treat the C# port as the reference.
+
+---
+
+## 9. The `snow.tex` binding (WIRED)
+
+The engine loads the flake texture once, for both weather modes, and binds it in
+the snow branch only. Every step of that chain is now in the editor:
+
+| Step | Engine | Editor |
+|---|---|---|
+| register the name | `gRainTexture = Game_AddTexture("snow.tex")`, `RainEffect_Init` HOOK 0x436780, `src/fxobj/rain.c:82`; the intern table is `src/game/game.c:835-848` | `igi::rain::SnowTextureName()` (`source/runtime/rain_rules.cpp`), passed by `Renderer::Draw` (`source/renderer/renderer_draw.cpp`) |
+| build the member identity | `path = "LOCAL:common/textures/"; strcat(path, name)`, `Game_LoadTextures` HOOK 0x416130, `src/game/game.c:524-534` | `igi_res::GameTextureMemberName` (`source/renderer/res_chunks.h`) |
+| the archive that answers it | `Resource_Load("LOCAL:common/textures/textures.res")`, `src/game/game.c:430`; `Texture_LoadFile` then `Resource_Load`s the member name, `src/file/texture.c:231-252` | `igi_res::kGameTexturePackName`; `<IGI>/common/textures/textures.res` indexed with `RES_BuildIndex` |
+| name matching | `String_ToUpper` HOOK 0x4B5AF0 (`src/res/resource.c:98-104`) + `Resource_IsLoaded` HOOK 0x4B5B90 (`:136-138`) compare the folded full name, newest resource first | the index key is `igi_res::NormalizeResourceName(member)`; lookup with `RES_FindIndexEntry` |
+| decode | `Texture_LoadFile` dispatches on `LOOP` + version, `LoopHeader11` at `src/file/texture.c:24-36`, fields consumed at `:239-243` | `Tex_LoadFromMemory` (`source/level/level_common.cpp`) |
+| bind + stage 0 | `SetTexture(device, 0, texture->surface)`, `SET_TSS(0,1,4)` COLOROP = MODULATE, `SET_TSS(0,4,4)` ALPHAOP = MODULATE, args TEXTURE/DIFFUSE, `k = 4`; with `r->texture == NULL` the ops are SELECTARG2 (`k = 3`), `src/dxinit/rain.c:430-438` | `Renderer_Objects::GetOrLoadGameTexture`; the fragment shader computes `u_diffuse * texel` with `texel = 1` when the handle is 0 |
+| uv | `v0..v3` carry `(0,0) (1,0) (0,1) (1,1)` and `v4 = v1`, `v5 = v2`, `src/dxinit/rain.c:344-363` | `v_uv = (a_corner + 1) / 2` in `SNOW_VERT_SRC` / `SNOW_VERT_SRC_120` |
+| filtering | `SET_TSS(0,0x10,2)` MAGFILTER = LINEAR, `SET_TSS(0,0x11,1)` MINFILTER = POINT; MIPFILTER unset, `src/dxinit/rain.c:444-445` | `glTexParameteri` in `Renderer_Rain::DrawSnow` (MAG `GL_LINEAR`, MIN `GL_NEAREST`, wrap `GL_REPEAT`) |
+
+**Verified:** `tests/test_weather_texture.cpp` (7 tests) reads the retail pack with
+the product's own reader and asserts that `LOCAL:common/textures/snow.tex` is a
+member, that its bytes decode as a `LOOP` v11 16x16 4-bpp image (`IMAGE_MODE_67`),
+and that the identity, the UV mapping and the colour domain are the engine's.
+
+**The colour domain, with the evidence.** The particles are `D3DFVF_DIFFUSE`
+vertices (`Rain_CreateVB`, `src/dxinit/rain.c:139`), so their diffuse words are raw
+8-bit `D3DCOLOR` and `Rain_SetAlpha` packs `trunc(alpha * 255)` into the top byte
+(`rain.c:646-649`) — a full 0..255 range. The 1/128 domain belongs to the menus:
+`gColorScale` DATA 0x534AB0 = `0.0078125f` (`src/res/qvertex.c:189`) with
+`COLOR_SCALE = 1/128` (`src/math/draw.c:12`), consumed by the QVertex/Grid draw
+path, which `Rain_*` never touches. The editor therefore converts with `/255`
+(`renderer_rain.cpp`, the `u_diffuse` upload).
+
+**Unverified:** the rendered pixels. This host offers OpenGL 2.1 and the editor
+needs 4.1, so nothing here was seen on screen; the binding is proven by the
+corpus test and the citations above, not by a frame.

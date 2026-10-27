@@ -714,6 +714,10 @@ public:
     void                    RequestSplineTrace(std::string path) { splines_.RequestTrace(std::move(path)); }
 	glm::vec3				GetMeshExtents(const std::string& modelId, bool isBuilding) { return objects_.GetMeshExtents(modelId, isBuilding); }
 	float					GetMeshRadius(const std::string& modelId, bool isBuilding) { return objects_.GetMeshRadius(modelId, isBuilding); }
+	// VirModel_GetRadius 0x4D0950 (src/lod/mesh3d.c:381-387), i.e. the LOD0
+	// MeshHeader.radius -- the value the pickup touch range uses
+	// (src/comprun/pickup.c:172-177). NOT GetMeshRadius above (extent diagonal).
+	float					GetMeshHeaderRadius(const std::string& modelId, bool isBuilding) { return objects_.GetMeshHeaderRadius(modelId, isBuilding); }
 	glm::vec3				GetMeshCenter(const std::string& modelId, bool isBuilding) { return objects_.GetMeshCenter(modelId, isBuilding); }
 	float					GetMeshZOffset(const std::string& modelId, bool isBuilding) { return objects_.GetMeshZOffset(modelId, isBuilding); }
 	int						PickObjectAtScreen(int x, int y, int w, int h,

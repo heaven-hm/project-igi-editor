@@ -41,6 +41,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <string>
 
@@ -249,6 +250,61 @@ inline std::string TextureMemberName(const std::string& textureId) {
 //   crt_sprintf(gModelPath, "LOCAL:models/%s.mef", name);
 inline std::string ModelMemberName(const std::string& modelName) {
     return "LOCAL:models/" + modelName + ".mef";
+}
+
+// ---------------------------------------------------------------------------
+// Member names the engine builds for the game's SHARED textures — the ones
+// Game_AddTexture interns. A different template from TextureMemberName above:
+// a model's texture is "LOCAL:textures/%s.tex" (model.c:467) while these are
+// "LOCAL:common/textures/%s". "snow.tex" is the weather system's
+// (RainEffect_Init, src/fxobj/rain.c:82).
+// ---------------------------------------------------------------------------
+
+// Game_LoadTextures — src/game/game.c:524-534, HOOK(0x416130):
+//   char path[0x100] = "LOCAL:common/textures/";
+//   strcat(path, gGameTextures[i].name);
+//   Texture_LoadFile(gGameTextures[i].tex, NULL, path);
+// Texture_LoadFile is Resource_Load (src/file/texture.c:231-252), so the name
+// below is a RESOURCE identity: it is matched upper-cased with '\' folded to
+// '/' against the resource list (Resource_IsLoaded 0x4B5B90,
+// src/res/resource.c:124-147). There is no basename fallback.
+inline std::string GameTextureMemberName(const std::string& name) {
+    return "LOCAL:common/textures/" + name;
+}
+
+// The archive that supplies the names above. The game mounts it once, before
+// Game_LoadTextures walks the registered names — src/game/game.c:430:
+//   gGame->textures = Resource_Load("LOCAL:common/textures/textures.res", NULL);
+// In the retail install that resolves to <IGI>/common/textures/textures.res
+// (measured: it carries the member "LOCAL:common/textures/snow.tex").
+inline constexpr const char* kGameTexturePackName = "LOCAL:common/textures/textures.res";
+
+// The LOCAL: device strips its own prefix and hands the remainder to the CRT
+// (LocalDevice_Open, src/sysmisc/localdev.c:162-205: crt_fopen(path, how)), so a
+// "LOCAL:" resource name is an on-disk path relative to the process's working
+// directory — the install root when the game runs.
+inline std::string LocalDeviceRelativePath(const std::string& resourceName) {
+    static const char kPrefix[] = "LOCAL:";
+    const std::size_t kPrefixLen = 6;
+    if (resourceName.size() >= kPrefixLen) {
+        bool match = true;
+        for (std::size_t i = 0; i < kPrefixLen; ++i) {
+            char c = resourceName[i];
+            if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+            if (c != kPrefix[i]) { match = false; break; }
+        }
+        if (match) return resourceName.substr(kPrefixLen);
+    }
+    return resourceName;
+}
+
+// The on-disk path of a "LOCAL:" resource under an install root. std::filesystem
+// supplies the platform separator, so this is the engine's own path on Windows
+// (root\common\textures\textures.res) and still a real path on a POSIX host,
+// which is what makes it checkable outside the Windows build.
+inline std::string LocalDevicePath(const std::string& root, const std::string& resourceName) {
+    const std::filesystem::path relative(LocalDeviceRelativePath(resourceName));
+    return (std::filesystem::path(root) / relative).string();
 }
 
 }  // namespace igi_res

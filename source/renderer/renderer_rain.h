@@ -16,15 +16,20 @@ public:
     // cameraRight/cameraUp are the frame's camera basis. Rain_FillVB expands the
     // flake quad in the camera's own axes (gTransContext.matrix, rain.c:338-340,
     // :382-388), so the basis has to come from the frame being drawn.
+    //
+    // snowTexture is the game's `snow.tex` as the engine loads it
+    // (Game_AddTexture("snow.tex"), fxobj/rain.c:82; bound only by the snow branch,
+    // rain.c:431-434). Pass 0 when it could not be resolved: Rain_DrawCell's
+    // null-texture branch (rain.c:435-438) is then reproduced exactly.
     void Draw(GLuint ubo_mats, const glm::vec3& cameraPos, const glm::vec3& cameraRight,
-              const glm::vec3& cameraUp, bool cameraIsSheltered);
+              const glm::vec3& cameraUp, bool cameraIsSheltered, GLuint snowTexture);
     bool IsActive() const { return active_ && weather_enabled_; }
     bool IsSnow() const { return is_snow_; }
     bool IsWeatherEnabled() const { return weather_enabled_; }
 
 private:
     void DrawSnow(GLuint ubo_mats, const glm::vec3& cameraPos, const glm::vec3& cameraRight,
-                  const glm::vec3& cameraUp, float time_sec);
+                  const glm::vec3& cameraUp, float time_sec, GLuint snow_texture);
 
     GLuint shader_program_ = 0;
     GLuint snow_program_ = 0;

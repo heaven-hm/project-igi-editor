@@ -112,6 +112,18 @@ public:
     size_t GetMeshCacheCount() const { return mesh_cache_.size(); }
     size_t GetTextureCacheCount() const { return texture_cache_.size(); }
 
+    // The game's SHARED textures — the ones Game_AddTexture interns
+    // (src/game/game.c:835-848, HOOK 0x416930) and Game_LoadTextures loads
+    // (src/game/game.c:524-534, HOOK 0x416130). "snow.tex" is the weather
+    // system's (RainEffect_Init, src/fxobj/rain.c:82). This is a DIFFERENT
+    // resource identity from a model's texture — "LOCAL:common/textures/<name>"
+    // against "LOCAL:textures/<id>.tex" (src/model/model.c:467) — and it comes
+    // out of the pack "LOCAL:common/textures/textures.res" that the game mounts
+    // at load (src/game/game.c:430). Returns 0 only where the engine's own
+    // Texture_LoadFile would raise (src/file/texture.c:245-249), so a caller can
+    // fall back to the engine's null-texture branch.
+    GLuint GetOrLoadGameTexture(const std::string& name);
+
     // tan_half_fovx is the frame's `gTransContext.fov` (view_define_.tan_half_fovx_,
     // set in app.cpp): lod_select needs it to turn a view-space depth into the
     // engine's distance test (src/lod/mesh3d.c:216-222).
@@ -166,6 +178,13 @@ public:
     static bool IsSkippedModelId(const std::string& modelId);
     glm::vec3 GetMeshExtents(const std::string& modelId, bool isBuilding);
     float GetMeshRadius(const std::string& modelId, bool isBuilding);
+    // The engine's VirModel_GetRadius 0x4D0950 (src/lod/mesh3d.c:381-387):
+    // the LOD0 MeshHeader.radius, or 1.0f when the model does not resolve
+    // (mesh3d.c:88 `kOne`). This is NOT GetMeshRadius above, which is the
+    // extent diagonal; the pickup touch range is built from THIS value
+    // (src/comprun/pickup.c:172-177). Cached per model id because the lookup
+    // reads the .res entry off disk and the pickup pass runs every tick.
+    float GetMeshHeaderRadius(const std::string& modelId, bool isBuilding);
     glm::vec3 GetMeshCenter(const std::string& modelId, bool isBuilding);
     bool IsCameraInsideBuildingBounds(const std::vector<LevelObject>& objects,
                                       const glm::vec3& cameraPos);
@@ -411,6 +430,13 @@ private:
     uint64_t occupancy_sig_ = 0;
     std::unordered_map<std::string, Mesh> mesh_cache_;
     std::map<std::string, GLuint> texture_cache_;
+    // Game_AddTexture/Game_LoadTextures textures, keyed by the registered name
+    // alone: the pack they come from (igi_res::kGameTexturePackName) is
+    // level-independent, unlike texture_cache_'s "<level>:<id>" keys.
+    std::map<std::string, GLuint> game_texture_cache_;
+    std::unordered_map<std::string, ResEntryInfo> game_texture_pack_index_;
+    std::string game_texture_pack_path_;
+    bool game_texture_pack_indexed_ = false;
     std::map<std::string, std::vector<std::string>> model_texture_map_cache_;
     mutable std::map<std::string, std::vector<std::string>> global_texture_map_;
     mutable bool global_texture_map_loaded_ = false;
@@ -458,6 +484,11 @@ private:
     // the loaded .res model set changes (LoadResCache / ClearResCache), because
     // a chain is built over that set.
     std::map<std::string, igi::lod::LodChain> lod_chain_cache_;
+    // VirModel_GetRadius values (MeshHeader.radius), keyed by "<level>:<modelId>".
+    // Cached because the lookup reads the .res entry off disk and the pickup
+    // touch pass asks for it once per placed pickup per tick. Cleared with the
+    // .res indexes it is derived from.
+    std::unordered_map<std::string, float> mesh_header_radius_cache_;
     // Authored ModelLODSettings tables from lod.qvm, in world units (metres x
     // 4096), monotonized exactly as ModelLODSettings_Changed leaves
     // VirModel.unk28. Level-independent, like portal_distances_.

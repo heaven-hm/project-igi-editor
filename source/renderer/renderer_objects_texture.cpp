@@ -544,6 +544,109 @@ GLuint Renderer_Objects::GetOrLoadTexture(const std::string& textureId) {
     return texture;
 }
 
+// ─── GetOrLoadGameTexture ─────────────────────────────────────────────────────
+//
+// The game's SHARED textures — the ones registered by name with Game_AddTexture
+// (src/game/game.c:835-848, HOOK 0x416930). RainEffect_Init registers "snow.tex"
+// this way, once, for both weather modes (src/fxobj/rain.c:82); Game_LoadTextures
+// then walks every registered name and loads it as "LOCAL:common/textures/<name>"
+// (src/game/game.c:524-534, HOOK 0x416130); Texture_LoadFile resolves that name
+// through the resource list (src/file/texture.c:231-252, HOOK 0x4B24C0). The list
+// was filled when the game mounted the pack
+//   Resource_Load("LOCAL:common/textures/textures.res")  (src/game/game.c:430)
+// whose members carry exactly that identity — measured on the retail install, the
+// pack holds the member "LOCAL:common/textures/snow.tex" (1396 bytes).
+//
+// This is NOT the model-texture path. A model's texture is
+// "LOCAL:textures/<id>.tex" (ModelFile_LoadTextures, src/model/model.c:467), which
+// GetOrLoadTexture above owns, and the two namespaces are disjoint: no member of
+// this pack can be reached by a model-texture lookup and vice versa. So this
+// method has its own cache and its own archive index instead of joining
+// res_tex_indexes_, whose owner-archive ordering the model path depends on.
+GLuint Renderer_Objects::GetOrLoadGameTexture(const std::string& name) {
+    if (name.empty()) return 0;
+
+    // A cached 0 is a cached failure: the pack is a global, level-independent
+    // archive, so a miss is not expected to become a hit later in the session.
+    // ClearCaches() drops the cache, which is what a level switch or a game-path
+    // change goes through.
+    auto cached = game_texture_cache_.find(name);
+    if (cached != game_texture_cache_.end()) return cached->second;
+
+    // The path the engine's own "LOCAL:" device would open (LocalDevice_Open strips
+    // the prefix, src/sysmisc/localdev.c:162-205); LocalDevicePath keeps that
+    // expression in one place so a test can check it against the retail install.
+    const std::string packPath =
+        igi_res::LocalDevicePath(Utils::GetIGIRootPath(), igi_res::kGameTexturePackName);
+    if (packPath != game_texture_pack_path_) {
+        game_texture_pack_index_.clear();
+        game_texture_pack_indexed_ = false;
+        game_texture_pack_path_ = packPath;
+    }
+    if (!game_texture_pack_indexed_) {
+        std::string error;
+        if (std::filesystem::exists(packPath) &&
+            RES_BuildIndex(packPath, game_texture_pack_index_, error)) {
+            Logger::Get().Log(LogLevel::INFO, "[TEX] Game texture pack indexed: " + packPath +
+                " (" + std::to_string(game_texture_pack_index_.size()) + " members)");
+        } else if (!error.empty()) {
+            Logger::Get().Log(LogLevel::WARNING, "[TEX] Game texture pack index failed: " + error);
+        }
+        game_texture_pack_indexed_ = true;
+    }
+
+    // 1. the mounted pack, by the engine's own member identity
+    const std::string member = igi_res::GameTextureMemberName(name);
+    ResEntryInfo info{};
+    if (RES_FindIndexEntry(game_texture_pack_index_, member, info)) {
+        std::vector<uint8_t> bytes = RES_ReadEntry(packPath, info);
+        pics_s pics{};
+        if (!bytes.empty() && Tex_LoadFromMemory(bytes.data(), bytes.size(), pics) &&
+            pics.pics_ && pics.num_pic_ > 0) {
+            const pic_s* pic = pics.pics_;
+            Logger::Get().Log(LogLevel::INFO, "[TEX] Game texture " + name + " loaded as " +
+                member + " from " + packPath + " " + std::to_string(pic->width_) + "x" +
+                std::to_string(pic->height_));
+            const GLuint tex =
+                GL_RegisterTexture(pic, GL_REPEAT, GL_LINEAR_MIPMAP_LINEAR, GL_LINEAR, true);
+            Pic_FreePics(pics);
+            game_texture_cache_[name] = tex;
+            return tex;
+        }
+        Pic_FreePics(pics);
+        Logger::Get().Log(LogLevel::WARNING, "[TEX] Game texture " + name + " is present as " +
+            member + " in " + packPath + " but failed to decode");
+    }
+
+    // 2. a loose file at the engine's own LOCAL path. Resource_Load falls back to
+    //    File_Load when the resource list does not carry the name (src/res/resource.c:259-266)
+    //    and the LOCAL device strips its prefix before the CRT open
+    //    (LocalDevice_Open, src/sysmisc/localdev.c:162-205), so the on-disk path is
+    //    <IGI>/common/textures/<name>.
+    const std::string loosePath =
+        igi_res::LocalDevicePath(Utils::GetIGIRootPath(), member);
+    pics_s pics{};
+    if (Tex_Load(loosePath.c_str(), pics) && pics.pics_ && pics.num_pic_ > 0) {
+        const pic_s* pic = pics.pics_;
+        Logger::Get().Log(LogLevel::INFO, "[TEX] Game texture " + name +
+            " loaded from loose file " + loosePath + " " + std::to_string(pic->width_) + "x" +
+            std::to_string(pic->height_));
+        const GLuint tex =
+            GL_RegisterTexture(pic, GL_REPEAT, GL_LINEAR_MIPMAP_LINEAR, GL_LINEAR, true);
+        Pic_FreePics(pics);
+        game_texture_cache_[name] = tex;
+        return tex;
+    }
+    Pic_FreePics(pics);
+
+    // The engine treats this as fatal (Texture_LoadFile -> Error_Show, texture.c:245-249);
+    // the editor reports it and lets the caller use the engine's null-texture branch.
+    Logger::Get().Log(LogLevel::WARNING,
+        "[TEX] Game texture NOT FOUND: " + name + " (" + member + "; pack " + packPath + ")");
+    game_texture_cache_[name] = 0;
+    return 0;
+}
+
 void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelId, const std::string& parentModelId) {
     std::vector<std::string> textureIds = GetTextureIdsForModel(modelId);
     bool isDatMiss = textureIds.empty();

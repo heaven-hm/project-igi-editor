@@ -508,6 +508,16 @@ void Renderer_Objects::ClearCaches() {
         }
     }
     texture_cache_.clear();
+    // The game-texture namespace (Game_AddTexture/Game_LoadTextures) is
+    // level-independent, but the GL names are not: drop the handles with the rest
+    // so a level switch cannot bind a deleted texture. The pack index itself is
+    // rebuilt lazily.
+    for (auto& pair : game_texture_cache_) {
+        if (pair.second) {
+            glDeleteTextures(1, &pair.second);
+        }
+    }
+    game_texture_cache_.clear();
     model_texture_map_cache_.clear();
     
     // We explicitly DO NOT clear global_texture_map_, model_level_map_,
@@ -541,6 +551,9 @@ void Renderer_Objects::ClearResCache() {
     // LOD chains are built over the loaded .res model set (issue #62), so they
     // are stale the moment that set changes.
     lod_chain_cache_.clear();
+    // MeshHeader.radius (VirModel_GetRadius) is read through the same .res
+    // indexes, so it is stale at the same moment.
+    mesh_header_radius_cache_.clear();
     for (const auto& p : tmp_mef_paths_) {
         std::error_code ec;
         std::filesystem::remove(p, ec);
@@ -768,6 +781,12 @@ void Renderer_Objects::Shutdown() {
         }
     }
     texture_cache_.clear();
+    for (auto& pair : game_texture_cache_) {
+        if (pair.second) {
+            glDeleteTextures(1, &pair.second);
+        }
+    }
+    game_texture_cache_.clear();
     model_texture_map_cache_.clear();
     texture_map_level_ = -1;
     persistent_dat_ = DATFile{};

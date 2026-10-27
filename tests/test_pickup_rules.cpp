@@ -33,6 +33,7 @@
 // tests/test_mission_fog.cpp does.
 
 #include "../source/level/qvm_parser.h"
+#include "../source/lod/mef_mesh_header.h"
 #include "../source/runtime/pickup_rules.h"
 #include "../source/weapon_system.h"
 
@@ -508,6 +509,120 @@ TEST(PickupRulesTest, TouchConstantsAreTheEngineData) {
     // 2867.2 / 4096 = 0.7 m; 4096 / 4096 = 1.0 m.
     EXPECT_NEAR(igi::kPickupMinTouchUnits / igi::kPickupUnitsPerMetre, 0.7, 1e-9);
     EXPECT_DOUBLE_EQ(igi::kPickupTouchHeightUnits / igi::kPickupUnitsPerMetre, 1.0);
+}
+
+// ---------------------------------------------------------------------------
+// The per-frame acquisition path
+// ---------------------------------------------------------------------------
+
+TEST(PickupRulesTest, OnlyThePlacedPickupTypesAreTouchTargets) {
+    // The three types that register a touch handler on Game_GetEvent1 and add
+    // themselves to task list 2: GenericPickup (pickup.c:264, :293), GunPickup
+    // (pickup.c:475, :489) and AmmoPickup (pickup.c:657, :489).
+    EXPECT_TRUE(igi::IsPlacedPickupType("GenericPickup"));
+    EXPECT_TRUE(igi::IsPlacedPickupType("GunPickup"));
+    EXPECT_TRUE(igi::IsPlacedPickupType("AmmoPickup"));
+
+    // AddAmmo is a pickup-family task but never a placed one: it is created by
+    // the weapon code as a child of a human (AddAmmo_Create 0x46DC20,
+    // pickup.c:782-788) and declares no Position parameter (pickup.c:776-777),
+    // so it can neither be authored into a level nor be in task list 2.
+    EXPECT_FALSE(igi::IsPlacedPickupType("AddAmmo"));
+    // The explicit-use types are a different family entirely (Game_GetEvent2 /
+    // task list 0, src/humanbase/human.c:1269-1312).
+    EXPECT_FALSE(igi::IsPlacedPickupType("Door"));
+    EXPECT_FALSE(igi::IsPlacedPickupType("Terminal"));
+    EXPECT_FALSE(igi::IsPlacedPickupType("GenericTBA"));
+    EXPECT_FALSE(igi::IsPlacedPickupType(""));
+}
+
+TEST(PickupRulesTest, PlayerTouchUsesTheModelRadiusClampedUp) {
+    // HumanPlayer_SendPosition 0x410F70 (src/humanplayer/humanplayer.c:1467-1484)
+    // hands the player's own position to the pickup; the touch handler re-tests
+    // `touches()` (pickup.c:605-606, :739-740), so the gate is the same cylinder
+    // PickupTouches pins. A placed pickup's max_scale is 1.0
+    // (RigidDynCubeObj_Init 0x4C5710, src/magicobj/magicobj.c:340-342).
+    const double pickup[3] = {0.0, 0.0, 0.0};
+
+    // A small weapon model (the retail UZI, 111_01_1, has MeshHeader.radius
+    // 1268.1) is clamped up to 2867.2: 2867.2 is still a touch, 2867.4 is not.
+    const float uzi_radius = 1268.082763671875f;
+    const double just_inside[3] = {2867.0, 0.0, 0.0};
+    const double just_outside[3] = {2867.4, 0.0, 0.0};
+    EXPECT_TRUE(igi::PickupTouchesPlayer(uzi_radius, pickup, just_inside));
+    EXPECT_FALSE(igi::PickupTouchesPlayer(uzi_radius, pickup, just_outside));
+
+    // A large model is NOT clamped: the retail DRAGUNOV (105_01_1) has radius
+    // 4059.7, so it is reachable from 4000 units but not from 4100. This is the
+    // case the minimum alone gets wrong.
+    const float dragunov_radius = 4059.67919921875f;
+    const double at_4000[3] = {4000.0, 0.0, 0.0};
+    const double at_4100[3] = {4100.0, 0.0, 0.0};
+    EXPECT_TRUE(igi::PickupTouchesPlayer(dragunov_radius, pickup, at_4000));
+    EXPECT_FALSE(igi::PickupTouchesPlayer(dragunov_radius, pickup, at_4100));
+    // ... and the minimum would have refused the 4000-unit case.
+    EXPECT_FALSE(igi::PickupTouchesFromModel(uzi_radius, 1.0f, pickup, at_4000));
+
+    // The vertical half-height is the separate 4096-unit rule and does not grow
+    // with the model radius.
+    const double above[3] = {0.0, 0.0, 4000.0};
+    const double above_too_far[3] = {0.0, 0.0, 4096.0};
+    EXPECT_TRUE(igi::PickupTouchesPlayer(dragunov_radius, pickup, above));
+    EXPECT_FALSE(igi::PickupTouchesPlayer(dragunov_radius, pickup, above_too_far));
+
+    // An unresolved model is VirModel_GetRadius's kOne (mesh3d.c:88) and is
+    // therefore clamped to the minimum, exactly like the UZI.
+    EXPECT_TRUE(igi::PickupTouchesPlayer(igi::kPickupNoModelRadius, pickup, just_inside));
+    EXPECT_FALSE(igi::PickupTouchesPlayer(igi::kPickupNoModelRadius, pickup, just_outside));
+}
+
+TEST(PickupRulesTest, MeshHeaderRadiusIsReadFromOffset0x78) {
+    // MeshHeader.radius is at 0x78 (src/model/modeltypes.h:21) and is the word
+    // VirModel_GetRadius 0x4D0950 returns (src/lod/mesh3d.c:381-387). It is NOT
+    // `sphere` (0x3C), which the LOD distance test uses (mesh3d.c:224) -- the
+    // retail UZI model has radius 1268.1 and sphere 973.1, so a reader that
+    // confused them would be wrong by 30%.
+    //
+    // Minimal ILFF/HSEM container, built the way Chunk_FirstChild 0x4B7490 /
+    // Chunk_Data 0x4B74D0 walk it (src/res/chunk.c:17-49) with align 4, which is
+    // what every retail .mef uses: the child chunk header sits at 0x14 and its
+    // payload at 0x24, leaving room for the whole 0x90-byte MeshHeader.
+    std::vector<uint8_t> mef(0x24 + 0x90, 0);
+    auto put_u32 = [](std::vector<uint8_t>& b, size_t off, uint32_t v) {
+        std::memcpy(b.data() + off, &v, 4);
+    };
+    auto put_f32 = [](std::vector<uint8_t>& b, size_t off, float v) {
+        std::memcpy(b.data() + off, &v, 4);
+    };
+    std::memcpy(mef.data(), "ILFF", 4);
+    put_u32(mef, 0x04, static_cast<uint32_t>(mef.size()));  // parent size
+    put_u32(mef, 0x08, 4);                                  // parent align
+    std::memcpy(mef.data() + 0x14, "HSEM", 4);
+    put_u32(mef, 0x18, 0x90);                               // child size
+    put_u32(mef, 0x1C, 4);                                  // child align
+    put_f32(mef, 0x24 + 0x3C, 973.0735473632812f);          // sphere
+    put_f32(mef, 0x24 + 0x78, 1268.082763671875f);          // radius
+
+    const igi::lod::MefMeshHeader header = igi::lod::ReadMefMeshHeader(mef);
+    ASSERT_TRUE(header.valid);
+    EXPECT_FLOAT_EQ(header.radius, 1268.082763671875f);
+    EXPECT_FLOAT_EQ(header.sphere, 973.0735473632812f);
+    EXPECT_NE(header.radius, header.sphere);
+
+    // A buffer that is not an ILFF container, or carries no MESH chunk, leaves
+    // `valid` false -- the caller then uses kPickupNoModelRadius (1.0f), the
+    // engine's kOne.
+    const std::vector<uint8_t> not_a_mef = {'N', 'O', 'P', 'E'};
+    EXPECT_FALSE(igi::lod::ReadMefMeshHeader(not_a_mef).valid);
+
+    std::vector<uint8_t> no_mesh(0x24 + 0x90, 0);
+    std::memcpy(no_mesh.data(), "ILFF", 4);
+    put_u32(no_mesh, 0x04, static_cast<uint32_t>(no_mesh.size()));
+    put_u32(no_mesh, 0x08, 4);
+    std::memcpy(no_mesh.data() + 0x14, "ATTA", 4);
+    put_u32(no_mesh, 0x18, 0x90);
+    put_u32(no_mesh, 0x1C, 4);
+    EXPECT_FALSE(igi::lod::ReadMefMeshHeader(no_mesh).valid);
 }
 
 // ---------------------------------------------------------------------------

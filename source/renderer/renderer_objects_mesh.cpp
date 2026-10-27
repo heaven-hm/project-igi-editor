@@ -248,6 +248,39 @@ float Renderer_Objects::GetMeshRadius(const std::string& modelId, bool isBuildin
     return glm::length(GetMeshExtents(modelId, isBuilding));
 }
 
+float Renderer_Objects::GetMeshHeaderRadius(const std::string& modelId, bool isBuilding) {
+    // VirModel_GetRadius 0x4D0950 (src/lod/mesh3d.c:381-387):
+    //     if (vm && vm->lods[0]) return lod_header(vm->lods[0])->radius;
+    //     return kOne;                                        /* mesh3d.c:88 */
+    // `vm->lods[0]` is the REQUESTED name (VirModel_InitLods, src/model/model.c:145-163),
+    // so the lookup key is the model id itself, and a model that never resolved
+    // reports kOne = 1.0f. `radius` is MeshHeader + 0x78 (src/model/modeltypes.h:21),
+    // a different word from the `sphere` the LOD distance test uses
+    // (src/lod/mesh3d.c:224) -- see source/lod/mef_mesh_header.h.
+    //
+    // This is the value the pickup touch range is built from
+    // (comprun/pickup.c:172-177 `VirModel_GetRadius(o->model) * max_scale`), so it
+    // is cached per (level, model): the lookup reads the .res entry off disk and
+    // the pickup pass asks once per placed pickup per tick.
+    FillLevelModelKey(level_model_key_scratch_, current_level_, isBuilding, modelId);
+    auto cached = mesh_header_radius_cache_.find(level_model_key_scratch_);
+    if (cached != mesh_header_radius_cache_.end()) {
+        return cached->second;
+    }
+
+    // Same two-step read the LOD header pass uses (GetLodMeshIndex above): the
+    // in-memory .res index first, then the on-disk/temp-extracted .mef.
+    std::vector<uint8_t> bytes = FindMeshData(modelId);
+    if (bytes.empty()) {
+        const std::string path = GetOrExtractMefTemp(modelId, isBuilding);
+        if (!path.empty()) bytes = ReadFileBytes(path);
+    }
+    const igi::lod::MefMeshHeader header = igi::lod::ReadMefMeshHeader(bytes);
+    const float radius = header.valid ? header.radius : 1.0f;  // kOne, mesh3d.c:88
+    mesh_header_radius_cache_[level_model_key_scratch_] = radius;
+    return radius;
+}
+
 glm::vec3 Renderer_Objects::GetMeshCenter(const std::string& modelId, bool isBuilding) {
     return GetOrLoadMesh(modelId, isBuilding).center;
 }

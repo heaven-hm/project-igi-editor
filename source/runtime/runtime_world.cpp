@@ -2296,6 +2296,10 @@ void RuntimeWorld::SetInteractionQuery(InteractionQuery interaction_query) {
     interaction_query_ = std::move(interaction_query);
 }
 
+void RuntimeWorld::SetPickupTouchQuery(PickupTouchQuery pickup_touch_query) {
+    pickup_touch_query_ = std::move(pickup_touch_query);
+}
+
 void RuntimeWorld::UpdateSimulationTick(uint64_t tick_number, const PlayerInputCmd& input_cmd) {
     AdvanceExplosionRenderStates();
     AdvanceGuardMuzzleFlashStates();
@@ -2385,6 +2389,27 @@ void RuntimeWorld::UpdateSimulationTick(uint64_t tick_number, const PlayerInputC
             QueueOneShotAudio(SoundEffect::Jump);
         }
         PlayFootstepIfNeeded(player_input, was_grounded);
+    }
+
+    // Pickup acquisition: the engine's per-frame touch broadcast, not an action.
+    //
+    // HumanPlayer_SendPosition 0x410F70 (src/humanplayer/humanplayer.c:1467-1484)
+    // runs once per player update and does nothing else:
+    //     if (Human_IsDead(h)) return;                       /* :1474-1475 */
+    //     msg.h = h; memcpy(msg.pos, h->pos, sizeof(msg.pos)); /* :1476-1477 */
+    //     for (i = 0; i < Game_GetTaskList2()->count; i++)
+    //         TASK_HANDLER(Game_GetEvent1(), type)(task, &msg); /* :1478-1482 */
+    // The pickup types register their touch handler on Game_GetEvent1
+    // (pickup.c:264, :475, :657) and re-test `touches()` there, so the player's
+    // position alone decides. It is called here, immediately after the player's
+    // movement for this tick (Human_UpdateMove precedes Human_SendPosition and
+    // HumanPlayer_SendPosition in HumanPlayer_Update, :1412-1419), and it is
+    // gated on the same liveness check the engine uses.
+    //
+    // The editor's level objects are not engine tasks, so App supplies the walk
+    // over them; this callback is the task-list loop above.
+    if (pickup_touch_query_ && player_.IsAlive()) {
+        pickup_touch_query_(player_.GetPosition());
     }
 
     // OpenIGI identifies MapComputer as a grounded rising-edge weapon action.

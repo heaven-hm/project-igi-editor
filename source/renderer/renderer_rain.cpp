@@ -55,7 +55,8 @@ void main() {
 // (IGI-RE src/dxinit/rain.c:153, HOOK 0x498960) and every snow difference is a
 // branch on that flag. This shader draws the flakes the engine's snow branch
 // builds: a camera-facing quad of six vertices (rain.c:337-364), opaque white
-// (rain.c:353), placed by the tile/layer the cell walk selected (rain.c:461-468).
+// (rain.c:353), placed by the tile/layer the cell walk selected (rain.c:461-468),
+// textured with the game's "snow.tex" (rain.c:431-434).
 static const char* SNOW_VERT_SRC = R"(
 #version 330 core
 layout(location = 0) in vec3 a_seed;   // flake position inside the drawn tile + layer
@@ -67,21 +68,38 @@ uniform vec3  u_camera_right;  // camera basis: the editor's gTransContext.matri
 uniform vec3  u_camera_up;
 uniform float u_half_extent;   // fade * kFlakeSize (rain.c:309,341-342,685)
 
+out vec2 v_uv;
+
 void main() {
     // rain.c:338-342 expands vx +/- size and vy +/- size in the camera's own
     // axes, so the flake always faces the camera.
     vec3 worldPos = u_tile_origin + a_seed +
                     (u_camera_right * a_corner.x + u_camera_up * a_corner.y) * u_half_extent;
     gl_Position = u_mvp * vec4(worldPos, 1.0);
+    // rain.c:344-361: the four corners are (x0,y0) (x1,y0) (x0,y1) (x1,y1) and
+    // carry uv (0,0) (1,0) (0,1) (1,1), so u = (corner.x + 1) / 2 and
+    // v = (corner.y + 1) / 2. v4 = v1 and v5 = v2 (rain.c:362-363) reuse them.
+    v_uv = (a_corner + 1.0) * 0.5;
 }
 )";
 
 static const char* SNOW_FRAG_SRC = R"(
 #version 330 core
-uniform vec4 u_diffuse;   // SnowFlakeDiffuse() == 0xFFFFFFFF (rain.c:353)
+uniform vec4 u_diffuse;      // SnowFlakeDiffuse() == 0xFFFFFFFF (rain.c:353)
+uniform sampler2D u_texture; // the game's snow.tex (fxobj/rain.c:82)
+uniform int u_has_texture;
+in vec2 v_uv;
 out vec4 fragColor;
 void main() {
-    fragColor = u_diffuse;
+    // Rain_DrawCell's stage 0 (rain.c:430-438). With r->texture set the snow
+    // branch binds it and sets COLOROP/ALPHAOP to MODULATE with
+    // COLORARG1/ALPHAARG1 = D3DTA_TEXTURE and COLORARG2/ALPHAARG2 = D3DTA_DIFFUSE
+    // (TSS 1 = 4, 4 = 4, 2/5 = 2, 3/6 = 0). With r->texture NULL it selects
+    // SELECTARG2 (TSS 1 = 3, 4 = 3), i.e. the vertex diffuse alone - which is
+    // what texel = 1.0 reproduces here. Either way the result is the same
+    // multiply, and the alpha comes from the texel, not from a boosted constant.
+    vec4 texel = u_has_texture != 0 ? texture(u_texture, v_uv) : vec4(1.0);
+    fragColor = u_diffuse * texel;
 }
 )";
 
@@ -141,18 +159,26 @@ uniform vec3  u_tile_origin;
 uniform vec3  u_camera_right;
 uniform vec3  u_camera_up;
 uniform float u_half_extent;
+varying vec2 v_uv;
 void main() {
     vec3 worldPos = u_tile_origin + a_seed +
                     (u_camera_right * a_corner.x + u_camera_up * a_corner.y) * u_half_extent;
     gl_Position = u_mvp * vec4(worldPos, 1.0);
+    // rain.c:344-361 - the same corner -> uv mapping as the 330 tier.
+    v_uv = (a_corner + 1.0) * 0.5;
 }
 )";
 
 static const char* SNOW_FRAG_SRC_120 = R"(
 #version 120
 uniform vec4 u_diffuse;
+uniform sampler2D u_texture;
+uniform int u_has_texture;
+varying vec2 v_uv;
 void main() {
-    gl_FragColor = u_diffuse;
+    // rain.c:430-438, the same stage-0 MODULATE / SELECTARG2 rule as the 330 tier.
+    vec4 texel = u_has_texture != 0 ? texture2D(u_texture, v_uv) : vec4(1.0);
+    gl_FragColor = u_diffuse * texel;
 }
 )";
 
@@ -348,7 +374,9 @@ void SnowTick(bool falling) {
 // per flake in the engine's own order - v0..v3 are the corners and v4 = v1,
 // v5 = v2 (rain.c:362-363) - written into the group named by `kind`
 // (rain.c:327-330,378). Corner signs only: the extent is rain_rules'
-// SnowFlakeSizeUnits() times the fade (rain.c:309).
+// SnowFlakeSizeUnits() times the fade (rain.c:309). The matching texture
+// coordinates are (0,0) (1,0) (0,1) (1,1) (rain.c:354-361), which the vertex
+// shader derives as (sign + 1) / 2, so the table below is also the UV order.
 constexpr float kSnowCorners[6][2] = {  // 6 == SnowVerticesPerParticle() (rain.c:364,447)
     {-1.0f, -1.0f},  // v0 = (x0, y0)  rain.c:344-345
     {+1.0f, -1.0f},  // v1 = (x1, y0)  rain.c:346-347
@@ -422,13 +450,16 @@ bool Renderer_Rain::Init() {
     glEnableVertexAttribArray(1);
     glBindVertexArray(0);
 
-    // fxobj/rain.c:82 loads "snow.tex" once, for both modes, and Rain_DrawCell's
+    // fxobj/rain.c:82 registers "snow.tex" once, for both modes, and Rain_DrawCell's
     // snow branch binds it (rain.c:430-434) while the rain branch binds NULL
-    // (rain.c:449). The editor has no reachable loader for the game's .tex format
-    // from this file, so the engine's own null-texture branch (rain.c:435-438)
-    // is what draws today; see the report for the wiring this needs.
+    // (rain.c:449). The handle is resolved per frame by the caller, through the
+    // engine's own identity and pack (Renderer_Objects::GetOrLoadGameTexture over
+    // igi_res::GameTextureMemberName -> "LOCAL:common/textures/snow.tex", mounted
+    // at src/game/game.c:430); a failed resolution passes 0, which is the engine's
+    // null-texture branch (rain.c:435-438).
     Logger::Get().Log(LogLevel::INFO, std::string("[Renderer_Rain] Snow texture (fxobj/rain.c:82): ") +
-                                          igi::rain::SnowTextureName());
+                                          igi::rain::SnowTextureName() +
+                                          " as LOCAL:common/textures/" + igi::rain::SnowTextureName());
 
     // The editor draws fixed-function overlays after the scene. Leaving either
     // particle upload VBO bound lets affected drivers dereference NULL+0x444
@@ -471,7 +502,7 @@ void Renderer_Rain::SetParams(bool active, bool is_snow, float startMeters, floa
 }
 
 void Renderer_Rain::Draw(GLuint ubo_mats, const glm::vec3& cameraPos, const glm::vec3& cameraRight,
-                         const glm::vec3& cameraUp, bool cameraIsSheltered) {
+                         const glm::vec3& cameraUp, bool cameraIsSheltered, GLuint snowTexture) {
     // RainEffect_Run calls Rain_Update once per tick (fxobj/rain.c:104) whether or
     // not the effect is falling, so the snow pool is advanced here - before the
     // visibility gate - and the fade-out runs to zero like the engine's.
@@ -490,7 +521,7 @@ void Renderer_Rain::Draw(GLuint ubo_mats, const glm::vec3& cameraPos, const glm:
 
     const float time_sec = glutGet(GLUT_ELAPSED_TIME) / 1000.0f;
     if (is_snow_) {
-        DrawSnow(ubo_mats, cameraPos, cameraRight, cameraUp, time_sec);
+        DrawSnow(ubo_mats, cameraPos, cameraRight, cameraUp, time_sec, snowTexture);
         return;
     }
 
@@ -529,7 +560,7 @@ void Renderer_Rain::Draw(GLuint ubo_mats, const glm::vec3& cameraPos, const glm:
 }
 
 void Renderer_Rain::DrawSnow(GLuint ubo_mats, const glm::vec3& cameraPos, const glm::vec3& cameraRight,
-                             const glm::vec3& cameraUp, float time_sec) {
+                             const glm::vec3& cameraUp, float time_sec, GLuint snow_texture) {
     // The engine's snow has no time term: Rain_Update moves every drop by the same
     // fixed step per tick (rain.c:587-591) and the sway is re-rolled on a tick
     // timer (rain.c:595-598). SnowTick already advanced the pool for this frame.
@@ -569,6 +600,34 @@ void Renderer_Rain::DrawSnow(GLuint ubo_mats, const glm::vec3& cameraPos, const 
     glUseProgram(snow_program_);
     glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
 
+    // rain.c:430-438. The snow branch binds the game's snow.tex at stage 0 and
+    // sets COLOROP/ALPHAOP to MODULATE of TEXTURE x DIFFUSE; when r->texture is
+    // NULL it sets SELECTARG2, the diffuse alone. `snow_texture` is that texture
+    // (Renderer_Objects::GetOrLoadGameTexture over the identity
+    // GameTextureMemberName(SnowTextureName()), i.e. "LOCAL:common/textures/snow.tex"
+    // from the pack the game mounts at src/game/game.c:430), so passing 0 here is
+    // the engine's own null-texture branch, not a special case invented for it.
+    if (snow_texture != 0) {
+        // Rain_DrawCell's stage-0 sampler states: SET_TSS(0, 0x10, 2) MAGFILTER =
+        // D3DTEXF_LINEAR and SET_TSS(0, 0x11, 1) MINFILTER = D3DTEXF_POINT
+        // (rain.c:444-445). MIPFILTER (0x12) is not set in that block, so the D3D7
+        // default D3DTEXF_NONE applies and no mip level is selected; ADDRESSU/V are
+        // unset too and default to D3DTADDRESS_WRAP. GL_RegisterTexture's shared
+        // defaults are mipmapped trilinear, so the state is corrected here. It is
+        // re-applied every frame rather than latched, because the handle is a GL
+        // name that the renderer's cache may reuse after a level switch.
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, snow_texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glUniform1i(glGetUniformLocation(snow_program_, "u_texture"), 0);
+        glUniform1i(glGetUniformLocation(snow_program_, "u_has_texture"), 1);
+    } else {
+        glUniform1i(glGetUniformLocation(snow_program_, "u_has_texture"), 0);
+    }
+
     // Rain_FillVB expands the quad in the camera's own axes (gTransContext.matrix,
     // rain.c:338-342,382-388). The frame's basis arrives from the caller
     // (renderer_draw.cpp passes view_define_->right_/up_, the same vectors the
@@ -580,7 +639,13 @@ void Renderer_Rain::DrawSnow(GLuint ubo_mats, const glm::vec3& cameraPos, const 
     // flake grows out of the fade instead of fading its colour.
     glUniform1f(glGetUniformLocation(snow_program_, "u_half_extent"),
                 s.fade * igi::rain::SnowFlakeSizeUnits());
-    // rain.c:353 - all four corners carry 0xFFFFFFFF (opaque white).
+    // rain.c:353 - all four corners carry 0xFFFFFFFF (opaque white). The domain is
+    // the raw 8-bit D3DCOLOR of a D3DFVF_DIFFUSE vertex (rain.c:139), NOT the
+    // 1/128 QVertex domain the menus use (gColorScale 0x534AB0 = 0.0078125f,
+    // src/res/qvertex.c:189, consumed by the QVertex/Grid path via
+    // math/draw.c:12 COLOR_SCALE). The weather particles never touch QVertex:
+    // Rain_FillVB writes unsigned diffuse words straight into the VB, and
+    // Rain_SetAlpha packs trunc(alpha * 255) into the top byte (rain.c:646-649).
     const std::uint32_t diffuse = igi::rain::SnowFlakeDiffuse();
     glUniform4f(glGetUniformLocation(snow_program_, "u_diffuse"),
                 static_cast<float>((diffuse >> 16) & 0xFFu) / 255.0f,
@@ -623,6 +688,8 @@ void Renderer_Rain::DrawSnow(GLuint ubo_mats, const glm::vec3& cameraPos, const 
 
     glDepthMask(depth_mask_was);
     glDisable(GL_BLEND);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
     glUseProgram(0);
     GL_UnbindForImmediateMode();
 }

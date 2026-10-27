@@ -11,6 +11,7 @@
 #include "../runtime/pause_menu_layout.h"
 #include "../runtime/pause_menu_font.h"
 #include "../runtime/log_policy.h"
+#include "../runtime/rain_rules.h"
 #include "../utils.h"
 #include <vector>
 #include <unordered_map>
@@ -469,7 +470,17 @@ void Renderer::Draw(const draw_params_s &params,
                                              params.view_define_->pos_);
   if (!params.fast_scene_preview_)
     rain_.Draw(ubo_mats_, params.view_define_->pos_, params.view_define_->right_,
-               params.view_define_->up_, cameraIsSheltered);
+               params.view_define_->up_, cameraIsSheltered,
+               // RainEffect_Init registers the texture once, for BOTH modes
+               // (Game_AddTexture("snow.tex"), src/fxobj/rain.c:82); only the snow
+               // branch of Rain_DrawCell binds it (src/dxinit/rain.c:430-434), and
+               // the rain branch binds NULL (:449). It is resolved through the
+               // engine's own identity, "LOCAL:common/textures/snow.tex" out of the
+               // pack the game mounts at src/game/game.c:430; a resolution failure
+               // yields 0, which is the engine's own null-texture branch.
+               rain_.IsSnow()
+                   ? objects_.GetOrLoadGameTexture(igi::rain::SnowTextureName())
+                   : 0u);
 
   if (profileRenderer) {
     static int frames = 0;

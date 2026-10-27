@@ -584,6 +584,16 @@ private:
   igi::RuntimeInteractionResult HandleGameplayInteraction(
       const glm::vec3& interaction_origin,
       const glm::vec3& interaction_direction);
+  // The engine's pickup acquisition path: a per-tick proximity broadcast, not an
+  // interaction. HumanPlayer_SendPosition 0x410F70
+  // (src/humanplayer/humanplayer.c:1467-1484) hands the live player's position to
+  // every task in task list 2, and GenericPickup/GunPickup/AmmoPickup registered
+  // their touch handler on that event (Game_GetEvent1 0x4167E0;
+  // src/comprun/pickup.c:264, :475, :657). No key, no facing test.
+  void ApplyPickupTouches(const glm::vec3& player_position);
+  // The grant half of the three touch handlers, for one pickup the proximity test
+  // accepted (pickup.c:361-366, :599-616, :734-749).
+  void GrantPickup(LevelObject& target);
   void SnapObjectsToTerrain();
   void EvaluateTrainTrackPositions();
 

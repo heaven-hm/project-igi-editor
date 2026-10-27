@@ -62,9 +62,11 @@ invariants from the corpus fingerprint.
 **Still not done, in the order I would take them:** (1) the `BendSegmentMesh` -> `igi::spline`
 draw-path swap -- it is a rewrite, not a swap, because the engine draws INDEXED over a
 transformed vertex buffer while the editor expands triangles and draws `glDrawArrays`; the
-full recipe is in the spline section above; (2) the `snow.tex` binding; (3) the pickup
-proximity grant (`app.cpp:2729-2790`); (4) the tails of the PARTIAL issues.
-The animation driver that used to be item 2 is wired -- see item 3 of "Still to do - the
+full recipe is in the spline section above; (2) the RAIN half of the weather system -- the
+`snow.tex` binding itself is now WIRED, see item 4 of "Still to do - the wiring" below;
+(3) the tails of the PARTIAL issues. The pickup proximity grant that used to be item 3 is
+WIRED -- see item 5 of "Still to do - the wiring" below and `PICKUPS.md` §3/§8.4. The
+animation driver that used to be item 2 is wired -- see item 3 of "Still to do - the
 wiring" below.
 
 **Unverifiable here, needs the user:** every rendered pixel. This host offers OpenGL 2.1 and
@@ -300,18 +302,71 @@ use the engine's method on those paths:
    `AnimPlayer::AdvanceSeconds`, which steps whole 160-tick frames. Covered by the
    host-portable `tests/test_anim_playback.cpp` (11 tests) and the new
    `MefEngineSkinVerticesTest` cases in `tests/test_mef_dual_set.cpp`.
-4. **`snow.tex`** - `Renderer_Objects::GetOrLoadTexture` and `objects_` are private, so
-   `Renderer_Rain` cannot reach the game's `.tex` decode. Until bound, snow renders as the
-   engine's own null-texture branch (opaque white quads).
-5. **Pickup proximity grant** - `app.cpp:2729-2790` grants on an explicit use action; the
-   engine grants on proximity via the touch handlers (`igi::PickupTouchesFromModel`).
+4. **`snow.tex`** - **WIRED.** `Renderer_Objects::GetOrLoadGameTexture` is public
+   now and resolves the game's shared textures the way the engine does:
+   `RainEffect_Init` registers the name once for both modes
+   (`Game_AddTexture("snow.tex")`, `src/fxobj/rain.c:82`, HOOK 0x416930 ->
+   `src/game/game.c:835-848`), `Game_LoadTextures` loads each registered name as
+   `"LOCAL:common/textures/" + name` (`src/game/game.c:524-534`, HOOK 0x416130),
+   and the pack that answers that identity is the one the game mounts,
+   `Resource_Load("LOCAL:common/textures/textures.res")` (`src/game/game.c:430`).
+   Measured on the retail install: that pack really does carry the member
+   `LOCAL:common/textures/snow.tex` (1396 bytes, LOOP v11, 16x16, format 67), and
+   `tests/test_weather_texture.cpp` reads it through `RES_BuildIndex` /
+   `RES_FindIndexEntry` / `RES_ReadEntry` and pins its header fields.
+   The identity is NOT a model texture's: `TextureMemberName` builds
+   `LOCAL:textures/<id>.tex` (`src/model/model.c:467`) while this is
+   `LOCAL:common/textures/<name>`; the two namespaces cannot collide, which is why
+   the weather path has its own loader instead of joining `res_tex_indexes_`.
+   The flake quad now carries the engine's UVs (`(corner + 1) / 2`,
+   `src/dxinit/rain.c:344-361`) and the shader reproduces stage 0's
+   MODULATE(TEXTURE, DIFFUSE) / SELECTARG2-when-null pair (`rain.c:430-438`), so a
+   missing texture falls back to the engine's own null-texture branch rather than
+   to an editor special case. Stage-0 filtering is the engine's too:
+   MAGFILTER LINEAR, MINFILTER POINT, no mip filter (`rain.c:444-445`).
+   Colour domain: the particles are raw 8-bit D3DCOLOR (FVF `D3DFVF_DIFFUSE`,
+   `rain.c:139`), NOT the menus' 1/128 QVertex domain (`gColorScale` DATA 0x534AB0
+   = 0.0078125f, `src/res/qvertex.c:189`; `COLOR_SCALE = 1/128`,
+   `src/math/draw.c:12`).
+   **Still divergent, unchanged:** the RAIN half of the same system. The editor's
+   rain is still a 1200-drop GPU field of invented constants
+   (`source/renderer/weather_math.h`) rather than the engine's shared 80-drop pool
+   and tile lattice, and its streak colour is the invented
+   `vec4(0.8, 0.85, 0.9, clamp(a*1.25, 0, 0.28))` where the engine uses white with
+   `trunc(a*255)` in the alpha byte (`rain.c:366-367,646-649`). Snow already draws
+   through the engine's grid; making rain use the same pool/grid/line path is the
+   remaining swap, and it also removes `weather_math.h`'s OpenIGI-derived
+   constants.
+5. **Pickup proximity grant** - **WIRED.** The explicit-action grant is gone from
+   `HandleGameplayInteraction` (pickups are no longer in `is_interactable`), and the
+   engine's path is implemented instead: `HumanPlayer_SendPosition` 0x410F70
+   (`src/humanplayer/humanplayer.c:1467-1484`) is the ONLY dispatcher of
+   `Game_GetEvent1` 0x4167E0, and every frame it hands the live player's position to
+   every task in task list 2; GenericPickup/GunPickup/AmmoPickup registered their
+   touch handler on that event (`comprun/pickup.c:264`, `:475`, `:657`) and each
+   re-tests the cylinder (`pickup.c:180-200`, `:363`, `:605-606`, `:739-740`). No
+   key and no facing test: `Human_UpdateUse` 0x460EE0 dispatches `Game_GetEvent2` to
+   task list 0, where the pickups are not. `RuntimeWorld::SetPickupTouchQuery`
+   carries the broadcast (called after the player's movement, gated on
+   `player_.IsAlive()` = the engine's `Human_IsDead` return) and
+   `App::ApplyPickupTouches` / `App::GrantPickup` walk the editor's level objects.
+   The radius is the engine's: `VirModel_GetRadius` 0x4D0950 returns
+   `MeshHeader.radius` (0x78) -- a different word from the `sphere` (0x3C) the LOD
+   test uses -- so `MefMeshHeader` now reads it and
+   `Renderer_Objects::GetMeshHeaderRadius` (cached per level+model) feeds
+   `igi::PickupTouchesPlayer`. Every retail pickup model is below the 2867.2 (0.7 m)
+   minimum, but a placed DRAGUNOV (4059.7), M2HB (5102.5) or APC (16594.1) is not,
+   which is why the real radius is read rather than assumed. Divergences left:
+   status-message text (the editor's HUD takes a literal, not the engine's
+   `PICKEDUPWEAPON%s`/`PICKEDUPAMMO` status-screen resource), and the toucher origin
+   (`h->pos` body position vs the editor's feet position). Full record:
+   `docs/igi-re-parity/PICKUPS.md` §3, §8.4, §11.
 
 Stale comments worth correcting when those files are next touched:
 `renderer_objects.h:196-213` still says the complexity branch "is not implemented,
 because the editor always has lod.qvm" - but `lod.qvm` names only 450 distinct retail
 models, so the complexity branch is the common case and it IS implemented now.
-`docs/igi-re-parity/LOD_CHAINS.md` says the same. `docs/igi-re-parity/PICKUPS.md` still
-says "not wired".
+`docs/igi-re-parity/LOD_CHAINS.md` says the same.
 
 ## Open judgement calls (need the user, not a guess)
 

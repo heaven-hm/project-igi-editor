@@ -432,6 +432,7 @@ add_executable(igi_tests
     tests/test_cutscene_rules.cpp
     tests/test_alarm_light_rules.cpp
     tests/test_rain_rules.cpp
+    tests/test_weather_texture.cpp
     tests/test_pickup_rules.cpp
     tests/test_sound_rules.cpp
 )

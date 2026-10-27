@@ -312,14 +312,22 @@ authored descriptor is `RainEffect_Init` (`0x436780`, `src/fxobj/rain.c:84`), an
 `renderer_objects_mesh.cpp`.
 
 **What remains.** (1) `rain_rules.h` has **no caller** outside its own TU, so the
-ported spawn/wrap/flake rules do not drive the GPU path. (2) `snow.tex` is never
-loaded or bound (SNOW.md S-D8) — the engine does `Game_AddTexture("snow.tex")` at
-`src/fxobj/rain.c:82`, sampled at `src/dxinit/rain.c:431-432`. (3) The `r_weather_speed`
-0..2× multiplier and the S6 fade ramp (SNOW.md S-D11) are absent.
+ported spawn/wrap/flake rules do not drive the **rain** GPU path — they drive the
+snow path (`Renderer_Rain::DrawSnow`), while rain is still the invented 1200-drop
+field of `source/renderer/weather_math.h`. (2) **DONE** — `snow.tex` is loaded and
+bound: `Renderer_Objects::GetOrLoadGameTexture` resolves the engine's own identity
+`LOCAL:common/textures/snow.tex` out of the pack mounted at `src/game/game.c:430`
+(the engine registers it with `Game_AddTexture("snow.tex")` at `src/fxobj/rain.c:82`
+and samples it at `src/dxinit/rain.c:431-432`), and `Renderer_Rain` binds it with
+the engine's UVs, stage-0 MODULATE / SELECTARG2 and filters — see SNOW.md §9 and
+`tests/test_weather_texture.cpp`. (3) The `r_weather_speed` 0..2× multiplier is an
+editor feature with no engine counterpart (no such symbol exists in IGI-RE); the S6
+fade ramp **is** implemented (`SnowTick` ramps `fade` by `kFadeStep`, rain.c:574-583).
 
-**Next action.** Wire `rain_rules` into `renderer_rain.cpp` for the flake geometry
-and the fade; add the `snow.tex` texture load; add the speed multiplier next to the
-existing weather-mode cycle.
+**Next action.** Move the rain half onto the same pool/tile-lattice draw as snow
+(`Rain_Update` / `Rain_FillVB` / `Rain_DrawCell`), which also removes
+`weather_math.h`'s OpenIGI-derived constants; add the speed multiplier next to the
+existing weather-mode cycle if it is still wanted.
 
 ---
 

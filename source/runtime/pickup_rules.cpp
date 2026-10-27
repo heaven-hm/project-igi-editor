@@ -167,6 +167,18 @@ bool PickupTouchesFromModel(float model_radius, float max_scale, const double pi
     return PickupTouches(PickupTouchRange(model_radius, max_scale), pickup_pos, toucher_pos);
 }
 
+bool PickupTouchesPlayer(float model_radius, const double pickup_pos[3],
+                         const double player_pos[3]) {
+    // max_scale(o) is 1.0 for a placed pickup: RigidDynCubeObj_Init 0x4C5710 is
+    // the only writer of RigidDynCubeObj::scale (magicobj.c:340-342).
+    return PickupTouchesFromModel(model_radius, 1.0f, pickup_pos, player_pos);
+}
+
+bool IsPlacedPickupType(const std::string& task_type) {
+    return task_type == "GenericPickup" || task_type == "GunPickup" ||
+           task_type == "AmmoPickup";
+}
+
 // --- grants ----------------------------------------------------------------
 
 PickupGrant GenericPickupGrant() {

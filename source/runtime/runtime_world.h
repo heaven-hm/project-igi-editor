@@ -189,6 +189,19 @@ public:
         const glm::vec3& interaction_direction)>;
     void SetInteractionQuery(InteractionQuery interaction_query);
 
+    // The engine's per-frame pickup acquisition path: HumanPlayer_SendPosition
+    // 0x410F70 (src/humanplayer/humanplayer.c:1467-1484) broadcasts the live
+    // player's position to every task in task list 2, and the pickup types
+    // register their proximity test on that event (Game_GetEvent1 0x4167E0;
+    // comprun/pickup.c:264, :475, :657). There is no use key and no facing test.
+    //
+    // The editor's level objects are not engine tasks, so App supplies the walk.
+    // The callback receives the player's world position (the engine's
+    // `Toucher::pos`, msg.pos = h->pos) once per fixed tick, after the player has
+    // moved and only while the player is alive (humanplayer.c:1474-1475).
+    using PickupTouchQuery = std::function<void(const glm::vec3& player_position)>;
+    void SetPickupTouchQuery(PickupTouchQuery pickup_touch_query);
+
     // Binds a parsed retail mission AI program to an already registered guard.
     bool AttachGuardScript(
         uint32_t guard_id,
@@ -483,6 +496,7 @@ private:
     WeaponSelectionPhase weapon_selection_phase_ = WeaponSelectionPhase::Ready;
     int pending_weapon_slot_ = -1;
     InteractionQuery interaction_query_;
+    PickupTouchQuery pickup_touch_query_;
     bool fire_was_held_ = false;
     bool zoom_active_ = false;
     bool map_computer_open_ = false;
