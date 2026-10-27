@@ -43,17 +43,15 @@
 // level — exactly the walk GetOrLoadMesh / GetOrExtractMefTemp /
 // GetOrLoadParsedGeometry / GetOrLoadSkinGeometry each perform inline.  Reads
 // archive bytes only; nothing is parsed or uploaded.
+//
+// It calls FindMeshData itself (rather than repeating the lookup) so that a
+// regression inside FindMeshData is what this probe detects — which is the whole
+// point of the command.
 ModelEntryHit Renderer_Objects::FindMeshEntryAcrossLevels(const std::string& modelId) {
     auto lookup = [&]() -> ModelEntryHit {
-        std::vector<ModelSourceArchiveIndex> archives;
-        archives.reserve(res_model_indexes_.size());
-        for (const auto& index : res_model_indexes_)
-            archives.push_back({index.res_path, index.index});
-        return FindModelEntryByIdentity(
-            archives, modelId,
-            [](const std::string& resPath, const ResEntryInfo& info) {
-                return RES_ReadEntry(resPath, info);
-            });
+        ModelEntryHit hit;
+        hit.bytes = FindMeshData(modelId, &hit.resPath);
+        return hit;
     };
 
     ModelEntryHit hit = lookup();
