@@ -79,6 +79,15 @@ Also note, since it looks like an inconsistency and is not: the coordinate write
 `obj.pos.z` because its origin is an abstract world origin that the parse and load paths
 both read directly, with no snap offset.
 
+And the mechanism behind "3 of the 15 need no branch": the fallback's candidate is confirmed
+against the **level's own** `Task_DeclareParameters` lines, collected at
+`level_objects.cpp:44-48` and tested with `TaskDeclarationHasPositionAt3` at `:55-57` -- not
+against the static schema in `task_schema.cpp`, which holds only 15 types.  So `HeightMap`,
+`TerrainLightMap` and `TextureModifier` keep their candidate position because their level
+declares "Position" ObjectPos first, and any type whose level does not is reverted to the
+origin as intended (`:61-66`).  Reading the static schema instead would wrongly suggest
+those three were broken.
+
 
 ## Still to do - the wiring, which is the point of the objective
 
