@@ -221,6 +221,31 @@ TEST(MefDualSetTest, RenderGroupChainFollowsPaddedNextLinks) {
     EXPECT_EQ(geo.triangles[1][2], 0u);
 }
 
+// g->texture == 0xFFFF is the engine's "no texture" word, not a slot number.
+// Every draw path tests it before binding and clears the stage otherwise:
+//   src/render/render.c:524-531   draw_group: if (g->texture != 0xFFFF)
+//                                     SetTexture(0, lod_texture(ml, g->texture));
+//                                 else SetTexture(0, NULL) + COLOROP = SELECTARG2
+//   src/render/render.c:1029-1033 lightmapped, :1061-1062 spline, :1210-1213 sorted
+// The parser must therefore surface it as an invalid slot (-1), never as 65535,
+// so a consumer cannot mistake it for an index into the model's texture list.
+// Retail evidence: 013_01_1 (LEVEL2/LEVEL4) carries exactly one such group among
+// nine, 428_01_2/428_01_3 one among twenty-one.
+TEST(MefDualSetTest, UntexturedGroupYieldsInvalidSlot) {
+    const std::vector<uint8_t> dner = Concat({
+        MakeGroup(3, 6, 0, 0, 3, {0, 1, 2}, 0),           // texture slot 0
+        MakeGroup(3, 0xFFFF, 0xFFFF, 1, 3, {0, 1, 2}, 0), // g->texture == 0xFFFF
+    });
+
+    const ParsedGeometry geo = ParseMefFileFromMemory(MakeType1Mef(1, {dner}), "013_01_1");
+
+    ASSERT_EQ(geo.renderBlocks.size(), 2u);
+    EXPECT_EQ(geo.renderBlocks[0].materialSlot, 0);
+    EXPECT_EQ(geo.renderBlocks[1].materialSlot, -1)
+        << "0xFFFF is the engine's untextured word (src/render/render.c:524), "
+           "not a texture index";
+}
+
 // Dual-vertex-set format-1 models split XTRV into base vertices plus extra
 // influences. The counts come from the RD3D header fields BoneMesh_Skin reads
 // (mesh+0xC and mesh+0x10), and the two runs must partition the vertex array.

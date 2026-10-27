@@ -603,6 +603,8 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
 
     if (!mesh.subMeshes.empty()) {
         size_t assigned = 0;
+        size_t untextured = 0;   // groups whose engine slot is 0xFFFF (no texture)
+        size_t outOfRange = 0;   // groups whose engine slot has no texture in the list
 
         // Find the best valid (non-zero) texture to use as fallback for submeshes
         // that fall outside the DAT texture list range.
@@ -616,7 +618,56 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
             const int matSlot = mesh.subMeshes[i].materialSlot;
             std::string resolvedTexId; // tracks the actual texture id string for ARGB detection
 
-            if (textures.size() == 1) {
+            if (matSlot >= 0 && static_cast<size_t>(matSlot) >= textures.size())
+                ++outOfRange;
+
+            // ── The engine selects a group's texture by the group's OWN index ──
+            //
+            // IGI-RE: a render group carries its own texture index and the engine
+            // binds the LOD texture at that index — never the group's ordinal
+            // position in the group chain:
+            //   lod_texture(l, i) => ((Texture *)l->textures[i])->surface
+            //       src/render/render.c:216-219
+            //   draw_group: if (g->texture != 0xFFFF)
+            //                   SetTexture(DEV, 0, lod_texture(ml, g->texture));
+            //       src/render/render.c:524-525 (spline :733-734, lightmapped
+            //       :1029-1033 and :1061-1062, sorted spline :1210-1211)
+            // The index word is MeshGroup.texture for formats 0/1
+            // (src/render/rendertypes.h:10) and LmGroup.texture for format 3
+            // (src/render/render.c:44); mef_native.cpp:1053 surfaces it unchanged as
+            // SubMesh::materialSlot.
+            //
+            // The list it indexes is ModelLod::textures — the per-mesh list
+            // ModelFile_Setup built from that mesh's MTP INST record and its GTT
+            // entries (src/model/model.c:286-314, HOOK 0x4CF080; modeltypes.h:44-45).
+            // The editor's DAT list is that same list in that same order: verified
+            // against the retail MTPs, all 1334 INST records of LEVEL1/4/7 resolve,
+            // through the engine's own VNAM+INST+GTT walk, to the DAT order.
+            //
+            // 0xFFFF is NOT "no index given, take the next one": it is the engine's
+            // untextured group, drawn with the texture stage off —
+            //   SetTexture(DEV, 0, NULL); TSS(0, D3DTSS_COLOROP, D3DTOP_SELECTARG2);
+            //   src/render/render.c:524-531 (spline :1210-1213)
+            // so such a group must stay untextured here. mef_native.cpp:1053 maps the
+            // 0xFFFF word to materialSlot == -1, and the draw path renders
+            // textureID == 0 untextured (renderer_objects.cpp:1314-1328).
+            if (matSlot < 0) {
+                if (mesh.fromRenderMesh) {
+                    // Engine-untextured group (g->texture == 0xFFFF): bind nothing.
+                    ++untextured;
+                } else {
+                    // Editor-only collision fallback: this mesh has no REND groups at
+                    // all, the geometry was fabricated from the collision chunks
+                    // (mef_native.cpp:1136-1143) and the engine draws nothing for it.
+                    // There is no g->texture to honour, so keep the preview visible
+                    // the way it has always been. This is the only place a positional
+                    // pick can happen and it is not an engine mapping (measured: 8 of
+                    // 559 retail MEFs, all one submesh, e.g. 700_08_1).
+                    const size_t preview = std::min(i, textures.size() - 1);
+                    texture = textures[preview];
+                    resolvedTexId = (preview < textureIds.size()) ? textureIds[preview] : "";
+                }
+            } else if (textures.size() == 1) {
                 texture = textures[0];
                 resolvedTexId = textureIds.empty() ? "" : textureIds[0];
             } else if (matSlot >= 0 && static_cast<size_t>(matSlot) < textures.size()) {
@@ -668,10 +719,10 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
                         " textureCount=" + std::to_string(textures.size()) +
                         " wrappedSlot=" + std::to_string(wrapped));
                 }
-            } else if (i < textures.size()) {
-                texture = textures[i];
-                resolvedTexId = (i < textureIds.size()) ? textureIds[i] : "";
             } else {
+                // The engine index has no texture in the editor's list, so the DAT
+                // list is shorter than the mesh's MTP INST/GTT list. Counted above;
+                // keep the last valid texture instead of binding an unrelated one.
                 texture = fallbackTexture;
             }
 
@@ -703,14 +754,31 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
             "[TEX Native] Applied textures to modelId=" + modelId +
             " subMeshes=" + std::to_string(mesh.subMeshes.size()) +
             " datTextures=" + std::to_string(textureIds.size()) +
-            " assigned=" + std::to_string(assigned));
+            " assigned=" + std::to_string(assigned) +
+            " untextured=" + std::to_string(untextured) +
+            " outOfRange=" + std::to_string(outOfRange));
 
-        if (textureIds.size() != mesh.subMeshes.size()) {
+        // IGI-RE: a model's render-group count and its texture-list length are
+        // independent, so a difference between them is NOT an error.
+        // ModelFile_Setup gives one ModelLod per MTP INST record, and that record's
+        // `n` is the number of GTT-indexed textures of the mesh
+        // (src/model/model.c:285-289,296-314, HOOK 0x4CF080); the MEF's REND chain is
+        // a free-form group list that shares those slots and carries no count at all
+        // — it is walked link by link until g->next == 0xFFFF, formats 0/1 at
+        // src/render/render.c:1009-1011 and format 3 at :1045-1047. Measured
+        // on the retail install: 472_02_1 has 142 groups over 34 slots, 700_08_1 has
+        // 1 group over 15 slots, and 114 of 551 extracted models differ — every one of
+        // them renders correctly in the game. The engine-impossible case is a group
+        // whose slot is outside the model's texture list (the engine cannot express
+        // it: ModelLod::count bounds the index), which in the editor means the DAT
+        // list is shorter than the mesh's INST/GTT list. Only that is reported.
+        if (outOfRange > 0) {
             Logger::Get().Log(
                 LogLevel::WARNING,
-                "[TEX Native] WARNING: Texture/submesh count mismatch for modelId=" + modelId +
+                "[TEX Native] WARNING: materialSlot outside the model's texture list for modelId=" + modelId +
                 " subMeshes=" + std::to_string(mesh.subMeshes.size()) +
-                " datTextures=" + std::to_string(textureIds.size()));
+                " datTextures=" + std::to_string(textureIds.size()) +
+                " outOfRange=" + std::to_string(outOfRange));
         }
         return;
     }
