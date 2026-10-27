@@ -52,11 +52,39 @@ The modules are transcribed but several have **no caller**, so the editor does n
 use the engine's method on those paths:
 
 1. **`igi::spline`** - `renderer_splines.cpp:218` still calls the editor's own
-   `BendSegmentMesh`. The engine's normals differ by ~22 degrees. The span inputs need
-   waypoint args `NumAreas@11`, `Align@12`, `Flip@13`, which `level_objects.cpp:352-364`
-   and `task_schema.cpp:123-128` drop; and `renderer_splines.cpp:197,210` carries an
-   invented `std::clamp(count, 2, 20)` the engine does not have
-   (`src/tagitem/spline.c:771-772`).
+   `BendSegmentMesh`. The engine's normals differ by ~22 degrees. The invented
+   `std::clamp(count, 2, 20)` was removed (the engine's rule is a cap, `spline.c:771-772`),
+   but the span inputs are still missing because the parser drops them.
+
+   Verified from the retail data, so this part is not guesswork. The shipped declaration is
+   in `MISSIONS/location0/level1/objects.qsc`:
+
+       Task_DeclareParameters("SplineObjWaypoint", "Orientation", "Real32x9", "Position",
+         "ObjectPos", "Waypoint Model", "String16", "Segment Model", "String16",
+         "NumAreas", "Int32", "Align", "bool8", "Flip", "bool8",
+         "Automatic Orientation", "bool8");
+
+   and a shipped instance reads
+
+       Task_New(-1, "SplineObjWaypoint", "", 0, 0, 3.1415929794311523, 25287152.0,
+                -55948040.0, 174410960.0, "waypoint", "368_01_1", 20, FALSE, FALSE, FALSE)
+
+   so the token indices are `[9]` model, `[10]` segment model, `[11]` NumAreas (Int32,
+   20 or 10 in the retail rows), `[12]` Align, `[13]` Flip, `[14]` Automatic Orientation.
+   The editor parses only up to `[10]`.
+
+   The engine's waypoint fields are `int segments` plus `char straight`, `char rigid`,
+   `char reversed`, `char autoOrient` (`src/editobj/editobjtypes.h:6-25`), and
+   `SplineObjWaypoint_Changed` derives `rigid = obj->rigid || w->straight` (`:769`).
+
+   **What is NOT verifiable from IGI-RE:** the mapping from those authored params to those
+   fields. The ParamTable for the type is registered on `gSplineObjWaypointType`, a runtime
+   global that is *used* (`src/editobj/spline.c:115`, `src/tagitem/spline.c:69`) but never
+   defined in the decompilation, so there is no table to read. `NumAreas -> segments` is
+   certain by name and by the retail values; `Automatic Orientation -> autoOrient` is
+   near-certain; `Align -> straight` and `Flip -> reversed` are inferences. Do not wire
+   those two on a guess - a wrong mapping puts authored data in the wrong field, which is
+   worse than not parsing it.
 2. **Per-frame LOD switch (#62)** - prerequisites all exist (`GetLodMeshName`,
    `SelectLodForDistance`, `view_define_.tan_half_fovx_` at `common.h:255`). It needs the
    LOD-0 `MeshHeader` read (`igi::lod::ReadMefMeshHeader`), the mesh lookup switched to
