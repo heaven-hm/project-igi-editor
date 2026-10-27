@@ -140,6 +140,25 @@ use the engine's method on those paths:
    vertices in source order, then write each into the renderer's 10-float interleaved
    vertex, taking `uv2` from source vertex i's own `uv2`.
 
+   **Scope warning -- the swap is NOT geometry-only.**  The engine transforms the model's
+   vertex buffer in place and then draws it INDEXED with the model's own indices:
+   `Direct3DRender_FillSplineVB` (HOOK 0x49CC80, src/render/render.c:613-670) fills the VB,
+   and the draw is `IDirect3DDevice7_DrawIndexedPrimitiveVB(DEV, d->primType, vb,
+   start + g->base, g->vertexCount, ...)` (`:526`, `:531`).  The editor instead EXPANDS each
+   indexed triangle into its own vertices (`AppendBentVertex` per index,
+   `spline_geometry.cpp:376`) and draws non-indexed
+   (`glDrawArrays(GL_TRIANGLES, 0, sub.vertexCount)`, `renderer_splines.cpp:256`).
+   So replacing only the geometry function would produce a vertex list whose triangle count
+   no longer matches the source mesh's index buffer.  A faithful swap has to make the
+   upload and draw indexed as well -- `UploadBentSegmentMesh` and the draw loop in
+   `renderer_splines.cpp` are part of the change, not just the 122-line function.
+
+   Convenient detail for that work: `RenderVertex` is 10 contiguous floats
+   (vec3 pos, vec3 normal, vec2 uv, vec2 uv2 = 40 bytes), so the engine's `SplineMeshSource`
+   can be filled directly with `verts = reinterpret_cast<const float*>(geometry.vertices.data())`
+   and `stride = 10`; the engine reads v[0..2] as position, v[3..5] normal, v[6..7] uv, which
+   is exactly that layout's prefix.
+
    **De-risked for the swap:** no build change is needed. `source/level/spline_geometry.cpp`
    is already compiled into `igi-editor` through the `source/level/*.*` glob
    (`CMakeLists.txt:76`, `:145`; its object file exists under
