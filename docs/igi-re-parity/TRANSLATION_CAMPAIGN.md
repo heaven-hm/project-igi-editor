@@ -15,13 +15,61 @@ Never touch `/Users/haseeb-mir/Documents/Code/project-igi-editor` (original chec
 | gate | result |
 | --- | --- |
 | build gate (`scripts/build-windows.sh`) | x64 link OK, i686 compile OK, exit 0 |
-| host lane (`scripts/run-host-tests.sh`) | OK: 1095 tests passed in 64 suites, exit 0 |
-| Windows suite (i686 `igi_tests` under Wine) | 1526 ran, 1514 passed, 0 failed, exit 0 |
+| host lane (`scripts/run-host-tests.sh`) | OK: 1140 tests passed in 67 suites, 0 failed |
+| Windows suite (i686 `igi_tests` under Wine) | 1577 ran, 1565 passed, 0 failed, exit 0 |
 
-**Trap when re-running the Windows suite:** `build-windows.sh` relinks `bin/igi_tests.exe`
-as **x64** in its gate-1 pass, so a Wine run straight afterwards fails with exit 53
-(wrong architecture). Force an i686 relink first:
-`rm -f bin/igi_tests.exe && cmake --build build-mingw --target igi_tests --parallel`.
+**Trap when re-running either artifact under Wine:** `build-windows.sh` relinks
+`bin/igi_tests.exe` AND `bin/Release/igi1ed.exe` as **x64** in its gate-1 pass, so a Wine run
+straight afterwards fails with `libgcc_s_seh-1.dll not found` / `exit 53`. Force an i686
+relink first, deleting the artifact so ninja cannot skip it:
+`rm -f bin/igi_tests.exe && cmake --build build-mingw --target igi_tests --parallel`, and
+`rm -f bin/Release/igi1ed.exe && cmake --build build-mingw --target igi-editor --parallel`.
+This has bitten this campaign four times.
+
+## Handoff at round 40
+
+**58 commits on `fix/igi-re-known-issues`, none pushed** (deliberate: the user pushes only
+after testing the binary themselves). Tree clean. All three gates green as above.
+
+**New tooling worth knowing about: `--smoke-level`.** A headless loader check --
+`igi1ed.exe --smoke-level --level N [--level N ...] --game-path <IGI>` -- which loads a
+level's objects and resolves every object's model and textures through the renderer's own
+resolution path with NO OpenGL context (`Init()` is never called), then prints
+`models resolved / missing` and `textures resolved / missing` with names, exiting non-zero
+if anything is missing. It is the command that catches the class of bug that emptied the
+viewport (`FindMeshData` looking up a bare `<id>.mef` instead of `LOCAL:models/<id>.mef`),
+which `--verify-level` cannot, because that only checks the QSC parse. Current results on
+the retail install: levels 1, 2, 12, 13 clean (0 missing models, 0 missing textures);
+level 7 reports one genuine dangling reference, `s332_02_1`, absent from every file and
+archive member.
+
+**A caution earned the hard way.** The first version of that probe substituted the model id
+as a texture id when the model's texture list was empty -- a lookup the real renderer never
+performs. That manufactured 21 "missing textures" on level 13, 13 on level 12 and 4 on
+level 1, all on Tunnel/UndergroundRoom/ElevatorTunnel buildings, and it was briefly reported
+as the user's known underground-texture defect. It was entirely an artefact. **A probe that
+does not exactly mirror the path it probes manufactures findings.** Verify a new checker
+against a known-good case, and against the real code path, before trusting its output.
+
+**The corpus test is an install-purity test.** `LodChainCorpusTest` reads the retail MTPs and
+pins an exact histogram (6605 names). The editor's add-model feature writes `.res`/`.dat`/
+`.mtp` into the install, which moved it to 6610 and turned the gate red; restoring level 1
+from `editor/backup/level1/` returned it to 6605. **Do not re-baseline to 6610** -- that
+would make the test require a polluted install. Durable fixes: freeze the 14 MTPs and point
+`IGI_LOD_ROOT` at them (needs sign-off to commit game data), or split the hard engine
+invariants from the corpus fingerprint.
+
+**Still not done, in the order I would take them:** (1) the `BendSegmentMesh` -> `igi::spline`
+draw-path swap -- it is a rewrite, not a swap, because the engine draws INDEXED over a
+transformed vertex buffer while the editor expands triangles and draws `glDrawArrays`; the
+full recipe is in the spline section above; (2) the animation driver (`app.cpp:1259-1261`,
+`renderer.cpp:403`); (3) the `snow.tex` binding; (4) the pickup proximity grant
+(`app.cpp:2729-2790`); (5) the tails of the PARTIAL issues.
+
+**Unverifiable here, needs the user:** every rendered pixel. This host offers OpenGL 2.1 and
+the editor needs 4.1, so the pause menu, the loading bar and the texture fixes are proven by
+value-level tests and citations only -- nobody has seen them on screen.
+
 
 The Windows suite is the gate that finds what the host lane cannot, and it is the one
 that mattered: it opened at **19 failures** and reached 0 across rounds 3-7. Every fix in
