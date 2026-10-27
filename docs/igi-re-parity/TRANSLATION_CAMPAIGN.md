@@ -144,6 +144,33 @@ says "not wired".
 
 ## Open judgement calls (need the user, not a guess)
 
+### The two parse paths still disagree for 33 types -- LOAD side, not yet investigated
+
+`LoadRecursive` (`level_objects.cpp`) handles 23 types; `ParseTaskLine`
+(`level_objects_serialize.cpp`) handles 54.  The line parser's extra 33 are:
+
+    AlarmLight AmmoPickup AnimTask Cabinet CutScene Dirlight DirlightKeyframe
+    DiscardTerrain Dynamic Elevator FlatSky FlatSkyLayer Generator GenericPickup
+    GenericTBA GlobalLight GlobalLightKeyframe HeightMap HumanPlayer
+    HumanSoldierFemale HumanSoldierRPG LODSettings Level MipMapControl Plane Radio
+    RotatingObject Siren SoundSource Static StationaryGun TerrainLightMap
+    TextureModifier
+
+Four defects have already come out of this drift (see the parse-path test file), so this
+list is the obvious place to look next.  But it is NOT a mechanical fix, and that is the
+point of recording it rather than doing it: `LoadRecursive`'s fallback treats args 3/4/5 as
+a *candidate* position and reverts it unless the level's own `Task_DeclareParameters`
+agrees (`level_objects.cpp:540-558`), precisely because the layout is not uniform across
+types.  `ParseTaskLine` reads pos@3-5 and rot@6-8 unconditionally for the group
+AIStationaryGunHolder / AlarmLight / Elevator / Generator / GenericPickup / GenericTBA /
+Plane / Radio / RotatingObject / Siren / StationaryGun
+(`level_objects_serialize.cpp:307-312`) -- so mirroring that group into the load path
+would assert a layout for ten types at once, and if any of them differs it would corrupt
+their placement.  Verify each against its retail declaration first.
+
+Consequence today: at load those types get a position (via the candidate) but no rotation,
+so e.g. a `RotatingObject` is drawn unrotated.
+
 * **`renderer_terrain.cpp:230`** binds `mat_tex_.texs_[rc->tex_idx_]` unguarded, and
   `LEVEL12/TERRAIN.TEX` holds 12 textures while level 12's tile maps reference 12, 13 and
   14. The engine over-reads there too - `new_set` allocates `count*0x24+0x30`
