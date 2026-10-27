@@ -77,14 +77,39 @@ use the engine's method on those paths:
    `char reversed`, `char autoOrient` (`src/editobj/editobjtypes.h:6-25`), and
    `SplineObjWaypoint_Changed` derives `rigid = obj->rigid || w->straight` (`:769`).
 
-   **What is NOT verifiable from IGI-RE:** the mapping from those authored params to those
-   fields. The ParamTable for the type is registered on `gSplineObjWaypointType`, a runtime
-   global that is *used* (`src/editobj/spline.c:115`, `src/tagitem/spline.c:69`) but never
-   defined in the decompilation, so there is no table to read. `NumAreas -> segments` is
-   certain by name and by the retail values; `Automatic Orientation -> autoOrient` is
-   near-certain; `Align -> straight` and `Flip -> reversed` are inferences. Do not wire
-   those two on a guess - a wrong mapping puts authored data in the wrong field, which is
-   worse than not parsing it.
+   **The field mapping is now CONFIRMED, not inferred.** `SplineObj_Open` HOOK(0x502250),
+   `src/editobj/spline.c:184-225`, registers the waypoint ParamTable explicitly at `:215`:
+
+       gSplineObjWaypointParams = ParamTable_New(8);
+       ... &w.rot         Param_Real32x9()
+       ... &w.point       Param_ObjectPos()
+       ... w.modelName    Param_String16()
+       ... w.segModel     Param_String16()
+       ... &w.segments    Param_Int32()  &gSplineObjSegmentRange
+       ... &w.straight    Param_Bool8()
+       ... &w.reversed    Param_Bool8()
+       ... &w.autoOrient  Param_Bool8()
+
+   Position for position that matches the authored order (Orientation, Position, Waypoint
+   Model, Segment Model, NumAreas, Align, Flip, Automatic Orientation), so:
+
+       arg 11 NumAreas  -> w.segments    (Int32)
+       arg 12 Align     -> w.straight    (bool8)
+       arg 13 Flip      -> w.reversed    (bool8)
+       arg 14 Auto Orient -> w.autoOrient (bool8)
+
+   The editor parses only up to arg 10, which is why the engine's draw path cannot be
+   fed today.
+
+   **Correction to commit 523364e0.** That commit removed a lower clamp bound of 2 and
+   called it "an invented lower bound the engine does not have". That wording was wrong:
+   the engine does declare `gSplineObjSegmentRange.min = 2; max = 20;`
+   (`src/editobj/spline.c:202-203`) and attaches it to both the container's `maxSegments`
+   (`:209`) and the waypoint's `segments` (`:220`). What is true is that it is stored in the
+   ParamTable entry's `extra` field (`src/param/param.c:167`) and nothing reads a RangeI
+   back, so it is authored UI metadata rather than a load-time bound -- the runtime rule
+   remains SplineObjWaypoint_Changed's cap (`:771-772`). The code change (std::min(x, 20))
+   is right for runtime fidelity; only the "invented" characterisation was wrong.
 2. **Per-frame LOD switch (#62)** - prerequisites all exist (`GetLodMeshName`,
    `SelectLodForDistance`, `view_define_.tan_half_fovx_` at `common.h:255`). It needs the
    LOD-0 `MeshHeader` read (`igi::lod::ReadMefMeshHeader`), the mesh lookup switched to
