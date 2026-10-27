@@ -126,9 +126,19 @@ use the engine's method on those paths:
    `AppendBentVertex(verts, bentPositions[i], bentNormals[i], src.uv, src.uv2)`
    (`spline_geometry.cpp:376`, `submeshVertexCounts.push_back(verts.size() / 10)` at `:379`).
    So `SplineRenderVertex` (pos/normal/uv only) is NOT a drop-in: the swap has to supply
-   `uv2` per vertex from the corresponding source vertex, which means the output vertex
-   order must line up with the source mesh's.  Confirm that correspondence before writing
-   the copy -- that is the one thing left to establish.
+   `uv2` per vertex from the corresponding source vertex.  **That correspondence is now
+   established and is the identity.**  `FillSplineVertices` (the body
+   `FillSplineSpanVertices` delegates to, `source/level/spline_geometry.cpp:165-...`) walks
+   `for (int i = 0; i < src.vert_count; i++, v += src.stride)` and writes `out[i]`, so
+   output vertex i is source vertex i, same order, no reindexing.  Note also that the
+   ENGINE's vertex is 8 floats -- `PackSplineMeshSource` packs position/normal/uv into
+   `RigidMesh.vertices`, "which is also what gVBNormal holds (32-byte stride,
+   src/render/render.c:626-641)" -- so the editor's trailing `uv2` pair is its own
+   extension, not something the engine produces.
+
+   With that, the swap is fully specified: call `FillSplineSpanVertices` to fill 8-float
+   vertices in source order, then write each into the renderer's 10-float interleaved
+   vertex, taking `uv2` from source vertex i's own `uv2`.
 
    **De-risked for the swap:** no build change is needed. `source/level/spline_geometry.cpp`
    is already compiled into `igi-editor` through the `source/level/*.*` glob
