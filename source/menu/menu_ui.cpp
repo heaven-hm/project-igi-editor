@@ -412,6 +412,12 @@ const char* MenuUiActionName(MenuUiAction action) {
         case MenuUiAction::SaveLevel: return "SaveLevel";
         case MenuUiAction::OpenEditorOptions:
             return "OpenEditorOptions";
+        case MenuUiAction::OpenGameMenu:
+            return "OpenGameMenu";
+        case MenuUiAction::EditMenuText:
+            return "EditMenuText";
+        case MenuUiAction::SaveMenu:
+            return "SaveMenu";
         case MenuUiAction::Quit: return "Quit";
     }
     return "None";

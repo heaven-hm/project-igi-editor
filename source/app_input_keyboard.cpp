@@ -34,7 +34,16 @@ void App::Input_OnSpecial(int key, int x, int y) {
 	}
 	if (in_game_mode_ && IsGameplayInputFocused() &&
 		!gameplay_host_.IsGameplayWindowCurrent()) return;
-	if (in_game_mode_ && IsGameplayInputFocused() && pause_mode_) return;
+	if (igi::IsPauseMenuInputActive(pause_mode_, IsGameplayInputFocused())) {
+		// The pause overlay owns the arrow keys while it is up.  This is
+		// `MenuManager_ReadInput` HOOK 0x418580 (src/menu/menumanager.c:479-551):
+		// KEY_DOWN (-4) advances with wraparound to 0, KEY_UP (-3) steps back with
+		// wraparound to itemCount-1, both moving the menu's focus.  The rows come
+		// from the loaded menu tree.
+		if (key == GLUT_KEY_DOWN) { MovePauseMenuFocus(1); return; }
+		if (key == GLUT_KEY_UP) { MovePauseMenuFocus(-1); return; }
+		return;
+	}
 	if (in_game_mode_ && IsGameplayInputFocused() && !pause_mode_) {
 		return;
 	}
@@ -555,7 +564,13 @@ void App::Input_OnSpecial(int key, int x, int y) {
 void App::Input_OnSpecialUp(int key, int x, int y) {
 	if (in_game_mode_ && IsGameplayInputFocused() &&
 		!gameplay_host_.IsGameplayWindowCurrent()) return;
-	if (in_game_mode_ && IsGameplayInputFocused() && pause_mode_) return;
+	// A key RELEASE never moves the pause menu's focus: retail reads key presses
+	// (`MenuManager_ReadInput` HOOK 0x418580 consumes `Keys_Pop`), so only
+	// Input_OnSpecial navigates.  The release is consumed so it cannot reach the
+	// editor behind the overlay.
+	if (igi::IsPauseMenuInputActive(pause_mode_, IsGameplayInputFocused())) {
+		return;
+	}
 	if (in_game_mode_ && IsGameplayInputFocused() && !pause_mode_) {
 		return;
 	}
@@ -665,7 +680,10 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		if (key == 13) { // Enter
 			// Enter is consumed by the pause overlay. It only commits the level
 			// selector after that row has explicitly been focused; opening the
-			// menu must never reload the current level as a side effect.
+			// menu must never reload the current level as a side effect.  On any
+			// other row it is KEY_ENTER (-7), which retail forwards to the focused
+			// window (`MenuManager_ReadInput` HOOK 0x418580) — here, the focused
+			// row's editor action.
 			if (igi::PauseMenuLevelInputFocused(pause_mode_, pause_active_input_) &&
 				!pause_level_input_.empty()) {
 				int lvl = std::atoi(pause_level_input_.c_str());
@@ -675,12 +693,16 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 				} else {
 					Logger::Get().Log(LogLevel::ERR, "Level must be between 1 and 14.");
 				}
+			} else if (pause_active_input_ == -1) {
+				ActivateFocusedPauseMenuRow();
 			}
 			return;
 		}
 		if (key == 27) {
 			if (pause_active_input_ != -1) { pause_active_input_ = -1; return; }
-			TogglePauseMenu();
+			// KEY_ESCAPE (-8): pop the screen the menu pushed, or close the menu
+			// (`MenuManager_PopScreen` HOOK 0x417710, src/game/menumanager.c:237-247).
+			PauseMenuBack();
 			return;
 		}
 		if (igi::PauseMenuLevelInputFocused(pause_mode_, pause_active_input_)) {

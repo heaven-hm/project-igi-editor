@@ -24,76 +24,10 @@ void App::Input_OnMouseWheel(int wheel, int direction, int x, int y) {
 		return;
 	}
 	if (pause_mode_) {
-		const PauseMenuFontMetrics fontMetrics = GetPauseMenuFontMetrics(
-			Config::Get().useEditorFont, Config::Get().systemFontSize);
-		const igi::PauseMenuLayout layout = igi::BuildPauseMenuLayout(
-			window_state_.viewport_width_, window_state_.viewport_height_,
-			pause_terrain_expanded_, fontMetrics.lineHeight);
-		int row = 3; // Resume, mode, and collision rows precede the controls below.
-		const int fontRow = row++;
-		const int levelRow = row++;
-		const int autosaveRow = row++;
-		const int loggingRow = row++;
-		const int logLevelRow = row++;
-		(void)loggingRow; // The checkbox is click-only; the wheel adjusts severity only.
-		row += 5; // music, weather, lightmaps, calculate-lightmaps, terrain header
-		const int terrainHeaderRow = row - 1;
-		if (pause_terrain_expanded_) {
-			row += 5;
-		}
-
-		auto adjust = [&](int targetRow, int labelWidth, int valueWidth,
-		                  int minimum, int maximum, int step, int& value) {
-			if (!igi::IsPauseMenuRowHit(layout, targetRow, y)) return false;
-			const igi::PauseMenuSpinner spinner = igi::BuildPauseMenuSpinner(
-				layout, igi::PauseMenuRowCenter(layout, targetRow), labelWidth, valueWidth);
-			if (!igi::IsPauseMenuSpinnerHit(spinner, x)) return false;
-			value = igi::AdjustPauseMenuSpinner(value, direction, minimum, maximum, step);
-			return true;
-		};
-
-		char fontLabel[32];
-		snprintf(fontLabel, sizeof(fontLabel), "Font: %s",
-			Config::Get().useEditorFont ? "Editor" : "System");
-		int fontSize = Config::Get().systemFontSize;
-		if (adjust(fontRow, PauseMenuTextWidth(fontLabel, Config::Get().useEditorFont, Config::Get().systemFontSize, layout.text_scale), 44, 8, 32, 1, fontSize)) {
-			Config::Get().systemFontSize = fontSize;
-			Config::Save();
-			return;
-		}
-
-		int level = pause_level_input_.empty() ? 1 : std::atoi(pause_level_input_.c_str());
-		if (adjust(levelRow, PauseMenuTextWidth("Select Level", Config::Get().useEditorFont, Config::Get().systemFontSize, layout.text_scale), 44, 1, 14, 1, level)) {
-			pause_level_input_ = std::to_string(level);
-			return;
-		}
-
-		int autosaveInterval = auto_save_interval_seconds_;
-		const char* autosaveLabel = auto_save_enabled_ ? "Save Enable" : "Save Disable";
-		if (adjust(autosaveRow, PauseMenuTextWidth(autosaveLabel, Config::Get().useEditorFont, Config::Get().systemFontSize, layout.text_scale), 44,
-		           10, 3600, 10, autosaveInterval)) {
-			AdjustAutoSaveInterval(autosaveInterval - auto_save_interval_seconds_);
-			return;
-		}
-
-		int logLevel = Config::Get().logLevelThreshold;
-		if (adjust(logLevelRow, PauseMenuTextWidth("Log Level", Config::Get().useEditorFont, Config::Get().systemFontSize, layout.text_scale), 78,
-		           igi::kLogLevelDebug, igi::kLogLevelFatal, 1, logLevel)) {
-			Config::Get().logLevelThreshold = logLevel;
-			Config::Get().debugLogging = logLevel == igi::kLogLevelDebug;
-			Config::Save();
-			return;
-		}
-
-		int fogIntensity = Config::Get().fogIntensity;
-		const int fogRow = pause_terrain_expanded_ ? terrainHeaderRow + 5 : -1;
-		if (pause_terrain_expanded_ &&
-			adjust(fogRow, PauseMenuTextWidth("Fog Intensity", Config::Get().useEditorFont, Config::Get().systemFontSize, layout.text_scale), 56,
-			       0, 1000, 100, fogIntensity)) {
-			Config::Get().fogIntensity = fogIntensity;
-			SetFogIntensity(fogIntensity);
-			Config::Save();
-		}
+		// The wheel adjusts the spinner row under the pointer, whatever row that is
+		// (`AdjustPauseMenuSpinner`, source/runtime/pause_menu_layout.h); the rows
+		// themselves come from the loaded menu tree.
+		WheelPauseMenuSpinner(x, y, direction);
 		return;
 	}
 	if (show_help_) {
@@ -439,163 +373,10 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 			}
 
 			if (pause_mode_) {
-				// *** Layout MUST match renderer_draw.cpp pause menu exactly ***
-				const PauseMenuFontMetrics fontMetrics = GetPauseMenuFontMetrics(
-					Config::Get().useEditorFont, Config::Get().systemFontSize);
-				const igi::PauseMenuLayout pause_layout = igi::BuildPauseMenuLayout(
-					window_state_.viewport_width_, window_state_.viewport_height_,
-					pause_terrain_expanded_, fontMetrics.lineHeight);
-				const int menu_x = pause_layout.menu_left;
-
-				if (x >= menu_x && x <= menu_x + pause_layout.menu_width &&
-				    y >= pause_layout.menu_top && y <= pause_layout.menu_top + pause_layout.menu_height) {
-					mouse_state_.left_button_down_ = false;
-					int clicked_input = -1;
-
-					int btn_idx = 0;
-int RESUME_ROW = btn_idx++;
-				int MODE_ROW = btn_idx++;
-				int CLIP_ROW = btn_idx++;
-				int FONT_ROW = btn_idx++;
-					int LEVEL_ROW = btn_idx++;
-					int AUTOSAVE_ROW = btn_idx++;
-					int LOGGING_ROW = btn_idx++;
-					int LOG_LEVEL_ROW = btn_idx++;
-					int MUSIC_ROW = btn_idx++;
-					int WEATHER_ROW = btn_idx++;
-					int LIGHTMAPS_ROW = btn_idx++;
-					int LIGHTMAPS_CALC_ROW = btn_idx++;
-					int TERRAIN_HEADER_ROW = btn_idx++;
-				int TERRAIN_TEX_ROW = -1, TERRAIN_HGT_ROW = -1, TERRAIN_DSC_ROW = -1, TERRAIN_FOG_ROW = -1, TERRAIN_FOGINT_ROW = -1;
-				if (pause_terrain_expanded_) {
-					TERRAIN_TEX_ROW = btn_idx++;
-					TERRAIN_HGT_ROW = btn_idx++;
-					TERRAIN_DSC_ROW = btn_idx++;
-					TERRAIN_FOG_ROW = btn_idx++;
-					TERRAIN_FOGINT_ROW = btn_idx++;
-				}
-					int RESET_ROW = btn_idx++;
-					int SAVE_ROW = btn_idx++;
-					int QUIT_ROW = btn_idx++;
-
-					auto btn_hit2 = [&](int idx) -> bool {
-						return igi::IsPauseMenuRowHit(pause_layout, idx, y);
-					};
-
-					if      (btn_hit2(RESUME_ROW)) { TogglePauseMenu(); }
-else if (btn_hit2(MODE_ROW))   { ToggleGamePlayMode(); TogglePauseMenu(); }
-				else if (btn_hit2(CLIP_ROW))  { noclip_mode_ = !noclip_mode_; }
-				else if (btn_hit2(FONT_ROW)) {
-						// Layout MUST match renderer: dynamic label width, val_w=44
-						char font_lbl[32];
-						snprintf(font_lbl, sizeof(font_lbl), "Font: %s",
-								 Config::Get().useEditorFont ? "Editor" : "System");
-						const igi::PauseMenuSpinner spinner = igi::BuildPauseMenuSpinner(
-							pause_layout, igi::PauseMenuRowCenter(pause_layout, FONT_ROW),
-							PauseMenuTextWidth(font_lbl, Config::Get().useEditorFont,
-								Config::Get().systemFontSize, pause_layout.text_scale), 44);
-						int& fs = Config::Get().systemFontSize;
-						if (x >= spinner.minus_left && x < spinner.minus_left + 22) {
-							fs = std::max(8, fs - 1); Config::Save();
-						} else if (x >= spinner.plus_left && x < spinner.plus_left + 22) {
-							fs = std::min(32, fs + 1); Config::Save();
-						} else if (x < spinner.minus_left) {
-							Config::Get().useEditorFont = !Config::Get().useEditorFont; Config::Save();
-						}
-					}
-					else if (btn_hit2(LEVEL_ROW)) {
-						clicked_input = igi::kPauseMenuLevelRow;
-						// Layout MUST match renderer: dynamic label width, val_w=44
-						const char* lbl = "Select Level";
-						const igi::PauseMenuSpinner spinner = igi::BuildPauseMenuSpinner(
-							pause_layout, igi::PauseMenuRowCenter(pause_layout, LEVEL_ROW),
-							PauseMenuTextWidth(lbl, Config::Get().useEditorFont,
-								Config::Get().systemFontSize, pause_layout.text_scale), 44);
-						int cur = pause_level_input_.empty() ? 1 : std::atoi(pause_level_input_.c_str());
-						if (x >= spinner.minus_left && x < spinner.minus_left + 22) {
-							cur = (cur > 1) ? cur - 1 : 1;
-							pause_level_input_ = std::to_string(cur);
-						} else if (x >= spinner.plus_left && x < spinner.plus_left + 22) {
-							cur = (cur < 14) ? cur + 1 : 14;
-							pause_level_input_ = std::to_string(cur);
-						}
-					}
-					else if (btn_hit2(AUTOSAVE_ROW)) {
-						// Layout MUST match renderer: dynamic label width, val_w=44
-						const char* lbl = auto_save_enabled_
-								 ? "Save Enable" : "Save Disable";
-						const igi::PauseMenuSpinner spinner = igi::BuildPauseMenuSpinner(
-							pause_layout, igi::PauseMenuRowCenter(pause_layout, AUTOSAVE_ROW),
-							PauseMenuTextWidth(lbl, Config::Get().useEditorFont,
-								Config::Get().systemFontSize, pause_layout.text_scale), 44);
-						if      (x >= spinner.minus_left && x < spinner.minus_left + 22) AdjustAutoSaveInterval(-10);
-						else if (x >= spinner.plus_left  && x < spinner.plus_left  + 22) AdjustAutoSaveInterval(10);
-						else if (x >= spinner.group_left && x < spinner.minus_left) ToggleAutoSave();
-					}
-					else if (btn_hit2(LOGGING_ROW)) {
-						Config::Get().enableLogging = !Config::Get().enableLogging;
-						Config::Save();
-						status_message_ = Config::Get().enableLogging ? "Logging: ON" : "Logging: OFF";
-					}
-					else if (btn_hit2(LOG_LEVEL_ROW)) {
-						const igi::PauseMenuSpinner spinner = igi::BuildPauseMenuSpinner(
-							pause_layout, igi::PauseMenuRowCenter(pause_layout, LOG_LEVEL_ROW),
-							PauseMenuTextWidth("Log Level", Config::Get().useEditorFont,
-								Config::Get().systemFontSize, pause_layout.text_scale), 78);
-						int& level = Config::Get().logLevelThreshold;
-						if (x >= spinner.minus_left && x < spinner.minus_left + 22) {
-							level = std::max(igi::kLogLevelDebug, level - 1);
-						} else if (x >= spinner.plus_left && x < spinner.plus_left + 22) {
-							level = std::min(igi::kLogLevelFatal, level + 1);
-						} else {
-							level = igi::ClampLogLevel(level);
-						}
-						Config::Get().debugLogging = level == igi::kLogLevelDebug;
-						Config::Save();
-						status_message_ = std::string("Log level: ") + igi::LogLevelLabel(level);
-					}
-					else if (btn_hit2(MUSIC_ROW)) { ToggleMusic(); }
-					else if (btn_hit2(WEATHER_ROW)) { CycleWeatherMode(); }
-					else if (btn_hit2(LIGHTMAPS_ROW)) { igi::ObjectLightmapManager::Get().CycleRenderMode(); }
-					else if (btn_hit2(LIGHTMAPS_CALC_ROW)) {
-						CalculateLightmapsForAllObjects();
-					}
-					else if (btn_hit2(TERRAIN_HEADER_ROW)) { pause_terrain_expanded_ = !pause_terrain_expanded_; }
-					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_TEX_ROW)) { ToggleTerrainModOption(1); }
-					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_HGT_ROW)) { ToggleTerrainModOption(2); }
-					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_DSC_ROW)) { ToggleTerrainModOption(4); }
-					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_FOG_ROW)) {
-						ToggleTerrainDrawOption(Renderer_Terrain::DRAW_TERRAIN_OPT_FOG);
-						int dOpts = GetTerrainDrawOptions();
-						bool fogOn = (dOpts & Renderer_Terrain::DRAW_TERRAIN_OPT_FOG) != 0;
-						SetFogEnabled(fogOn);
-						Config::Get().enableFog = fogOn;
-						Config::Save();
-					}
-					else if (pause_terrain_expanded_ && btn_hit2(TERRAIN_FOGINT_ROW)) {
-						// Layout MUST match renderer: dynamic label width, val_w=56
-						const char* lbl = "Fog Intensity";
-						const igi::PauseMenuSpinner spinner = igi::BuildPauseMenuSpinner(
-							pause_layout, igi::PauseMenuRowCenter(pause_layout, TERRAIN_FOGINT_ROW),
-							PauseMenuTextWidth(lbl, Config::Get().useEditorFont,
-								Config::Get().systemFontSize, pause_layout.text_scale), 56);
-						int& fi = Config::Get().fogIntensity;
-						if (x >= spinner.minus_left && x < spinner.minus_left + 22) {
-							fi = std::max(0, fi - 100);
-							SetFogIntensity(fi); Config::Save();
-						} else if (x >= spinner.plus_left && x < spinner.plus_left + 22) {
-							fi = std::min(1000, fi + 100);
-							SetFogIntensity(fi); Config::Save();
-						}
-					}
-					else if (btn_hit2(RESET_ROW)) { ResetLevel(); TogglePauseMenu(); }
-					else if (btn_hit2(SAVE_ROW)) { SaveCurrentLevel(); }
-					else if (btn_hit2(QUIT_ROW)) { glutLeaveMainLoop(); }
-
-					pause_active_input_ = clicked_input;
-				} else {
-					pause_active_input_ = -1; // Clicked outside menu
-				}
+				// The live menu's rows, hit test, focus and activation all come from the
+				// loaded tree (`HandlePauseMenuClick`, source/app_pause_menu.cpp); the
+				// click is consumed while the menu is up.
+				HandlePauseMenuClick(x, y);
 				return; // Block all other interactions while paused
 			}
 
@@ -785,7 +566,17 @@ void App::Input_OnMotion(int x, int y) {
 	}
 	if (igi::IsPauseMenuInputActive(pause_mode_, IsGameplayInputFocused())) {
 		// Paused menus keep pointer hover but never feed motion into editor or
-		// gameplay tools behind the modal overlay.
+		// gameplay tools behind the modal overlay.  The hover DOES move the menu's
+		// focus: retail focuses the window the pointer has entered
+		// (`MenuWindow_HitTest` HOOK 0x4248A0, src/widget/menuwindow.c:335-360, and
+		// `MenuManager_FocusItem` HOOK 0x418FE0), so the row under the cursor is the
+		// row that is highlighted and the row KEY_ENTER would run.
+		if (pause_menu_.model.ok) {
+			const int entry = pause_menu_.model.HitTest(x, y);
+			if (entry >= 0) {
+				pause_menu_.model.FocusEntry(entry);
+			}
+		}
 		mouse_state_.prior_x_ = x;
 		mouse_state_.prior_y_ = y;
 		return;

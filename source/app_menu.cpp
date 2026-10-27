@@ -35,9 +35,11 @@
 
 #include "menu/menu_ui.h"
 
+#include <algorithm>
 #include <cctype>
 #include <fstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "menu/qvm_image.h"
@@ -174,8 +176,47 @@ MenuUiAction EditorActionForRetailItem(const MenuUiEntry& entry) {
     return MenuUiAction::None;
 }
 
+// One row of the editor's own list, as the live menu builds it: the same geometry
+// the renderer has always used (`PauseMenuRowCenter`, source/runtime/
+// pause_menu_layout.h) so the model and the draw layer cannot drift apart.
+MenuUiEntry MakeEditorRow(const PauseMenuLayout& layout, const MenuUiBuildOptions& options,
+                          int row_index, const char* label, MenuUiAction action) {
+    const int centre = PauseMenuRowCenter(layout, row_index);
+    // The legacy hit test is inclusive (IsPauseMenuRowHit: centre - radius <= y
+    // <= centre + radius); the model uses retail's strict comparison
+    // (MenuWindow_HitTest: y0 < y < y0 + h), so the box is grown by one pixel
+    // on each side to keep the clickable band identical.
+    const MenuUiRect viewport_rect{layout.menu_left - 1, centre - layout.row_hit_radius - 1,
+                                   layout.menu_width + 2,
+                                   2 * layout.row_hit_radius + 2};
+
+    MenuUiEntry entry;
+    entry.widget_type = "EditorRow";
+    entry.widget_name = label;
+    entry.task_id = -1;
+    entry.label = label;
+    entry.item_label = label;
+    // These rows are the editor's own, so they are already display text: there is
+    // no `Text Resource` key to resolve and nothing to look up in an archive.
+    entry.display_label = label;
+    entry.rect = MenuUiToRetail(viewport_rect, options.viewport_width,
+                                options.viewport_height);
+    entry.has_text = true;
+    entry.selectable = true;
+    entry.item_candidate = true;
+    entry.collected = true;
+    entry.editor_added = true;
+    entry.enabled = true;
+    entry.visible = true;
+    entry.editor_action = action;
+    entry.inert = false;
+    entry.colour_index = 1;  // TEXT_WHITE, src/menuscreen/menutext.c:301-304
+    return entry;
+}
+
 MenuUiModel BuildEditorFallbackMenu(bool terrain_expanded,
-                                    const MenuUiBuildOptions& options) {
+                                    const MenuUiBuildOptions& options,
+                                    const std::vector<EditorAddedRow>& added_rows) {
     MenuUiModel model;
     model.viewport_width = options.viewport_width;
     model.viewport_height = options.viewport_height;
@@ -185,9 +226,11 @@ MenuUiModel BuildEditorFallbackMenu(bool terrain_expanded,
     model.fallback_reason =
         "the retail menu definition was not used; the editor's own row list is shown";
 
+    // The panel holds the editor's rows plus the added ones, so it grows by them
+    // (`kPauseMenuEditorExtraRows`, source/runtime/pause_menu_layout.h).
     const PauseMenuLayout layout = BuildPauseMenuLayout(
         options.viewport_width, options.viewport_height, terrain_expanded,
-        options.metrics.line_height);
+        options.metrics.line_height, static_cast<int>(added_rows.size()));
 
     MenuUiScreen screen;
     screen.id = 0;
@@ -201,38 +244,22 @@ MenuUiModel BuildEditorFallbackMenu(bool terrain_expanded,
 
     const std::vector<FallbackRow> rows = FallbackRowsFor(terrain_expanded);
     for (size_t i = 0; i < rows.size(); ++i) {
-        const int centre = PauseMenuRowCenter(layout, static_cast<int>(i));
-        // The legacy hit test is inclusive (IsPauseMenuRowHit: centre - radius <= y
-        // <= centre + radius); the model uses retail's strict comparison
-        // (MenuWindow_HitTest: y0 < y < y0 + h), so the box is grown by one pixel
-        // on each side to keep the clickable band identical.
-        const MenuUiRect viewport_rect{layout.menu_left - 1, centre - layout.row_hit_radius - 1,
-                                       layout.menu_width + 2,
-                                       2 * layout.row_hit_radius + 2};
-
-        MenuUiEntry entry;
-        entry.widget_type = "EditorRow";
-        entry.widget_name = rows[i].label;
-        entry.task_id = -1;
-        entry.label = rows[i].label;
-        entry.item_label = rows[i].label;
-        // These rows are the editor's own, so they are already display text: there is
-        // no `Text Resource` key to resolve and nothing to look up in an archive.
-        entry.display_label = rows[i].label;
-        entry.rect = MenuUiToRetail(viewport_rect, options.viewport_width,
-                                    options.viewport_height);
-        entry.has_text = true;
-        entry.selectable = true;
-        entry.item_candidate = true;
-        entry.collected = true;
-        entry.editor_added = true;
-        entry.enabled = true;
-        entry.visible = true;
-        entry.editor_action = rows[i].action;
-        entry.inert = false;
-        entry.colour_index = 1;  // TEXT_WHITE, src/menuscreen/menutext.c:302-305
+        MenuUiEntry entry = MakeEditorRow(layout, options, static_cast<int>(i),
+                                          rows[i].label, rows[i].action);
         screen.selectable.push_back(static_cast<int>(i));
         screen.entries.push_back(std::move(entry));
+    }
+
+    // The editor-added rows, after the editor's own list, in the order given.
+    int next_row = PauseMenuRowCount(terrain_expanded);
+    for (const EditorAddedRow& row : added_rows) {
+        MenuUiEntry entry = MakeEditorRow(layout, options, next_row, row.label, row.action);
+        if (row.widget_name != nullptr && row.widget_name[0] != '\0') {
+            entry.widget_name = row.widget_name;
+        }
+        screen.selectable.push_back(static_cast<int>(screen.entries.size()));
+        screen.entries.push_back(std::move(entry));
+        ++next_row;
     }
 
     model.screens.push_back(std::move(screen));
@@ -242,49 +269,34 @@ MenuUiModel BuildEditorFallbackMenu(bool terrain_expanded,
     return model;
 }
 
-EditorMenu LoadEditorMenu(const std::string& game_root, bool terrain_expanded,
-                          const MenuUiBuildOptions& options) {
-    EditorMenu result;
-    const std::string path = game_root + "/" + kRetailMenuRelativePath;
+// Fills `menu.model` from `menu.definition` (and `menu.game_root` /
+// `menu.terrain_expanded`), recording in `menu` whether that was the retail tree
+// or the documented fallback.  `menu.definition` is never re-read here, so an
+// unsaved edit survives a rebuild.
+void BuildModelInto(EditorMenu& menu, const MenuUiBuildOptions& options) {
+    menu.model = MenuUiModel{};
+    menu.retail = false;
+    menu.fallback = false;
+    menu.language.clear();
+    menu.label_stats = EditorMenuLabelStats{};
 
-    if (game_root.empty() || !IsReadableFile(path)) {
-        result.model = BuildEditorFallbackMenu(terrain_expanded, options);
-        result.fallback = true;
-        result.reason = "retail menu file not found: " + path;
-        result.model.fallback_reason = result.reason;
-        return result;
+    if (!menu.definition.ok) {
+        menu.model = BuildEditorFallbackMenu(menu.terrain_expanded, options);
+        menu.fallback = true;
+        menu.model.fallback_reason = menu.reason;
+        return;
     }
 
-    // One reader, the supported path (source/menu/qvm_image.h).  A second, more
-    // forgiving reader here would mask a parser regression instead of surfacing it,
-    // so a failure falls through to the documented fallback and the error is kept.
-    MenuDefinition definition = MenuDefinition::FromQvmFile(path);
-    result.reader = "MenuDefinition::FromQvmFile";
-
-    if (!definition.ok) {
-        result.model = BuildEditorFallbackMenu(terrain_expanded, options);
-        result.fallback = true;
-        result.reason = "retail menu file could not be read (" + path + "): " + definition.error;
-        result.model.fallback_reason = result.reason;
-        return result;
-    }
-
-    MenuUiModel model = BuildMenuUiModel(definition, options);
+    MenuUiModel model = BuildMenuUiModel(menu.definition, options);
     if (!model.ok) {
-        result.model = BuildEditorFallbackMenu(terrain_expanded, options);
-        result.fallback = true;
-        result.reason =
-            "retail menu definition has no usable screen (" + path + "): " + model.error;
-        result.model.fallback_reason = result.reason;
-        return result;
+        const std::string definition_error = model.error;
+        menu.reason = "retail menu definition has no usable screen (" +
+                      menu.definition.source + "): " + definition_error;
+        menu.model = BuildEditorFallbackMenu(menu.terrain_expanded, options);
+        menu.fallback = true;
+        menu.model.fallback_reason = menu.reason;
+        return;
     }
-
-    // Keep the definition the model was built from so the menu can be edited and
-    // saved back through `menu/menu_qvm_writer.h`.  A fallback never reaches here,
-    // so `definition.ok` is true exactly when the retail file was read -- and the
-    // writer refuses a definition that is not ok, so a fallback menu can never
-    // overwrite the retail file.
-    result.definition = definition;
 
     // Editor wiring.  A retail item with no editor behaviour stays in the item
     // list and reports why it is inert.
@@ -303,7 +315,7 @@ EditorMenu LoadEditorMenu(const std::string& game_root, bool terrain_expanded,
         }
     }
 
-    // ── the one deliberate addition ──────────────────────────────────────────
+    // ── the deliberate additions ─────────────────────────────────────────────
     // The retail definition declares no editor function, so a retail-only menu
     // would make Save Level, Weather, Lightmap, Logging and the rest unreachable
     // on every real install.  The editor's functions are therefore kept reachable
@@ -320,7 +332,19 @@ EditorMenu LoadEditorMenu(const std::string& game_root, bool terrain_expanded,
             break;
         }
     }
-    MenuUiModel editor_screen = BuildEditorFallbackMenu(terrain_expanded, options);
+
+    // The editor's own screen, plus the three rows that are the live menu's write
+    // side (issue #74): open the loaded retail screens, edit the loaded tree, and
+    // save it back.  They exist only when a retail definition was loaded -- with
+    // no definition there is nothing to open, edit or save, which is why the
+    // fallback proper has none of them.
+    const std::vector<EditorAddedRow> editor_added_rows = {
+        {kGameMenuLabel, MenuUiAction::OpenGameMenu, "game-menu"},
+        {kMenuTextLabel, MenuUiAction::EditMenuText, "edit-menu-text"},
+        {kSaveMenuLabel, MenuUiAction::SaveMenu, "save-menu"},
+    };
+    MenuUiModel editor_screen =
+        BuildEditorFallbackMenu(menu.terrain_expanded, options, editor_added_rows);
     if (editor_screen.ok && !editor_screen.screens.empty()) {
         MenuUiScreen options_screen = std::move(editor_screen.screens.front());
         options_screen.id = kEditorOptionsScreenId;
@@ -328,7 +352,6 @@ EditorMenu LoadEditorMenu(const std::string& game_root, bool terrain_expanded,
         options_screen.name = kEditorOptionsLabel;
         options_screen.popup = false;
         options_screen.editor_added = true;
-        const int options_index = static_cast<int>(model.screens.size());
         model.screens.push_back(std::move(options_screen));
 
         if (main_screen >= 0) {
@@ -396,9 +419,9 @@ EditorMenu LoadEditorMenu(const std::string& game_root, bool terrain_expanded,
     {
         menu_text::LanguageResources resources;
         std::string res_error;
-        if (resources.AddLanguageDirectory(game_root, resources.language_name(), res_error)) {
-            result.language = resources.language_name();
-            result.label_stats.language_data_loaded = true;
+        if (resources.AddLanguageDirectory(menu.game_root, resources.language_name(), res_error)) {
+            menu.language = resources.language_name();
+            menu.label_stats.language_data_loaded = true;
             menu_text::LookupCounters counters;
 
             for (MenuUiScreen& screen : model.screens) {
@@ -415,33 +438,192 @@ EditorMenu LoadEditorMenu(const std::string& game_root, bool terrain_expanded,
                     entry.display_label = r.text;
                     entry.label_resolved = r.resolved();
                     counters.Add(r);
-                    ++result.label_stats.labels;
+                    ++menu.label_stats.labels;
                 }
             }
 
-            result.label_stats.resolved = counters.resolved();
-            result.label_stats.engine_path = counters.engine_path;
-            result.label_stats.final_component = counters.final_component;
-            result.label_stats.engine_miss = counters.engine_miss;
-            result.label_stats.no_language_data = counters.no_language_data;
+            menu.label_stats.resolved = counters.resolved();
+            menu.label_stats.engine_path = counters.engine_path;
+            menu.label_stats.final_component = counters.final_component;
+            menu.label_stats.engine_miss = counters.engine_miss;
+            menu.label_stats.no_language_data = counters.no_language_data;
 
-            if (result.label_stats.engine_miss > 0) {
+            if (menu.label_stats.engine_miss > 0) {
                 model.warnings.push_back(
                     "language archive has no entry for " +
-                    std::to_string(result.label_stats.engine_miss) +
+                    std::to_string(menu.label_stats.engine_miss) +
                     " retail label(s); the engine draws its \"RM: <key>\" miss string");
             }
         } else {
             model.warnings.push_back(
-                "no language archive under " + game_root + "/LANGUAGE (" +
+                "no language archive under " + menu.game_root + "/LANGUAGE (" +
                 (res_error.empty() ? std::string("not found") : res_error) +
                 "); retail labels stay as their script keys");
         }
     }
 
-    result.model = std::move(model);
-    result.retail = true;
-    result.fallback = false;
+    menu.model = std::move(model);
+    menu.retail = true;
+    menu.fallback = false;
+    menu.reason.clear();
+    menu.model.fallback_reason.clear();
+}
+
+bool RebuildEditorMenuModel(EditorMenu& menu, const MenuUiBuildOptions& options) {
+    // Where the user is, so a rebuild caused by a row's own action does not move
+    // the menu (the terrain toggle and the font toggle both rebuild).
+    int current_screen_id = 0;
+    int current_item = menu.model.item_index;
+    std::vector<int> screen_stack = menu.model.screen_stack;
+    if (const MenuUiScreen* current = menu.model.CurrentScreen()) {
+        current_screen_id = current->id;
+    }
+
+    const MenuUiModel previous = menu.model;
+    BuildModelInto(menu, options);
+    if (!menu.model.ok) {
+        menu.model = previous;
+        return false;
+    }
+
+    // `MenuManager_RequestScreen` / `MenuManager_PushScreen` address a screen by
+    // its task id (src/game/menumanager.c:216-235); the editor's own fallback
+    // screen carries id 0, which is not addressable and is the only screen there.
+    if (current_screen_id != 0) {
+        menu.model.OpenScreen(current_screen_id);
+    }
+    const int count = menu.model.SelectableCount();
+    if (count == 0) {
+        menu.model.item_index = -1;
+    } else {
+        menu.model.item_index = std::max(0, std::min(current_item, count - 1));
+    }
+    menu.model.screen_stack = std::move(screen_stack);
+    return true;
+}
+
+bool OpenEditorPauseMenu(EditorMenu& menu) {
+    // A retail definition's model carries the editor's own screen under
+    // `kEditorOptionsScreenId`; the fallback model's only screen is already the
+    // editor's row list (id 0, which `MenuUiModel::OpenScreen` refuses by design).
+    if (menu.model.FindScreen(kEditorOptionsScreenId) == nullptr) {
+        return menu.model.ok;
+    }
+    return menu.model.OpenScreen(kEditorOptionsScreenId);
+}
+
+namespace {
+
+// The first plain `MenuText` with a `Text Resource` value, depth first.  On the
+// retail in-game menu's main screen that is the title the engine draws inside the
+// title `MenuFrame` (`MAKE_LABEL`, src/menuscreen/menutext.c:126-149).
+MenuWidget* FirstTextWidget(MenuWidget& widget) {    if (widget.type == "MenuText" && widget.FindValue(menu_field::kTextResource) != nullptr) {
+        return &widget;
+    }
+    for (MenuWidget& child : widget.children) {
+        if (MenuWidget* found = FirstTextWidget(child)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+}  // namespace
+
+bool EditEditorMenuText(EditorMenu& menu, const MenuUiBuildOptions& options,
+                        std::string* error) {
+    if (!menu.definition.ok) {
+        if (error != nullptr) {
+            *error = "the menu was not built from a retail container (" +
+                     (menu.reason.empty() ? std::string("no definition") : menu.reason) + ")";
+        }
+        return false;
+    }
+
+    // The screen the manager opens: the script's own "Current menuscreen", which
+    // `MenuManager_New` HOOK 0x418B00 opens (src/menu/menumanager.c:713-790).
+    MenuWidget* screen = nullptr;
+    if (menu.model.declared_screen_id != 0) {
+        screen = menu.definition.FindById(menu.model.declared_screen_id);
+    }
+    if (screen == nullptr) {
+        screen = menu.definition.FindByType("MenuScreen");
+    }
+    if (screen == nullptr) {
+        if (error != nullptr) {
+            *error = "the retail definition declares no MenuScreen to edit";
+        }
+        return false;
+    }
+
+    MenuWidget* text = FirstTextWidget(*screen);
+    if (text == nullptr) {
+        if (error != nullptr) {
+            *error = "the retail main screen declares no MenuText to edit";
+        }
+        return false;
+    }
+    MenuValue* value = text->FindValue(menu_field::kTextResource);
+    if (value == nullptr || value->kind != MenuValueKind::String) {
+        if (error != nullptr) {
+            *error = "the retail main screen's text widget has no string Text Resource";
+        }
+        return false;
+    }
+
+    // The next string of the editor's own cycle.  The current value is looked up
+    // first, so the edit cycles the editor's strings and never guesses at what the
+    // game's text should become.
+    const char* next = kEditorMenuTitleCycle[0];
+    for (int i = 0; i < kEditorMenuTitleCycleCount; ++i) {
+        if (value->text == kEditorMenuTitleCycle[i]) {
+            next = kEditorMenuTitleCycle[(i + 1) % kEditorMenuTitleCycleCount];
+            break;
+        }
+    }
+    value->text = next;
+
+    if (!RebuildEditorMenuModel(menu, options)) {
+        if (error != nullptr) {
+            *error = "the edited definition could not be built into a menu model";
+        }
+        return false;
+    }
+    return true;
+}
+
+EditorMenu LoadEditorMenu(const std::string& game_root, bool terrain_expanded,
+                          const MenuUiBuildOptions& options) {
+    EditorMenu result;
+    result.game_root = game_root;
+    result.terrain_expanded = terrain_expanded;
+    const std::string path = game_root + "/" + kRetailMenuRelativePath;
+
+    if (game_root.empty() || !IsReadableFile(path)) {
+        result.reason = "retail menu file not found: " + path;
+        BuildModelInto(result, options);
+        return result;
+    }
+
+    // One reader, the supported path (source/menu/qvm_image.h).  A second, more
+    // forgiving reader here would mask a parser regression instead of surfacing it,
+    // so a failure falls through to the documented fallback and the error is kept.
+    MenuDefinition definition = MenuDefinition::FromQvmFile(path);
+    result.reader = "MenuDefinition::FromQvmFile";
+
+    if (!definition.ok) {
+        result.reason = "retail menu file could not be read (" + path + "): " + definition.error;
+        BuildModelInto(result, options);
+        return result;
+    }
+
+    // Keep the definition the model was built from so the menu can be edited and
+    // saved back through `menu/menu_qvm_writer.h`.  A fallback never reaches here,
+    // so `definition.ok` is true exactly when the retail file was read -- and the
+    // writer refuses a definition that is not ok, so a fallback menu can never
+    // overwrite the retail file.
+    result.definition = std::move(definition);
+    BuildModelInto(result, options);
     return result;
 }
 

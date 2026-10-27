@@ -54,6 +54,7 @@
 
 #include "menu/qvm_image.h"
 #include "runtime/pause_menu_layout.h"
+#include "runtime/pause_menu_rows.h"
 #include "runtime/pause_menu_style.h"
 
 namespace {
@@ -191,23 +192,230 @@ TEST(PauseMenuRetailStyle, DrawnTextLandsOnTheRetailRowLines) {
 }
 
 TEST(PauseMenuRetailStyle, RowsStayInsideThePanelAtEveryViewport) {
-    for (int height : {480, 600, 720, 900, 1080, 1440}) {
-        for (int width : {640, 1280, 1920}) {
-            for (bool expanded : {false, true}) {
-                const igi::PauseMenuLayout layout =
-                    igi::BuildPauseMenuLayout(width, height, expanded, igi::kRetailFontLineHeight);
-                EXPECT_GE(layout.menu_top, 0);
-                EXPECT_LE(layout.menu_top + layout.menu_height, height);
-                EXPECT_LE(layout.menu_left + layout.menu_width, width);
-                EXPECT_EQ(layout.row_count, igi::PauseMenuRowCount(expanded));
-                const int last = igi::PauseMenuRowCenter(layout, layout.row_count - 1);
-                EXPECT_TRUE(igi::IsPauseMenuRowHit(layout, layout.row_count - 1, last));
-                EXPECT_LE(last, layout.menu_top + layout.menu_height);
-                // Consecutive hit bands never overlap, so one y is one row.
-                EXPECT_LT(2 * layout.row_hit_radius, layout.row_height);
+    // `extra_rows` is the live menu's write side: the editor's own screen grows by
+    // `kPauseMenuEditorExtraRows` rows when a retail definition is loaded
+    // (source/app_menu.cpp), which is what makes the row list long enough for the
+    // pitch to be squeezed below the editor's minimum on a short viewport.
+    for (int extra : {0, igi::kPauseMenuEditorExtraRows}) {
+        for (int height : {480, 600, 720, 900, 1080, 1440}) {
+            for (int width : {640, 1280, 1920}) {
+                for (bool expanded : {false, true}) {
+                    const igi::PauseMenuLayout layout = igi::BuildPauseMenuLayout(
+                        width, height, expanded, igi::kRetailFontLineHeight, extra);
+                    EXPECT_GE(layout.menu_top, 0);
+                    EXPECT_LE(layout.menu_top + layout.menu_height, height);
+                    EXPECT_LE(layout.menu_left + layout.menu_width, width);
+                    EXPECT_EQ(layout.row_count, igi::PauseMenuRowCount(expanded) + extra);
+                    const int last = igi::PauseMenuRowCenter(layout, layout.row_count - 1);
+                    EXPECT_TRUE(igi::IsPauseMenuRowHit(layout, layout.row_count - 1, last));
+                    // The row's hit band — and therefore the row the model draws —
+                    // is inside the panel, not below its bottom edge.
+                    EXPECT_LE(last + layout.row_hit_radius,
+                              layout.menu_top + layout.menu_height);
+                    // Consecutive hit bands never overlap, so one y is one row.
+                    EXPECT_LT(2 * layout.row_hit_radius, layout.row_height);
+                }
             }
         }
     }
+}
+
+TEST(PauseMenuRetailStyle, ExtraRowsGrowThePanelAndKeepTheRetailPitchWhenItFits) {
+    const igi::PauseMenuLayout plain =
+        igi::BuildPauseMenuLayout(1920, 1080, false, igi::kRetailFontLineHeight);
+    const igi::PauseMenuLayout extended = igi::BuildPauseMenuLayout(
+        1920, 1080, false, igi::kRetailFontLineHeight, igi::kPauseMenuEditorExtraRows);
+    EXPECT_EQ(plain.row_count, igi::PauseMenuRowCount(false));
+    EXPECT_EQ(extended.row_count,
+              igi::PauseMenuRowCount(false) + igi::kPauseMenuEditorExtraRows);
+    // A viewport that fits the retail pitch keeps it, whatever the row count.
+    EXPECT_EQ(plain.row_height, igi::kRetailRowPitch);
+    EXPECT_EQ(extended.row_height, igi::kRetailRowPitch);
+    EXPECT_EQ(extended.menu_width, plain.menu_width);
+    EXPECT_EQ(extended.menu_left, plain.menu_left);
+    EXPECT_GT(extended.menu_height, plain.menu_height);
+}
+
+TEST(PauseMenuRetailStyle, SpinnerGroupIsTheSameFromALayoutOrAPanelRect) {
+    const igi::PauseMenuLayout layout =
+        igi::BuildPauseMenuLayout(1920, 1080, false, igi::kRetailFontLineHeight);
+    const int row_y = igi::PauseMenuRowCenter(layout, 3);
+    const igi::PauseMenuSpinner from_layout =
+        igi::BuildPauseMenuSpinner(layout, row_y, 60, 44);
+    const igi::PauseMenuSpinner from_panel = igi::BuildPauseMenuSpinner(
+        layout.menu_left, layout.menu_width, row_y, layout.row_hit_radius, 60, 44);
+    EXPECT_EQ(from_layout.group_left, from_panel.group_left);
+    EXPECT_EQ(from_layout.group_width, from_panel.group_width);
+    EXPECT_EQ(from_layout.minus_left, from_panel.minus_left);
+    EXPECT_EQ(from_layout.value_left, from_panel.value_left);
+    EXPECT_EQ(from_layout.plus_left, from_panel.plus_left);
+    EXPECT_EQ(from_layout.row_y, from_panel.row_y);
+    EXPECT_EQ(from_layout.row_hit_radius, from_panel.row_hit_radius);
+    EXPECT_EQ(from_layout.group_left + from_layout.group_width,
+              layout.menu_left + (layout.menu_width + from_layout.group_width) / 2);
+    EXPECT_TRUE(igi::IsPauseMenuSpinnerHit(from_layout, from_layout.group_left));
+    EXPECT_TRUE(igi::IsPauseMenuSpinnerHit(from_layout,
+                                           from_layout.group_left + from_layout.group_width - 1));
+    EXPECT_FALSE(igi::IsPauseMenuSpinnerHit(from_layout, from_layout.group_left - 1));
+}
+
+// ─── the live rows of the loaded menu tree (#74) ────────────────────────────
+//
+// The live pause menu's rows come from the loaded menu tree, and each editor row
+// carries the editor behaviour it is wired to (`MenuUiEntry::editor_action`,
+// source/menu/menu_ui.h).  The label the row is DRAWN with and the label the click
+// test MEASURES for the spinner group come from one function
+// (source/runtime/pause_menu_rows.h), so a row cannot be drawn at one place and
+// clicked at another.
+
+TEST(PauseMenuRows, LiveLabelsAreTheEditorsOwnStrings) {
+    igi::PauseMenuRowState state;
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::Resume, state), "Resume");
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::Quit, state), "Quit");
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::SaveLevel, state), "Save Level");
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ResetLevel, state), "Reset Level");
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::CalculateLightmaps, state),
+              "Calculate Lightmaps");
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::SelectLevel, state), "Select Level");
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::CycleLogLevel, state), "Log Level");
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::AdjustFogIntensity, state),
+              "Fog Intensity");
+
+    // The editor's own added rows (source/menu/menu_ui.h): the game menu, the menu
+    // text edit and the menu save.
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::OpenGameMenu, state),
+              igi::app_menu::kGameMenuLabel);
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::EditMenuText, state),
+              igi::app_menu::kMenuTextLabel);
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::SaveMenu, state),
+              igi::app_menu::kSaveMenuLabel);
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::OpenEditorOptions, state),
+              igi::app_menu::kEditorOptionsLabel);
+
+    // A retail row is drawn from the definition, so this mapping has nothing to
+    // say about it.
+    EXPECT_TRUE(igi::PauseMenuRowLabel(igi::MenuUiAction::None, state).empty());
+}
+
+TEST(PauseMenuRows, StateIsAppendedToTheRowLabel) {
+    igi::PauseMenuRowState state;
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleMode, state), "Mode: [Editor]");
+    state.in_game_mode = true;
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleMode, state), "Mode: [Game Play]");
+    state.in_game_mode = false;
+
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleCollision, state),
+              "Collision: [Clip]");
+    state.noclip = false;
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleCollision, state),
+              "Collision: [Normal]");
+    state.noclip = true;
+
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleFont, state), "Font: System");
+    state.use_editor_font = true;
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleFont, state), "Font: Editor");
+    state.use_editor_font = false;
+
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleAutoSave, state),
+              "Save Disable");
+    state.auto_save_enabled = true;
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleAutoSave, state), "Save Enable");
+
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleLogging, state), "[ ] Logging");
+    state.logging_enabled = true;
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleLogging, state), "[X] Logging");
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleMusic, state), "[ ] Music");
+    state.music_on = true;
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleMusic, state), "[X] Music");
+
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::CycleWeather, state),
+              "Weather: [Default]");
+    state.weather_mode = 1;
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::CycleWeather, state), "Weather: [Rain]");
+    state.weather_mode = 2;
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::CycleWeather, state), "Weather: [Snow]");
+    state.weather_mode = 3;
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::CycleWeather, state), "Weather: [OFF]");
+    state.weather_mode = 0;
+
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleLightmaps, state),
+              "Lightmap: [Default]");
+    state.lightmap_mode = "Baked";
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleLightmaps, state),
+              "Lightmap: [Baked]");
+
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleTerrainOptions, state),
+              "Terrain Options: [+]");
+    state.terrain_expanded = true;
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleTerrainOptions, state),
+              "Terrain Options: [-]");
+
+    // The terrain checkboxes keep the two-space indent they have always been drawn
+    // with, so the label and the row it is centred in do not move.
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleTerrainTexture, state),
+              "  [ ] Texture");
+    state.terrain_texture = true;
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleTerrainTexture, state),
+              "  [X] Texture");
+    state.terrain_height = true;
+    state.terrain_discard = true;
+    state.terrain_fog = true;
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleTerrainHeight, state),
+              "  [X] Height");
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleTerrainDiscard, state),
+              "  [X] Discard");
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleTerrainFog, state), "  [X] Fog");
+}
+
+TEST(PauseMenuRows, SpinnerRowsAreTheOnesWithAValueBox) {
+    // The five spinner rows and the widths the pause menu has always used: font
+    // size and level and auto-save at 44, log level at 78, fog intensity at 56.
+    EXPECT_EQ(igi::PauseMenuSpinnerValueWidth(igi::MenuUiAction::ToggleFont), 44);
+    EXPECT_EQ(igi::PauseMenuSpinnerValueWidth(igi::MenuUiAction::SelectLevel), 44);
+    EXPECT_EQ(igi::PauseMenuSpinnerValueWidth(igi::MenuUiAction::ToggleAutoSave), 44);
+    EXPECT_EQ(igi::PauseMenuSpinnerValueWidth(igi::MenuUiAction::CycleLogLevel), 78);
+    EXPECT_EQ(igi::PauseMenuSpinnerValueWidth(igi::MenuUiAction::AdjustFogIntensity), 56);
+    for (igi::MenuUiAction action : {igi::MenuUiAction::ToggleFont,
+                                     igi::MenuUiAction::SelectLevel,
+                                     igi::MenuUiAction::ToggleAutoSave,
+                                     igi::MenuUiAction::CycleLogLevel,
+                                     igi::MenuUiAction::AdjustFogIntensity}) {
+        EXPECT_TRUE(igi::PauseMenuRowHasSpinner(action)) << igi::MenuUiActionName(action);
+    }
+    // Every other row is a plain row: no value box, so nothing to click inside it.
+    for (igi::MenuUiAction action : {igi::MenuUiAction::Resume, igi::MenuUiAction::ToggleMode,
+                                     igi::MenuUiAction::ToggleCollision,
+                                     igi::MenuUiAction::ToggleLogging,
+                                     igi::MenuUiAction::ToggleMusic,
+                                     igi::MenuUiAction::CycleWeather,
+                                     igi::MenuUiAction::ToggleLightmaps,
+                                     igi::MenuUiAction::CalculateLightmaps,
+                                     igi::MenuUiAction::ToggleTerrainOptions,
+                                     igi::MenuUiAction::ToggleTerrainTexture,
+                                     igi::MenuUiAction::ToggleTerrainHeight,
+                                     igi::MenuUiAction::ToggleTerrainDiscard,
+                                     igi::MenuUiAction::ToggleTerrainFog,
+                                     igi::MenuUiAction::ResetLevel, igi::MenuUiAction::SaveLevel,
+                                     igi::MenuUiAction::Quit,
+                                     igi::MenuUiAction::OpenEditorOptions,
+                                     igi::MenuUiAction::OpenGameMenu,
+                                     igi::MenuUiAction::EditMenuText,
+                                     igi::MenuUiAction::SaveMenu, igi::MenuUiAction::None}) {
+        EXPECT_FALSE(igi::PauseMenuRowHasSpinner(action)) << igi::MenuUiActionName(action);
+        EXPECT_EQ(igi::PauseMenuSpinnerValueWidth(action), 0)
+            << igi::MenuUiActionName(action);
+    }
+}
+
+TEST(PauseMenuRows, LogLevelNameIsTheEngineIndependentLabel) {
+    EXPECT_STREQ(igi::PauseMenuLogLevelName(igi::kLogLevelDebug), "DEBUG");
+    EXPECT_STREQ(igi::PauseMenuLogLevelName(igi::kLogLevelInfo), "INFO");
+    EXPECT_STREQ(igi::PauseMenuLogLevelName(igi::kLogLevelWarning), "WARNING");
+    EXPECT_STREQ(igi::PauseMenuLogLevelName(igi::kLogLevelError), "ERROR");
+    EXPECT_STREQ(igi::PauseMenuLogLevelName(igi::kLogLevelFatal), "FATAL");
+    // Out-of-range values clamp, exactly like `igi::ClampLogLevel`.
+    EXPECT_STREQ(igi::PauseMenuLogLevelName(-5), "DEBUG");
+    EXPECT_STREQ(igi::PauseMenuLogLevelName(99), "FATAL");
 }
 
 // ─── colours ────────────────────────────────────────────────────────────────

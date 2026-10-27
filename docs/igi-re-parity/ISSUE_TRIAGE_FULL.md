@@ -385,16 +385,21 @@ the retail file cannot be overwritten by the editor's own rows. Tests:
 `MenuQvmWrite` (8, `tests/test_menu_qvm.cpp`) and `MenuUiSave` (3,
 `tests/test_menu_ui.cpp`). See `MENU_SYSTEM.md` §11.
 
-**What remains.** The issue's first two acceptance criteria: the *live* pause menu is
-still the hand-drawn one (`source/runtime/pause_menu_style.h`); `LoadEditorMenu` is
-reached only by tests, so no UI tree edits `EditorMenu::definition` yet. Acceptance
-criterion 3 ("the game loads the modified menu") cannot be run on this host — the
-strongest verified claim is byte-identity plus the engine's loader validation and the
-repository's reader round-trip.
-
-**Next action.** Wire `LoadEditorMenu`/`SaveEditorMenu` into the pause menu and give
-the editor options screen a menu-tree edit action that mutates `EditorMenu::definition`
-through the mutable accessors in `source/menu/qvm_image.h`.
+**What remains: nothing on the editor's side; criterion 3 is unverifiable here.**
+The first two acceptance criteria are now met by the live menu: the pause menu the
+editor draws *is* the loaded tree (`source/app_pause_menu.cpp`,
+`source/renderer/renderer_draw.cpp`, `source/app_input_mouse.cpp`,
+`source/app_input_keyboard.cpp`), its `Menu Text` row edits
+`EditorMenu::definition` through the mutable accessors of `source/menu/qvm_image.h`
+and rebuilds the model, and its `Save Menu` row calls `app_menu::SaveEditorMenu`.
+Verified under Wine on the i686 editor: the log records
+`pause menu: loaded <IGI>/menusystem/ingamemenu.qvm (9 screens, screen 900 has 6 rows,
+editor screen -2000)`, a click on `Menu Text` records the edit, a click on
+`Save Menu` writes the container, and the written file contains `IGI EDITOR` where
+the shipped one has `Game Paused` (11307 bytes vs 11308). `MENU_UI.md` "The live
+wiring" has the full record. Acceptance criterion 3 ("the game loads the modified
+menu") still cannot be run on this host — the strongest claim remains byte-identity
+for an unedited save plus the engine's loader rules and the repository's reader.
 
 ---
 

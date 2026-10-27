@@ -11,7 +11,17 @@ them.
 The editor's own strings are untouched: the panel still says "IGI EDITOR",
 "PAUSED", "Resume", "Mode: [Game Play]", … The game's text ("Game Paused",
 "Resume Game", "Restart Game", "Sound", "Controls", "Quit to Main Menu") is **not**
-used anywhere.
+used anywhere *as one of the editor's own rows*.
+
+One thing did change after this document was written: the ROW LIST is no longer
+hard-coded in the renderer. It is the loaded menu tree
+(`igi::app_menu::EditorMenu`, issue #74's live wiring — see `MENU_UI.md` "The live
+wiring"), and the editor's own screen is one screen of it. That is also why the
+game's text is now *reachable*: the editor's screen carries a `Game Menu` row that
+opens the definition's own screen 900, which the draw layer renders from the
+definition — its title, its five items and their colours — because that is what the
+engine draws there. The editor's own rows, and the strings in this file, are
+unchanged.
 
 ## TL;DR
 

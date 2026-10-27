@@ -172,6 +172,12 @@ enum class MenuUiAction {
     Quit,
     // Editor-only: opens the editor's own options screen (app_menu's added entry).
     OpenEditorOptions,
+    // Editor-only, on the editor's own screen: opens the loaded retail screens
+    // (the in-game menu's own screen 900 and, from it, the editor's screen again),
+    // edits the loaded definition's text, and writes the definition back.
+    OpenGameMenu,
+    EditMenuText,
+    SaveMenu,
 };
 
 const char* MenuUiActionName(MenuUiAction action);
@@ -395,6 +401,33 @@ inline constexpr char kRetailMenuRelativePath[] = "menusystem/ingamemenu.qvm";
 inline constexpr int kEditorOptionsScreenId = -2000;
 inline constexpr char kEditorOptionsLabel[] = "Editor Options";
 
+// The three entries the editor appends to its OWN screen when the retail
+// definition is loaded.  They are the live menu's write side (issue #74): the
+// entry that opens the loaded retail screens, the menu-tree edit, and the save
+// back to the container.  They are editor strings and editor-added rows; the
+// retail definition declares none of them, and without a retail definition
+// (`fallback == true`) none of them exists, because there is nothing to open,
+// edit or save.
+inline constexpr char kGameMenuLabel[] = "Game Menu";
+inline constexpr char kMenuTextLabel[] = "Menu Text";
+inline constexpr char kSaveMenuLabel[] = "Save Menu";
+
+// How many rows those add to the editor's own screen (the panel grows by them,
+// `kPauseMenuEditorExtraRows`, source/runtime/pause_menu_layout.h).
+constexpr int kEditorAddedRowCount = 3;
+
+// The strings `EditEditorMenuText` cycles the retail main screen's title text
+// through, in order.  They are the EDITOR's own strings: the retail menu's text
+// is data the editor may change, and the editor never writes the game's text back
+// into its own UI (see docs/igi-re-parity/PAUSE_MENU_STYLE.md).
+inline constexpr const char* kEditorMenuTitleCycle[] = {
+    "IGI EDITOR",
+    "IGI EDITOR PAUSED",
+    "IGI LEVEL EDITOR",
+};
+constexpr int kEditorMenuTitleCycleCount =
+    static_cast<int>(sizeof(kEditorMenuTitleCycle) / sizeof(kEditorMenuTitleCycle[0]));
+
 // How many of an `EditorMenu`'s labels resolved against the language archives.
 // Mirrors `menu_text::LookupCounters` as plain counts, so this header does not have
 // to pull in the .RES reader.
@@ -424,6 +457,16 @@ struct EditorMenu {
     // Empty / all-zero when no language archive was found.
     std::string language;
     EditorMenuLabelStats label_stats;
+
+    // What `model` was built from, so the LIVE menu can rebuild it without
+    // re-reading the file: `RebuildEditorMenuModel` keeps `definition` (and any
+    // unsaved edit in it) and only re-derives the presentation model.  The live
+    // menu rebuilds when the editor's font changes (a text window's size is its
+    // rendered label, `MAKE_LABEL`, src/menuscreen/menutext.c:126-149, so the
+    // retail rows move with the metrics) and when the terrain section toggles
+    // (the editor's own row list grows).
+    std::string game_root;
+    bool terrain_expanded = false;
 };
 
 // Loads `game_root/menusystem/ingamemenu.qvm` and builds the editor menu from it.
@@ -460,8 +503,50 @@ bool SaveEditorMenu(const EditorMenu& menu, const std::string& path, std::string
 // the menu.  Labels are the rows' state-independent base names; the live state
 // suffix (`Mode: [Editor]`, `Weather: [Rain]`, ...) is still appended by the draw
 // layer, exactly as before.
+//
+// `added_rows` are editor-added rows appended after the editor's own list (the
+// live menu's "Game Menu" / "Menu Text" / "Save Menu" when a retail definition is
+// loaded); the panel grows by them.  Empty for the fallback proper, which has
+// nothing to open, edit or save.
+struct EditorAddedRow {
+    const char* label = "";
+    MenuUiAction action = MenuUiAction::None;
+    const char* widget_name = "";
+};
+
 MenuUiModel BuildEditorFallbackMenu(bool terrain_expanded,
-                                    const MenuUiBuildOptions& options);
+                                    const MenuUiBuildOptions& options,
+                                    const std::vector<EditorAddedRow>& added_rows = {});
+
+// Rebuilds `menu.model` from `menu.definition` (which is kept, so an unsaved edit
+// survives the rebuild) and `menu.game_root` / `menu.terrain_expanded`, re-running
+// the same wiring `LoadEditorMenu` does.  The current screen and the focused item
+// are preserved, so a rebuild caused by a row's own action does not move the menu.
+// Returns false (and leaves the model as it was) when the model cannot be built.
+bool RebuildEditorMenuModel(EditorMenu& menu, const MenuUiBuildOptions& options);
+
+// The screen the LIVE pause menu opens on: the editor's own screen when a retail
+// definition was loaded (so the editor's own strings are what the user sees, and
+// the loaded retail screens are one entry away), or the single fallback screen
+// otherwise.  The model itself keeps the definition's declared screen
+// (`MenuUiModel::declared_screen_id`); this is the editor's presentation choice.
+bool OpenEditorPauseMenu(EditorMenu& menu);
+
+// The menu-tree edit the editor's own screen exposes ("Menu Text"): sets the
+// retail main screen's title `Text Resource` to the next string of
+// `kEditorMenuTitleCycle` through the MUTABLE accessors of `MenuDefinition`
+// (`qvm_image.h`), then rebuilds `menu.model` so the change is drawn.  The
+// definition is the one `SaveEditorMenu` writes, so the edit is what lands.
+//
+// ORACLE for the widget it edits: the title the engine draws is a `MenuText` in a
+// `MenuFrame` on the screen the manager opens (`MAKE_LABEL`, src/menuscreen/
+// menutext.c:126-149, resolves its `Text Resource` through
+// `MenuManager_GetString` HOOK 0x418EA0, src/menu/menumanager.c:832-852).
+//
+// Returns false, with `*error` set, when the menu was not built from a retail
+// container or the main screen declares no text widget.
+bool EditEditorMenuText(EditorMenu& menu, const MenuUiBuildOptions& options,
+                        std::string* error);
 
 // The editor behaviour an item is wired to, from its retail "On Click Script":
 //   `MenuManager_LeaveMenus(<id>, MENUMANAGER_IDLE)`         -> Resume

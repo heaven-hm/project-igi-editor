@@ -487,6 +487,14 @@ or to the definition's own `source` when the path is empty, and refuses a menu t
 was not built from a retail container — a fallback menu can never overwrite
 `ingamemenu.qvm`.
 
+**The write side is live.** The editor's pause menu is the loaded tree
+(`source/app_pause_menu.cpp`, `source/renderer/renderer_draw.cpp`), and its
+`Menu Text` and `Save Menu` rows are `app_menu::EditEditorMenuText` (an edit through
+`MenuDefinition`'s mutable accessors, then a model rebuild) and
+`app_menu::SaveEditorMenu`. A Wine run of the i686 editor clicked both rows and the
+container on disk came back with the edit in it (11307 bytes, `IGI EDITOR` present,
+`Game Paused` gone); see `MENU_UI.md` "The live path, verified under Wine".
+
 ### What is verified
 
 `tests/test_menu_qvm.cpp` (suite `MenuQvmWrite`, 8 tests) and `tests/test_menu_ui.cpp`

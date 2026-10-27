@@ -17,6 +17,9 @@
 #include "../level/task_schema.h"
 #include "../mission_state.h"
 #include "../runtime/runtime_renderer.h"
+// The live pause menu's model and its panel geometry (see task_tree_view_params_s).
+#include "../menu/menu_ui.h"
+#include "../runtime/pause_menu_layout.h"
 #include "graph_writer.h"
 #include <functional>
 
@@ -566,6 +569,16 @@ public:
 		float            flash_effect_strength_ = 0.0f;
 		float            muzzle_flash_strength_ = 0.0f;
 		float            player_damage_effect_strength_ = 0.0f;
+
+		// ── the live pause menu (#74) ───────────────────────────────────────────
+		// The rows the pause menu draws are the loaded menu tree, not a hard-coded
+		// list: `pause_menu_model_` is `app_menu::EditorMenu::model`
+		// (source/menu/menu_ui.h, built from <IGI>/menusystem/ingamemenu.qvm) and
+		// `pause_menu_layout_` is the editor's own panel for the current row count,
+		// which the title band and the spinner furniture are placed from.  Null
+		// outside pause mode.
+		const igi::MenuUiModel* pause_menu_model_ = nullptr;
+		igi::PauseMenuLayout pause_menu_layout_{};
 	};
 
 

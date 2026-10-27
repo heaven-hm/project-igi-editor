@@ -84,13 +84,21 @@ constexpr int PauseMenuRowCount(bool terrainOptionsExpanded) noexcept {
     return terrainOptionsExpanded ? 21 : 16;
 }
 
+// The editor-added rows the loaded game menu appends to the editor's own screen
+// (`app_menu.cpp`: the entry that opens the retail screens, the menu-text edit and
+// the menu save).  They are editor-side -- the retail definition declares none of
+// them -- so they are counted ON TOP of `PauseMenuRowCount`.  A menu built without
+// a retail definition (`BuildEditorFallbackMenu`) has none of them, which is why
+// this is a separate constant and not part of `PauseMenuRowCount`.
+constexpr int kPauseMenuEditorExtraRows = 3;
+
 constexpr PauseMenuLayout BuildPauseMenuLayout(
     int viewportWidth, int viewportHeight, bool terrainOptionsExpanded,
-    int fontLineHeight = 0) noexcept {
+    int fontLineHeight = 0, int extraRows = 0) noexcept {
     const int safeWidth = std::max(0, viewportWidth - 2 * kPauseMenuScreenMargin);
     const int safeHeight = std::max(0, viewportHeight - 2 * kPauseMenuScreenMargin);
     const int width = std::min(kPauseMenuWidth, safeWidth);
-    const int rows = PauseMenuRowCount(terrainOptionsExpanded);
+    const int rows = PauseMenuRowCount(terrainOptionsExpanded) + std::max(0, extraRows);
 
     // The retail row pitch: the font's own line height plus the frame's
     // Y-Spacing (kRetailFontLineHeight / kRetailRowSpacing).  With no font
@@ -102,11 +110,19 @@ constexpr PauseMenuLayout BuildPauseMenuLayout(
     // First estimate of the band, at the retail (unscaled) line height.
     const int retailBand = PauseMenuTitleBandHeight(kPauseMenuTitleLines, lineHeight);
 
-    // Shrink the retail pitch uniformly when the viewport cannot hold it.
+    // Shrink the retail pitch uniformly when the viewport cannot hold it.  The
+    // editor's own minimum row height is a floor for legibility, but only while it
+    // still fits: the rows must never run past the panel's bottom edge (the live
+    // menu's write-side rows are what make the list long enough for that to
+    // happen), so when the floor itself does not fit the pitch is the space that
+    // is left.
     const int available = safeHeight - retailBand - kPauseMenuBottomPadding;
     const int maxPitch = available / std::max(1, rows);
-    const int rowHeight = std::max(kPauseMenuMinimumRowHeight,
-                                   std::min(retailPitch, maxPitch));
+    int rowHeight = std::min(retailPitch, maxPitch);
+    if (rowHeight < kPauseMenuMinimumRowHeight) {
+        rowHeight = std::min(kPauseMenuMinimumRowHeight, maxPitch);
+    }
+    rowHeight = std::max(1, rowHeight);
     const float textScale = static_cast<float>(rowHeight) / static_cast<float>(retailPitch);
 
     // The title band and the title lines at the same scale.
@@ -126,7 +142,12 @@ constexpr PauseMenuLayout BuildPauseMenuLayout(
         kPauseMenuScreenMargin,
         std::min(centredTop, std::max(kPauseMenuScreenMargin, maxTop)));
 
-    const int hitRadius = std::max(8, std::min(16, rowHeight / 2 - 1));
+    // The hit band is the row's own half-pitch, capped so a tall row does not
+    // swallow its neighbours.  It follows the pitch rather than a fixed floor: a
+    // floor larger than half the pitch would make two adjacent rows answer for the
+    // same y (`IsPauseMenuRowHit` is inclusive at both ends), which is exactly the
+    // case the live menu's longer row list reaches on a short viewport.
+    const int hitRadius = std::max(1, std::min(16, rowHeight / 2 - 1));
 
     return {
         std::max(0, (viewportWidth - width) / 2 + kPauseMenuRetailCentreOffsetX),
@@ -188,18 +209,30 @@ struct PauseMenuSpinner {
     int row_hit_radius;
 };
 
-constexpr PauseMenuSpinner BuildPauseMenuSpinner(
-    const PauseMenuLayout& layout, int rowY, int labelWidth, int valueWidth) noexcept {
+// The same spinner group for a caller that has the panel rect rather than a
+// `PauseMenuLayout`: the live menu draws the model's own screen rects
+// (`igi::MenuUiModel::ToViewport`), which are the retail definition's rects on a
+// retail screen and the layout's panel on the editor's own screen.  Only the
+// panel's left edge and width are used.
+constexpr PauseMenuSpinner BuildPauseMenuSpinner(int menuLeft, int menuWidth, int rowY,
+                                                 int rowHitRadius, int labelWidth,
+                                                 int valueWidth) noexcept {
     constexpr int buttonWidth = 22;
     constexpr int gap = 6;
     constexpr int labelGap = 14;
     const int groupWidth = labelWidth + labelGap + buttonWidth + gap +
                            valueWidth + gap + buttonWidth;
-    const int groupLeft = layout.menu_left + (layout.menu_width - groupWidth) / 2;
+    const int groupLeft = menuLeft + (menuWidth - groupWidth) / 2;
     const int minusLeft = groupLeft + labelWidth + labelGap;
     const int valueLeft = minusLeft + buttonWidth + gap;
     return {groupLeft, groupWidth, minusLeft, valueLeft,
-            valueLeft + valueWidth + gap, rowY, layout.row_hit_radius};
+            valueLeft + valueWidth + gap, rowY, rowHitRadius};
+}
+
+constexpr PauseMenuSpinner BuildPauseMenuSpinner(
+    const PauseMenuLayout& layout, int rowY, int labelWidth, int valueWidth) noexcept {
+    return BuildPauseMenuSpinner(layout.menu_left, layout.menu_width, rowY,
+                                 layout.row_hit_radius, labelWidth, valueWidth);
 }
 
 constexpr bool IsPauseMenuSpinnerHit(const PauseMenuSpinner& spinner, int x) noexcept {

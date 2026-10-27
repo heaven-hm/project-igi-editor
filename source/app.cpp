@@ -843,6 +843,8 @@ void App::Frame(float delta_seconds) {
 			.prop_anim_ids_ = propAnimIds,
 			.prop_anim_active_id_ = propAnimActiveId,
 			.prop_anim_is_playing_ = propAnimIsPlaying,
+			.pause_menu_model_ = &pause_menu_.model,
+			.pause_menu_layout_ = PauseMenuLayoutNow(),
 		};
 		draw_params_.level_objects_ = &GetActiveRenderLevelObjects();
 		draw_params_.selected_object_index_ = selected_object_index_;
@@ -1201,6 +1203,8 @@ void App::Frame(float delta_seconds) {
 		.player_damage_effect_strength_ = render_gameplay
 			? render_snapshot.player_damage_effect_strength
 			: 0.0f,
+		.pause_menu_model_ = &pause_menu_.model,
+		.pause_menu_layout_ = PauseMenuLayoutNow(),
 	};
 
 	renderer_.Draw(draw_params_, task_tree_view);
@@ -1712,6 +1716,14 @@ void App::TogglePauseMenu() {
 		int cur = level_.GetLevelNo();
 		if (cur > 0) pause_level_input_ = std::to_string(cur);
 		pause_active_input_ = -1;
+		// The live menu is the loaded tree (issue #74): load it on first use and
+		// open the editor's own screen, so the rows on screen are the model's.
+		// Opening the screen here (rather than in the loader) is what makes every
+		// Escape start at the editor's own rows again, while the rows themselves
+		// and their actions stay the loaded tree's.
+		EnsurePauseMenu();
+		igi::app_menu::OpenEditorPauseMenu(pause_menu_);
+		Logger::Get().Log(LogLevel::INFO, "pause menu: opened");
 		// The menu is mouse-driven: the pointer must be visible. Gameplay
 		// motion handlers return early while paused, so nothing else would
 		// restore the cursor here — an invisible pointer made the menu
@@ -1719,6 +1731,7 @@ void App::TogglePauseMenu() {
 		glutSetCursor(GLUT_CURSOR_INHERIT);
 	} else {
 		// Closing pause menu: reset mouse state so no stale drag occurs
+		Logger::Get().Log(LogLevel::INFO, "pause menu: closed");
 		input_.mouse_delta_x_ = 0;
 		input_.mouse_delta_y_ = 0;
 		mouse_state_.left_button_down_ = false;

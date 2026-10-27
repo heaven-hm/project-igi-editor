@@ -18,6 +18,8 @@
 #include "runtime/render_target.h"
 #include "runtime/editor_cursor_mode.h"
 #include "runtime/level_weather.h"
+#include "menu/menu_ui.h"
+#include "runtime/pause_menu_rows.h"
 #include <atomic>
 #include <cstdint>
 #include <optional>
@@ -73,6 +75,37 @@ public:
   bool GetTerrainEditEnabled() const;
   void TogglePauseMenu();
   bool GetPauseMode() const;
+
+  // ── the live pause menu (#74) ───────────────────────────────────────────────
+  //
+  // The pause menu's rows are the loaded menu tree, not a hard-coded list.  The
+  // tree is `igi::app_menu::EditorMenu` (source/menu/menu_ui.h), built from
+  // `<IGI>/menusystem/ingamemenu.qvm` -- the compiled `ingamemenu.qsc` the engine's
+  // own in-game menu is (`MenuManager_New` HOOK 0x418B00, src/levelflow/levelflow.c:139,
+  // src/menu/menumanager.c:713-790).  The draw layer renders the model's current
+  // screen (source/renderer/renderer_draw.cpp); these methods are the row actions.
+  void EnsurePauseMenu();                       // load once, then open the editor's own screen
+  void RebuildPauseMenu();                      // re-derive the model (font/terrain change)
+  igi::MenuUiBuildOptions PauseMenuBuildOptions() const;
+  igi::PauseMenuLayout PauseMenuLayoutNow() const;
+  igi::PauseMenuRowState PauseMenuRowStateNow() const;
+  int PauseMenuExtraRows() const;
+  // Model-driven click: hit test, focus, spinner sub-rectangle, activation.  The
+  // click is always consumed while the menu is up.
+  bool HandlePauseMenuClick(int x, int y);
+  // KEY_DOWN/KEY_UP (`MenuManager_ReadInput` HOOK 0x418580): +1 down, -1 up, with
+  // retail's wraparound.
+  bool MovePauseMenuFocus(int direction);
+  // KEY_ENTER, or a click that is not on a spinner: run the focused row's editor
+  // action.  Returns true when the row was acted on.
+  bool ActivateFocusedPauseMenuRow();
+  // KEY_ESCAPE: `MenuManager_PopScreen` HOOK 0x417710 when the model has a screen
+  // on its stack, otherwise the menu closes (screen 900's own "On Press Escape" is
+  // `MenuManager_LeaveMenus(900, MENUMANAGER_IDLE)`, which is the editor's Resume).
+  void PauseMenuBack();
+  bool HandlePauseMenuSpinner(const igi::MenuUiEntry& row, int x);
+  // The wheel adjusts the spinner row under the pointer, if there is one.
+  bool WheelPauseMenuSpinner(int x, int y, int direction);
   void SetEditBrush(int brush);
   int GetEditBrush() const;
   // Returns true and consumes the click if (x,y) hit an on-screen terrain brush
@@ -183,6 +216,9 @@ private:
   bool edit_mode_;
   bool terrain_edit_enabled_;
   bool pause_mode_;
+  // The live pause menu's tree (issue #74): its rows, its edit and its save.
+  igi::app_menu::EditorMenu pause_menu_;
+  bool pause_menu_loaded_ = false;
   std::string pause_level_input_ = "";
   std::string pause_search_input_ = "";
   int pause_active_input_ = -1; // -1: none, 1: search

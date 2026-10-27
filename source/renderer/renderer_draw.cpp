@@ -10,6 +10,7 @@
 #include "../runtime/map_computer_projection.h"
 #include "../runtime/pause_menu_layout.h"
 #include "../runtime/pause_menu_font.h"
+#include "../runtime/pause_menu_rows.h"
 #include "../runtime/log_policy.h"
 #include "../runtime/rain_rules.h"
 #include "../utils.h"
@@ -1727,475 +1728,365 @@ void Renderer::Draw(const draw_params_s &params,
 
     // SPR sprite cursors are drawn by App::DrawCustomCursor() — no GLUT overlays here
 
-    if (task_tree_view.pause_mode_) {
-      const int viewport_h = params.view_define_->viewport_height_;
-      const bool exp = task_tree_view.pause_terrain_expanded_;
-      const PauseMenuFontMetrics pause_font_metrics =
-          GetPauseMenuFontMetrics(Config::Get().useEditorFont,
-                                  Config::Get().systemFontSize);
-      const igi::PauseMenuLayout pause_layout = igi::BuildPauseMenuLayout(
-          params.view_define_->viewport_width_, viewport_h, exp,
-          pause_font_metrics.lineHeight);
-      const int menu_w = pause_layout.menu_width;
-      const int menu_h = pause_layout.menu_height;
-      const int menu_x = pause_layout.menu_left;
-      const int menu_y = pause_layout.menu_top;
-      const float pause_font_scale = pause_layout.text_scale *
-          (static_cast<float>(Config::Get().systemFontSize) / 12.0f);
-      const int pause_box_height = (std::max)(24, static_cast<int>(std::ceil(
-          static_cast<float>(pause_font_metrics.lineHeight) *
-          pause_layout.text_scale)) + 4);
-      if (Config::Get().useEditorFont) EnsureEditorFont();
-      else EnsureRetailPauseFontTexture();
-
-      auto pause_text_width = [&](const char* text) {
-        return PauseMenuTextWidth(text, Config::Get().useEditorFont,
-                                  Config::Get().systemFontSize,
-                                  pause_layout.text_scale);
-      };
-
-      // `alpha` is the retail text alpha.  DRAW_LABEL (src/menuscreen/menutext.c:196-230)
-      // halves it for a dim label (:211-212) and passes it straight to the draw
-      // otherwise; a plain label on a settled menu is alpha 1.
-      auto draw_pause_text = [&](int x, int y, const char* text,
-                                 float r, float g, float b, float alpha = 1.0f) {
-        if (Config::Get().useEditorFont && g_editorFont.valid && g_editorFontTex) {
-          DrawFontText(x, viewport_h - y, text, r, g, b, pause_font_scale, alpha);
-        } else if (!Config::Get().useEditorFont &&
-                   g_retailPauseFontTex && GetRetailPauseFont().valid) {
-          DrawRetailPauseText(x, viewport_h - y, text, r, g, b,
-                              pause_font_scale, alpha);
-        } else {
-          draw_text_sys(x, y, text, r, g, b);
-        }
-      };
-
-      // ── the retail frame ────────────────────────────────────────────────
-      // MenuScreen_DrawFrame HOOK 0x421CD0, src/menuscreen/menuscreen.c:168-229.
-      // The engine draws this frame in the 640x480 menu space SCREEN_X/SCREEN_Y
-      // map into the display (src/menuscreen/menuscreen.h:141-142) -- no
-      // scaling, just a centred origin -- so the editor's panel rect IS the
-      // retail rect in viewport pixels, and only the y axis needs flipping for
-      // GL's y-up ortho.  The frame is drawn one pixel inside and below the
-      // declared rect (:175-178), hence kRetailFrameInset.
+    if (task_tree_view.pause_mode_ && task_tree_view.pause_menu_model_ != nullptr &&
+        task_tree_view.pause_menu_model_->ok) {
+      // ── the live pause menu: the loaded menu tree (#74) ────────────────────
       //
-      // The line width below is the editor's own: the engine's line strip is a
-      // two/five-vertex QVertexStrip handed to the D3D strip driver, which is
-      // registered by name (RenderMode_CreateMethod HOOK 0x4B0E70,
-      // src/res/qvertex.c:8) and is not decompiled, so its line width has no
-      // oracle.  2.5 px is what the editor already used.
-      const float frame_x0 = static_cast<float>(menu_x + igi::kRetailFrameInset);
-      const float frame_x1 = static_cast<float>(menu_x + menu_w + igi::kRetailFrameInset);
-      const float frame_y_top =
-          static_cast<float>(viewport_h - (menu_y + igi::kRetailFrameInset));
-      const float frame_y_bottom =
-          static_cast<float>(viewport_h - (menu_y + menu_h + igi::kRetailFrameInset));
-      // line = y0 + 20 (:179): the title rule, 20 px below the inset top edge.
-      const float rule_y = frame_y_top - static_cast<float>(igi::kRetailTitleRuleDrop);
-      const float frame_fade = igi::kRetailFadeSettled;
-
-      // The green-to-black wash (:215-223) and, with no background picture, the
-      // flat black fill (:225-227).  Both go UNDER the labels here.  The engine
-      // instead draws the children first and the frame after them
-      // (MenuScreen_DrawHandler HOOK 0x421C20, src/menuscreen/menuscreen.c:131-150),
-      // which would put a 0.66-alpha black fill over every label.  The labels go
-      // through Text_DrawAlt (HOOK 0x4B6F50, src/res/text.c:102-107) with
-      // `flags | 0x40000000`, and what that bit does is NOT recoverable from
-      // IGI-RE -- the strip driver that receives the flags is the undecoded D3D
-      // method above -- so whether retail's labels survive the fill cannot be
-      // established.  Drawing the background first keeps the editor's labels
-      // legible and leaves every colour, alpha and coordinate retail's.
-      glEnable(GL_BLEND);
-      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-      glBegin(GL_QUADS);
-      glColor4f(0.0f, igi::kRetailWashTopGreen, 0.0f,
-                frame_fade * igi::kRetailWashTopAlpha);
-      glVertex2f(frame_x0, frame_y_top);
-      glVertex2f(frame_x1, frame_y_top);
-      glColor4f(0.0f, 0.0f, 0.0f, frame_fade * igi::kRetailWashBottomAlpha);
-      glVertex2f(frame_x1, frame_y_bottom);
-      glVertex2f(frame_x0, frame_y_bottom);
-      glEnd();
-      glColor4f(0.0f, 0.0f, 0.0f, frame_fade * igi::kRetailFillAlpha);
-      glBegin(GL_QUADS);
-      glVertex2f(frame_x0, frame_y_top);
-      glVertex2f(frame_x1, frame_y_top);
-      glVertex2f(frame_x1, frame_y_bottom);
-      glVertex2f(frame_x0, frame_y_bottom);
-      glEnd();
-      glDisable(GL_BLEND);
-
-      // The green border and the title rule share ONE vertex colour: r = b = 0,
-      // g = 0.75 (set_vertex, src/menuscreen/menuscreen.c:152-163, called with
-      // g = 0.75f at :190-191 and reused for the rule at :208-213).
-      glColor3f(0.0f, igi::kRetailBorderGreen, 0.0f);
-      glLineWidth(2.5f);
-      glBegin(GL_LINE_LOOP);
-      glVertex2f(frame_x0, frame_y_top);
-      glVertex2f(frame_x1, frame_y_top);
-      glVertex2f(frame_x1, frame_y_bottom);
-      glVertex2f(frame_x0, frame_y_bottom);
-      glEnd();
-      glLineWidth(1.0f);
-      glBegin(GL_LINES);
-      glVertex2f(frame_x0, rule_y);
-      glVertex2f(frame_x1, rule_y);
-      glEnd();
-
-      // ── the title lines ─────────────────────────────────────────────────
-      // Retail screen 900's title is a MenuText with ColourIndex 1 -- TEXT_WHITE
-      // (128,128,128), i.e. 1.0 after gColorScale 1/128 (gMenuColors DATA
-      // 0x53B778, src/menu/typewriterbox.c:616-617; MenuText_Init HOOK 0x420CC0,
-      // src/menuscreen/menutext.c:301-304) -- centred inside the 26-tall title
-      // MenuFrame by MenuWindow_Place's centreX/centreY rule
-      // (src/widget/menuwindow.c:172-192).  The editor keeps its own two strings
-      // and lays them out in that same band.
-      const igi::RetailMenuColour title_colour =
-          igi::RetailMenuColourFor(igi::kRetailTitleColourIndex);
-      const char* title = "IGI EDITOR";
-      const char* subtitle = "PAUSED";
-      draw_pause_text(menu_x + (menu_w - pause_text_width(title)) / 2,
-                      igi::PauseMenuTitleDrawY(pause_layout, 0), title,
-                      title_colour.r, title_colour.g, title_colour.b);
-      // The second line is the editor's own, drawn with the retail dim rule:
-      // `if (dim) alpha *= 0.5f` (DRAW_LABEL, src/menuscreen/menutext.c:211-212).
-      draw_pause_text(menu_x + (menu_w - pause_text_width(subtitle)) / 2,
-                      igi::PauseMenuTitleDrawY(pause_layout, 1), subtitle,
-                      title_colour.r, title_colour.g, title_colour.b,
-                      igi::kRetailDimAlpha);
-
-      // Font row is rendered specially (index 1): a "Font: <type>" toggle on the
-      // left plus a [-] [size] [+] size control on the right, all on one line.
-      char font_btn_label[32];
-      snprintf(font_btn_label, sizeof(font_btn_label), "Font: %s",
-               Config::Get().useEditorFont ? "Editor" : "System");
-      char mode_btn_label[64];
-      snprintf(mode_btn_label, sizeof(mode_btn_label), "Mode: [%s]",
-               task_tree_view.in_game_mode_ ? "Game Play" : "Editor");
-      char clip_btn_label[64];
-      snprintf(clip_btn_label, sizeof(clip_btn_label), "Collision: [%s]",
-               task_tree_view.noclip_mode_ ? "Clip" : "Normal");
-      char lightmap_btn_label[64];
-      snprintf(lightmap_btn_label, sizeof(lightmap_btn_label), "Lightmap: [%s]",
-               igi::ObjectLightmapManager::Get().GetRenderModeName());
-      char weather_btn_label[64];
-      const char* wmode_str = "Default";
-      if (Config::Get().weatherMode == 1) wmode_str = "Rain";
-      else if (Config::Get().weatherMode == 2) wmode_str = "Snow";
-      else if (Config::Get().weatherMode == 3) wmode_str = "OFF";
-      snprintf(weather_btn_label, sizeof(weather_btn_label), "Weather: [%s]", wmode_str);
-
-      int mods = task_tree_view.terrain_mod_options_;
-      bool tex = (mods & TERRAIN_TEXTURE_MOD) != 0;
-      bool hgt = (mods & TERRAIN_HEIGHT_MOD) != 0;
-      bool dsc = (mods & TERRAIN_DISCARD_MOD) != 0;
-
-      char bufTex[32], bufHgt[32], bufDsc[32];
-      snprintf(bufTex, sizeof(bufTex), "  [%c] Texture", tex ? 'X' : ' ');
-      snprintf(bufHgt, sizeof(bufHgt), "  [%c] Height", hgt ? 'X' : ' ');
-      snprintf(bufDsc, sizeof(bufDsc), "  [%c] Discard", dsc ? 'X' : ' ');
-      int draws = task_tree_view.terrain_draw_options_;
-      bool fog = (draws & Renderer_Terrain::DRAW_TERRAIN_OPT_FOG) != 0;
-      char bufFog[32];
-      snprintf(bufFog, sizeof(bufFog), "  [%c] Fog", fog ? 'X' : ' ');
-
-      std::vector<const char*> btn_labels;
-      btn_labels.push_back("Resume");
-      const int MODE_ROW = btn_labels.size();
-      btn_labels.push_back(mode_btn_label);
-      const int CLIP_ROW = btn_labels.size();
-      btn_labels.push_back(clip_btn_label);
-      const int FONT_ROW = btn_labels.size();
-      btn_labels.push_back(font_btn_label);
-      const int LEVEL_ROW = btn_labels.size();
-      btn_labels.push_back("Select Level");
-      const int AUTOSAVE_ROW = btn_labels.size();
-      btn_labels.push_back("Auto Save");
-      const int LOGGING_ROW = btn_labels.size();
-      btn_labels.push_back("Logging");
-      const int LOG_LEVEL_ROW = btn_labels.size();
-      btn_labels.push_back("Log Level");
-      const int MUSIC_ROW = btn_labels.size();
-      btn_labels.push_back("Music");
-      const int WEATHER_ROW = btn_labels.size();
-      btn_labels.push_back(weather_btn_label);
-      const int LIGHTMAPS_ROW = btn_labels.size();
-      btn_labels.push_back(lightmap_btn_label);
-      const int LIGHTMAPS_CALC_ROW = btn_labels.size();
-      btn_labels.push_back("Calculate Lightmaps");
-      const int TERRAIN_HEADER_ROW = btn_labels.size();
-
-      btn_labels.push_back(exp ? "Terrain Options: [-]" : "Terrain Options: [+]");
-
-      int TERRAIN_TEX_ROW = -1, TERRAIN_HGT_ROW = -1, TERRAIN_DSC_ROW = -1, TERRAIN_FOG_ROW = -1, TERRAIN_FOGINT_ROW = -1;
-      if (exp) {
-        TERRAIN_TEX_ROW = btn_labels.size(); btn_labels.push_back(bufTex);
-        TERRAIN_HGT_ROW = btn_labels.size(); btn_labels.push_back(bufHgt);
-        TERRAIN_DSC_ROW = btn_labels.size(); btn_labels.push_back(bufDsc);
-        TERRAIN_FOG_ROW = btn_labels.size(); btn_labels.push_back(bufFog);
-        TERRAIN_FOGINT_ROW = btn_labels.size(); btn_labels.push_back("Fog Intensity");
-      }
-
-      const int RESET_ROW = btn_labels.size();
-      btn_labels.push_back("Reset Level");
-      const int SAVE_ROW = btn_labels.size();
-      btn_labels.push_back("Save Level");
-      const int QUIT_ROW = btn_labels.size();
-      btn_labels.push_back("Quit");
-
-      const int NUM_BTNS = btn_labels.size();
-
-      auto row_screen_y = [&](int idx) { return igi::PauseMenuRowCenter(pause_layout, idx); };
-
-      auto spinner_box_bounds = [&](int gl_row_y) {
-        const int above = pause_box_height / 2;
-        const int below = pause_box_height - above;
-        return std::pair<int, int>{gl_row_y - above, gl_row_y + below};
-      };
-
-      // ── the retail palette the rows are drawn from ───────────────────────
-      // Screen 900's five items each carry ColourIndex 2 -- TEXT_GREEN
-      // (0,128,0), which is (0,1,0) after gColorScale 1/128 (gMenuColors DATA
-      // 0x53B778, src/menu/typewriterbox.c:616-617; MenuText_Init HOOK
-      // 0x420CC0, src/menuscreen/menutext.c:301-304).  A focused label is
-      // brightened to c * 0.5 + 64 (DRAW_LABEL, src/menuscreen/menutext.c:203-205),
-      // i.e. (0.5,1,0.5), and gets a glow behind it (:227-228).
+      // The rows, their order, their geometry and the editor behaviour each is
+      // wired to are the model's (source/menu/menu_ui.h), built from
+      // `<IGI>/menusystem/ingamemenu.qvm` — the compiled script the engine's own
+      // in-game menu is (`MenuManager_New` HOOK 0x418B00,
+      // src/levelflow/levelflow.c:139, src/menu/menumanager.c:713-790).  The draw
+      // path the engine takes is `MenuManager_Draw` HOOK 0x418970
+      // (src/menu/menumanager.c:673-692) -> `MenuScreen_DrawHandler` HOOK 0x421C20
+      // (src/menuscreen/menuscreen.c:131-150: the screen's windows first, then the
+      // frame) -> `MenuScreen_DrawFrame` HOOK 0x421CD0
+      // (src/menuscreen/menuscreen.c:168-229), which is the green frame below.
       //
-      // The editor also marks row STATE with colour.  Retail's table has no
-      // "on" colour, so the state uses TEXT_ORANGE (128,95,0) -> (1,0.742,0),
-      // the third named entry.  Every colour below is therefore an entry of
-      // gMenuColors or the focus value derived from one; nothing off-palette.
-      const igi::RetailMenuColour row_idle =
-          igi::RetailMenuColourFor(igi::kRetailItemColourIndex);   // TEXT_GREEN
-      const igi::RetailMenuColour row_on =
-          igi::RetailMenuColourFor(3);                             // TEXT_ORANGE
-      const igi::RetailMenuColour row_focus = igi::RetailFocusedColour(row_idle);
-      const igi::RetailMenuColour row_glow = igi::RetailGlowColour(row_idle);
+      // The model's rects are in the retail 640x480 menu space; `ToViewport` is
+      // the engine's own SCREEN_X/SCREEN_Y mapping (src/menuscreen/menuscreen.h:141-142),
+      // a centred origin with no scaling.
+      const igi::MenuUiModel& pause_menu = *task_tree_view.pause_menu_model_;
+      const igi::MenuUiScreen* pause_screen = pause_menu.CurrentScreen();
+      if (pause_screen != nullptr) {
+        const int viewport_h = params.view_define_->viewport_height_;
+        const PauseMenuFontMetrics pause_font_metrics =
+            GetPauseMenuFontMetrics(Config::Get().useEditorFont,
+                                    Config::Get().systemFontSize);
+        const igi::PauseMenuLayout pause_layout = task_tree_view.pause_menu_layout_;
+        const igi::MenuUiRect pause_panel = pause_menu.ToViewport(pause_screen->frame);
+        const int menu_x = pause_panel.x;
+        const int menu_w = pause_panel.w;
+        const float pause_font_scale = pause_layout.text_scale *
+            (static_cast<float>(Config::Get().systemFontSize) / 12.0f);
+        const int pause_box_height = (std::max)(24, static_cast<int>(std::ceil(
+            static_cast<float>(pause_font_metrics.lineHeight) *
+            pause_layout.text_scale)) + 4);
+        if (Config::Get().useEditorFont) EnsureEditorFont();
+        else EnsureRetailPauseFontTexture();
 
-      // The focused label's glow.  DRAW_LABEL draws "glow.spr" at
-      //   x0 = SCREEN_X(w.x) - w.w * 0.4, y0 = SCREEN_Y(w.y) - w.h * 0.2
-      //   x1 = x0 + w.w * 1.8,            y1 = y0 + w.h * 1.4
-      // in the item's colour * 0.2, vertex alpha 1 (src/menuscreen/menutext.c:219-229;
-      // QVertex_DrawQuad HOOK 0x4B51F0 sets a = 1.0f, src/res/qvertex.c:63-80).
-      // The editor does not resolve retail sprites, so the same quad is filled
-      // rather than textured; its geometry and colour are retail's.
-      auto draw_row_glow = [&](int row_y, int label_w) {
-        const float line_h = static_cast<float>(pause_font_metrics.lineHeight);
-        const float label_x = static_cast<float>(menu_x + (menu_w - label_w) / 2);
-        const float top = static_cast<float>(row_y) - line_h * 0.5f;
-        const float gx0 = label_x - static_cast<float>(label_w) * igi::kRetailGlowInsetX;
-        const float gy0 = top - line_h * igi::kRetailGlowInsetY;
-        const float gx1 = static_cast<float>(label_w) * igi::kRetailGlowWidthScale + gx0;
-        const float gy1 = line_h * igi::kRetailGlowHeightScale + gy0;
+        auto pause_text_width = [&](const char* text) {
+          return PauseMenuTextWidth(text, Config::Get().useEditorFont,
+                                    Config::Get().systemFontSize,
+                                    pause_layout.text_scale);
+        };
+
+        // `alpha` is the retail text alpha.  DRAW_LABEL (src/menuscreen/menutext.c:196-230)
+        // halves it for a dim label (:211-212) and passes it straight to the draw
+        // otherwise; a plain label on a settled menu is alpha 1.
+        auto draw_pause_text = [&](int x, int y, const char* text,
+                                   float r, float g, float b, float alpha = 1.0f) {
+          if (Config::Get().useEditorFont && g_editorFont.valid && g_editorFontTex) {
+            DrawFontText(x, viewport_h - y, text, r, g, b, pause_font_scale, alpha);
+          } else if (!Config::Get().useEditorFont &&
+                     g_retailPauseFontTex && GetRetailPauseFont().valid) {
+            DrawRetailPauseText(x, viewport_h - y, text, r, g, b,
+                                pause_font_scale, alpha);
+          } else {
+            draw_text_sys(x, y, text, r, g, b);
+          }
+        };
+
+        // ── the retail frame ────────────────────────────────────────────────
+        // MenuScreen_DrawFrame HOOK 0x421CD0, src/menuscreen/menuscreen.c:168-229.
+        // The engine draws this frame in the 640x480 menu space SCREEN_X/SCREEN_Y
+        // map into the display (src/menuscreen/menuscreen.h:141-142) -- no
+        // scaling, just a centred origin -- so the editor's panel rect IS the
+        // retail rect in viewport pixels, and only the y axis needs flipping for
+        // GL's y-up ortho.  The frame is drawn one pixel inside and below the
+        // declared rect (:175-178), hence kRetailFrameInset.
+        //
+        // The line width below is the editor's own: the engine's line strip is a
+        // two/five-vertex QVertexStrip handed to the D3D strip driver, which is
+        // registered by name (RenderMode_CreateMethod HOOK 0x4B0E70,
+        // src/res/qvertex.c:8) and is not decompiled, so its line width has no
+        // oracle.  2.5 px is what the editor already used.
+        const float frame_x0 = static_cast<float>(menu_x + igi::kRetailFrameInset);
+        const float frame_x1 = static_cast<float>(menu_x + menu_w + igi::kRetailFrameInset);
+        const float frame_y_top =
+            static_cast<float>(viewport_h - (pause_panel.y + igi::kRetailFrameInset));
+        const float frame_y_bottom =
+            static_cast<float>(viewport_h - (pause_panel.y + pause_panel.h +
+                                             igi::kRetailFrameInset));
+        // line = y0 + 20 (:179): the title rule, 20 px below the inset top edge.
+        const float rule_y = frame_y_top - static_cast<float>(igi::kRetailTitleRuleDrop);
+        const float frame_fade = igi::kRetailFadeSettled;
+
+        // The green-to-black wash (:215-223) and, with no background picture, the
+        // flat black fill (:225-227).  Both go UNDER the labels here.  The engine
+        // instead draws the children first and the frame after them
+        // (MenuScreen_DrawHandler HOOK 0x421C20, src/menuscreen/menuscreen.c:131-150),
+        // which would put a 0.66-alpha black fill over every label.  The labels go
+        // through Text_DrawAlt (HOOK 0x4B6F50, src/res/text.c:102-107) with
+        // `flags | 0x40000000`, and what that bit does is NOT recoverable from
+        // IGI-RE -- the strip driver that receives the flags is the undecoded D3D
+        // method above -- so whether retail's labels survive the fill cannot be
+        // established.  Drawing the background first keeps the editor's labels
+        // legible and leaves every colour, alpha and coordinate retail's.
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glColor4f(row_glow.r, row_glow.g, row_glow.b, 1.0f);
         glBegin(GL_QUADS);
-        glVertex2f(gx0, static_cast<float>(viewport_h) - gy0);
-        glVertex2f(gx1, static_cast<float>(viewport_h) - gy0);
-        glVertex2f(gx1, static_cast<float>(viewport_h) - gy1);
-        glVertex2f(gx0, static_cast<float>(viewport_h) - gy1);
+        glColor4f(0.0f, igi::kRetailWashTopGreen, 0.0f,
+                  frame_fade * igi::kRetailWashTopAlpha);
+        glVertex2f(frame_x0, frame_y_top);
+        glVertex2f(frame_x1, frame_y_top);
+        glColor4f(0.0f, 0.0f, 0.0f, frame_fade * igi::kRetailWashBottomAlpha);
+        glVertex2f(frame_x1, frame_y_bottom);
+        glVertex2f(frame_x0, frame_y_bottom);
+        glEnd();
+        glColor4f(0.0f, 0.0f, 0.0f, frame_fade * igi::kRetailFillAlpha);
+        glBegin(GL_QUADS);
+        glVertex2f(frame_x0, frame_y_top);
+        glVertex2f(frame_x1, frame_y_top);
+        glVertex2f(frame_x1, frame_y_bottom);
+        glVertex2f(frame_x0, frame_y_bottom);
         glEnd();
         glDisable(GL_BLEND);
-      };
 
-      // Shared spinner-box draw helper (reused for FONT_ROW and LEVEL_ROW).
-      // The box outline is the retail window outline, r = b = 0 and g = 1
-      // (`MenuWindow_DrawEnd` HOOK 0x424980, src/widget/menuwindow.c:379-387:
-      // `v[i].g = 1.0f` with `r = b = focused ? 0.5f : 0.0f`; an idle box takes
-      // the 0 branch); its text is the retail item colour.
-      auto sbox = [&](int x1, int w, const char *txt, int row_top, int row_bot, int lbl_y) {
-        glColor3f(0.0f, igi::kRetailOutlineIdleGreen, 0.0f);
+        // The green border and the title rule share ONE vertex colour: r = b = 0,
+        // g = 0.75 (set_vertex, src/menuscreen/menuscreen.c:152-163, called with
+        // g = 0.75f at :190-191 and reused for the rule at :208-213).
+        glColor3f(0.0f, igi::kRetailBorderGreen, 0.0f);
+        glLineWidth(2.5f);
         glBegin(GL_LINE_LOOP);
-        glVertex2i(x1, row_bot); glVertex2i(x1 + w, row_bot);
-        glVertex2i(x1 + w, row_top); glVertex2i(x1, row_top);
+        glVertex2f(frame_x0, frame_y_top);
+        glVertex2f(frame_x1, frame_y_top);
+        glVertex2f(frame_x1, frame_y_bottom);
+        glVertex2f(frame_x0, frame_y_bottom);
         glEnd();
-        int tw = pause_text_width(txt);
-        draw_pause_text(x1 + (w - tw) / 2, lbl_y, txt,
-                        row_idle.r, row_idle.g, row_idle.b);
-      };
+        glLineWidth(1.0f);
+        glBegin(GL_LINES);
+        glVertex2f(frame_x0, rule_y);
+        glVertex2f(frame_x1, rule_y);
+        glEnd();
 
-      for (int i = 0; i < NUM_BTNS; ++i) {
-        int screen_btn_y = row_screen_y(i);
-        int gl_btn_y = viewport_h - screen_btn_y;
-
-        bool hovered = (task_tree_view.mouse_x_ >= menu_x &&
-                        task_tree_view.mouse_x_ <= menu_x + menu_w &&
-                        task_tree_view.mouse_y_ >= screen_btn_y - pause_layout.row_hit_radius &&
-                        task_tree_view.mouse_y_ <= screen_btn_y + pause_layout.row_hit_radius);
-
-        // The row's colour: the retail focus highlight under the pointer,
-        // TEXT_GREEN otherwise.
-        const igi::RetailMenuColour row_colour = hovered ? row_focus : row_idle;
-
-        if (i == MODE_ROW) {
-          int tw = pause_text_width(mode_btn_label);
-          int gx = menu_x + (menu_w - tw) / 2;
-          if (hovered) draw_row_glow(screen_btn_y, tw);
-          if (task_tree_view.in_game_mode_) {
-            draw_pause_text(gx, screen_btn_y, mode_btn_label,
-                            row_on.r, row_on.g, row_on.b);
-          } else {
-            draw_pause_text(gx, screen_btn_y, mode_btn_label,
-                            row_colour.r, row_colour.g, row_colour.b);
-          }
-        } else if (i == CLIP_ROW) {
-          int tw = pause_text_width(clip_btn_label);
-          int gx = menu_x + (menu_w - tw) / 2;
-          if (hovered) draw_row_glow(screen_btn_y, tw);
-          if (task_tree_view.noclip_mode_) {
-            draw_pause_text(gx, screen_btn_y, clip_btn_label,
-                            row_on.r, row_on.g, row_on.b);
-          } else {
-            draw_pause_text(gx, screen_btn_y, clip_btn_label,
-                            row_colour.r, row_colour.g, row_colour.b);
-          }
-        } else if (i == FONT_ROW) {
-          // "Font: <type>  [-] <n> [+]" — label left, spinner group right; whole row centered
-          const int btn_w = 22, val_w = 44;
-          const char* lbl = font_btn_label;
-          int label_px = pause_text_width(lbl);
-          const igi::PauseMenuSpinner spinner = igi::BuildPauseMenuSpinner(
-              pause_layout, screen_btn_y, label_px, val_w);
-          draw_pause_text(spinner.group_left, screen_btn_y, lbl,
-                          row_colour.r, row_colour.g, row_colour.b);
-          int minus_x = spinner.minus_left;
-          int box_x   = spinner.value_left;
-          int plus_x  = spinner.plus_left;
-          const auto [rt, rb] = spinner_box_bounds(gl_btn_y);
-          char szbuf[8]; snprintf(szbuf, sizeof(szbuf), "%d", Config::Get().systemFontSize);
-          sbox(minus_x, btn_w, "-",    rt, rb, screen_btn_y);
-          sbox(box_x,   val_w, szbuf,  rt, rb, screen_btn_y);
-          sbox(plus_x,  btn_w, "+",    rt, rb, screen_btn_y);
-
-        } else if (i == LEVEL_ROW) {
-          // Level spinner: "Select Level  [-] [N] [+]" — same width as Font row for visual alignment
-          const int btn_w = 22, val_w = 44;
-          const char* lbl = "Select Level";
-          int label_px = pause_text_width(lbl);
-          const igi::PauseMenuSpinner spinner = igi::BuildPauseMenuSpinner(
-              pause_layout, screen_btn_y, label_px, val_w);
-          draw_pause_text(spinner.group_left, screen_btn_y, lbl,
-                          row_colour.r, row_colour.g, row_colour.b);
-          int minus_x = spinner.minus_left;
-          int box_x   = spinner.value_left;
-          int plus_x  = spinner.plus_left;
-          const auto [rt, rb] = spinner_box_bounds(gl_btn_y);
-          sbox(minus_x, btn_w, "-",   rt, rb, screen_btn_y);
-          sbox(box_x,   val_w, task_tree_view.pause_level_input_.c_str(), rt, rb, screen_btn_y);
-          sbox(plus_x,  btn_w, "+",   rt, rb, screen_btn_y);
-
-        } else if (i == AUTOSAVE_ROW) {
-          // Auto Save: "Save Enable/Disable  [-] [Ns] [+]" — same width as Font/Level for alignment
-          const int btn_w = 22, val_w = 44;
-          const char* lbl = task_tree_view.auto_save_enabled_
-                                 ? "Save Enable" : "Save Disable";
-          int label_px = pause_text_width(lbl);
-          const igi::PauseMenuSpinner spinner = igi::BuildPauseMenuSpinner(
-              pause_layout, screen_btn_y, label_px, val_w);
-          draw_pause_text(spinner.group_left, screen_btn_y, lbl,
-                          row_colour.r, row_colour.g, row_colour.b);
-          int minus_x = spinner.minus_left;
-          int box_x   = spinner.value_left;
-          int plus_x  = spinner.plus_left;
-          const auto [rt, rb] = spinner_box_bounds(gl_btn_y);
-          char secbuf[16];
-          snprintf(secbuf, sizeof(secbuf), "%ds", task_tree_view.auto_save_interval_seconds_);
-          sbox(minus_x, btn_w, "-",     rt, rb, screen_btn_y);
-          sbox(box_x,   val_w, secbuf,  rt, rb, screen_btn_y);
-          sbox(plus_x,  btn_w, "+",     rt, rb, screen_btn_y);
-
-        } else if (i == LOGGING_ROW) {
-          char loggingbuf[24];
-          snprintf(loggingbuf, sizeof(loggingbuf), "[%c] Logging",
-                   task_tree_view.logging_enabled_ ? 'X' : ' ');
-          const int tw = pause_text_width(loggingbuf);
-          if (hovered) draw_row_glow(screen_btn_y, tw);
-          draw_pause_text(menu_x + (menu_w - tw) / 2, screen_btn_y, loggingbuf,
-                          row_colour.r, row_colour.g, row_colour.b);
-
-        } else if (i == LOG_LEVEL_ROW) {
-          const int btn_w = 22, val_w = 78;
-          const char* lbl = "Log Level";
-          const igi::PauseMenuSpinner spinner = igi::BuildPauseMenuSpinner(
-              pause_layout, screen_btn_y, pause_text_width(lbl), val_w);
-          draw_pause_text(spinner.group_left, screen_btn_y, lbl,
-                          row_colour.r, row_colour.g, row_colour.b);
-          const auto [rt, rb] = spinner_box_bounds(gl_btn_y);
-          sbox(spinner.minus_left, btn_w, "-", rt, rb, screen_btn_y);
-          sbox(spinner.value_left, val_w,
-               igi::LogLevelLabel(task_tree_view.log_level_threshold_), rt, rb, screen_btn_y);
-          sbox(spinner.plus_left, btn_w, "+", rt, rb, screen_btn_y);
-
-        } else if (i == MUSIC_ROW) {
-          // Music on/off checkbox: "[X] Music" / "[ ] Music", centered, glow-highlighted.
-          char musicbuf[24];
-          snprintf(musicbuf, sizeof(musicbuf), "[%c] Music", task_tree_view.music_on_ ? 'X' : ' ');
-          int tw = pause_text_width(musicbuf);
-          if (hovered) draw_row_glow(screen_btn_y, tw);
-          draw_pause_text(menu_x + (menu_w - tw) / 2, screen_btn_y, musicbuf,
-                          row_colour.r, row_colour.g, row_colour.b);
-
-        } else if (i == WEATHER_ROW) {
-          int wtw = pause_text_width(weather_btn_label);
-          if (hovered) draw_row_glow(screen_btn_y, wtw);
-          draw_pause_text(menu_x + (menu_w - wtw) / 2, screen_btn_y, weather_btn_label,
-                          row_colour.r, row_colour.g, row_colour.b);
-
-        } else if (i == LIGHTMAPS_ROW) {
-          int lmtw = pause_text_width(lightmap_btn_label);
-          if (hovered) draw_row_glow(screen_btn_y, lmtw);
-          draw_pause_text(menu_x + (menu_w - lmtw) / 2, screen_btn_y, lightmap_btn_label,
-                          row_colour.r, row_colour.g, row_colour.b);
-
-        } else if (i == LIGHTMAPS_CALC_ROW) {
-          const char* calc_lbl = "Calculate Lightmaps";
-          int btw = pause_text_width(calc_lbl);
-          if (hovered) draw_row_glow(screen_btn_y, btw);
-          draw_pause_text(menu_x + (menu_w - btw) / 2, screen_btn_y, calc_lbl,
-                          row_colour.r, row_colour.g, row_colour.b);
-
-        } else if (i == TERRAIN_HEADER_ROW) {
-          // A header, not an item: the retail dim rule (`if (dim) alpha *= 0.5f`,
-          // DRAW_LABEL src/menuscreen/menutext.c:211-212) is what separates it
-          // from the rows below it.
-          draw_pause_text(menu_x + (menu_w - pause_text_width(btn_labels[i])) / 2,
-                          screen_btn_y, btn_labels[i],
-                          row_idle.r, row_idle.g, row_idle.b,
+        // ── the title band ──────────────────────────────────────────────────
+        // The editor's OWN screen (screen -2000, the row list the editor has always
+        // shown) carries the editor's own two title lines: "IGI EDITOR" at the
+        // retail title colour and "PAUSED" below it, laid out in the retail band
+        // (`PauseMenuTitleDrawY`, source/runtime/pause_menu_layout.h).  A retail
+        // screen carries the definition's own title instead -- screen 900's is a
+        // MenuText with ColourIndex 1 inside its title MenuFrame
+        // (ingamemenu.qvm), drawn below as one of the screen's rows.
+        if (pause_screen->editor_added) {
+          const igi::RetailMenuColour title_colour =
+              igi::RetailMenuColourFor(igi::kRetailTitleColourIndex);
+          const char* title = "IGI EDITOR";
+          const char* subtitle = "PAUSED";
+          draw_pause_text(menu_x + (menu_w - pause_text_width(title)) / 2,
+                          igi::PauseMenuTitleDrawY(pause_layout, 0), title,
+                          title_colour.r, title_colour.g, title_colour.b);
+          // The second line is the editor's own, drawn with the retail dim rule:
+          // `if (dim) alpha *= 0.5f` (DRAW_LABEL, src/menuscreen/menutext.c:211-212).
+          draw_pause_text(menu_x + (menu_w - pause_text_width(subtitle)) / 2,
+                          igi::PauseMenuTitleDrawY(pause_layout, 1), subtitle,
+                          title_colour.r, title_colour.g, title_colour.b,
                           igi::kRetailDimAlpha);
-        } else if (i == TERRAIN_FOGINT_ROW) {
-          // Fog Intensity: "Fog Intensity  [-] [N%] [+]" — same spinner layout as Auto Save
-          const int btn_w = 22, val_w = 56;
-          const char* lbl = "Fog Intensity";
-          int label_px = pause_text_width(lbl);
-          const igi::PauseMenuSpinner spinner = igi::BuildPauseMenuSpinner(
-              pause_layout, screen_btn_y, label_px, val_w);
-          draw_pause_text(spinner.group_left, screen_btn_y, lbl,
-                          row_colour.r, row_colour.g, row_colour.b);
-          int minus_x = spinner.minus_left;
-          int box_x   = spinner.value_left;
-          int plus_x  = spinner.plus_left;
-          const auto [rt, rb] = spinner_box_bounds(gl_btn_y);
-          char fibuf[8];
-          snprintf(fibuf, sizeof(fibuf), "%d%%", Config::Get().fogIntensity);
-          sbox(minus_x, btn_w, "-",    rt, rb, screen_btn_y);
-          sbox(box_x,   val_w, fibuf,  rt, rb, screen_btn_y);
-          sbox(plus_x,  btn_w, "+",    rt, rb, screen_btn_y);
+        }
 
-        } else if (i == TERRAIN_TEX_ROW || i == TERRAIN_HGT_ROW || i == TERRAIN_DSC_ROW) {
-          const int tw = pause_text_width(btn_labels[i]);
-          if (hovered) draw_row_glow(screen_btn_y, tw);
-          draw_pause_text(menu_x + (menu_w - tw) / 2,
-                          screen_btn_y, btn_labels[i],
-                          row_colour.r, row_colour.g, row_colour.b);
+        // ── the retail palette the rows are drawn from ───────────────────────
+        // Screen 900's five items each carry ColourIndex 2 -- TEXT_GREEN
+        // (0,128,0), which is (0,1,0) after gColorScale 1/128 (gMenuColors DATA
+        // 0x53B778, src/menu/typewriterbox.c:616-617; MenuText_Init HOOK 0x420CC0,
+        // src/menuscreen/menutext.c:301-304).  A focused label is brightened to
+        // c * 0.5 + 64 (DRAW_LABEL, src/menuscreen/menutext.c:203-205),
+        // i.e. (0.5,1,0.5), and gets a glow behind it (:227-228).
+        //
+        // The editor also marks row STATE with colour.  Retail's table has no
+        // "on" colour, so the state uses TEXT_ORANGE (128,95,0) -> (1,0.742,0),
+        // the third named entry.  Every colour below is therefore an entry of
+        // gMenuColors or the focus value derived from one; nothing off-palette.
+        const igi::RetailMenuColour row_idle =
+            igi::RetailMenuColourFor(igi::kRetailItemColourIndex);   // TEXT_GREEN
+        const igi::RetailMenuColour row_on =
+            igi::RetailMenuColourFor(3);                             // TEXT_ORANGE
+        const igi::RetailMenuColour row_focus = igi::RetailFocusedColour(row_idle);
+        const igi::RetailMenuColour row_glow = igi::RetailGlowColour(row_idle);
 
-        } else {
-          // Plain centered buttons: Resume, Reset Level, Save Level, Quit
-          const int tw = pause_text_width(btn_labels[i]);
-          if (hovered) draw_row_glow(screen_btn_y, tw);
-          draw_pause_text(menu_x + (menu_w - tw) / 2,
-                          screen_btn_y, btn_labels[i],
-                          row_colour.r, row_colour.g, row_colour.b);
+        // The focused label's glow.  DRAW_LABEL draws "glow.spr" at
+        //   x0 = SCREEN_X(w.x) - w.w * 0.4, y0 = SCREEN_Y(w.y) - w.h * 0.2
+        //   x1 = x0 + w.w * 1.8,            y1 = y0 + w.h * 1.4
+        // in the item's colour * 0.2, vertex alpha 1 (src/menuscreen/menutext.c:219-229;
+        // QVertex_DrawQuad HOOK 0x4B51F0 sets a = 1.0f, src/res/qvertex.c:63-80).
+        // The editor does not resolve retail sprites, so the same quad is filled
+        // rather than textured; its geometry and colour are retail's.
+        auto draw_row_glow = [&](int row_y, int label_w) {
+          const float line_h = static_cast<float>(pause_font_metrics.lineHeight);
+          const float label_x = static_cast<float>(menu_x + (menu_w - label_w) / 2);
+          const float top = static_cast<float>(row_y) - line_h * 0.5f;
+          const float gx0 = label_x - static_cast<float>(label_w) * igi::kRetailGlowInsetX;
+          const float gy0 = top - line_h * igi::kRetailGlowInsetY;
+          const float gx1 = static_cast<float>(label_w) * igi::kRetailGlowWidthScale + gx0;
+          const float gy1 = line_h * igi::kRetailGlowHeightScale + gy0;
+          glEnable(GL_BLEND);
+          glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+          glColor4f(row_glow.r, row_glow.g, row_glow.b, 1.0f);
+          glBegin(GL_QUADS);
+          glVertex2f(gx0, static_cast<float>(viewport_h) - gy0);
+          glVertex2f(gx1, static_cast<float>(viewport_h) - gy0);
+          glVertex2f(gx1, static_cast<float>(viewport_h) - gy1);
+          glVertex2f(gx0, static_cast<float>(viewport_h) - gy1);
+          glEnd();
+          glDisable(GL_BLEND);
+        };
+
+        // Shared spinner-box draw helper (reused for every spinner row).
+        // The box outline is the retail window outline, r = b = 0 and g = 1
+        // (`MenuWindow_DrawEnd` HOOK 0x424980, src/widget/menuwindow.c:379-387:
+        // `v[i].g = 1.0f` with `r = b = focused ? 0.5f : 0.0f`; an idle box takes
+        // the 0 branch); its text is the retail item colour.
+        auto sbox = [&](int x1, int w, const char *txt, int row_top, int row_bot, int lbl_y) {
+          glColor3f(0.0f, igi::kRetailOutlineIdleGreen, 0.0f);
+          glBegin(GL_LINE_LOOP);
+          glVertex2i(x1, row_bot); glVertex2i(x1 + w, row_bot);
+          glVertex2i(x1 + w, row_top); glVertex2i(x1, row_top);
+          glEnd();
+          int tw = pause_text_width(txt);
+          draw_pause_text(x1 + (w - tw) / 2, lbl_y, txt,
+                          row_idle.r, row_idle.g, row_idle.b);
+        };
+
+        // The live state the editor's own rows render (source/runtime/pause_menu_rows.h).
+        // It is the state the rows have always shown; the ROW LIST is the model's.
+        const igi::PauseMenuRowState row_state{
+          .in_game_mode = task_tree_view.in_game_mode_,
+          .noclip = task_tree_view.noclip_mode_,
+          .use_editor_font = Config::Get().useEditorFont,
+          .auto_save_enabled = task_tree_view.auto_save_enabled_,
+          .logging_enabled = task_tree_view.logging_enabled_,
+          .log_level = task_tree_view.log_level_threshold_,
+          .music_on = task_tree_view.music_on_,
+          .weather_mode = Config::Get().weatherMode,
+          .lightmap_mode = igi::ObjectLightmapManager::Get().GetRenderModeName(),
+          .terrain_expanded = task_tree_view.pause_terrain_expanded_,
+          .terrain_texture = (task_tree_view.terrain_mod_options_ & TERRAIN_TEXTURE_MOD) != 0,
+          .terrain_height = (task_tree_view.terrain_mod_options_ & TERRAIN_HEIGHT_MOD) != 0,
+          .terrain_discard = (task_tree_view.terrain_mod_options_ & TERRAIN_DISCARD_MOD) != 0,
+          .terrain_fog = (task_tree_view.terrain_draw_options_ &
+                          Renderer_Terrain::DRAW_TERRAIN_OPT_FOG) != 0,
+        };
+
+        const int focused_entry = pause_menu.FocusedEntryIndex();
+        for (size_t i = 0; i < pause_screen->entries.size(); ++i) {
+          const igi::MenuUiEntry& entry = pause_screen->entries[i];
+          if (!entry.visible) {
+            continue;
+          }
+          const igi::MenuUiRect rect = pause_menu.ToViewport(entry.rect);
+          const bool hovered = static_cast<int>(i) == focused_entry;
+
+          if (!entry.editor_added) {
+            // A retail row: the definition's own text, colour and window.  Retail
+            // draws the label from the window's top-left, which the engine's
+            // text draw treats as the line origin (`MAKE_LABEL`,
+            // src/menuscreen/menutext.c:139-143: `int y_ = SCREEN_Y((mt)->w.y);
+            // Text_New(font_, x_, y_, s_)`), and the editor's text helpers lift a
+            // line origin by kRetailTextLineLift (source/runtime/pause_menu_style.h
+            // section 8).
+            if (!entry.has_text) {
+              continue;  // a container: retail draws its sprite resources
+            }
+            // `display_label` is the engine's own resolution of the `Text
+            // Resource` key through `MenuManager_GetString` HOOK 0x418EA0
+            // (src/menu/menumanager.c:832-852: "LOCAL:<language>/<key>"); the raw
+            // key is the fallback when no language archive was found.
+            const std::string& text =
+                entry.display_label.empty() ? entry.label : entry.display_label;
+            if (text.empty()) {
+              continue;
+            }
+            igi::RetailMenuColour colour = igi::RetailMenuColourFor(entry.colour_index);
+            const float alpha = (entry.colour_index & igi::kRetailDimBit) != 0
+                                    ? igi::kRetailDimAlpha
+                                    : 1.0f;
+            if (hovered) {
+              // A focused label is brightened and gets the glow (DRAW_LABEL
+              // :203-205, :227-228), which is the only focus cue a text window has.
+              draw_row_glow(rect.y + rect.h / 2, pause_text_width(text.c_str()));
+              colour = igi::RetailFocusedColour(colour);
+            }
+            draw_pause_text(rect.x, rect.y + igi::kRetailTextLineLift, text.c_str(),
+                            colour.r, colour.g, colour.b, alpha);
+            continue;
+          }
+
+          // An editor row: the editor's own live label and furniture.  Its rect is
+          // the row's hit band, so the row is drawn at the band's centre (which is
+          // where the renderer has always drawn it: `PauseMenuRowCenter`).
+          const std::string label = igi::PauseMenuRowLabel(entry.editor_action, row_state);
+          if (label.empty()) {
+            continue;
+          }
+          const int screen_btn_y = rect.y + rect.h / 2;
+          const int gl_btn_y = viewport_h - screen_btn_y;
+          const int value_width = igi::PauseMenuSpinnerValueWidth(entry.editor_action);
+
+          // The row's colour: the retail focus highlight under the pointer,
+          // TEXT_GREEN otherwise; the editor's own on/off state uses TEXT_ORANGE.
+          const bool state_on =
+              (entry.editor_action == igi::MenuUiAction::ToggleMode && task_tree_view.in_game_mode_) ||
+              (entry.editor_action == igi::MenuUiAction::ToggleCollision && task_tree_view.noclip_mode_);
+          const igi::RetailMenuColour row_colour = hovered ? row_focus : row_idle;
+          // The terrain options header has always been drawn dim (a header, not a
+          // row: the retail dim rule, DRAW_LABEL src/menuscreen/menutext.c:211-212).
+          const bool dim = entry.editor_action == igi::MenuUiAction::ToggleTerrainOptions;
+
+          if (value_width > 0) {
+            // A spinner row: the label on the left, then [-] [value] [+].  The
+            // geometry is the editor's own (`BuildPauseMenuSpinner`), taken from the
+            // same label the click test measures (source/runtime/pause_menu_rows.h).
+            const int label_px = pause_text_width(label.c_str());
+            const igi::PauseMenuSpinner spinner = igi::BuildPauseMenuSpinner(
+                menu_x, menu_w, screen_btn_y, pause_layout.row_hit_radius, label_px,
+                value_width);
+            draw_pause_text(spinner.group_left, screen_btn_y, label.c_str(),
+                            row_colour.r, row_colour.g, row_colour.b);
+            char value[32];
+            value[0] = '\0';
+            switch (entry.editor_action) {
+              case igi::MenuUiAction::ToggleFont:
+                snprintf(value, sizeof(value), "%d", Config::Get().systemFontSize);
+                break;
+              case igi::MenuUiAction::SelectLevel:
+                snprintf(value, sizeof(value), "%s", task_tree_view.pause_level_input_.c_str());
+                break;
+              case igi::MenuUiAction::ToggleAutoSave:
+                snprintf(value, sizeof(value), "%ds", task_tree_view.auto_save_interval_seconds_);
+                break;
+              case igi::MenuUiAction::CycleLogLevel:
+                snprintf(value, sizeof(value), "%s",
+                         igi::LogLevelLabel(task_tree_view.log_level_threshold_));
+                break;
+              case igi::MenuUiAction::AdjustFogIntensity:
+                snprintf(value, sizeof(value), "%d%%", Config::Get().fogIntensity);
+                break;
+              default:
+                break;
+            }
+            const int above = pause_box_height / 2;
+            const int below = pause_box_height - above;
+            sbox(spinner.minus_left, 22, "-", gl_btn_y - above, gl_btn_y + below, screen_btn_y);
+            sbox(spinner.value_left, value_width, value, gl_btn_y - above, gl_btn_y + below,
+                 screen_btn_y);
+            sbox(spinner.plus_left, 22, "+", gl_btn_y - above, gl_btn_y + below, screen_btn_y);
+            continue;
+          }
+
+          // A plain editor row, centred in the panel.
+          const int text_w = pause_text_width(label.c_str());
+          if (hovered) {
+            draw_row_glow(screen_btn_y, text_w);
+          }
+          if (dim) {
+            draw_pause_text(menu_x + (menu_w - text_w) / 2, screen_btn_y, label.c_str(),
+                            row_idle.r, row_idle.g, row_idle.b, igi::kRetailDimAlpha);
+          } else if (state_on) {
+            draw_pause_text(menu_x + (menu_w - text_w) / 2, screen_btn_y, label.c_str(),
+                            row_on.r, row_on.g, row_on.b);
+          } else {
+            draw_pause_text(menu_x + (menu_w - text_w) / 2, screen_btn_y, label.c_str(),
+                            row_colour.r, row_colour.g, row_colour.b);
+          }
         }
       }
     }

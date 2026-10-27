@@ -346,46 +346,79 @@ pause menu already uses (`source/runtime/pause_menu_font.*`):
   back at the same offsets the current code uses.
 
 Not drawn, on purpose: the eight `MenuFrame` sprite resources and `MenuScreen`
-background pictures (the editor does not resolve retail sprites), colour indices
-beyond the verified five (white instead of a guess), and the six bespoke rows of the
-editor's own menu (font/level/autosave/log-level/terrain-intensity spinners, the
-`[-]`/`[+]` steppers). Those stay in `renderer_draw.cpp`, which task-14 does not
-touch.
+background pictures (the editor does not resolve retail sprites) and colour indices
+beyond the verified five (white instead of a guess).
+
+`menu_ui_draw.cpp` is the generic presenter of the model and is **not** on the live
+path: the live menu draws with `renderer_draw.cpp`'s own retail frame, palette and
+font helpers (so the panel the user sees is the one the pause menu always had), and
+keeps the six bespoke rows of the editor's own menu — the font/level/autosave/
+log-level/terrain-intensity spinners with their `[-]`/`[+]` steppers — which are
+editor furniture rather than menu items. `menu_ui_draw.cpp` remains as the
+standalone renderer for a caller that has a model but not the editor's chrome; the
+duplication of the two `DrawText` bodies is the known gap recorded below.
 
 **Known duplication (agreed with the lead, to remove later):** the five text helpers
 in `renderer_draw.cpp:164-330` are `static`, so `menu_ui_draw.cpp` re-implements the
 two `DrawText` bodies it needs. The lead chose not to widen this change into the
 renderer; the fix is to move those helpers into a shared header both files include.
 
-## Wiring diff for the lead-owned files (not applied)
+## The live wiring (applied — issue #74, second half)
 
-`source/renderer/renderer_draw.cpp` and `source/app_input_mouse.cpp` keep working
-exactly as before: task-14 deliberately changed neither, so the pause menu is
-untouched until someone decides the modal behaviour. The diff that routes them
-through the model:
+The pause menu the editor shows is the loaded tree. This is what the diff that used
+to be listed here as "not applied" became:
 
-1. `renderer_draw.cpp`'s pause-menu block (`:1700-1960`) builds `btn_labels` and
-   draws it. Replace the label list with `app_menu::LoadEditorMenu(...)` once per
-   frame (or cache it, keyed on `terrain_expanded`), and replace the row loop with
-   `DrawMenuUi(menu.model, style)` — `style.title = "IGI EDITOR"`,
-   `style.subtitle = "PAUSED"` keeps the header.
-2. The text helpers `EnsureEditorFont`, `EnsureRetailPauseFontTexture`,
-   `DrawRetailPauseText`, `DrawFontText`, `draw_text_sys` are `static` in
-   `renderer_draw.cpp` (`:164-330`), so `menu_ui_draw.cpp` cannot call them and
-   re-implements the two `DrawText` bodies. If the lead prefers one implementation,
-   move them to a shared header (e.g. `renderer/pause_menu_text.h`) and have both
-   call them; the duplication is intentional and documented until then.
-3. `app_input_mouse.cpp`'s row dispatch (`:455-593`) mirrors the renderer's row
-   indices by hand (`RESUME_ROW = btn_idx++ ... QUIT_ROW = btn_idx++`) and is the
-   reason both files must agree. Route it through the model instead:
-   `int entry = model.HitTest(x, y); if (entry >= 0) model.FocusEntry(entry);`
-   for hover, and on click `model.FocusEntry(model.HitTest(x, y))` then
-   `MenuUiActivation a = model.Activate();` and switch on `a.editor_action`. The
-   six spinner rows need their existing sub-rectangle handling (`BuildPauseMenuSpinner`)
-   kept ahead of that switch, because the spinner buttons are not menu items.
-4. While `terrain_expanded`/`pause_active_input_` live in the app, the model has to
-   be rebuilt (or `SetEntryEnabled`) when the terrain section toggles; the fallback
-   row count changes with it, the retail structure does not.
+| file | role |
+| --- | --- |
+| `source/app_pause_menu.cpp` | the App's side of the menu: load once, rebuild, hit test, focus, spinner sub-rectangles, row activation, Escape |
+| `source/app.h` | `app_menu::EditorMenu pause_menu_`, the load/rebuild/activate methods |
+| `source/renderer/renderer_draw.cpp` | draws the model's current screen with the retail frame the editor already had |
+| `source/app_input_mouse.cpp` | wheel → the spinner row under the pointer; click → `HandlePauseMenuClick`; motion → hover focus |
+| `source/app_input_keyboard.cpp` | DOWN/UP → `MoveDown`/`MoveUp`, ENTER → `ActivateFocusedPauseMenuRow`, ESCAPE → `PauseMenuBack` |
+| `source/runtime/pause_menu_rows.*` | the live label and spinner width of each editor row, one source for the draw layer and the click test |
+
+**Which screen the pause menu opens on.** `app_menu::OpenEditorPauseMenu`
+(`source/app_menu.cpp`) positions the model on the editor's own screen
+(`kEditorOptionsScreenId`, −2000) every time the menu opens, so the editor's own
+strings are what the user sees first — the decision recorded in "Editor-added
+entry". The loaded retail screens are one row away: the editor's screen carries the
+`Game Menu` row, which is `MenuManager_PushScreen` HOOK 0x417690
+(src/game/menumanager.c:226-235) to the definition's declared screen (900), and
+Escape is `MenuManager_PopScreen` HOOK 0x417710 (:237-247) back. With nothing on the
+stack Escape closes the menu, which is what screen 900's own `On Press Escape`
+(`MenuManager_LeaveMenus(900, MENUMANAGER_IDLE)`) does in retail.
+
+**The three rows the editor adds to its own screen when a retail definition is
+loaded** (they do not exist in the fallback, because there is nothing to open, edit
+or save):
+
+| row | action | what it does |
+| --- | --- | --- |
+| `Game Menu` | `OpenGameMenu` | opens the definition's declared screen (900) and draws it from the definition: its own title, its five items, their colours and the `Editor Options` entry |
+| `Menu Text` | `EditMenuText` | sets the retail main screen's title `Text Resource` to the next string of `app_menu::kEditorMenuTitleCycle` through the mutable accessors of `MenuDefinition`, then rebuilds the model so the change is drawn |
+| `Save Menu` | `SaveMenu` | `app_menu::SaveEditorMenu(menu, "", &error)` — writes `menu.definition` back to the container it was read from |
+
+The edit and the save are the issue's acceptance criteria in one path: an edit made
+through `qvm_image.h`'s mutable accessors changes what the model draws and is what
+`SaveEditorMenu` writes. `tests/test_menu_ui.cpp` (`MenuUiLive`) proves it host-side;
+the live path is proved by a Wine run (below).
+
+**What the draw layer keeps.** The retail frame (`MenuScreen_DrawFrame` HOOK
+0x421CD0), the palette (`gMenuColors`), the row pitch and the font metrics are
+unchanged; the rows are the model's. The editor's own screen keeps its two title
+lines ("IGI EDITOR" / "PAUSED"); a retail screen draws the definition's own title
+instead, as one of its rows. A retail row is drawn from the definition —
+`display_label` when the language archive resolved the key
+(`MenuManager_GetString` HOOK 0x418EA0), else the raw key — at the window's own
+position, which is what the engine draws. An editor row is drawn with the live state
+appended by `PauseMenuRowLabel`, exactly as before.
+
+**What is still not executed.** Retail script expressions and retail script *actions*
+stay opaque: an item whose action is not one the editor implements is drawn, is
+focusable, and activating it reports `inert_reason` (in the status line and the log)
+rather than being guessed at. That is why `Sound`, `Controls`, `Restart Game` and
+`Quit to Main Menu` do nothing on screen 900 — the reasoning is the "Editor wiring"
+table above.
 
 ## How this was verified
 
@@ -413,6 +446,50 @@ was compiled with the exact cross-build flags of the editor target
 (`i686-w64-mingw32-g++`, exit 0). The Windows build gate itself was not run by
 task-14 (the shared `build-mingw/` tree is owned by the build-gate stream).
 
+### The live path, verified under Wine (#74, second half)
+
+The i686 editor was run under Wine against a **copy** of the retail install
+(`Config::Init` rewrites `<IGI>/editor/qed/*.qvm` and `igi1ed.log`, so the install is
+never the game root of a run), with the window driven by `PostMessage` helpers
+(`scratch/pause-menu-smoke/key_helper.c` for keys, `scratch/wine-smoke/click_helper.c`
+for clicks). The editor's own log is the evidence:
+
+```
+[INFO] pause menu: loaded Z:\...\scratch\pause-menu-smoke\igi/menusystem/ingamemenu.qvm
+       (9 screens, screen 900 has 6 rows, editor screen -2000)
+[INFO] pause menu: viewport 1680x1050 panel 605,328 470x403 rows 19 pitch 18
+       first row y 376 scale 1.500000
+[INFO] pause menu: opened
+[INFO] pause menu: activated row 'Game Menu' (OpenGameMenu, screen -2000)
+[INFO] pause menu: activated row 'Resume Game' (Resume, screen 900)
+[INFO] pause menu: closed
+[INFO] pause menu: activated row 'Menu Text' (EditMenuText, screen -2000)
+[INFO] pause menu: Menu text edited (not saved yet)
+[INFO] pause menu: activated row 'Save Menu' (SaveMenu, screen -2000)
+[INFO] pause menu: Menu saved: Z:\...\scratch\pause-menu-smoke\igi/menusystem/ingamemenu.qvm
+```
+
+`Resume Game` is the *definition's* row on screen 900 — its label comes from the loaded
+tree, not from the editor — and activating it resumed, which is
+`MenuManager_LeaveMenus(900, MENUMANAGER_IDLE)`. `Menu Text` and `Save Menu` are the
+editor's own added rows on its own screen.
+
+and the container that click wrote:
+
+```
+$ python3 -c "...ingamemenu.qvm..."     # the copy, after the run
+IGI EDITOR present: True
+Game Paused present: False
+size 11307                              # the shipped file is 11308 ("Game Paused" is one char longer)
+```
+
+So the live UI path — not a test — built the model from the retail container,
+mutated the loaded definition through `qvm_image.h`'s accessors, and wrote it back.
+Running the repository's own reader over that written file (`igi_tests
+--gtest_filter=MenuQvm.*:MenuUiSave.*` with `IGI_GAME_PATH` pointing at the copy)
+passes every container test; the only two failures are the two that assert the
+*shipped* title text, which is exactly the edit.
+
 ## Known gaps and what is not verified
 
 1. **Retail sprite/background resources are not resolved**, so a MenuFrame renders
@@ -427,10 +504,11 @@ task-14 (the shared `build-mingw/` tree is owned by the build-gate stream).
    children of the graphics/controls screens (no editor behaviour today).
 4. **Retail script expressions are never evaluated** (see above): a conditional item
    is always selectable in the editor.
-5. **The modal wiring is not done** (see the diff). The pause menu therefore still
-   runs entirely on the old code path (`renderer_draw.cpp` + `app_input_mouse.cpp`,
-   unchanged by task-14) and the model is exercised by the host tests only. No GL run
-   of the retail menu happened. This is the honest status of the branch, agreed with
-   the lead.
+5. **The modal wiring is done** (see "The live wiring"): the pause menu runs on the
+   model. The GL run under Wine exercised the load, the hit test, the row activation
+   and the save (the log and the written container are quoted below); **no rendered
+   pixel is verified** — this host gives Wine an OpenGL 2.1 context (see
+   `GL21_FALLBACK.md`), and the menu is drawn with fixed-function calls, so what the
+   frame looks like is unverified.
 6. **Item sounds are not played** (`Click Sound Resource` is carried verbatim);
    wiring sound needs the editor's audio path, which is outside this task.
