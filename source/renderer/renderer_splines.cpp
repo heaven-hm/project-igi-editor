@@ -194,7 +194,7 @@ void Renderer_Splines::DrawSplineSegment(
     bent_lookup_key_.rot0 = start.rot;
     bent_lookup_key_.rot1 = end.rot;
     bent_lookup_key_.linear = parent.linearSegments;
-    bent_lookup_key_.segments = std::clamp(parent.splineSegmentCount, 2, 20);
+    bent_lookup_key_.segments = std::min(parent.splineSegmentCount, 20);
     auto cacheIt = bent_gpu_cache_.find(bent_lookup_key_);
     if (cacheIt == bent_gpu_cache_.end()) {
         const std::string modelId(segModelId);
@@ -207,7 +207,7 @@ void Renderer_Splines::DrawSplineSegment(
         // container's "Linear Segments" flag. SplineObjWaypoint_Changed
         // (HOOK 0x500EF0, src/tagitem/spline.c:759-846) clamps the per-waypoint
         // count to the container's and to 20.
-        const int segments = std::clamp(parent.splineSegmentCount, 2, 20);
+        const int segments = std::min(parent.splineSegmentCount, 20);
         const spline_geometry::SplineSpan span{
             p0, p1,
             spline_geometry::EngineEulerMatrix(start.rot),

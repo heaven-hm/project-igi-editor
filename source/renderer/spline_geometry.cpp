@@ -501,8 +501,12 @@ SplineSpanJoints BuildSplineSpan(const SplineSpan& span) {
     SplineSpanJoints out;
     // SplineObjSegment_Setup, src/sound/segsetup.c:267-270: a rigid span is
     // always a single sub-segment; otherwise the count is the waypoint's, capped
-    // at 20 (SplineObjWaypoint_Changed, src/tagitem/spline.c:774-775).
-    const int segments = span.rigid ? 1 : std::clamp(span.segments, 2, 20);
+    // at 20.  SplineObjWaypoint_Changed (HOOK 0x500EF0, src/tagitem/spline.c:771-772):
+    //   n = w->segments < obj->maxSegments ? w->segments : obj->maxSegments;
+    //   w->segments = n > 20 ? 20 : n;
+    // That is a CAP only -- the editor used to clamp to a minimum of 2, an invented
+    // lower bound the engine does not have.
+    const int segments = span.rigid ? 1 : std::min(span.segments, 20);
     out.mid = (span.from + span.to) * 0.5;
     out.joints.assign(static_cast<size_t>(segments) + 1, SplineJoint{});
     out.segLength.assign(static_cast<size_t>(segments) + 2, 0.0);
