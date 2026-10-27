@@ -667,7 +667,12 @@ std::vector<uint8_t> Renderer_Objects::FindTextureDataFromLevel(
 }
 
 // Try to find mesh bytes in the in-memory .res index.
-std::vector<uint8_t> Renderer_Objects::FindMeshData(const std::string& modelId) const {
+// `sourceRes` (optional) receives the archive the bytes came from; the headless
+// --smoke-level probe reports it, and taking it here keeps that probe on THIS
+// function so a regression in it is caught.
+std::vector<uint8_t> Renderer_Objects::FindMeshData(const std::string& modelId,
+                                                    std::string* sourceRes) const {
+    if (sourceRes) sourceRes->clear();
     // The archive index is keyed by the engine's own resource identity: the member name
     // built the way the engine builds it, upper-cased and backslash-folded
     // (String_ToUpper 0x4B5AF0, src/res/resource.c:98-104; compared by Resource_IsLoaded
@@ -678,14 +683,21 @@ std::vector<uint8_t> Renderer_Objects::FindMeshData(const std::string& modelId) 
     // re-keyed -- the same mistake already fixed for textures in
     // model_texture_resolution.cpp:235-248 and for the menu labels.  It made every model
     // resolve to nothing, which is why the viewport loaded terrain but no objects.
-    const std::string fname =
-        igi_res::NormalizeResourceName(igi_res::ModelMemberName(modelId));
-    for (const auto& ri : res_model_indexes_) {
-        auto it = ri.index.find(fname);
-        if (it != ri.index.end())
-            return RES_ReadEntry(ri.res_path, it->second);
-    }
-    return {};
+    //
+    // The rule itself now lives in model_texture_resolution.cpp
+    // (FindModelEntryByIdentity), which is host-portable, so the identity is pinned by a
+    // unit test instead of only by the Windows renderer target.
+    std::vector<ModelSourceArchiveIndex> archives;
+    archives.reserve(res_model_indexes_.size());
+    for (const auto& ri : res_model_indexes_)
+        archives.push_back({ri.res_path, ri.index});
+    const ModelEntryHit hit = FindModelEntryByIdentity(
+        archives, modelId,
+        [](const std::string& resPath, const ResEntryInfo& info) {
+            return RES_ReadEntry(resPath, info);
+        });
+    if (sourceRes) *sourceRes = hit.resPath;
+    return hit.bytes;
 }
 
 std::vector<uint8_t> Renderer_Objects::FindMeshDataFromLevel(

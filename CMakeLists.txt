@@ -365,6 +365,7 @@ add_executable(igi_tests
     tests/test_utils.cpp
     tests/test_verify_unit.cpp
     tests/test_verify_level.cpp
+    tests/test_smoke_level.cpp
     tests/test_dat_parser.cpp
     tests/test_dat_writer.cpp
     tests/test_graph_parser.cpp
@@ -419,6 +420,7 @@ add_executable(igi_tests
     tests/test_menu_labels.cpp
     tests/test_menu_ui.cpp
     tests/test_pause_menu_style.cpp
+    tests/test_loading_bar_style.cpp
     tests/test_magic_object_expand.cpp
     tests/test_mission_fog.cpp
     tests/test_spline_rules.cpp
@@ -492,6 +494,7 @@ target_sources(igi_tests PRIVATE
     source/level/level_objects.cpp
     source/level/level_objects_serialize.cpp
     source/cli/verify_level_core.cpp
+    source/cli/smoke_level_core.cpp
     source/cli/verify_level.cpp
     source/renderer/dat_writer.cpp
     source/renderer/graph_writer.cpp

@@ -300,3 +300,66 @@ TEST(ModelTextureResolution, LevelArchiveWinsOverCommonArchive) {
     const auto bundle = IndexSyntheticBundle(levelRes, commonRes);
     EXPECT_EQ(FindModelSourceEntry(bundle, "dup_model", false, ReadFromDisk), levelMesh);
 }
+
+// ── The model-archive lookup must use the engine's resource identity ─────────
+//
+// Regression guard for the bug that made 61 models resolve to nothing and left the
+// viewport empty: Renderer_Objects::FindMeshData asked the .res index for a bare
+// "<id>.mef", while RES_BuildIndex keys entries by the engine's own identity —
+// Mesh_Load's "LOCAL:models/%s.mef" (HOOK 0x4CF390, src/model/model.c:364), folded
+// by String_ToUpper (0x4B5AF0, src/res/resource.c:98-104) and compared by
+// Resource_IsLoaded (0x4B5B90, :136-138). FindMeshData is now a thin wrapper over
+// FindModelEntryByIdentity, which is what this test pins.
+TEST(ModelTextureResolution, ModelLookupResolvesByEngineResourceIdentity) {
+    test_support::TempDirectory temp;
+    const std::string levelRes = (temp.path() / "level2.res").string();
+    const std::vector<uint8_t> meshBytes = {0x4D, 0x45, 0x46, 0x00};
+    std::string error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:models/001_02_1.mef", meshBytes}}, levelRes, error)) << error;
+
+    std::vector<ModelSourceArchiveIndex> archives(1);
+    archives[0].resPath = levelRes;
+    ASSERT_TRUE(RES_BuildIndex(levelRes, archives[0].entries, error)) << error;
+
+    const ModelEntryHit hit = FindModelEntryByIdentity(archives, "001_02_1", ReadFromDisk);
+    EXPECT_EQ(hit.bytes, meshBytes);
+    EXPECT_EQ(hit.resPath, levelRes);
+
+    // Nothing else resolves against this archive.
+    EXPECT_TRUE(FindModelEntryByIdentity(archives, "001_02_2", ReadFromDisk).bytes.empty());
+    EXPECT_TRUE(FindModelEntryByIdentity(archives, "", ReadFromDisk).bytes.empty());
+
+    // The bare leaf name is NOT a key. An index that only holds "<id>.mef" — the
+    // pre-fix lookup — must resolve nothing.
+    std::vector<ModelSourceArchiveIndex> bare(1);
+    bare[0].resPath = levelRes;
+    bare[0].entries["001_02_1.mef"] = ResEntryInfo{0, meshBytes.size()};
+    EXPECT_TRUE(FindModelEntryByIdentity(bare, "001_02_1", ReadFromDisk).bytes.empty())
+        << "a bare '<id>.mef' key must not resolve — that was the 61-model bug";
+}
+
+// Archives are searched in the order given (level before shared common), and the
+// hit reports which archive supplied the bytes.
+TEST(ModelTextureResolution, ModelIdentityLookupKeepsArchiveOrder) {
+    test_support::TempDirectory temp;
+    const std::string levelRes = (temp.path() / "level7.res").string();
+    const std::string commonRes = (temp.path() / "location0.res").string();
+    const std::vector<uint8_t> levelBytes = {7, 7, 7};
+    const std::vector<uint8_t> commonBytes = {1, 1, 1};
+    std::string error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:models/001_02_1.mef", levelBytes}}, levelRes, error)) << error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:models/001_02_1.mef", commonBytes}}, commonRes, error)) << error;
+
+    std::vector<ModelSourceArchiveIndex> archives(2);
+    archives[0].resPath = levelRes;
+    archives[1].resPath = commonRes;
+    ASSERT_TRUE(RES_BuildIndex(levelRes, archives[0].entries, error)) << error;
+    ASSERT_TRUE(RES_BuildIndex(commonRes, archives[1].entries, error)) << error;
+
+    const ModelEntryHit hit = FindModelEntryByIdentity(archives, "001_02_1", ReadFromDisk);
+    EXPECT_EQ(hit.bytes, levelBytes);
+    EXPECT_EQ(hit.resPath, levelRes);
+}

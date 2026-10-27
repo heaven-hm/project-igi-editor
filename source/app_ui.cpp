@@ -4,6 +4,7 @@
  *          Split from app.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include "runtime/loading_bar_style.h"
 #include "runtime/pause_menu_cursor.h"
 #include "runtime/progress_overlay_policy.h"
 
@@ -325,7 +326,12 @@ void App::DrawProgressOverlay(const char* title, int pct, const char* stage) {
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 	for (int i = 0; i < 4; ++i) glDisableVertexAttribArray(i);
 	glBindBufferBase(GL_UNIFORM_BUFFER, 0, 0);
-	glClearColor(0.02f, 0.06f, 0.02f, 1.0f);
+	// The retail loading screen clears to black when it tears the bar down:
+	//   LoadingScreen_Delete (HOOK 0x48A5D0, src/loadscreen/loadscreen.c:100-108)
+	//       Display_SetClearColor(0, 0, 0);
+	//       Display_Clear();
+	// The editor has no loading picture, so its overlay backdrop is that black.
+	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	glDisable(GL_DEPTH_TEST);
 	glMatrixMode(GL_PROJECTION);
@@ -334,43 +340,64 @@ void App::DrawProgressOverlay(const char* title, int pct, const char* stage) {
 	glMatrixMode(GL_MODELVIEW);
 	glPushMatrix(); glLoadIdentity();
 
-	// Panel and text scale with the pause-menu Font Size (12 is the baseline)
-	// so loading progress is readable instead of tiny.
-	const float uiScale = Config::Get().systemFontSize / 12.0f;
-	int pw = (int)(340 * uiScale), ph = (int)(84 * uiScale);
-	int px = (vw - pw) / 2, py = (vh - ph) / 2;
+	// ── the retail loading bar ──────────────────────────────────────────────
+	// Geometry, colours and the fill rule all come from
+	// source/runtime/loading_bar_style.h, which cites
+	//   LoadingScreen_New  (HOOK 0x48A440, src/loadscreen/loadscreen.c:63-96)
+	//   LoadingScreen_Step (HOOK 0x48A620, src/loadscreen/loadscreen.c:110-124)
+	// The bar is a flat 560x10 two-tone green bitmap inside a screen-centred
+	// 640x480 band (:74-76).  It has NO border, NO panel and NO gradient -- and
+	// it is NOT the pause menu's MenuScreen_DrawFrame (HOOK 0x421CD0,
+	// src/menuscreen/menuscreen.c:168-229), which is a different widget.
+	const igi::LoadingBarLayout bar = igi::BuildLoadingBarLayout(vw, vh);
+	// The layout is top-down (the engine blits with a top-left origin) while
+	// this projection has y=0 at the bottom, so flip the y.
+	const int barY = vh - (bar.y + bar.h);
+
 	glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	glColor4f(0.0f, 0.15f, 0.0f, 0.9f);
+
+	// Track: every pixel starts at 0x7F00 (:77-78).  The low 24 bits are
+	// literal 8-bit RGB -- Direct3D_Blit takes them verbatim and ORs in the
+	// alpha (src/d3d/direct3d.c:1111-1114) -- so the green is 0x7F / 255 and
+	// NOT the menus' 1/128 domain (gColorScale DATA 0x534AB0,
+	// src/res/qvertex.c:189).  Dividing by 128 here would draw the track at
+	// 0.99 and erase the contrast against the fill.
+	glColor4f(igi::kRetailLoadingBarRed, igi::kRetailLoadingTrackGreen,
+	          igi::kRetailLoadingBarBlue, 1.0f);
 	glBegin(GL_QUADS);
-	glVertex2i(px, py); glVertex2i(px+pw, py);
-	glVertex2i(px+pw, py+ph); glVertex2i(px, py+ph);
+	glVertex2i(bar.x, barY); glVertex2i(bar.x + bar.w, barY);
+	glVertex2i(bar.x + bar.w, barY + bar.h); glVertex2i(bar.x, barY + bar.h);
 	glEnd();
-	glColor3f(0.0f, 0.8f, 0.0f);
-	glBegin(GL_LINE_LOOP);
-	glVertex2i(px, py); glVertex2i(px+pw, py);
-	glVertex2i(px+pw, py+ph); glVertex2i(px, py+ph);
-	glEnd();
-	int bx = px+20, by = py+18, bw = pw-40, bh = (int)(12 * uiScale);
-	glColor3f(0.0f, 0.3f, 0.0f);
-	glBegin(GL_QUADS);
-	glVertex2i(bx, by); glVertex2i(bx+bw, by);
-	glVertex2i(bx+bw, by+bh); glVertex2i(bx, by+bh);
-	glEnd();
-	int fw = bw * pct / 100;
-	glColor3f(0.1f, 0.95f, 0.1f);
-	glBegin(GL_QUADS);
-	glVertex2i(bx, by); glVertex2i(bx+fw, by);
-	glVertex2i(bx+fw, by+bh); glVertex2i(bx, by+bh);
-	glEnd();
+
+	// Fill: the first `filled` pixels of each row are overwritten with 0xFF00
+	// (:119-121), i.e. 8-bit green 0xFF = 1.0.  The retail rule is
+	//   filled = ls->bar.w * ls->done / ls->total;   (:115)
+	// an integer fraction of `done`/`total`; the editor's driver is a
+	// percentage, which is the same rule with total == 100.
+	const int filled = igi::LoadingBarFillWidthForPercent(bar.w, pct);
+	if (filled > 0) {
+		glColor4f(igi::kRetailLoadingBarRed, igi::kRetailLoadingFillGreen,
+		          igi::kRetailLoadingBarBlue, 1.0f);
+		glBegin(GL_QUADS);
+		glVertex2i(bar.x, barY); glVertex2i(bar.x + filled, barY);
+		glVertex2i(bar.x + filled, barY + bar.h); glVertex2i(bar.x, barY + bar.h);
+		glEnd();
+	}
 	glDisable(GL_BLEND);
 
+	// ── the editor's own label ──────────────────────────────────────────────
+	// NO ENGINE ORACLE for this text.  The retail loading bar draws none:
+	// LoadingScreen_New loads only the loading picture (`loading.pic`, a sprite
+	// via Text_Load HOOK 0x4B6DB0, src/res/text.c:12-35) and never a .fnt, so
+	// there is no retail loading-bar font to follow.  The editor therefore
+	// keeps its OWN strings and its OWN font, drawn just above the bar.
 	char msg[160];
 	snprintf(msg, sizeof(msg), "%s  -  %d%%  (%s)", title ? title : "", pct, stage ? stage : "");
-	glColor3f(0.0f, 0.9f, 0.0f);
+	glColor3f(0.0f, igi::kRetailLoadingFillGreen, 0.0f);
 	void* overlayFont = (Config::Get().systemFontSize >= 15) ? GLUT_BITMAP_HELVETICA_18
 	                  : (Config::Get().systemFontSize <= 11) ? GLUT_BITMAP_HELVETICA_10
 	                                                         : GLUT_BITMAP_HELVETICA_12;
-	glRasterPos2i(px + 20, py + ph - (int)(18 * uiScale));
+	glRasterPos2i(bar.x, barY + bar.h + 6);
 	for (const char* c = msg; *c; ++c)
 		glutBitmapCharacter(overlayFont, *c);
 

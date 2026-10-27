@@ -178,6 +178,31 @@ std::vector<ModelSourceArchiveIndex> OrderTextureArchivesByOwner(
     return ordered;
 }
 
+ModelEntryHit FindModelEntryByIdentity(
+    const std::vector<ModelSourceArchiveIndex>& archives,
+    const std::string& modelId,
+    const std::function<std::vector<uint8_t>(const std::string& resPath,
+                                              const ResEntryInfo& info)>& readEntry) {
+    ModelEntryHit hit;
+    if (modelId.empty()) return hit;
+
+    // Mesh_Load's own key: "LOCAL:models/%s.mef", folded the way the resource
+    // system folds every name it stores and compares
+    // (src/model/model.c:364; src/res/resource.c:98-104,136-138).
+    const std::string entryName =
+        igi_res::NormalizeResourceName(igi_res::ModelMemberName(modelId));
+    for (const auto& archive : archives) {
+        const auto found = archive.entries.find(entryName);
+        if (found == archive.entries.end()) continue;
+        std::vector<uint8_t> bytes = readEntry(archive.resPath, found->second);
+        if (bytes.empty()) continue;  // zero-length member: keep looking
+        hit.resPath = archive.resPath;
+        hit.bytes = std::move(bytes);
+        return hit;
+    }
+    return hit;
+}
+
 std::vector<uint8_t> FindPreviewTextureEntry(
     const std::vector<ModelSourceArchiveIndex>& archives,
     const std::string& textureId,

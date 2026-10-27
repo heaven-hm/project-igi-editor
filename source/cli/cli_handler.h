@@ -15,6 +15,13 @@ struct VerifyLevelParams {
     int  delay      = 5;    // seconds between levels
 };
 
+// `--smoke-level`: headless loader smoke check (model/texture resolution, no GUI,
+// no OpenGL context). See source/cli/smoke_level.cpp.
+struct SmokeLevelParams {
+    std::vector<int> levels;
+    std::string gamePath;   // empty = Utils::GetIGIRootPath()
+};
+
 class CLIHandler {
 public:
   // Checks if the given arguments contain any of the headless CLI flags
@@ -24,6 +31,7 @@ public:
   // Returns 0 on success, non-zero on failure
   static int Process(int argc, char **argv);
   static int VerifyLevel(const VerifyLevelParams &params);
+  static int SmokeLevel(const SmokeLevelParams &params);
 
 private:
   static int ExtractLevelResources(int levelNo, const std::string &outDir);

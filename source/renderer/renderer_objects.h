@@ -91,12 +91,14 @@ public:
 
     // Find texture/mesh bytes from the in-memory .res index.
     // Returns empty vector if not found (callers fall back to on-disk paths).
+    // `sourceRes` (optional) receives the archive a mesh came from.
     std::vector<uint8_t> FindTextureData(const std::string& textureId) const;
     // Resolve texture bytes from one explicit level archive, preserving source
     // provenance when a foreign destination contains the same texture name.
     std::vector<uint8_t> FindTextureDataFromLevel(const std::string& textureId,
                                                   int levelNo) const;
-    std::vector<uint8_t> FindMeshData(const std::string& modelId) const;
+    std::vector<uint8_t> FindMeshData(const std::string& modelId,
+                                      std::string* sourceRes = nullptr) const;
     std::vector<uint8_t> FindMeshDataFromLevel(const std::string& modelId,
                                                int levelNo) const;
 
@@ -295,6 +297,24 @@ public:
     // Returns the path (disk or temp). Caller must NOT delete it (temp files
     // are tracked in tmp_mef_paths_ and cleaned on ClearCaches).
     std::string GetOrExtractMefTemp(const std::string& modelId, bool isBuilding);
+
+    // ── Headless resolution probe (CLI `--smoke-level`) ──────────────────────
+    // Resolve one model through the same resolution path the draw code uses — the
+    // archive identity lookup FindMeshData performs, the cross-level .res fallback
+    // GetOrLoadMesh performs, then the on-disk FindModelFile — plus the model's DAT
+    // texture list and which of those ids resolve.  NOTHING here touches OpenGL:
+    // no mesh parse into VAO/VBO, no texture upload, so it runs without a GL
+    // context (Init() is never called).  Used by the CLI loader smoke check so a
+    // resolution regression (e.g. the bare "<id>.mef" lookup that made 61 models
+    // resolve to nothing) fails a headless command instead of only the viewport.
+    struct SmokeModelResolution {
+        bool meshResolved = false;
+        std::string meshSource;                 // "res:<archive>" or an on-disk path
+        std::vector<std::string> textureIds;    // DAT list, or the model id itself
+        std::vector<std::string> resolvedTextureIds;
+        std::vector<std::string> missingTextureIds;
+    };
+    SmokeModelResolution ResolveModelForSmoke(const std::string& modelId, bool isBuilding);
     glm::vec3 GetSunDir() const { return sun_dir_; }
     glm::vec3 GetSunFrontColor() const { return sun_front_color_; }
     glm::vec3 GetSunBackColor() const { return sun_back_color_; }
@@ -475,6 +495,10 @@ private:
     Mesh CreateTextMesh(const std::string& text);
     void AddCharacterVertices(std::vector<float>& vertices, char c, float x, float y, float scale);
     std::string FindModelFile(const std::string& modelId, bool isBuilding);
+    // Resolution-only halves of the load path, shared with ResolveModelForSmoke so
+    // the smoke check and the draw path resolve through the same code (no GL).
+    ModelEntryHit FindMeshEntryAcrossLevels(const std::string& modelId);
+    bool TextureResolvesForSmoke(const std::string& textureId);
     std::string FindTextureFile(const std::string& textureId) const;
     std::string FindTextureFileInLevel(const std::string& textureId, int levelNo) const;
     std::string GetLevelTexturesPath() const;

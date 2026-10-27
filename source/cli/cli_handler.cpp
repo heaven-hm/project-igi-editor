@@ -17,6 +17,7 @@ bool CLIHandler::IsCLICommand(int argc, char **argv) {
     std::string arg = argv[i];
     if (arg == "--help" || arg == "--run-tests" ||
         arg == "--extract-level" || arg == "--verify-level" ||
+        arg == "--smoke-level" ||
         arg == "--import-model" || arg == "--import-mef") {
       return true;
     }
@@ -44,6 +45,11 @@ void CLIHandler::PrintHelp() {
       << "      --report-md <f>     Write aggregated Markdown report\n"
       << "      --report-dir <dir>  Write per-level reports to dir\n"
       << "      --delay <sec>       Delay between levels (default: 5)\n"
+      << "  --smoke-level --level N [--level N ...]  Headless loader smoke check\n"
+      << "      (loads the level's objects and resolves every model + texture\n"
+      << "       through the renderer's own path; no GUI, no OpenGL context.\n"
+      << "       Exits non-zero and prints the names of anything missing.)\n"
+      << "      --game-path <path>  IGI1 install path\n"
       << "  --extract-level <N> [outdir]  Extract level N resources\n\n"
       << "  --import-model <N> <model> [--source-level <N>]  Import a model family into level N\n\n"
       << "  --import-mef <in.obj> <out.mef>   Import an OBJ mesh as a static .mef model\n"
@@ -146,6 +152,28 @@ int CLIHandler::Process(int argc, char **argv) {
         return 1;
       }
       return VerifyLevel(params);
+    } else if (arg == "--smoke-level") {
+      // Headless loader smoke check. Mirrors --verify-level's argument handling,
+      // but never launches the editor: it resolves the level's models and
+      // textures in-process with no OpenGL context.
+      SmokeLevelParams params;
+      while (i + 1 < argc) {
+        std::string nx = argv[i + 1];
+        if (nx == "--level" && i + 2 < argc) {
+          params.levels.push_back(std::stoi(argv[i + 2])); i += 2;
+        } else if (nx == "--game-path" && i + 2 < argc) {
+          params.gamePath = argv[i + 2]; i += 2;
+        } else {
+          // Bare integer treated as a level number (--smoke-level 2)
+          try { params.levels.push_back(std::stoi(nx)); ++i; }
+          catch (...) { break; }
+        }
+      }
+      if (params.levels.empty()) {
+        std::cerr << "[SmokeLevel] ERROR: no levels specified. Use --level N.\n";
+        return 1;
+      }
+      return SmokeLevel(params);
     }
   }
   Logger::Get().Log(LogLevel::WARNING,

@@ -116,6 +116,32 @@ struct ModelSourceArchiveIndex {
     std::unordered_map<std::string, ResEntryInfo> entries;
 };
 
+// One resolved archive entry: the archive it was read from plus its bytes.
+// `bytes` empty (and `resPath` then meaningless) means "not in any of these
+// archives".
+struct ModelEntryHit {
+    std::string resPath;
+    std::vector<uint8_t> bytes;
+};
+
+// Resolve a model's .mef bytes from indexed archives by the engine's own resource
+// identity, returning the archive they came from.
+//
+// IGI-RE: Mesh_Load (HOOK 0x4CF390) asks the resource system for
+// "LOCAL:models/%s.mef" (src/model/model.c:364) and the match is on the folded
+// full name — String_ToUpper 0x4B5AF0 folds it (src/res/resource.c:98-104) and
+// Resource_IsLoaded compares the folded string (:136-138). A bare "<id>.mef" is
+// NOT that key, so a lookup with one never matches: that is exactly the bug that
+// made 61 models resolve to nothing while the viewport stayed empty.
+//
+// Host-portable on purpose: Renderer_Objects::FindMeshData is a thin wrapper over
+// this, so the identity rule is unit-testable without the Windows GL target.
+ModelEntryHit FindModelEntryByIdentity(
+    const std::vector<ModelSourceArchiveIndex>& archives,
+    const std::string& modelId,
+    const std::function<std::vector<uint8_t>(const std::string& resPath,
+                                              const ResEntryInfo& info)>& readEntry);
+
 // Resolve a scene-preview texture. Level entries are authoritative over
 // same-named common entries; explicit source imports use FindModelSourceEntry.
 std::vector<uint8_t> FindPreviewTextureEntry(

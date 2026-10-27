@@ -41,8 +41,11 @@ public:
 
   // level_no: 1 ~ 13
   void LoadLevel(int level_no);
+  // The retail loading screen's progress bar (LoadingScreen_New HOOK 0x48A440,
+  // src/loadscreen/loadscreen.c:63-96): geometry, colours and fill rule come
+  // from runtime/loading_bar_style.h.  Used for level loads and model imports.
   void DrawProgressOverlay(const char *title, int pct,
-                           const char *stage); // reusable loading bar
+                           const char *stage);
   void SetGameLevel(int level_no);
   void SaveCurrentLevel();
   void FlushAttaProxiesToMef();
