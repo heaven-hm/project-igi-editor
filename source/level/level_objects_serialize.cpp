@@ -206,6 +206,20 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(5, obj.pos.z);
             readDouble(8, obj.rot.z);
             if (obj.argTokens.size() > 13) obj.modelId = unquote(obj.argTokens[13]);
+        } else if (obj.type == "AIGraph") {
+            // AIGraph "Graph position" (args 3/4/5) is the world origin the graph's
+            // node coordinates are local to, and arg@7 is Graphdata's node_count.
+            // LoadRecursive reads the same fields (level_objects.cpp:516-527); this
+            // path was dropping them, so an AIGraph parsed here had no origin and no
+            // node count.
+            readDouble(3, obj.pos.x);
+            readDouble(4, obj.pos.y);
+            readDouble(5, obj.pos.z);
+            readInt(7, obj.graphNodeCount);
+        } else if (obj.type == "HumanAI") {
+            // Task_New(id, "HumanAI", name, "AITYPE_*", graphId).  Same field the load
+            // path reads (level_objects.cpp:528-533).
+            readInt(4, obj.aiGraphTaskId);
         } else if (obj.type == "SplineObjWaypoint") {
             obj.isSplineWaypoint = true;
             readDouble(3, obj.rot.x);
