@@ -287,6 +287,15 @@ void DrawMenuUiScreen(const MenuUiModel& model, const MenuUiScreen& screen,
         if (entry.is_container && entry.label.empty()) {
             continue;  // retail draws container sprites; see the file comment
         }
+        // The editor draws its OWN text for a retail row, never the game's:
+        // `editor_label` is set by `app_menu::EditorLabelForRetailEntry`
+        // (source/app_menu.cpp) on the live path.  A model built without that
+        // wiring (a hand-built definition, a test) has no editor label, and only
+        // then does this presenter fall back to the model's own text.
+        const std::string& text = entry.editor_label.empty() ? entry.label : entry.editor_label;
+        if (text.empty()) {
+            continue;
+        }
 
         const MenuUiRect rect = model.ToViewport(entry.rect);
         const bool is_focused = static_cast<int>(i) == focused;
@@ -295,14 +304,14 @@ void DrawMenuUiScreen(const MenuUiModel& model, const MenuUiScreen& screen,
         if (is_fallback_row) {
             // The editor's own rows: centred in the panel, green normally and
             // yellow when hovered, exactly like the existing pause menu.
-            const int text_w = TextWidth(entry.label, style.use_editor_font, style.system_font_size);
+            const int text_w = TextWidth(text, style.use_editor_font, style.system_font_size);
             const int text_x = panel.x + (panel.w - text_w) / 2;
             const int row_centre = rect.y + rect.h / 2;
             if (is_focused) {
-                DrawText(text_x, viewport_height - row_centre, entry.label, 1.0f, 1.0f,
+                DrawText(text_x, viewport_height - row_centre, text, 1.0f, 1.0f,
                          0.0f, 1.0f, scale, style.use_editor_font);
             } else {
-                DrawText(text_x, viewport_height - row_centre, entry.label, 0.0f, 0.85f,
+                DrawText(text_x, viewport_height - row_centre, text, 0.0f, 0.85f,
                          0.0f, 1.0f, scale, style.use_editor_font);
             }
             continue;
@@ -312,7 +321,7 @@ void DrawMenuUiScreen(const MenuUiModel& model, const MenuUiScreen& screen,
         // its top-left, and the window draws its own focus outline.
         const MenuTextColour colour = ColourForIndex(entry.colour_index);
         // A dim text (colour index bit 0x10) is drawn at half alpha, menutext.c:362.
-        DrawText(rect.x, viewport_height - (rect.y + rect.h), entry.label, colour.r, colour.g,
+        DrawText(rect.x, viewport_height - (rect.y + rect.h), text, colour.r, colour.g,
                  colour.b, colour.dim ? 0.5f : 1.0f, scale, style.use_editor_font);
 
         if (is_focused) {

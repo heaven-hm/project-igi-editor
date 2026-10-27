@@ -31,6 +31,7 @@
 #include <filesystem>
 #include <fstream>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -1642,4 +1643,222 @@ TEST(MenuUiLive, AFallbackMenuHasNoWriteSide) {
     ASSERT_NE(fallback.model.CurrentScreen(), nullptr);
     EXPECT_TRUE(fallback.fallback);
     EXPECT_EQ(fallback.model.SelectableCount(), igi::app_menu::EditorFallbackRowCount(true));
+}
+
+// ── the text the editor DRAWS (source/app_menu.cpp EditorLabelForRetailEntry) ─
+//
+// The retail structure is kept whole: the same screens, the same rows in the same
+// order, the same rects and colour indices, and the game's text verbatim in
+// `label` / `display_label` (the definition is data the editor edits and saves).
+// What the editor SHOWS is `editor_label`, the editor's own text for the row.
+// docs/igi-re-parity/PAUSE_MENU_STYLE.md records the rule.
+
+namespace {
+
+const MenuUiEntry* EntryByWidget(const MenuUiScreen& screen, const std::string& widget_name,
+                                 const std::string& label) {
+    for (const MenuUiEntry& entry : screen.entries) {
+        if (entry.widget_name == widget_name && entry.label == label) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+// The screen's title is the first MenuText: the retail title frame's only child
+// (ingamemenu.qvm screen 900; the fixture above mirrors it).
+const MenuUiEntry* TitleEntry(const MenuUiScreen& screen) {
+    for (const MenuUiEntry& entry : screen.entries) {
+        if (entry.widget_type == "MenuText") {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+}  // namespace
+
+TEST(MenuUiEditorText, RetailRowsShowTheEditorsOwnLabels) {
+    const MenuDefinition definition = RetailShapedFixture();
+    igi::app_menu::EditorMenu menu;
+    menu.definition = definition;
+    menu.model = igi::BuildMenuUiModel(definition, MenuUiBuildOptions{});
+    ASSERT_TRUE(menu.model.ok);
+    // The wiring that sets `editor_label` is `BuildModelInto`, reached through a
+    // rebuild (or `LoadEditorMenu`).
+    ASSERT_TRUE(igi::app_menu::RebuildEditorMenuModel(menu, MenuUiBuildOptions{}));
+
+    const MenuUiScreen* main = menu.model.FindScreen(900);
+    ASSERT_NE(main, nullptr);
+
+    struct Expected {
+        const char* widget_name;
+        const char* retail_key;   // the game's text, still in the model
+        const char* editor_label; // the editor's own text, drawn
+    };
+    const Expected expected[] = {
+        {"", "Game Paused", "IGI EDITOR"},
+        {"resume", "Resume Game", "Resume"},
+        {"restart", "Restart Game", "Reset Level"},
+        {"sound", "Sound", "Music"},
+        {"controls", "Controls", "Keybindings"},
+        {"quit", "Quit to Main Menu", "Quit"},
+    };
+
+    for (const Expected& row : expected) {
+        const MenuUiEntry* entry = EntryByWidget(*main, row.widget_name, row.retail_key);
+        ASSERT_NE(entry, nullptr) << "retail row '" << row.retail_key << "' is missing";
+        // The structure and the game's text are untouched...
+        EXPECT_EQ(entry->label, row.retail_key);
+        EXPECT_EQ(entry->widget_name, row.widget_name);
+        // ... and the editor draws its own words, never the game's.
+        EXPECT_EQ(igi::app_menu::EditorLabelForRetailEntry(*entry), row.editor_label);
+        EXPECT_EQ(entry->editor_label, row.editor_label);
+        EXPECT_NE(entry->editor_label, row.retail_key);
+    }
+
+    // The five items keep their retail order and geometry: only the text changed.
+    // (The editor's own "Editor Options" entry is appended after them, which is the
+    // documented addition.)
+    ASSERT_GE(main->selectable.size(), 5u);
+    const char* order[] = {"resume", "restart", "sound", "controls", "quit"};
+    for (size_t i = 0; i < 5; ++i) {
+        EXPECT_EQ(main->entries[static_cast<size_t>(main->selectable[i])].widget_name, order[i]);
+    }
+}
+
+TEST(MenuUiEditorText, EveryEditorLabelIsTheEditorsOwnRowLabel) {
+    // The mapping does not invent strings: each label it returns is a label the
+    // editor's own row list already draws (source/app_menu.cpp kFallbackRows /
+    // kFallbackExpandedRows), except the title (the editor's own panel title) and
+    // the one concept the editor names elsewhere ("Keybindings" is the title of its
+    // KEYBINDINGS overlay, source/renderer/renderer_draw.cpp).
+    const MenuUiModel fallback =
+        igi::app_menu::BuildEditorFallbackMenu(false, MenuUiBuildOptions{});
+    ASSERT_TRUE(fallback.ok);
+
+    std::vector<std::string> own_labels;
+    for (const MenuUiEntry& row : fallback.screens[0].entries) {
+        own_labels.push_back(row.label);
+    }
+
+    for (const char* mapped : {"Resume", "Reset Level", "Music", "Quit"}) {
+        EXPECT_NE(std::find(own_labels.begin(), own_labels.end(), mapped), own_labels.end())
+            << "'" << mapped << "' is not one of the editor's own row labels";
+    }
+    EXPECT_EQ(std::string(igi::app_menu::kEditorKeybindingsLabel), "Keybindings");
+    EXPECT_EQ(std::string(igi::app_menu::kEditorMenuTitleCycle[0]), "IGI EDITOR");
+}
+
+TEST(MenuUiEditorText, ARetailRowTheEditorHasNoCounterpartForSaysSo) {
+    const MenuDefinition definition = RetailShapedFixture();
+    const MenuUiModel model = igi::BuildMenuUiModel(definition, OptionsFor(definition));
+    ASSERT_TRUE(model.ok);
+
+    // Screen 901's OK row: the editor has no graphics-configuration behaviour, so
+    // the row shows the editor's own "Not in Editor" rather than the retail "OK".
+    const MenuUiScreen* graphics = model.FindScreen(901);
+    ASSERT_NE(graphics, nullptr);
+    const MenuUiEntry* ok = EntryByWidget(*graphics, "OK", "OK");
+    ASSERT_NE(ok, nullptr);
+    EXPECT_EQ(igi::app_menu::EditorLabelForRetailEntry(*ok),
+              std::string(igi::app_menu::kRetailNotInEditorLabel));
+    EXPECT_NE(igi::app_menu::kRetailNotInEditorLabel, std::string("OK"));
+}
+
+TEST(MenuUiEditorText, AWiredRetailRowIsLabelledByItsEditorAction) {
+    // The confirmation popups' `Yes` carries no widget name of its own but IS wired
+    // (screen 931's Yes is `MenuManager_LeaveMenus(0, MENUMANAGER_QUITTOMAINMENU)`,
+    // which the editor maps to Quit).  Its label follows the behaviour, not the
+    // widget, so it reads `Quit` rather than `Not in Editor`.
+    MenuUiEntry yes;
+    yes.widget_type = "MenuText";
+    yes.widget_name = "";
+    yes.label = "Yes";
+    yes.has_text = true;
+    yes.collected = true;
+    yes.colour_index = 2;
+    yes.editor_action = igi::MenuUiAction::Quit;
+    EXPECT_EQ(igi::app_menu::EditorLabelForRetailEntry(yes), "Quit");
+
+    // ... and a wired row the editor has no row label for still gets its own label
+    // from the widget table or the explicit fallback, never the game's text.
+    MenuUiEntry resume;
+    resume.widget_name = "resume";
+    resume.label = "Resume Game";
+    resume.has_text = true;
+    resume.collected = true;
+    resume.colour_index = 2;
+    resume.editor_action = igi::MenuUiAction::Resume;
+    EXPECT_EQ(igi::app_menu::EditorLabelForRetailEntry(resume), "Resume");
+}
+
+TEST(MenuUiEditorText, ContainersAndEmptyRowsHaveNoEditorLabel) {
+    MenuUiEntry container;
+    container.widget_type = "MenuFrame";
+    container.has_text = false;
+    EXPECT_TRUE(igi::app_menu::EditorLabelForRetailEntry(container).empty());
+
+    MenuUiEntry empty_text;
+    empty_text.widget_type = "MenuText";
+    empty_text.has_text = false;
+    empty_text.label = "";
+    EXPECT_TRUE(igi::app_menu::EditorLabelForRetailEntry(empty_text).empty());
+}
+
+TEST(MenuUiEditorText, EditingTheTitleKeepsTheEditorsOwnText) {
+    // The `Menu Text` row edits the loaded definition's title.  The game's text
+    // stops being drawn immediately, and the editor's own strings the cycle writes
+    // are what the row shows -- so the edit stays visible without the game's words
+    // ever coming back.
+    igi::app_menu::EditorMenu menu;
+    menu.definition = RetailShapedFixture();
+    ASSERT_TRUE(igi::app_menu::RebuildEditorMenuModel(menu, MenuUiBuildOptions{}));
+
+    const MenuUiScreen* main = menu.model.FindScreen(900);
+    ASSERT_NE(main, nullptr);
+    const MenuUiEntry* title = TitleEntry(*main);
+    ASSERT_NE(title, nullptr);
+    EXPECT_EQ(title->label, "Game Paused");        // the game's text is in the data
+    EXPECT_EQ(title->editor_label, "IGI EDITOR");  // ... and is not what is drawn
+
+    std::string error;
+    ASSERT_TRUE(igi::app_menu::EditEditorMenuText(menu, MenuUiBuildOptions{}, &error)) << error;
+    main = menu.model.FindScreen(900);
+    ASSERT_NE(main, nullptr);
+    title = TitleEntry(*main);
+    ASSERT_NE(title, nullptr);
+    EXPECT_EQ(title->label, igi::app_menu::kEditorMenuTitleCycle[0]);
+    EXPECT_EQ(title->editor_label, igi::app_menu::kEditorMenuTitleCycle[0]);
+
+    // The next cycle step is a different editor string, and it is drawn as such.
+    ASSERT_TRUE(igi::app_menu::EditEditorMenuText(menu, MenuUiBuildOptions{}, &error)) << error;
+    main = menu.model.FindScreen(900);
+    ASSERT_NE(main, nullptr);
+    title = TitleEntry(*main);
+    ASSERT_NE(title, nullptr);
+    EXPECT_EQ(title->editor_label, igi::app_menu::kEditorMenuTitleCycle[1]);
+    EXPECT_EQ(title->label, igi::app_menu::kEditorMenuTitleCycle[1]);
+}
+
+TEST(MenuUiEditorText, EditorAddedRowsKeepTheirOwnLabels) {
+    igi::app_menu::EditorMenu menu;
+    menu.definition = RetailShapedFixture();
+    ASSERT_TRUE(igi::app_menu::RebuildEditorMenuModel(menu, MenuUiBuildOptions{}));
+
+    // The editor's own screen and the one entry the retail main screen gains are
+    // the editor's text already: nothing may rewrite them.
+    const MenuUiScreen* own = menu.model.FindScreen(igi::app_menu::kEditorOptionsScreenId);
+    ASSERT_NE(own, nullptr);
+    for (const MenuUiEntry& row : own->entries) {
+        EXPECT_TRUE(row.editor_added);
+        EXPECT_EQ(row.editor_label, row.label) << row.label;
+    }
+    const MenuUiScreen* main = menu.model.FindScreen(900);
+    ASSERT_NE(main, nullptr);
+    const MenuUiEntry* options = EntryByWidget(*main, "editor-options",
+                                               igi::app_menu::kEditorOptionsLabel);
+    ASSERT_NE(options, nullptr);
+    EXPECT_TRUE(options->editor_added);
+    EXPECT_EQ(options->editor_label, std::string(igi::app_menu::kEditorOptionsLabel));
 }

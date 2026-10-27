@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <vector>
+
 /*
 ================================================================================
  Renderer_FlatSkyLayers
@@ -22,6 +24,10 @@ public:
 	void					UnloadAllTexs();
 	void					LoadLayerTex(int layer_no, const pic_s* pic);
 
+	// Per-frame dynamic geometry, filled by FlatSkyLayer::Update.  MapVB hands
+	// out the CPU-side staging array and UnmapVB publishes it with an orphan +
+	// glBufferSubData instead of glMapBuffer: Wine's wow64 GL cannot map a
+	// buffer without copying it (fixme:opengl:wow64_map_buffer).
 	vert_flat_sky_layer_s*	MapVB();
 	void					UnmapVB();
 
@@ -38,4 +44,7 @@ private:
 	GLint					tex_loc_;
 
 	Renderer_FlatSkyLayer	layers_[MAX_FLAT_SKY_LAYERS];
+
+	// CPU-side staging for the per-frame vertex fill (see MapVB/UnmapVB).
+	std::vector<vert_flat_sky_layer_s>	vb_staging_;
 };

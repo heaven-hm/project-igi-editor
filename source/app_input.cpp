@@ -5,6 +5,7 @@
  *****************************************************************************/
 #include "app_internal.h"
 #include "runtime/editor_camera_start.h"
+#include "runtime/loading_bar_style.h"
 #include <cstdio>
 #include <fstream>
 
@@ -777,6 +778,13 @@ void App::ResetLevel() {
 
 	Logger::Get().Log(LogLevel::INFO, "[App] Resetting Level " + std::to_string(levelNo));
 
+	// The restore is a whole-folder copy and can take seconds: it reports through
+	// the same bar as a level load (source/runtime/loading_bar_style.h section 5).
+	// This ladder stops at 20% because the reload that follows runs the level-load
+	// ladder, which carries the bar to 100.
+	DrawProgressOverlay("Resetting Level", igi::kLevelResetPreparing.percent,
+	                    igi::kLevelResetPreparing.stage);
+
 	// Only stop the game process launched and tracked by this editor instance.
 	// Scanning by executable name used to terminate unrelated retail sessions.
 #ifdef _WIN32
@@ -802,6 +810,8 @@ void App::ResetLevel() {
 	// captures the pristine state of the full level folder (objects, ai, graphs,
 	// models, textures, terrain). A full folder replacement (remove + copy)
 	// ensures deleted graph nodes, removed AI scripts, etc. are all reverted.
+	DrawProgressOverlay("Resetting Level", igi::kLevelResetRestoring.percent,
+	                    igi::kLevelResetRestoring.stage);
 	bool restored = false;
 	{
 		std::string gameLevelDir = Utils::GetIGIRootPath() + "\\missions\\location0\\level" + std::to_string(levelNo);
@@ -860,6 +870,8 @@ void App::ResetLevel() {
 	catch (...) {}
 
 	// Reload level after reset
+	DrawProgressOverlay("Resetting Level", igi::kLevelResetReloading.percent,
+	                    igi::kLevelResetReloading.stage);
 	last_loaded_level_ = -1;
 	Config::Get().cameraPosX = 0.0f;
 	Config::Get().cameraPosY = 0.0f;

@@ -607,14 +607,17 @@ public:
 	void					LoadTerrainMatTex(const pic_s* pic) override;
 	void					LoadTerrainLMPTex(const pic_s* pic) override;
 
+	// Per-frame dynamic terrain / flat-sky geometry.  Map* hands out CPU staging
+	// (no glMapBuffer: Wine's wow64 GL copies a mapped buffer), and Unmap*
+	// publishes what the engine wrote - see renderer_terrain.cpp MapVB.
 	vert_flat_sky_layer_s *	MapFlatSkyLayersVB();
 	void					UnmapFlatSkyLayersVB();
 
 	vert_pos_a_uv_s*		MapTerrainVB();
-	void					UnmapTerrainVB();
+	void					UnmapTerrainVB(int num_vert);
 
 	uint32_t*				MapTerrainIB();
-	void					UnmapTerrainIB();
+	void					UnmapTerrainIB(int num_index);
 
 	render_chunk_s*			GetTerrainRenderChunckBuffer();
 

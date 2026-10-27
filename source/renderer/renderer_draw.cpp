@@ -1966,22 +1966,28 @@ void Renderer::Draw(const draw_params_s &params,
           const bool hovered = static_cast<int>(i) == focused_entry;
 
           if (!entry.editor_added) {
-            // A retail row: the definition's own text, colour and window.  Retail
-            // draws the label from the window's top-left, which the engine's
-            // text draw treats as the line origin (`MAKE_LABEL`,
-            // src/menuscreen/menutext.c:139-143: `int y_ = SCREEN_Y((mt)->w.y);
-            // Text_New(font_, x_, y_, s_)`), and the editor's text helpers lift a
-            // line origin by kRetailTextLineLift (source/runtime/pause_menu_style.h
-            // section 8).
+            // A retail row: the definition's own window, colour, geometry and
+            // metrics -- but the editor's OWN text.  Retail draws the label from
+            // the window's top-left, which the engine's text draw treats as the
+            // line origin (`MAKE_LABEL`, src/menuscreen/menutext.c:139-143:
+            // `int y_ = SCREEN_Y((mt)->w.y); Text_New(font_, x_, y_, s_)`), and
+            // the editor's text helpers lift a line origin by
+            // kRetailTextLineLift (source/runtime/pause_menu_style.h section 8).
             if (!entry.has_text) {
               continue;  // a container: retail draws its sprite resources
             }
-            // `display_label` is the engine's own resolution of the `Text
-            // Resource` key through `MenuManager_GetString` HOOK 0x418EA0
-            // (src/menu/menumanager.c:832-852: "LOCAL:<language>/<key>"); the raw
-            // key is the fallback when no language archive was found.
-            const std::string& text =
-                entry.display_label.empty() ? entry.label : entry.display_label;
+            // The editor draws its OWN text, never the game's.  `display_label`
+            // is the engine's own resolution of the `Text Resource` key through
+            // `MenuManager_GetString` HOOK 0x418EA0 (src/menu/menumanager.c:832-852:
+            // "LOCAL:<language>/<key>") and is the GAME's word for the row; it is
+            // kept on the model -- the definition is data the editor edits and
+            // saves -- but is deliberately NOT drawn.  `editor_label` is the
+            // editor's label for the row's slot, built by
+            // `app_menu::EditorLabelForRetailEntry` (source/app_menu.cpp); a retail
+            // row with no editor counterpart says so in the editor's own words.
+            // See docs/igi-re-parity/PAUSE_MENU_STYLE.md "The editor's own strings
+            // come first".
+            const std::string& text = entry.editor_label;
             if (text.empty()) {
               continue;
             }

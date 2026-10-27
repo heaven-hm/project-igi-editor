@@ -35,6 +35,8 @@
 
 #include <gtest/gtest.h>
 
+#include <string>
+
 #include "runtime/loading_bar_style.h"
 
 namespace {
@@ -249,5 +251,80 @@ TEST(LoadingBarStyle, FillStaysCorrectForLargeBarWidths) {
     EXPECT_EQ(LoadingBarFillWidth(100000, 50000, 100000), 50000);
 }
 
-}  // namespace
 
+// ─── 5. the editor's own progress ladders ───────────────────────────────────
+//
+// Retail advances the bar in discrete steps (LoadingScreen_New(9) for a level
+// load, src/game/game.c:399; nine LoadingScreen_Step(loading, 1) calls at
+// :415-468), and the editor does the same: one presentation per phase of its own
+// synchronous work.  The ladders are source/runtime/loading_bar_style.h section 5,
+// and these tests hold them to the rule that matters -- a long operation reports
+// progress, the bar never rewinds, and the load/save ladders end full.
+
+TEST(LoadingBarStyle, LevelLoadLadderIsInRangeAndNeverRewinds) {
+    ASSERT_GT(igi::kLevelLoadStageCount, 0);
+    EXPECT_TRUE(igi::LoadingBarLadderIsMonotonic(igi::kLevelLoadStages));
+    EXPECT_EQ(igi::kLevelLoadStages[igi::kLevelLoadStageCount - 1].percent, 100);
+    // The load's own first phase used to be the first bar frame; the prelude
+    // (teardown + the pristine level-folder backup) is reported before it now.
+    EXPECT_LT(igi::kLevelLoadStages[0].percent, igi::kLevelLoadReading.percent);
+    EXPECT_LT(igi::kLevelLoadPreparing.percent, igi::kLevelLoadBackingUp.percent);
+    EXPECT_LT(igi::kLevelLoadBackingUp.percent, igi::kLevelLoadReading.percent);
+    for (int i = 0; i < igi::kLevelLoadStageCount; ++i) {
+        EXPECT_FALSE(std::string(igi::kLevelLoadStages[i].stage).empty()) << i;
+    }
+}
+
+TEST(LoadingBarStyle, LevelSaveLadderIsInRangeAndNeverRewinds) {
+    ASSERT_GT(igi::kLevelSaveStageCount, 0);
+    EXPECT_TRUE(igi::LoadingBarLadderIsMonotonic(igi::kLevelSaveStages));
+    EXPECT_EQ(igi::kLevelSaveStages[igi::kLevelSaveStageCount - 1].percent, 100);
+    EXPECT_EQ(igi::kLevelSavePreparing.percent, 0);
+    // The write-back of recalculated lightmaps runs between `lightmaps` and `done`.
+    EXPECT_LT(igi::kLevelSaveCompiling.percent, igi::kLevelSaveLightmaps.percent);
+    EXPECT_LT(igi::kLevelSaveLightmaps.percent, igi::kLevelSaveDone.percent);
+}
+
+TEST(LoadingBarStyle, LevelResetLadderHandsOverToTheLoad) {
+    ASSERT_GT(igi::kLevelResetStageCount, 0);
+    EXPECT_TRUE(igi::LoadingBarLadderIsMonotonic(igi::kLevelResetStages));
+    // A reset's restore is followed by a level load, whose ladder carries the bar
+    // to 100; the reset's own last stage must therefore stop short of it.
+    EXPECT_LT(igi::kLevelResetStages[igi::kLevelResetStageCount - 1].percent, 100);
+    EXPECT_LT(igi::kLevelResetRestoring.percent, igi::kLevelResetReloading.percent);
+}
+
+TEST(LoadingBarStyle, EveryLadderStageFillsTheBarByTheRetailRule) {
+    // Each stage's percentage is a `done` value with total == 100, so the retail
+    // integer rule (:115) gives its fill.  The fills must be non-decreasing, in
+    // range, and the load/save ladders must reach the whole bar.
+    auto check = [](const igi::LoadingBarStage* stages, int count) {
+        int previous = -1;
+        for (int i = 0; i < count; ++i) {
+            const int filled = LoadingBarFillWidthForPercent(igi::kRetailLoadingBarWidth,
+                                                             stages[i].percent);
+            EXPECT_GE(filled, 0) << i;
+            EXPECT_LE(filled, igi::kRetailLoadingBarWidth) << i;
+            EXPECT_GE(filled, previous) << "stage " << i << " rewinds the bar";
+            previous = filled;
+        }
+        return previous;
+    };
+    EXPECT_EQ(check(igi::kLevelLoadStages, igi::kLevelLoadStageCount),
+              igi::kRetailLoadingBarWidth);
+    EXPECT_EQ(check(igi::kLevelSaveStages, igi::kLevelSaveStageCount),
+              igi::kRetailLoadingBarWidth);
+    EXPECT_LT(check(igi::kLevelResetStages, igi::kLevelResetStageCount),
+              igi::kRetailLoadingBarWidth);
+}
+
+TEST(LoadingBarStyle, TheFirstLoadStageIsAlreadyVisible) {
+    // The prelude stage exists so the window is not frozen before the first bar
+    // frame: it must paint something (a 2% fill is 11 px of the 560 px bar).
+    const int filled = LoadingBarFillWidthForPercent(igi::kRetailLoadingBarWidth,
+                                                     igi::kLevelLoadStages[0].percent);
+    EXPECT_GT(filled, 0);
+    EXPECT_LT(filled, igi::kRetailLoadingBarWidth);
+}
+
+}  // namespace

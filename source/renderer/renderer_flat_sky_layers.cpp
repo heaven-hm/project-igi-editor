@@ -49,6 +49,10 @@ bool Renderer_FlatSkyLayers::Init() {
 
 	vbo_ = GL_CreateBuffer(GL_ARRAY_BUFFER, sizeof(vert_flat_sky_layer_s) * NUM_VERTEX_PER_FLAT_SKY_LAYER * MAX_FLAT_SKY_LAYERS, nullptr, GL_DYNAMIC_DRAW);
 
+	// CPU-side staging for the per-frame fill (see MapVB/UnmapVB).  Level::Update
+	// rewrites every layer every frame, so the whole array is republished.
+	vb_staging_.resize(NUM_VERTEX_PER_FLAT_SKY_LAYER * MAX_FLAT_SKY_LAYERS);
+
 	for (int i = 0; i < MAX_FLAT_SKY_LAYERS; ++i) {
 		if (!layers_[i].Init(i, vbo_, NUM_VERTEX_PER_FLAT_SKY_LAYER)) {
 			return false;
@@ -81,16 +85,21 @@ void Renderer_FlatSkyLayers::LoadLayerTex(int layer_no, const pic_s* pic) {
 }
 
 vert_flat_sky_layer_s* Renderer_FlatSkyLayers::MapVB() {
-	glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-	vert_flat_sky_layer_s * vb = (vert_flat_sky_layer_s*)glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
-	glBindBuffer(GL_ARRAY_BUFFER, 0);
-	return vb;
+	// No glMapBuffer - see renderer_terrain.cpp MapVB for why.
+	return vb_staging_.empty() ? nullptr : vb_staging_.data();
 }
 
 void Renderer_FlatSkyLayers::UnmapVB() {
-	glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-	glUnmapBuffer(GL_ARRAY_BUFFER);
-	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	if (vb_staging_.empty()) {
+		return;
+	}
+
+	// The two layers sit at fixed offsets in the one VBO
+	// (Renderer_FlatSkyLayer::Init), so a full-range upload keeps both correct.
+	const GLsizeiptr bytes = static_cast<GLsizeiptr>(
+		vb_staging_.size() * sizeof(vert_flat_sky_layer_s));
+	GL_BufferData(vbo_, GL_ARRAY_BUFFER, bytes, nullptr, GL_STREAM_DRAW);
+	GL_BufferSubData(vbo_, GL_ARRAY_BUFFER, 0, bytes, vb_staging_.data());
 }
 
 void Renderer_FlatSkyLayers::Draw(GLuint ubo_mats, bool overlay_wireframe) {

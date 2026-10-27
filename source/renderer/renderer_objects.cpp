@@ -13,7 +13,13 @@
 
 bool Renderer_Objects::IsSkippedModelId(const std::string& modelId) {
     if (modelId.empty()) return false;
-    return modelId == "colbox" || modelId == "colbox2" || modelId == "colbox4" || modelId == "colbox66";
+    // The engine's collision proxies are never drawn -- they carry no geometry worth
+    // rendering (mef_native.cpp:681: the only geometry is the collision mesh).  colbox3
+    // was missing from this list, so a level that places one (level 12 does) treated it
+    // as a real model, failed to resolve it and logged "Model NOT FOUND: 'colbox3'" as an
+    // ERROR on every load.  It is a proxy like the others.
+    return modelId == "colbox" || modelId == "colbox2" || modelId == "colbox3" ||
+           modelId == "colbox4" || modelId == "colbox66";
 }
 
 // Per-frame delta seconds feeder for continuous animations (e.g. helicopter rotor spin).
@@ -1038,6 +1044,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         if (obj.modelId.empty()) continue;
         if (obj.modelId == "colbox" || obj.name == "colbox" ||
             obj.modelId == "colbox2" || obj.name == "colbox2" ||
+            obj.modelId == "colbox3" || obj.name == "colbox3" ||
             obj.modelId == "colbox4" || obj.name == "colbox4" ||
             obj.modelId == "colbox66" || obj.name == "colbox66") {
             continue;

@@ -200,4 +200,142 @@ constexpr LoadingBarLayout BuildLoadingBarLayout(int viewportWidth,
     return bar;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. The editor's own progress ladder
+//
+// Retail advances the bar in DISCRETE STEPS, not with a timer: a full level load
+// is `LoadingScreen_New(9)` (src/game/game.c:399) advanced by nine
+// `LoadingScreen_Step(loading, 1)` calls (:415-468); a restart uses 5 (:1077) and
+// a mission transition 1 (:576).  Each step rewrites the fill from the same
+// integer rule (:115), so the bar moves in jumps between real work.
+//
+// The editor's loads are synchronous as well, so it advances the bar the same
+// way: ONE presentation per phase of its own work, never a timer.  The ladders
+// below are those phases, and every `percent` is the `done` value of the
+// percentage form of the retail rule (`LoadingBarFillWidthForPercent`).
+//
+// The rule the ladders exist to keep: no long editor operation may run with the
+// window frozen and no bar.  The three operations that can take seconds are a
+// level load (source/app_level.cpp), a level save (including the recalculated
+// lightmaps written back into the game's `lightmaps.res`) and a reset's restore
+// from the pristine level backup (source/app_input.cpp).  Model imports and the
+// lightmap bakes already report through `App::DrawProgressOverlay`.
+//
+// A phase that turns out to be fast is still reported: the alternative is a bar
+// that skips a value, and a skipped value is invisible while a missing phase is
+// not.
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct LoadingBarStage {
+    int percent = 0;        // 0..100, i.e. `done` with `total == 100`
+    const char* stage = "";  // the stage text of the editor's own overlay label
+};
+
+// A level load, in order.  `preparing` and `backing up level` cover
+// `App::LoadLevel`'s prelude -- the previous level's asset teardown and the
+// pristine full-folder backup of the level being loaded, which ran with no bar at
+// all before these two stages existed -- and `reading level` is the first stage
+// that was there before.
+inline constexpr LoadingBarStage kLevelLoadPreparing{2, "preparing"};
+inline constexpr LoadingBarStage kLevelLoadBackingUp{5, "backing up level"};
+inline constexpr LoadingBarStage kLevelLoadReading{10, "reading level"};
+inline constexpr LoadingBarStage kLevelLoadModels{25, "models & terrain"};
+inline constexpr LoadingBarStage kLevelLoadTracks{60, "tracks"};
+inline constexpr LoadingBarStage kLevelLoadSnapping{75, "snapping objects"};
+inline constexpr LoadingBarStage kLevelLoadFinalizing{90, "finalizing"};
+inline constexpr LoadingBarStage kLevelLoadDone{100, "done"};
+
+inline constexpr LoadingBarStage kLevelLoadStages[] = {
+    kLevelLoadPreparing, kLevelLoadBackingUp, kLevelLoadReading,   kLevelLoadModels,
+    kLevelLoadTracks,    kLevelLoadSnapping,   kLevelLoadFinalizing, kLevelLoadDone,
+};
+constexpr int kLevelLoadStageCount =
+    static_cast<int>(sizeof(kLevelLoadStages) / sizeof(kLevelLoadStages[0]));
+
+// A level save: serializing the level's `objects.qsc`/`.qvm`, compiling an edited
+// AI script, and repacking the recalculated lightmaps into the game's
+// `lightmaps.res` (`App::SaveCurrentLevel`, source/app_level.cpp).  The write-back
+// reports its own per-object progress between `lightmaps` and `done`.
+inline constexpr LoadingBarStage kLevelSavePreparing{0, "preparing"};
+inline constexpr LoadingBarStage kLevelSaveWriting{10, "writing level"};
+inline constexpr LoadingBarStage kLevelSaveCompiling{55, "compiling objects"};
+inline constexpr LoadingBarStage kLevelSaveLightmaps{80, "lightmaps"};
+inline constexpr LoadingBarStage kLevelSaveDone{100, "done"};
+
+inline constexpr LoadingBarStage kLevelSaveStages[] = {
+    kLevelSavePreparing, kLevelSaveWriting, kLevelSaveCompiling,
+    kLevelSaveLightmaps, kLevelSaveDone,
+};
+constexpr int kLevelSaveStageCount =
+    static_cast<int>(sizeof(kLevelSaveStages) / sizeof(kLevelSaveStages[0]));
+
+// A reset's restore from the pristine level backup (`App::ResetLevel`,
+// source/app_input.cpp): the whole level folder is staged, swapped in and then
+// reloaded, and the reload runs the level-load ladder above -- which is why this
+// ladder stops at 20 rather than 100.
+inline constexpr LoadingBarStage kLevelResetPreparing{0, "preparing reset"};
+inline constexpr LoadingBarStage kLevelResetRestoring{10, "restoring backup"};
+inline constexpr LoadingBarStage kLevelResetReloading{20, "reloading level"};
+
+inline constexpr LoadingBarStage kLevelResetStages[] = {
+    kLevelResetPreparing, kLevelResetRestoring, kLevelResetReloading,
+};
+constexpr int kLevelResetStageCount =
+    static_cast<int>(sizeof(kLevelResetStages) / sizeof(kLevelResetStages[0]));
+
+// A ladder is well-formed when its percentages are in range and never go
+// backwards: the bar's fill follows `done` monotonically (:115), so a stage that
+// went backwards would visibly rewind it.
+template <int N>
+constexpr bool LoadingBarLadderIsMonotonic(const LoadingBarStage (&stages)[N]) noexcept {
+    for (int i = 0; i < N; ++i) {
+        if (stages[i].percent < 0 || stages[i].percent > 100) return false;
+        if (i > 0 && stages[i].percent < stages[i - 1].percent) return false;
+    }
+    return true;
+}
+
+static_assert(LoadingBarLadderIsMonotonic(kLevelLoadStages),
+              "the level-load ladder must be in range and never go backwards");
+static_assert(LoadingBarLadderIsMonotonic(kLevelSaveStages),
+              "the level-save ladder must be in range and never go backwards");
+static_assert(LoadingBarLadderIsMonotonic(kLevelResetStages),
+              "the level-reset ladder must be in range and never go backwards");
+static_assert(kLevelLoadStages[kLevelLoadStageCount - 1].percent == 100,
+              "a level load ends with the bar full");
+static_assert(kLevelSaveStages[kLevelSaveStageCount - 1].percent == 100,
+              "a level save ends with the bar full");
+static_assert(kLevelResetStages[kLevelResetStageCount - 1].percent < 100,
+              "a reset hands the bar over to the level load's own ladder");
+
+// ── how this was verified (2026-10-28) ──────────────────────────────────────
+// The i686 editor runs under Wine on this host through the GL 2.1 fallback
+// (docs/igi-re-parity/GL21_FALLBACK.md), so the overlay's own frames are
+// observable in the editor's log with DEBUG logging on (`QEDLogLevel(0)` in the
+// staged `qedconfig.qsc`; `App::DrawProgressOverlay` logs one DEBUG line per
+// presented frame).  A startup run (`igi1ed.exe -level 1 -w 1280 -h 720`, game
+// root a writable copy) reported exactly this, in order:
+//
+//   progress overlay: Loading Level 1  2% (preparing)         viewport 1280x720 bar 360,560 560x10 filled  11
+//   progress overlay: Loading Level 1  5% (backing up level) viewport 1280x720 bar 360,560 560x10 filled  28
+//   progress overlay: Loading Level 1 10% (reading level)    viewport 1280x720 bar 360,560 560x10 filled  56
+//   progress overlay: Loading Level 1 25% (models & terrain) viewport 1280x720 bar 360,560 560x10 filled 140
+//   progress overlay: Loading Level 1 60% (tracks)           viewport 1280x720 bar 360,560 560x10 filled 336
+//   progress overlay: Loading Level 1 75% (snapping objects) viewport 1280x720 bar 360,560 560x10 filled 420
+//   progress overlay: Loading Level 1 90% (finalizing)       viewport 1280x720 bar 360,560 560x10 filled 504
+//   progress overlay: Loading Level 1 100% (done)            viewport 1280x720 bar 360,560 560x10 filled 560
+//
+// `bar 360,560` is `BuildLoadingBarLayout(1280, 720)`: (1280-640)/2 + 40 = 360 and
+// (720-480)/2 + 440 = 560, i.e. the retail 640x480 band at this window size, and
+// every `filled` is the integer truncation of `560 * pct / 100` (:115).  The
+// startup load is the load this ladder's first two stages exist for: it runs
+// inside `App::Init`, before GLUT's reshape callback, and used to present NOTHING
+// because the viewport was still 0 (see `ProgressOverlayCanPaint`,
+// source/runtime/progress_overlay_policy.h).
+//
+// **Not verified: the rendered pixels.**  Wine on this host never maps a visible
+// window for the editor (the X root has no window and the macOS screen is
+// unchanged across a run), so what is proven is that each frame was presented at
+// the retail rect with the retail fill -- not what the bar looked like on screen.
+
 }  // namespace igi

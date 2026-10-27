@@ -193,7 +193,7 @@ void Renderer_Splines::DrawSplineSegment(
     const std::string_view segModelId = spline_geometry::ResolveSegmentModel(
         start.segmentModelId, end.segmentModelId, fallbackSegmentModelId);
     if (segModelId.empty()) return;
-    if (segModelId == "colbox" || segModelId == "colbox2" ||
+    if (segModelId == "colbox" || segModelId == "colbox2" || segModelId == "colbox3" ||
         segModelId == "colbox4" || segModelId == "colbox66") return;
 
     const glm::dvec3 p0 = start.pos;

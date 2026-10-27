@@ -173,6 +173,16 @@ bool App::Init(int argc, char** argv) {
 	terrain_mod_options_ = Arg_ReadInt(argc, argv, "-terrain_mod_opts", terrain_mod_options_);
 	stick_to_ground_ = Arg_OptionIdx(argc, argv, "-stick_to_ground") > 0;
 
+	// The loading overlay is drawn with the editor's viewport, and the reshape
+	// callback is only registered AFTER App::Init returns (source/main.cpp), so
+	// `window_state_.viewport_*` is still 0 here (the constructor memsets it) and
+	// `App::DrawProgressOverlay` drops every frame of the STARTUP load on its
+	// `vw <= 0 || vh <= 0` guard -- which is why the retail bar was invisible for
+	// the one load every user sees.  Seed the viewport from the window GLUT has
+	// already created; the later `-w`/`-h` block below still applies its own values.
+	OnWindowResize((std::max)(1, glutGet(GLUT_WINDOW_WIDTH)),
+	               (std::max)(1, glutGet(GLUT_WINDOW_HEIGHT)));
+
 	int start_level = Arg_ReadInt(argc, argv, "-level", cfg.level);
 	if (start_level >= MIN_LEVEL_NO && start_level <= MAX_LEVEL_NO) {
 		try {
@@ -1147,12 +1157,14 @@ void App::Frame(float delta_seconds) {
 	const auto frame_pre_t1b = profile_frame_break ? FrameBreakClock::now()
 	                                               : FrameBreakClock::time_point{};
 
+	// Publish exactly the range the engine just filled (Terrain::Update resets
+	// both counters at the start of the frame and fills from index 0).
 	if (terrain_ib) {
-		renderer_.UnmapTerrainIB();
+		renderer_.UnmapTerrainIB(update_params.num_terrain_idx_);
 	}
 
 	if (terrain_vb) {
-		renderer_.UnmapTerrainVB();
+		renderer_.UnmapTerrainVB(update_params.num_terrain_vert_);
 	}
 
 	if (fsl_vb) {

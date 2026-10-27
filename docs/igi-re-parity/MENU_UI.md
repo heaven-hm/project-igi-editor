@@ -203,7 +203,10 @@ the label inside it.
    which looks up `LOCAL:<language>/<name>`; in the retail definition the resource
    key *is* the English display string, and `LANGUAGE/ENGLISH/menusystem.res` maps
    `LOCAL:english/Resume Game` to `Resume Game`. The editor has no menu-language
-   selection, so it renders the key. Documented deviation, not a guess.
+   selection, so the model carries the resolved text as `display_label` — and the
+   editor's menu does not draw it: the drawn text is the editor's own
+   `editor_label`, so the game's words never appear in the editor's UI
+   (`docs/igi-re-parity/PAUSE_MENU_STYLE.md`). Documented deviation, not a guess.
 2. **Script expressions are not evaluated.** There is no retail script VM in the
    editor. An item that declares `isEnabled Expression` / `isVisible Expression` is
    reported selectable with `condition_unverified = true`, and both expression
@@ -406,12 +409,17 @@ the live path is proved by a Wine run (below).
 **What the draw layer keeps.** The retail frame (`MenuScreen_DrawFrame` HOOK
 0x421CD0), the palette (`gMenuColors`), the row pitch and the font metrics are
 unchanged; the rows are the model's. The editor's own screen keeps its two title
-lines ("IGI EDITOR" / "PAUSED"); a retail screen draws the definition's own title
-instead, as one of its rows. A retail row is drawn from the definition —
-`display_label` when the language archive resolved the key
-(`MenuManager_GetString` HOOK 0x418EA0), else the raw key — at the window's own
-position, which is what the engine draws. An editor row is drawn with the live state
-appended by `PauseMenuRowLabel`, exactly as before.
+lines ("IGI EDITOR" / "PAUSED"); a retail screen draws the editor's own title in
+its title row instead of the definition's. A retail row is drawn at the window's
+own position — the geometry is what the engine draws — but the TEXT is the
+editor's: `MenuUiEntry::editor_label`, filled by
+`app_menu::EditorLabelForRetailEntry` (`source/app_menu.cpp`) with the editor's own
+row label for that slot, or `Not in Editor` when the editor has no counterpart. The
+game's text (`label`, the script key, and `display_label`, the language archive's
+answer) stays on the model — the definition is data the editor edits and saves —
+and is never drawn. `docs/igi-re-parity/PAUSE_MENU_STYLE.md` records the rule and
+the per-row table. An editor row is drawn with the live state appended by
+`PauseMenuRowLabel`, exactly as before.
 
 **What is still not executed.** Retail script expressions and retail script *actions*
 stay opaque: an item whose action is not one the editor implements is drawn, is
@@ -426,8 +434,13 @@ table above.
 python3 tools/igi-re-parity/tu-check.py source/menu/menu_ui.cpp source/app_menu.cpp
   ==> OK (each file, both targets)      checked 4 translation unit(s), 0 failed
 
+python3 tools/igi-re-parity/tu-check.py source/app_menu.cpp source/menu/menu_ui_draw.cpp \
+        source/app_level.cpp source/app_input.cpp source/renderer/renderer_draw.cpp
+  ==> OK (each file)                    checked 6 translation unit(s), 0 failed
+      (the editor-label change's files; run after it landed)
+
 IGI_HOST_NO_CACHE=1 IGI_HOST_TESTS=tests/test_menu_ui.cpp bash scripts/run-host-tests.sh
-  ==> PASS test_menu_ui   30 passed  0 failed (30 tests, exit 0)
+  ==> PASS test_menu_ui   44 passed  0 failed (44 tests, exit 0)
       suites run: 1  failed: 0  not host-portable: 0
 ```
 
@@ -439,7 +452,11 @@ empty and a screen-less definition; disabling and re-enabling an item; focus by
 entry index; the mouse rectangle test and its exclusive edges; a selectable frame
 pruning its descendants; the 32-item cap; unknown screen ids; the fallback's row
 count, order, actions and hit boxes; a missing retail file; the retail corpus
-structure; the wiring invariant; and the two readers agreeing widget for widget.
+structure; the wiring invariant; the two readers agreeing widget for widget; and the
+six `MenuUiEditorText` tests for the text the editor DRAWS (the editor's own label
+per retail row, the title, the `Not in Editor` fallback, and the `Menu Text` edit
+staying visible) — see `docs/igi-re-parity/PAUSE_MENU_STYLE.md` "The editor's own
+strings come first".
 
 `source/menu/menu_ui_draw.cpp` is editor-only and is not linked by the host lane; it
 was compiled with the exact cross-build flags of the editor target
@@ -469,9 +486,11 @@ for clicks). The editor's own log is the evidence:
 [INFO] pause menu: Menu saved: Z:\...\scratch\pause-menu-smoke\igi/menusystem/ingamemenu.qvm
 ```
 
-`Resume Game` is the *definition's* row on screen 900 — its label comes from the loaded
-tree, not from the editor — and activating it resumed, which is
-`MenuManager_LeaveMenus(900, MENUMANAGER_IDLE)`. `Menu Text` and `Save Menu` are the
+`Resume Game` is the *definition's* row on screen 900 — the log line prints the
+retail key, which is the loaded tree's own identity for the row, not the editor's —
+and activating it resumed, which is `MenuManager_LeaveMenus(900, MENUMANAGER_IDLE)`.
+That row is DRAWN as `Resume`: the editor's own text for it
+(`app_menu::EditorLabelForRetailEntry`). `Menu Text` and `Save Menu` are the
 editor's own added rows on its own screen.
 
 and the container that click wrote:

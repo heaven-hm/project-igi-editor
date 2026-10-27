@@ -258,3 +258,132 @@ TEST(MenuLabels, EngineMissStringIsExact) {
     EXPECT_FALSE(miss.resolved());
     EXPECT_TRUE(miss.fallback());
 }
+
+// ─── the text the editor DRAWS is the editor's, not the game's ───────────────
+//
+// `label` / `display_label` above are the GAME's text and stay on the model: the
+// loaded definition is data the editor edits and saves (`SaveEditorMenu`), and the
+// reader tests read those fields.  What the editor's menu SHOWS is
+// `MenuUiEntry::editor_label`, which `LoadEditorMenu` fills from
+// `app_menu::EditorLabelForRetailEntry`.  These tests hold the two apart on the
+// real retail container.
+
+// Every retail text row has editor text to draw, and it is never the game's.
+TEST(MenuLabels, EveryRetailRowHasEditorTextThatIsNotTheGames) {
+    if (!CorpusAvailable()) {
+        GTEST_SKIP() << "retail corpus not installed";
+    }
+
+    const app_menu::EditorMenu menu = app_menu::LoadEditorMenu(
+        CorpusRoot().string(), /*terrain_expanded=*/false, Options());
+    ASSERT_TRUE(menu.retail);
+
+    std::size_t retail_text_rows = 0;
+    for (const igi::MenuUiScreen& screen : menu.model.screens) {
+        for (const igi::MenuUiEntry& entry : screen.entries) {
+            if (!entry.has_text) {
+                continue;  // a container draws its sprite resources, not text
+            }
+            if (entry.editor_added) {
+                continue;  // the editor's own rows, checked below
+            }
+            ++retail_text_rows;
+            EXPECT_FALSE(entry.editor_label.empty())
+                << "retail row '" << entry.label << "' has no editor text";
+            // The drawn text must differ from both forms of the game's text.  If a
+            // future mapping ever returned the retail string, this is the test that
+            // fails rather than the user seeing the game's words again.
+            EXPECT_NE(entry.editor_label, entry.label)
+                << "row '" << entry.label << "' would draw the game's script key";
+            EXPECT_NE(entry.editor_label, entry.display_label)
+                << "row '" << entry.label << "' would draw the game's resolved text";
+            EXPECT_EQ(entry.editor_label.find("RM: "), std::string::npos)
+                << "the engine's miss string must never reach an editor row";
+        }
+    }
+    EXPECT_GT(retail_text_rows, 0u);
+}
+
+// Screen 900 -- the screen the editor's "Game Menu" row opens -- keeps its five
+// retail rows, in retail order, with the retail text verbatim, and draws the
+// editor's own label for each.
+TEST(MenuLabels, TheRetailMainScreenKeepsItsStructureAndDrawsEditorText) {
+    if (!CorpusAvailable()) {
+        GTEST_SKIP() << "retail corpus not installed";
+    }
+
+    const app_menu::EditorMenu menu = app_menu::LoadEditorMenu(
+        CorpusRoot().string(), /*terrain_expanded=*/false, Options());
+    ASSERT_TRUE(menu.retail);
+    const igi::MenuUiScreen* main = menu.model.FindScreen(900);
+    ASSERT_NE(main, nullptr);
+
+    struct Expected {
+        const char* widget_name;
+        const char* retail_key;   // verbatim retail data, untouched
+        const char* retail_text;  // the archive's answer for that key
+        const char* editor_label; // what the editor draws
+    };
+    const Expected expected[] = {
+        // The title is the screen's first MenuText (its retail key is
+        // "Game Paused"; the editor shows its own panel title).
+        {"", "Game Paused", "Game Paused", "IGI EDITOR"},
+        {"resume", "Resume Game", "Resume Game", "Resume"},
+        {"restart", "Restart Game", "Restart Mission", "Reset Level"},
+        {"sound", "Sound", "Sound", "Music"},
+        {"controls", "Controls", "Controls", "Keybindings"},
+        {"quit", "Quit to Main Menu", "Quit to Main Menu", "Quit"},
+    };
+
+    for (const Expected& row : expected) {
+        const igi::MenuUiEntry* entry = nullptr;
+        for (const igi::MenuUiEntry& candidate : main->entries) {
+            if (candidate.widget_name == row.widget_name && candidate.label == row.retail_key) {
+                entry = &candidate;
+                break;
+            }
+        }
+        ASSERT_NE(entry, nullptr) << "retail row '" << row.retail_key << "' is missing";
+        EXPECT_EQ(entry->label, row.retail_key) << "the script key must stay verbatim";
+        EXPECT_EQ(entry->display_label, row.retail_text)
+            << "the game's resolved text must stay on the model";
+        EXPECT_EQ(entry->editor_label, row.editor_label);
+    }
+
+    // The retail items keep their order, and the editor's own entry is still
+    // appended after them.
+    ASSERT_GE(main->selectable.size(), 5u);
+    const char* order[] = {"resume", "restart", "sound", "controls", "quit"};
+    for (size_t i = 0; i < 5; ++i) {
+        EXPECT_EQ(main->entries[static_cast<size_t>(main->selectable[i])].widget_name, order[i]);
+    }
+    const igi::MenuUiEntry& added =
+        main->entries[static_cast<size_t>(main->selectable.back())];
+    EXPECT_TRUE(added.editor_added);
+    EXPECT_EQ(added.editor_label, std::string(app_menu::kEditorOptionsLabel));
+}
+
+// The editor's own rows are not run through the mapping: they are editor text
+// already, and their labels are drawn verbatim.
+TEST(MenuLabels, EditorRowsKeepTheirOwnEditorLabels) {
+    if (!CorpusAvailable()) {
+        GTEST_SKIP() << "retail corpus not installed";
+    }
+
+    const app_menu::EditorMenu menu = app_menu::LoadEditorMenu(
+        CorpusRoot().string(), /*terrain_expanded=*/false, Options());
+    ASSERT_TRUE(menu.retail);
+
+    const igi::MenuUiScreen* own = menu.model.FindScreen(app_menu::kEditorOptionsScreenId);
+    ASSERT_NE(own, nullptr);
+    std::size_t rows = 0;
+    for (const igi::MenuUiEntry& row : own->entries) {
+        if (!row.has_text) {
+            continue;
+        }
+        ++rows;
+        EXPECT_TRUE(row.editor_added);
+        EXPECT_EQ(row.editor_label, row.label) << "editor row '" << row.label << "' was altered";
+    }
+    EXPECT_GT(rows, 0u);
+}

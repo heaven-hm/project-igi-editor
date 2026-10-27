@@ -439,6 +439,18 @@ TEST(ProgressOverlayPolicyTest, VisibleOverlaySuppressesSceneRepaintAndPresentsF
     EXPECT_FALSE(igi::ShouldPresentOverlayBeforePumpingEvents(hidden));
 }
 
+// The overlay needs a viewport to draw into, and the startup level load runs
+// inside App::Init before GLUT's reshape callback exists (source/main.cpp), so
+// the viewport has to be seeded there or every frame of the one load every user
+// sees is dropped -- the bar is invisible exactly when it is most expected.
+TEST(ProgressOverlayPolicyTest, TheOverlayCannotPaintWithoutAViewport) {
+    EXPECT_FALSE(igi::ProgressOverlayCanPaint(0, 0));   // App::Init's pre-seed state
+    EXPECT_FALSE(igi::ProgressOverlayCanPaint(0, 720));
+    EXPECT_FALSE(igi::ProgressOverlayCanPaint(1280, 0));
+    EXPECT_TRUE(igi::ProgressOverlayCanPaint(1, 1));
+    EXPECT_TRUE(igi::ProgressOverlayCanPaint(1280, 720));
+}
+
 // The editor must launch with no title bar and no minimize/maximize/close
 // chrome; Pause -> Quit is the supported exit path.
 TEST(WindowStylePolicyTest, BorderlessFullscreenStripsAllChrome) {

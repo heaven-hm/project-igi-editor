@@ -219,6 +219,20 @@ struct MenuUiEntry {
     std::string display_label;   // resolved language text, or the engine's miss string
     bool label_resolved = false; // display_label came from a language archive
 
+    // ── the text the EDITOR draws ────────────────────────────────────────────
+    // `label`/`display_label` above are the GAME's text (the script key and the
+    // language archive's answer).  The editor's menu must not show the game's
+    // words, so the draw layer uses THIS field instead, and it is always
+    // editor-owned text: the editor's own row label for the row's slot, its own
+    // panel title for a retail screen's title, or the explicit
+    // `kRetailNotInEditorLabel` when the editor has no counterpart for the row.
+    // See `EditorLabelForRetailEntry` (source/app_menu.cpp) for the rule and
+    // docs/igi-re-parity/PAUSE_MENU_STYLE.md for why.
+    //
+    // Left empty for a container and for an entry that declares no text, exactly
+    // like `display_label`; the retail text is never copied here.
+    std::string editor_label;
+
     // Retail selectability.  `selectable` is what the retail window would set:
     // MenuFrame from "Is Selectable" (src/widget/menuframe.c:57, read by
     // `MenuFrame_Run` HOOK 0x422A50), MenuText/MenuTextConditional from a
@@ -427,6 +441,37 @@ inline constexpr const char* kEditorMenuTitleCycle[] = {
 };
 constexpr int kEditorMenuTitleCycleCount =
     static_cast<int>(sizeof(kEditorMenuTitleCycle) / sizeof(kEditorMenuTitleCycle[0]));
+
+// The editor's own text for a retail row it has no counterpart for, and for a
+// retail screen title that is not already one of the editor's own title strings.
+// It is editor-authored, so no game text can reach the editor's menu even when a
+// retail screen is opened for the first time or a new widget is added to the
+// definition.  See `EditorLabelForRetailEntry`.
+inline constexpr char kRetailNotInEditorLabel[] = "Not in Editor";
+
+// The editor's own name for the input-configuration concept, used as the label of
+// the retail `Controls` row: the editor has no controls screen, and its own word
+// for input configuration is its KEYBINDINGS overlay
+// (source/renderer/renderer_draw.cpp, "KEYBINDINGS  [H / Ctrl+H to close]").
+inline constexpr char kEditorKeybindingsLabel[] = "Keybindings";
+
+// The editor's own label for a retail entry: the text the editor DRAWS for that
+// row, never the game's (`label` / `display_label`).  Empty exactly when the
+// entry declares no text.
+//
+// The rule, in order (source/app_menu.cpp documents each branch and
+// docs/igi-re-parity/PAUSE_MENU_STYLE.md records the decision):
+//   1. a retail screen's title (a non-item text row in the retail title colour)
+//      shows the editor's own panel title, or the editor's own title string the
+//      loaded definition currently carries (the `Menu Text` row's cycle), so an
+//      edit made there is still visible;
+//   2. a retail row the editor has a function for shows the editor's own row
+//      label for that function ("Resume", "Reset Level", "Music", "Quit", ...);
+//   3. anything else shows `kRetailNotInEditorLabel`.
+//
+// `editor_added` entries are not passed here: their labels are the editor's own
+// already and are drawn verbatim.
+std::string EditorLabelForRetailEntry(const MenuUiEntry& entry);
 
 // How many of an `EditorMenu`'s labels resolved against the language archives.
 // Mirrors `menu_text::LookupCounters` as plain counts, so this header does not have

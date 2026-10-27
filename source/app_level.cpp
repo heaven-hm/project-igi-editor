@@ -10,6 +10,7 @@
 #include "renderer/object_lightmap.h"
 #include "runtime/audio_system.h"
 #include "runtime/level_weather.h"
+#include "runtime/loading_bar_style.h"
 #include "runtime/weather_mode.h"
 #include "runtime/pause_menu_state.h"
 #include "runtime/editor_camera_start.h"
@@ -203,6 +204,26 @@ void App::LoadLevel(int level_no) {
 		Logger::Get().Log(LogLevel::INFO, "[App] LoadLevel() START for level " + std::to_string(level_no));
 		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
 
+		// ── Loading overlay ──────────────────────────────────────────────────
+		// Staged progress: the load is synchronous, so the bar is redrawn and
+		// swapped once per phase of the work, never on a timer -- retail advances
+		// `LoadingScreen_Step` the same way (HOOK 0x48A620,
+		// src/loadscreen/loadscreen.c:110-124; `LoadingScreen_New(9)` for a full
+		// load, src/game/game.c:399).  The ladder, and why each stage is where it
+		// is, is source/runtime/loading_bar_style.h section 5.
+		//
+		// The first two stages cover the PRELUDE -- the previous level's asset
+		// teardown and the pristine full-folder backup of the level being loaded,
+		// which is a recursive copy of the whole level directory.  Until they
+		// existed the bar did not appear until that copy had finished, so the
+		// window sat frozen through the longest part of a first load.
+		auto drawLoadBar = [&](const igi::LoadingBarStage& stage) {
+			char title[32];
+			snprintf(title, sizeof(title), "Loading Level %d", level_no);
+			DrawProgressOverlay(title, stage.percent, stage.stage);
+		};
+		drawLoadBar(igi::kLevelLoadPreparing);
+
 		// Track in-session level switches. The FIRST load (last_loaded_level_ < 0) is
 		// equivalent to a fresh process; any later load is a MENU/RELOAD switch whose
 		// only difference from a fresh process is leftover per-level state.
@@ -230,6 +251,7 @@ void App::LoadLevel(int level_no) {
 	// ENTIRE level folder — objects, ai, graphs, models, textures, terrain —
 	// before any edits are made. Only create it once per level (if it doesn't
 	// exist); subsequent loads reuse the existing backup.
+	drawLoadBar(igi::kLevelLoadBackingUp);
 	{
 		std::string gameLevelDir = Utils::GetIGIRootPath() + "\\missions\\location0\\level" + std::to_string(level_no);
 		std::string backupLevelDir = Utils::GetExeDirectory() + "\\editor\\backup\\level" + std::to_string(level_no);
@@ -282,18 +304,11 @@ void App::LoadLevel(int level_no) {
 			.render_res_loader_ = &renderer_
 		};
 
-		// ── Loading overlay ──────────────────────────────────────────────────
-		// Staged progress: the load is synchronous, so we redraw + swap the bar at
-		// each milestone (10% → 100%). Reusable lambda fills proportionally to pct.
-		auto drawLoadBar = [&](int pct, const char* stage) {
-			char title[32];
-			snprintf(title, sizeof(title), "Loading Level %d", level_no);
-			DrawProgressOverlay(title, pct, stage);
-		};
-		drawLoadBar(10, "reading level");
+		// ── Loading overlay: the level itself ────────────────────────────────
+		drawLoadBar(igi::kLevelLoadReading);
 		// ─────────────────────────────────────────────────────────────────────
 
-		drawLoadBar(25, "models & terrain");
+		drawLoadBar(igi::kLevelLoadModels);
 		glm::vec3 start_pos;
 		float start_yaw;
 		if (level_.Load(level_load_params_s, start_pos, start_yaw)) {
@@ -337,15 +352,15 @@ void App::LoadLevel(int level_no) {
 		}
 
 
-		drawLoadBar(60, "tracks");
+		drawLoadBar(igi::kLevelLoadTracks);
 		// Step 2: Track Evaluation (Dynamic object placement along paths)
 		EvaluateTrainTrackPositions();
 
-		drawLoadBar(75, "snapping objects");
+		drawLoadBar(igi::kLevelLoadSnapping);
 		// Step 3: Always snap objects to terrain after any level load
 		Logger::Get().Log(LogLevel::INFO, "[App] Step 3: Snapping objects to terrain...");
 		SnapObjectsToTerrain();
-		drawLoadBar(90, "finalizing");
+		drawLoadBar(igi::kLevelLoadFinalizing);
 
 		// AI rotation override: AI models (HumanSoldier, HumanAI) only have horizontal rotation
 		auto& objects = level_.GetLevelObjects().GetObjects();
@@ -659,7 +674,7 @@ void App::LoadLevel(int level_no) {
 		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
 		Logger::Get().Log(LogLevel::INFO, "[App] LoadLevel() COMPLETE for level " + std::to_string(level_no));
 		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
-		drawLoadBar(100, "done");
+		drawLoadBar(igi::kLevelLoadDone);
 
 		if (Config::Get().musicEnabled) PlayLevelMusic(level_no);
 
@@ -805,6 +820,16 @@ void App::SaveCurrentLevel() {
 	try {
 		Logger::Get().Log(LogLevel::INFO, "[App] SaveCurrentLevel() called");
 
+		// The save is synchronous and can take seconds on a big level: serialize
+		// objects.qsc/qvm, compile an edited AI script, and repack the recalculated
+		// lightmaps into the game's lightmaps.res.  It reports the same way a level
+		// load does -- one bar presentation per phase (source/runtime/
+		// loading_bar_style.h section 5), so the window never sits frozen.
+		auto drawSaveBar = [&](const igi::LoadingBarStage& stage) {
+			DrawProgressOverlay("Saving Level", stage.percent, stage.stage);
+		};
+		drawSaveBar(igi::kLevelSavePreparing);
+
 		// Flush any in-flight property-panel edit (especially the AI script text
 		// editor) before serializing. Otherwise pressing SaveState while the AI
 		// script box still has focus would save the stale ai_script_text_ and
@@ -832,6 +857,7 @@ void App::SaveCurrentLevel() {
 		}
 
 		FlushAttaProxiesToMef();
+		drawSaveBar(igi::kLevelSaveWriting);
 		level_.SaveChanges();
 
 		// Persist edited navigation-graph nodes back to graph<taskId>.dat.
@@ -844,6 +870,7 @@ void App::SaveCurrentLevel() {
 
 		// Compile edited AI script (.qsc text -> .qvm file) before saving the level QVM.
 		if (ai_script_dirty_ && !ai_script_path_.empty()) {
+			drawSaveBar(igi::kLevelSaveCompiling);
 			Logger::Get().Log(LogLevel::INFO, "[App] Compiling modified AI script to: " + ai_script_path_);
 			auto lexResult   = qsc::Lex(ai_script_text_);
 			auto parseResult = lexResult.ok ? qsc::Parse(lexResult.tokens) : qsc::ParseResult{};
@@ -872,7 +899,9 @@ void App::SaveCurrentLevel() {
 
 		// Repack any recalculated lightmaps back into the level's lightmaps.res so
 		// the GAME (igi.exe) shows the new lighting, not the original prebaked one.
+		drawSaveBar(igi::kLevelSaveLightmaps);
 		WriteBackRecalculatedLightmaps();
+		drawSaveBar(igi::kLevelSaveDone);
 	}
 	catch (const std::exception& e) {
 		std::string errorMsg = "Error saving level:\n" + std::string(e.what());

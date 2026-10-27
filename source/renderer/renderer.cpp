@@ -231,11 +231,11 @@ void Renderer::UnmapFlatSkyLayersVB() { flat_sky_layers_.UnmapVB(); }
 
 vert_pos_a_uv_s *Renderer::MapTerrainVB() { return terrain_.MapVB(); }
 
-void Renderer::UnmapTerrainVB() { terrain_.UnmapVB(); }
+void Renderer::UnmapTerrainVB(int num_vert) { terrain_.UnmapVB(num_vert); }
 
 uint32_t *Renderer::MapTerrainIB() { return terrain_.MapIB(); }
 
-void Renderer::UnmapTerrainIB() { terrain_.UnmapIB(); }
+void Renderer::UnmapTerrainIB(int num_index) { terrain_.UnmapIB(num_index); }
 
 render_chunk_s *Renderer::GetTerrainRenderChunckBuffer() {
   return terrain_.GetRenderChunckBuffer();

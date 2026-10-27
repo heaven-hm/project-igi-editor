@@ -307,7 +307,10 @@ void App::DrawProgressOverlay(const char* title, int pct, const char* stage) {
 	pct = std::max(0, std::min(100, pct));
 	int vw = window_state_.viewport_width_;
 	int vh = window_state_.viewport_height_;
-	if (vw <= 0 || vh <= 0) return;
+	// No viewport, nothing to draw into: the frame is dropped (see
+	// `ProgressOverlayCanPaint`, runtime/progress_overlay_policy.h, and why
+	// `App::Init` has to seed the viewport before the startup level load).
+	if (!igi::ProgressOverlayCanPaint(vw, vh)) return;
 
 	// The overlay owns the surface for this pass: present it BEFORE pumping
 	// events and suppress any scene repaint the pump dispatches (see
@@ -353,6 +356,22 @@ void App::DrawProgressOverlay(const char* title, int pct, const char* stage) {
 	// The layout is top-down (the engine blits with a top-left origin) while
 	// this projection has y=0 at the bottom, so flip the y.
 	const int barY = vh - (bar.y + bar.h);
+
+	// One DEBUG line per presented frame: the overlay is the one UI surface whose
+	// absence cannot be told apart from "nothing to report" (the user's own report
+	// was exactly that -- the bar was invisible for the STARTUP load, see
+	// runtime/progress_overlay_policy.h).  DEBUG keeps it out of a normal run's log
+	// (a bulk lightmap bake presents one frame per object) while making a
+	// diagnostic run say which frames were actually painted, at which viewport and
+	// with which retail rect.
+	Logger::Get().Log(LogLevel::DEBUG,
+	                  std::string("progress overlay: ") + (title != nullptr ? title : "") +
+	                      " " + std::to_string(pct) + "% (" +
+	                      (stage != nullptr ? stage : "") + ") viewport " +
+	                      std::to_string(vw) + "x" + std::to_string(vh) + " bar " +
+	                      std::to_string(bar.x) + "," + std::to_string(bar.y) + " " +
+	                      std::to_string(bar.w) + "x" + std::to_string(bar.h) + " filled " +
+	                      std::to_string(igi::LoadingBarFillWidthForPercent(bar.w, pct)));
 
 	glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 

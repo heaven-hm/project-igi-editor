@@ -25,4 +25,14 @@ inline bool ShouldPresentOverlayBeforePumpingEvents(const ProgressOverlayState& 
     return state.overlay_visible;
 }
 
+// The overlay is positioned and its projection set from the editor's viewport, so
+// a viewport the editor does not know yet (0) means the frame is dropped: there is
+// nothing to draw into.  That is not a corner case -- the STARTUP level load runs
+// inside `App::Init`, before GLUT's reshape callback is registered
+// (source/main.cpp), so `App::Init` must seed the viewport from the window GLUT has
+// already created, or the one load every user sees reports nothing at all.
+inline bool ProgressOverlayCanPaint(int viewport_width, int viewport_height) {
+    return viewport_width > 0 && viewport_height > 0;
+}
+
 } // namespace igi

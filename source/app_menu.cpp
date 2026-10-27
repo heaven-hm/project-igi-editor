@@ -46,6 +46,7 @@
 #include "menu/menu_qvm_writer.h"
 #include "menu/menu_text_res.h"
 #include "runtime/pause_menu_layout.h"
+#include "runtime/pause_menu_style.h"
 
 namespace igi {
 namespace app_menu {
@@ -150,10 +151,110 @@ std::vector<FallbackRow> FallbackRowsFor(bool terrain_expanded) {
     return rows;
 }
 
+// The editor's OWN label for an editor action: the label its row list gives that
+// action (source/renderer/renderer_draw.cpp has always drawn those strings).  A
+// state-independent label, so the mapping below cannot depend on the editor's
+// live state.
+const char* EditorOwnRowLabel(MenuUiAction action) {
+    for (const FallbackRow& row : kFallbackRows) {
+        if (row.action == action) {
+            return row.label;
+        }
+    }
+    for (const FallbackRow& row : kFallbackExpandedRows) {
+        if (row.action == action) {
+            return row.label;
+        }
+    }
+    return nullptr;
+}
+
+// A retail widget name -> the editor row whose own label that retail row shows.
+// The name is the retail script's own task name (ingamemenu.qvm), which the
+// editor never edits, so the mapping survives a `Menu Text` edit of the row's
+// `Text Resource`.  The action's label is taken from the editor's own row list
+// (`EditorOwnRowLabel`), so the strings cannot drift from the rows they name.
+struct RetailEditorLabel {
+    const char* widget_name;  // the retail widget's task name, verbatim
+    MenuUiAction action;      // the editor row whose label this row shows
+    const char* literal;      // the label to use when `action == None`
+};
+
+const RetailEditorLabel kRetailEditorLabels[] = {
+    // Screen 900's five items, in retail order (ingamemenu.qvm).
+    {"resume", MenuUiAction::Resume, nullptr},        // -> "Resume"
+    {"restart", MenuUiAction::ResetLevel, nullptr},   // -> "Reset Level"
+    {"sound", MenuUiAction::ToggleMusic, nullptr},    // -> "Music"
+    // The editor has no controls screen; its own name for input configuration is
+    // its KEYBINDINGS overlay (source/renderer/renderer_draw.cpp).
+    {"controls", MenuUiAction::None, kEditorKeybindingsLabel},
+    {"quit", MenuUiAction::Quit, nullptr},            // -> "Quit"
+};
+
 }  // namespace
 
 int EditorFallbackRowCount(bool terrain_expanded) {
     return static_cast<int>(FallbackRowsFor(terrain_expanded).size());
+}
+
+std::string EditorLabelForRetailEntry(const MenuUiEntry& entry) {
+    if (!entry.has_text || entry.label.empty()) {
+        return std::string();
+    }
+
+    // 1. A retail screen's TITLE.  The engine draws it as a plain MenuText inside
+    //    the title MenuFrame at the title colour index (`MenuText_Init` HOOK
+    //    0x420CC0 registers TEXT_WHITE = 1 as the first named entry,
+    //    src/menuscreen/menutext.c:301-304; screen 900's title is ColourIndex 1,
+    //    901-903's titles and the popups' prompts likewise).  It is not an item,
+    //    so it is not collected.  The editor shows its OWN panel title there.
+    //
+    //    The `Menu Text` row cycles the definition's title through
+    //    `kEditorMenuTitleCycle`; when the loaded title is already one of those
+    //    editor strings the editor shows it, so that edit stays visible.  The
+    //    retail text ("Game Paused") is not one of them and is never drawn.
+    if (!entry.collected && (entry.colour_index & 0x0F) == kRetailTitleColourIndex) {
+        for (int i = 0; i < kEditorMenuTitleCycleCount; ++i) {
+            if (entry.label == kEditorMenuTitleCycle[i]) {
+                return entry.label;
+            }
+        }
+        return kEditorMenuTitleCycle[0];  // "IGI EDITOR"
+    }
+
+    // 2. A retail row the editor is WIRED to shows the editor's own label for the
+    //    behaviour it drives: the label names what the row does in the editor, not
+    //    what the game called it.  This covers the confirmation popups' `Yes`
+    //    (wired to Quit) as well as screen 900's `resume`, whose retail widget name
+    //    is also in the table below.
+    if (entry.editor_action != MenuUiAction::None) {
+        const char* own = EditorOwnRowLabel(entry.editor_action);
+        if (own != nullptr) {
+            return own;
+        }
+    }
+
+    // 3. A retail row the editor has a function for but does not wire, keyed on
+    //    the retail widget's own script name, shows the editor's own row label for
+    //    that function.
+    for (const RetailEditorLabel& mapping : kRetailEditorLabels) {
+        if (entry.widget_name != mapping.widget_name) {
+            continue;
+        }
+        if (mapping.action != MenuUiAction::None) {
+            const char* own = EditorOwnRowLabel(mapping.action);
+            if (own != nullptr) {
+                return own;
+            }
+        }
+        if (mapping.literal != nullptr) {
+            return mapping.literal;
+        }
+    }
+
+    // 4. Everything else: the editor has no counterpart for the row.  The label
+    //    says so in the editor's own words instead of repeating the game's.
+    return kRetailNotInEditorLabel;
 }
 
 MenuUiAction EditorActionForRetailItem(const MenuUiEntry& entry) {
@@ -199,6 +300,7 @@ MenuUiEntry MakeEditorRow(const PauseMenuLayout& layout, const MenuUiBuildOption
     // These rows are the editor's own, so they are already display text: there is
     // no `Text Resource` key to resolve and nothing to look up in an archive.
     entry.display_label = label;
+    entry.editor_label = label;
     entry.rect = MenuUiToRetail(viewport_rect, options.viewport_width,
                                 options.viewport_height);
     entry.has_text = true;
@@ -315,6 +417,24 @@ void BuildModelInto(EditorMenu& menu, const MenuUiBuildOptions& options) {
         }
     }
 
+    // ── the text the editor draws ────────────────────────────────────────────
+    // The retail structure is untouched -- the same screens, the same rows in the
+    // same order, the same rects, the same colour indices -- but what the editor
+    // DRAWS is its own text: `EditorLabelForRetailEntry` gives every retail text
+    // row the editor's label for its slot, and the game's words are never shown
+    // (docs/igi-re-parity/PAUSE_MENU_STYLE.md "The editor's own strings come
+    // first").  `label` / `display_label` keep the game's text verbatim: the
+    // definition is data the editor edits and saves, and the reader and label
+    // tests read those fields.
+    for (MenuUiScreen& screen : model.screens) {
+        for (MenuUiEntry& entry : screen.entries) {
+            if (entry.editor_added) {
+                continue;
+            }
+            entry.editor_label = EditorLabelForRetailEntry(entry);
+        }
+    }
+
     // ── the deliberate additions ─────────────────────────────────────────────
     // The retail definition declares no editor function, so a retail-only menu
     // would make Save Level, Weather, Lightmap, Logging and the rest unreachable
@@ -365,6 +485,7 @@ void BuildModelInto(EditorMenu& menu, const MenuUiBuildOptions& options) {
             // The editor's own label, not a retail key: there is no archive entry to
             // resolve, and pushing it through the lookup would yield "RM: Editor Options".
             entry.display_label = kEditorOptionsLabel;
+            entry.editor_label = kEditorOptionsLabel;
             entry.has_text = true;
             entry.selectable = true;
             entry.item_candidate = true;

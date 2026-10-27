@@ -17,11 +17,41 @@ One thing did change after this document was written: the ROW LIST is no longer
 hard-coded in the renderer. It is the loaded menu tree
 (`igi::app_menu::EditorMenu`, issue #74's live wiring — see `MENU_UI.md` "The live
 wiring"), and the editor's own screen is one screen of it. That is also why the
-game's text is now *reachable*: the editor's screen carries a `Game Menu` row that
-opens the definition's own screen 900, which the draw layer renders from the
+game's text was briefly *reachable*: the editor's screen carries a `Game Menu` row
+that opens the definition's own screen 900, which the draw layer rendered from the
 definition — its title, its five items and their colours — because that is what the
-engine draws there. The editor's own rows, and the strings in this file, are
-unchanged.
+engine draws there.
+
+## The editor's own strings come first (the rule this file exists to keep)
+
+Screen 900 stays a retail screen: the same five items, in retail order, with the
+retail frame, palette, metrics, pitch and colour indices, and with the definition's
+own text still carried verbatim on the model (`MenuUiEntry::label` — the script
+key — and `display_label` — the language archive's answer). What the editor
+**draws** is its own text, never the game's:
+
+| retail widget (screen 900) | the game's text (still on the model, never drawn) | what the editor draws |
+| --- | --- | --- |
+| the title `MenuText` | `Game Paused` | `IGI EDITOR` (the editor's own panel title; the `Menu Text` row's own strings are shown once the definition carries one) |
+| `resume` | `Resume Game` | `Resume` |
+| `restart` | `Restart Game` → `Restart Mission` | `Reset Level` |
+| `sound` | `Sound` | `Music` |
+| `controls` | `Controls` | `Keybindings` |
+| `quit` | `Quit to Main Menu` | `Quit` |
+| any other retail text | as declared | `Not in Editor` |
+
+The labels are the editor's own rows' labels (`kFallbackRows`, the same strings
+`source/renderer/renderer_draw.cpp` has always drawn), the editor's own panel title,
+and its own name for the one concept it has no row for (`Keybindings`, the title of
+its KEYBINDINGS overlay). `app_menu::EditorLabelForRetailEntry`
+(`source/app_menu.cpp`) is the single mapping, and `tests/test_menu_ui.cpp` /
+`tests/test_menu_labels.cpp` hold it to the rule: every retail text row has editor
+text, and that text is never the game's.
+
+The rows keep their retail actions: `resume` still resumes, `quit` still quits, and
+the three the editor has no behaviour for stay inert and say why in the status line
+when activated. Only the text changed — no row was deleted, and no row's action was
+changed.
 
 ## TL;DR
 
@@ -297,27 +327,41 @@ the rows stay inside the panel and that consecutive hit bands never overlap at
 
 | check | command | result |
 | --- | --- | --- |
-| build gate | `bash scripts/build-windows.sh` | **exit 0** — x64 link gate OK, i686 compile gate OK |
-| host lane | `bash scripts/run-host-tests.sh` | **exit 0** — 1111 tests passed in 65 suites, 0 failed |
-| new suite (host) | `IGI_HOST_TESTS=tests/test_pause_menu_style.cpp bash scripts/run-host-tests.sh` | 15 passed, 0 failed |
-| Windows suite | `wine bin/igi_tests.exe '--gtest_filter=-*VerifyLevel*' --gtest_color=no` with `IGI_GAME_PATH` and `WINEPATH` set | **exit 0** — 1548 tests ran, 1536 passed, 0 failed, 12 skipped |
+| build gate | `bash scripts/build-windows.sh` | **exit 0** — x64 link gate OK, i686 compile gate OK, build integrity OK |
+| host lane | `bash scripts/run-host-tests.sh` | **exit 0** — 1231 tests passed in 69 suites, 0 failed |
+| pause-menu style suite (host) | `IGI_HOST_TESTS=tests/test_pause_menu_style.cpp bash scripts/run-host-tests.sh` | 21 passed, 0 failed |
+| label tests (host) | `IGI_HOST_TESTS='tests/test_menu_ui.cpp tests/test_menu_labels.cpp' bash scripts/run-host-tests.sh` | 54 passed, 0 failed (`MenuUiEditorText` 7, `MenuLabels` 9) |
+| Windows suite | `wine bin/igi_tests.exe '--gtest_filter=-*VerifyLevel*' --gtest_color=no` with `IGI_GAME_PATH` and `WINEPATH` set | **exit 0** — 1667 tests ran, 1655 passed, 0 failed, 12 skipped |
+| headless end-to-end (`--fast`) | `bash scripts/e2e-headless.sh --fast` | **exit 0** — smoke + 278/278 native assertions |
+| loading bar reached | i686 editor under Wine, `-level 1`, DEBUG logging on | 8 overlay frames, `2% … 100%`, retail rect — see `LOADING_BAR.md` §5 |
 
-The 15 new tests (`PauseMenuRetailStyle` 13, `PauseMenuRetailStyleCorpus` 2) and
-the 1 new `FntParserRetailMenuFontTest` all pass in the Windows suite, which is
-where the FNT parser is exercised. `LodChainCorpusTest`'s corpus test — the one
-the project notes as a pre-existing failure on this install — passed in these
-runs.
+The 21 `PauseMenuRetailStyle` tests and the 1 `FntParserRetailMenuFontTest` all
+pass in the Windows suite, which is where the FNT parser is exercised.
+`LodChainCorpusTest`'s corpus test — the one the project notes as a pre-existing
+failure on this install — passed in these runs.
+
+The **"the editor draws its own text"** rule is held by 7 `MenuUiEditorText` tests
+(host, corpus-free: the hand-built retail-shaped definition) and 3 `MenuLabels`
+tests (corpus-backed: the real `ingamemenu.qvm`). Together they assert that every
+retail text row has editor text, that the text is never the retail key, the
+resolved language text or the engine's `RM: ` miss string, that a wired retail row
+is labelled by the editor action it drives, that screen 900 keeps its five rows,
+their order and their verbatim game text, and that the `Menu Text` edit's own
+strings are what the title row then shows.
 
 One **flaky, unrelated** test was seen while re-running the suite:
 `McpHttpIntegrationTest.StopUnblocksAnIdleAuthenticatedOrUnauthenticatedClient`
-(`tests/test_mcp_http.cpp:267-290`) binds a loopback TCP port and asserts
-`HttpTransport::Stop()` returns in under 1000 ms. It passed in 4 ms in one full
-run, failed at 5010 ms in the next, then passed again in isolation (2 of 3
-isolated runs) and passed in the following full run. It touches nothing this
-change touches.
+(`tests/test_mcp_http.cpp:267-290`) binds a loopback TCP port, opens an idle
+connection and asserts `HttpTransport::Stop()` returns in under 1000 ms. It failed
+at 5018-5073 ms in three full runs and passed (8 ms in its own group, and green in
+the final full run) in the others; it touches nothing this change touches.
 
-**Not verified:** the rendered result. This host has no OpenGL 4.1 context, so
-the editor's GUI cannot run here; the panel's appearance is asserted only through
-the geometry, colour and metric tests above. The compositing order in §5 and the
-glow approximation in §6 are the two places where the on-screen result may differ
-from retail, and both are recorded rather than papered over.
+**Not verified:** the rendered result. This host has no OpenGL 4.1 context and Wine
+never maps a visible window for the editor (the X root has no window and the macOS
+screen is unchanged across a run), so the panel's appearance and the drawn labels
+are asserted only through the model, geometry, colour and metric tests above. The
+label mapping's *effect* is verified at the model level:
+`MenuUiEntry::editor_label` is what the draw layer passes to the text helper, and
+no code path hands it `display_label`. The compositing order in §5 and the glow
+approximation in §6 are the two places where the on-screen result may differ from
+retail, and both are recorded rather than papered over.

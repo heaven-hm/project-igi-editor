@@ -80,6 +80,11 @@ bool Renderer_Terrain::Init() {
 	vbo_ = GL_CreateBuffer(GL_ARRAY_BUFFER, sizeof(vert_pos_a_uv_s) * MAX_TERRAIN_VERTICES, nullptr, GL_DYNAMIC_DRAW);
 	ibo_ = GL_CreateBuffer(GL_ELEMENT_ARRAY_BUFFER, sizeof(uint32_t) * MAX_TERRAIN_INDICES, nullptr, GL_DYNAMIC_DRAW);
 
+	// CPU-side staging for the per-frame fill (see MapVB/MapIB).  The GL buffers
+	// above stay pre-sized; the staging arrays are what the engine writes into.
+	vb_staging_.resize(MAX_TERRAIN_VERTICES);
+	ib_staging_.resize(MAX_TERRAIN_INDICES);
+
 	// create vao
 	glGenVertexArrays(1, &vao_);
 	glBindVertexArray(vao_);
@@ -167,29 +172,51 @@ void Renderer_Terrain::LoadLMPTex(const pic_s* pic) {
 }
 
 vert_pos_a_uv_s* Renderer_Terrain::MapVB() {
-	glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-	vert_pos_a_uv_s* vb = (vert_pos_a_uv_s*)glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
-	glBindBuffer(GL_ARRAY_BUFFER, 0);
-	return vb;
+	// No glMapBuffer: Wine's wow64 GL turns a map into a full copy of the
+	// buffer in and back out (fixme:opengl:wow64_map_buffer).  The engine's
+	// dynamic D3D vertex buffer is emulated by staging the frame's vertices in
+	// host memory and uploading them in UnmapVB().
+	return vb_staging_.empty() ? nullptr : vb_staging_.data();
 }
 
-void Renderer_Terrain::UnmapVB() {
-	glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-	glUnmapBuffer(GL_ARRAY_BUFFER);
-	glBindBuffer(GL_ARRAY_BUFFER, 0);
+void Renderer_Terrain::UnmapVB(int num_vert) {
+	if (num_vert <= 0) {
+		return;
+	}
+	if (num_vert > static_cast<int>(vb_staging_.size())) {
+		num_vert = static_cast<int>(vb_staging_.size());
+	}
+
+	// The engine writes the frame's vertices from index 0 (Terrain::Update resets
+	// num_vertex_ each frame), so only [0, num_vert) is live and only that range
+	// needs to cross the bus.  Orphan first: the previous frame's draws may still
+	// be reading the old store, and writing into a live store would stall on them.
+	GL_BufferData(vbo_, GL_ARRAY_BUFFER,
+		static_cast<GLsizeiptr>(sizeof(vert_pos_a_uv_s) * MAX_TERRAIN_VERTICES),
+		nullptr, GL_STREAM_DRAW);
+	GL_BufferSubData(vbo_, GL_ARRAY_BUFFER, 0,
+		static_cast<GLsizeiptr>(num_vert) * static_cast<GLsizeiptr>(sizeof(vert_pos_a_uv_s)),
+		vb_staging_.data());
 }
 
 uint32_t* Renderer_Terrain::MapIB() {
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_);
-	uint32_t* ib = (uint32_t*)glMapBuffer(GL_ELEMENT_ARRAY_BUFFER, GL_WRITE_ONLY);
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-	return ib;
+	return ib_staging_.empty() ? nullptr : ib_staging_.data();
 }
 
-void Renderer_Terrain::UnmapIB() {
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_);
-	glUnmapBuffer(GL_ELEMENT_ARRAY_BUFFER);
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+void Renderer_Terrain::UnmapIB(int num_index) {
+	if (num_index <= 0) {
+		return;
+	}
+	if (num_index > static_cast<int>(ib_staging_.size())) {
+		num_index = static_cast<int>(ib_staging_.size());
+	}
+
+	GL_BufferData(ibo_, GL_ELEMENT_ARRAY_BUFFER,
+		static_cast<GLsizeiptr>(sizeof(uint32_t) * MAX_TERRAIN_INDICES),
+		nullptr, GL_STREAM_DRAW);
+	GL_BufferSubData(ibo_, GL_ELEMENT_ARRAY_BUFFER, 0,
+		static_cast<GLsizeiptr>(num_index) * static_cast<GLsizeiptr>(sizeof(uint32_t)),
+		ib_staging_.data());
 }
 
 render_chunk_s* Renderer_Terrain::GetRenderChunckBuffer() {

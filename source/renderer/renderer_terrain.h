@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <vector>
+
 /*
 ================================================================================
  Renderer_Terrain
@@ -27,11 +29,18 @@ public:
 	void					LoadMatTex(const pic_s* pic);
 	void					LoadLMPTex(const pic_s* pic);
 
+	// Per-frame dynamic terrain geometry.  The engine filled a D3D *dynamic*
+	// vertex buffer (D3DLOCK_DISCARD) every frame; the editor used to do that
+	// through a persistently mapped GL buffer, which Wine's wow64 GL cannot map
+	// without copying the whole buffer in and back out
+	// (fixme:opengl:wow64_map_buffer).  MapVB/MapIB now hand out the CPU-side
+	// staging array, and UnmapVB/UnmapIB publish only the range the engine wrote
+	// with an orphan + glBufferSubData: same data, no map.
 	vert_pos_a_uv_s*		MapVB();
-	void					UnmapVB();
+	void					UnmapVB(int num_vert);
 
 	uint32_t *				MapIB();
-	void					UnmapIB();
+	void					UnmapIB(int num_index);
 
 	render_chunk_s *		GetRenderChunckBuffer();
 
@@ -64,6 +73,10 @@ private:
 	GLint					prg_lmp_tex_loc_;
 
 	render_chunk_s			render_chunks_[MAX_TERRAIN_RENDER_CHUNK];
+
+	// CPU-side staging for the two per-frame dynamic buffers (see MapVB/MapIB).
+	std::vector<vert_pos_a_uv_s>	vb_staging_;
+	std::vector<uint32_t>			ib_staging_;
 
 	void					SetRenderState(uint32_t render_layer) const;
 	void					DrawLayer0RenderChunks(int num_render_chunk) const;
