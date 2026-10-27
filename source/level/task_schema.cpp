@@ -120,13 +120,23 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
           add(sc, "Viewcone Gamma",     "Int32",    17);
           add(sc, "Viewcone Length",    "Real32",   18);
           add(sc, "On Expression",      "VarString", 19); }
-        // SplineObjWaypoint: ori first@3, pos@6, waypoint marker@9,
-        // segment model for the span ending here@10.
+        // SplineObjWaypoint: the shipped declaration is
+        //   Task_DeclareParameters("SplineObjWaypoint", "Orientation", "Real32x9",
+        //     "Position", "ObjectPos", "Waypoint Model", "String16", "Segment Model",
+        //     "String16", "NumAreas", "Int32", "Align", "bool8", "Flip", "bool8",
+        //     "Automatic Orientation", "bool8");
+        // (MISSIONS/location0/level1/objects.qsc), and the engine's ParamTable registers
+        // the same eight in the same order (SplineObj_Open HOOK 0x502250,
+        // src/editobj/spline.c:215-223).  The editor previously stopped at arg 10.
         { auto& sc = s["SplineObjWaypoint"];
           add(sc, "Orientation", "Real32x9",  3);
           add(sc, "Position",    "ObjectPos", 6);
           add(sc, "Model",       "String16",  9);
-          add(sc, "Segment Model", "String16", 10); }
+          add(sc, "Segment Model", "String16", 10);
+          add(sc, "NumAreas",    "Int32",     11);
+          add(sc, "Align",       "bool8",     12);
+          add(sc, "Flip",        "bool8",     13);
+          add(sc, "Automatic Orientation", "bool8", 14); }
         // AmbientArea
         { auto& sc = s["AmbientArea"];
           add(sc, "Position",    "ObjectPos", 3);

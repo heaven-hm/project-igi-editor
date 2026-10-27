@@ -88,6 +88,21 @@ struct LevelObject {
     bool isSplineWaypoint = false;
     bool isWire = false;
     std::string segmentModelId;    // The model repeated along the path (e.g. 368_01_1)
+    // SplineObjWaypoint's remaining authored parameters, at the arg indices the engine's
+    // own ParamTable fixes (SplineObj_Open HOOK 0x502250, src/editobj/spline.c:215-223,
+    // eight entries in the same order as the shipped declaration in
+    // MISSIONS/location0/level1/objects.qsc):
+    //   arg 11 "NumAreas"              Int32  -> SplineObjWaypoint::segments
+    //   arg 12 "Align"                 bool8  -> SplineObjWaypoint::straight
+    //   arg 13 "Flip"                  bool8  -> SplineObjWaypoint::reversed
+    //   arg 14 "Automatic Orientation" bool8  -> SplineObjWaypoint::autoOrient
+    // (src/editobj/editobjtypes.h:6-25).  SplineObjWaypoint_Changed (HOOK 0x500EF0,
+    // src/tagitem/spline.c:769-772) then derives `rigid = container.rigid || straight`
+    // and caps the count at the container's maxSegments and at 20.
+    int splineSegments = 0;        // arg 11, 0 when the waypoint declares none
+    bool splineStraight = false;   // arg 12
+    bool splineReversed = false;   // arg 13
+    bool splineAutoOrient = false; // arg 14
     std::string secondaryModelId;  // SCamera arg 11: "Camera Destroyed Model" (the broken model)
     std::string lensModelId;       // SCamera arg 10: "Camera Model" — the SCameraLens child's model
     // SCamera arg 7 ("Holder Model") is the model THIS task draws, so it is stored in

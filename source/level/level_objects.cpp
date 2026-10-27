@@ -366,6 +366,26 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                     }
                     break;
                 case 10: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.segmentModelId = cur_a->str_; break;
+                // SplineObjWaypoint's remaining authored parameters.  The indices are
+                // fixed by the engine's own ParamTable (SplineObj_Open HOOK 0x502250,
+                // src/editobj/spline.c:215-223) and confirmed by a shipped instance in
+                // MISSIONS/location0/level1/objects.qsc, whose trailing tokens are
+                // 20, FALSE, FALSE, FALSE.
+                case 11:
+                    if (cur_a->type_ == QSC::arg_s::type_t::DBL)
+                        obj.splineSegments = static_cast<int>(cur_a->dbl_);
+                    else if (cur_a->type_ == QSC::arg_s::type_t::BOOL)
+                        obj.splineSegments = cur_a->bool_;
+                    break;  // "NumAreas" -> SplineObjWaypoint::segments
+                case 12:
+                    if (cur_a->type_ == QSC::arg_s::type_t::BOOL) obj.splineStraight = cur_a->bool_ != 0;
+                    break;  // "Align" -> ::straight
+                case 13:
+                    if (cur_a->type_ == QSC::arg_s::type_t::BOOL) obj.splineReversed = cur_a->bool_ != 0;
+                    break;  // "Flip" -> ::reversed
+                case 14:
+                    if (cur_a->type_ == QSC::arg_s::type_t::BOOL) obj.splineAutoOrient = cur_a->bool_ != 0;
+                    break;  // "Automatic Orientation" -> ::autoOrient
             }
         } else if (isSwitch) {
             switch (arg_idx) {
