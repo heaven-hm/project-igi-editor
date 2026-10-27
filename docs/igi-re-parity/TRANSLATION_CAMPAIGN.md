@@ -51,6 +51,16 @@ Corrections and reconciliations:
 upper-cased, slash-folded resource identity) silently broke three consumers - menu
 labels, the LOD corpus test, and the texture preview. All three were the same defect.
 
+## The task schema is UI-only, not the serializer
+
+`task_schema.cpp` is consumed by the inspector and layout builder only --
+`renderer_draw.cpp:1117`, `:2223-2240` and `renderer.h:207-233` -- never by the save path.
+So adding the four SplineObjWaypoint parameters there declares them for the inspector and
+cannot change what gets written to a `.qsc`; the token writing is done by
+`UpdateCoordinatesInLine` / `GenerateTaskLine` from `obj.argTokens`.  Worth knowing before
+assuming a schema edit affects file output, and before "fixing" saved output through it.
+
+
 ## The parse-path drift thread is closed
 
 Five defects came out of comparing the functions that dispatch on `obj.type`, and all five
