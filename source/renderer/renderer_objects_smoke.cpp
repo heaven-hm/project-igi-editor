@@ -133,15 +133,15 @@ Renderer_Objects::ResolveModelForSmoke(const std::string& modelId, bool isBuildi
         }
     }
 
-    // 2. Textures — the same list GetOrLoadMesh's ApplyTexturesToMesh(mesh, modelId)
-    //    call builds (GetTextureIdsForModel, falling back to the model id itself when
-    //    the DAT has no entry), then the same archive-then-disk search
-    //    GetOrLoadTexture performs, minus the upload.  ApplyTexturesToMesh's
-    //    parent-inheritance branch is not mirrored here because only ATTA sub-models
-    //    take it (renderer_objects_atta.cpp:1065-1190); every model this probe
-    //    examines goes through the two-argument call.
+    // 2. Textures — exactly the list the real path builds.  ApplyTexturesToMesh calls
+    //    GetTextureIdsForModel(modelId) (renderer_objects_texture.cpp:510) and does NOT
+    //    substitute anything when that list is empty: the engine binds
+    //    l->textures[g->texture] and an empty list simply means no group has a texture
+    //    (src/render/render.c:524-525).  This probe used to push the MODEL id as a
+    //    texture id when the list was empty, which invented a lookup the renderer never
+    //    performs and reported real models as missing textures (e.g. 430_01_1, a Building
+    //    model in level 12/13/14 that is not a texture anywhere in the install).
     out.textureIds = GetTextureIdsForModel(modelId);
-    if (out.textureIds.empty()) out.textureIds.push_back(modelId);
     for (const auto& textureId : out.textureIds) {
         if (TextureResolvesForSmoke(textureId)) out.resolvedTextureIds.push_back(textureId);
         else                                     out.missingTextureIds.push_back(textureId);
