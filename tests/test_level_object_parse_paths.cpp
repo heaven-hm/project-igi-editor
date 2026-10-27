@@ -22,7 +22,11 @@
 
 #include <gtest/gtest.h>
 
+#include "level/level_common.h"
 #include "level/level_objects.h"
+
+#include <filesystem>
+#include <fstream>
 
 namespace {
 
@@ -64,4 +68,43 @@ TEST(LevelObjectParsePathsTest, HumanAiGraphIdSurvivesTheLineParser) {
     ASSERT_EQ(obj.type, "HumanAI");
     EXPECT_EQ(obj.aiGraphTaskId, 5001);
     EXPECT_EQ(obj.name, "guard1");
+}
+
+// The LOAD path must place a member of the rotating-placement group, not just the line
+// parser.  Every member of that group opens with ObjectPos at args 3/4/5 then Real32x9 at
+// 6/7/8: RotatingObject src/fxobj/rotating.c:81-82, AlarmLight src/fxobj/alarm.c:109-110,
+// Elevator src/elevator/elevator.c:63-64, GenericPickup src/comprun/pickup.c:269-270, and
+// Generator/GenericTBA/Radio/Siren through ExplodeObject's base table
+// (src/camera/explodeobject.c:204-205).
+TEST(LevelObjectParsePathsTest, LoadPathPlacesTheRotatingPlacementGroup) {
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "igi_rotating_group.qsc";
+    {
+        std::ofstream out(path, std::ios::trunc);
+        ASSERT_TRUE(out.is_open());
+        out << "Task_New(6001, \"RotatingObject\", \"fan\", 10.5, -20.25, 30.0, "
+               "0.25, 0.5, 0.75, \"fan_model\", \"fan_sound\");\n";
+    }
+
+    QSC qsc;
+    qsc.Load(path.string().c_str());
+
+    LevelObjects objects;
+    objects.Load(nullptr, &qsc);
+
+    const LevelObject* found = nullptr;
+    for (const LevelObject& o : objects.GetObjects()) {
+        if (o.type == "RotatingObject") found = &o;
+    }
+    std::filesystem::remove(path);
+    ASSERT_NE(found, nullptr) << "the loader produced no RotatingObject";
+
+    EXPECT_DOUBLE_EQ(found->pos.x, 10.5);
+    EXPECT_DOUBLE_EQ(found->pos.y, -20.25);
+    EXPECT_DOUBLE_EQ(found->pos.z, 30.0);
+    // The load path used to read only the generic position candidate, so the authored
+    // rotation was lost.
+    EXPECT_DOUBLE_EQ(found->rot.x, 0.25);
+    EXPECT_DOUBLE_EQ(found->rot.y, 0.5);
+    EXPECT_DOUBLE_EQ(found->rot.z, 0.75);
 }
