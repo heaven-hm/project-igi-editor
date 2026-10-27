@@ -108,3 +108,39 @@ TEST(LevelObjectParsePathsTest, LoadPathPlacesTheRotatingPlacementGroup) {
     EXPECT_DOUBLE_EQ(found->rot.y, 0.5);
     EXPECT_DOUBLE_EQ(found->rot.z, 0.75);
 }
+
+// AnimTask and CutScene declare "Position" ObjectPos then "Orientation" Real32x9, so their
+// rotation sits at args 6/7/8 exactly as the rotating-placement group's does -- and the
+// load path read neither.  Retail declaration, MISSIONS/location0/level1/objects.qsc:
+//   Task_DeclareParameters("AnimTask", "Position", "ObjectPos", "Orientation", "Real32x9",
+//                          "TargetID", "Int32", ...);
+TEST(LevelObjectParsePathsTest, LoadPathPlacesAnimTask) {
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "igi_anim_task.qsc";
+    {
+        std::ofstream out(path, std::ios::trunc);
+        ASSERT_TRUE(out.is_open());
+        out << "Task_New(7001, \"AnimTask\", \"walk\", 1.5, 2.5, 3.5, "
+               "0.1, 0.2, 0.3, 42);\n";
+    }
+
+    QSC qsc;
+    qsc.Load(path.string().c_str());
+
+    LevelObjects objects;
+    objects.Load(nullptr, &qsc);
+
+    const LevelObject* found = nullptr;
+    for (const LevelObject& o : objects.GetObjects()) {
+        if (o.type == "AnimTask") found = &o;
+    }
+    std::filesystem::remove(path);
+    ASSERT_NE(found, nullptr) << "the loader produced no AnimTask";
+
+    EXPECT_DOUBLE_EQ(found->pos.x, 1.5);
+    EXPECT_DOUBLE_EQ(found->pos.y, 2.5);
+    EXPECT_DOUBLE_EQ(found->pos.z, 3.5);
+    EXPECT_DOUBLE_EQ(found->rot.x, 0.1);
+    EXPECT_DOUBLE_EQ(found->rot.y, 0.2);
+    EXPECT_DOUBLE_EQ(found->rot.z, 0.3);
+}

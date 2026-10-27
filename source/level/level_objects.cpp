@@ -197,11 +197,15 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
     // The line parser reads this group the same way (level_objects_serialize.cpp:307-312);
     // the load path had no branch for it, so these objects loaded with a position from the
     // generic candidate and no rotation at all.
+    // AnimTask and CutScene belong here too: the retail declaration gives them
+    //   "Position" ObjectPos, "Orientation" Real32x9, ...
+    // so their rotation sits at 6/7/8 exactly as the group's does, and nothing read it.
     bool isPlacementMatrixGroup =
         (typeStr == "AIStationaryGunHolder" || typeStr == "AlarmLight" || typeStr == "Elevator" ||
          typeStr == "Generator" || typeStr == "GenericPickup" || typeStr == "GenericTBA" ||
          typeStr == "Plane" || typeStr == "Radio" || typeStr == "RotatingObject" ||
-         typeStr == "Siren" || typeStr == "StationaryGun");
+         typeStr == "Siren" || typeStr == "StationaryGun" ||
+         typeStr == "AnimTask" || typeStr == "CutScene");
     bool isWeaponChild = (typeStr.rfind("Gun", 0) == 0);  // Task_New(id,"Gun<Name>",name,"WEAPON_ID_*",count) — HumanSoldier weapon child
 
     bool isDecl = (typeStr == "Task_DeclareParameters");
