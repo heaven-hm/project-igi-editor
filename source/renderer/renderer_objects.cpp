@@ -6,20 +6,22 @@
 #include "../lod/lod_select.h"
 #include "../lod/mef_mesh_header.h"
 #include "../capture_camera.h"
+#include "../level/terrain_snap_rules.h"
 
 
 
 
 
 bool Renderer_Objects::IsSkippedModelId(const std::string& modelId) {
-    if (modelId.empty()) return false;
     // The engine's collision proxies are never drawn -- they carry no geometry worth
     // rendering (mef_native.cpp:681: the only geometry is the collision mesh).  colbox3
     // was missing from this list, so a level that places one (level 12 does) treated it
     // as a real model, failed to resolve it and logged "Model NOT FOUND: 'colbox3'" as an
     // ERROR on every load.  It is a proxy like the others.
-    return modelId == "colbox" || modelId == "colbox2" || modelId == "colbox3" ||
-           modelId == "colbox4" || modelId == "colbox66";
+    //
+    // The list lives in level/terrain_snap_rules.h so the terrain-snap pass (which must
+    // also leave proxies alone) shares this one definition instead of keeping its own.
+    return igi::IsCollisionProxyModelId(modelId);
 }
 
 // Per-frame delta seconds feeder for continuous animations (e.g. helicopter rotor spin).
@@ -468,10 +470,27 @@ bool Renderer_Objects::Init() {
 
     // Bind UBO block "Matrices" to binding point 0
     // This MUST match the binding point used by terrain renderer
+    //
+    // On the GL 2.1 fallback there is no such block to find, and that is by design:
+    // the 120-tier object shader declares `uniform mat4 u_mvp` instead of a
+    // `Matrices` block (renderer_objects.cpp:222-229, and the vertex/fragment source
+    // selection at :394-395), and the emulation delivers the matrix to it by name
+    // (LegacyUploadUboToCurrentProgram, gl_helper.cpp:101-126, reached through the
+    // patched glBindBufferBase, gl_helper.cpp:160-172 + :270).  So
+    // glGetUniformBlockIndex legitimately answers GL_INVALID_INDEX on every legacy
+    // run -- the program has no such block -- and the old unconditional warning was
+    // an artefact of the emulation path, not a missing binding (it fired once per
+    // Renderer_Objects::Init, i.e. once per editor start via Renderer::Init,
+    // renderer.cpp:106, so 1-3 bogus "[WARN] UBO 'Matrices' block not found" lines
+    // in a log = 1-3 launches).
+    // Warn only when a real GL 3.0+ context links a shader that genuinely should
+    // declare the block.
     GLuint blockIdx = glGetUniformBlockIndex(shader_program_, "Matrices");
     if (blockIdx != GL_INVALID_INDEX) {
         glUniformBlockBinding(shader_program_, blockIdx, ubo_binding_point_);
         Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] UBO 'Matrices' bound to point " + std::to_string(ubo_binding_point_));
+    } else if (g_gl_info.legacy_gl21_) {
+        Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] GL 2.1 fallback: 'Matrices' is the emulated plain uniform u_mvp; no UBO block to bind.");
     } else {
         Logger::Get().Log(LogLevel::WARNING, "[Renderer_Objects] WARNING: UBO 'Matrices' block not found.");
     }

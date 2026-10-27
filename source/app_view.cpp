@@ -6,6 +6,7 @@
 #include "app_internal.h"
 #include "renderer/igi_transform.h"
 #include "runtime/editor_camera_start.h"
+#include "level/terrain_snap_rules.h"
 #include <unordered_set>
 
 void App::ProcessInput(float delta_seconds) {
@@ -489,12 +490,27 @@ void App::SnapObjectsToTerrain() {
 
     int snapped = 0;
     int skipped = 0;
-    int failed = 0;
+    int no_terrain = 0;
     for (auto& obj : objects) {
         // Skip non-spatial task nodes: HumanAI, PatrolPath, ConditionalContainer, LevelFlow, etc.
         // These have no world position (stored as 0,0,0) and no model to snap.
         // IGI world coordinates are in the millions range, so (0,0) is always outside the map.
         if (obj.modelId.empty() || (obj.pos.x == 0.0 && obj.pos.y == 0.0)) {
+            skipped++;
+            continue;
+        }
+        // Collision proxies (colbox / colbox2 / colbox3 / ...) are engine collision
+        // volumes, not drawable geometry: the engine never resolves a mesh for them
+        // (Renderer_Objects::IsSkippedModelId -> igi::IsCollisionProxyModelId,
+        // level/terrain_snap_rules.h; source/renderer/mef_native.cpp:677-684 — a colbox
+        // MEF's only geometry is the collision mesh) and never drops them to the ground.
+        // This pass used to fall through to the terrain query for them and log
+        // "Snap FAILED" whenever it missed: colbox3 is co-located with the EkksHQLift /
+        // WinchHouseLift buildings and colbox2 with the Barracks, and the query misses
+        // under those interiors because the terrain there is a designed DiscardTerrain
+        // hole (src/terredit/discard.c:10-12), so every load produced bogus warnings.
+        // Leave them entirely alone.
+        if (Renderer_Objects::IsSkippedModelId(obj.modelId)) {
             skipped++;
             continue;
         }
@@ -577,36 +593,16 @@ void App::SnapObjectsToTerrain() {
         }
 
         float terrainZ = 0.0f;
-        if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ, false)) {
-            bool isHuman = (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale");
-            double zDelta = obj.original_pos.z - (double)terrainZ;
+        const bool terrainFound = level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ, false);
+        const bool isHuman = (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale");
+        const double zDelta = obj.original_pos.z - (double)terrainZ;
 
-            // Non-human objects always keep their QSC Z — trees, buildings, fences, crates, etc.
-            // all have authoritative Z values authored by level designers. Snapping them to
-            // terrain destroys heights for elevated platforms, embedded foundations, and stacked props.
-            if (!isHuman) {
-                obj.snap_z_offset = 0.0;
-                obj.pos.z = obj.original_pos.z;
-                skipped++;
-                continue;
-            }
-            // Human soldiers: snap to terrain unless they are elevated (on a platform/building)
-            // or below terrain (underground bunker).
-            if (zDelta > 100.0 || zDelta < 0.0) {
-                // On elevated surface or below terrain — preserve original Z.
-                obj.snap_z_offset = 0.0;
-                obj.pos.z = obj.original_pos.z;
-                skipped++;
-                continue;
-            }
-            // Underground/subsurface: QSC Z is far below terrain (e.g. ANYA_HQ at ~-13M).
-            if (zDelta < -1000000.0) {
-                obj.snap_z_offset = 0.0;
-                obj.pos.z = obj.original_pos.z;
-                Logger::Get().Log(LogLevel::INFO, "[App] Deep underground, preserving Z for " + obj.modelId + " (" + obj.name + ") Z=" + std::to_string(obj.pos.z));
-                skipped++;
-                continue;
-            }
+        // The rule itself is igi::DecideTerrainSnap (level/terrain_snap_rules.h), shared
+        // with its host-lane test.  In short: props always keep their authored QSC Z,
+        // humans snap only when they are within the surface band, and a query miss never
+        // moves anything.
+        if (igi::DecideTerrainSnap(terrainFound, isHuman, zDelta) ==
+            igi::TerrainSnapDecision::SnapToTerrain) {
             // Human soldiers within 100 units of terrain surface: snap to terrain.
             // Apply the mesh Z-offset (pivot→feet) so feet rest on the ground, matching
             // the manual Snap-to-ground in UpdateMarkerManipulation (was: bare terrainZ,
@@ -617,11 +613,39 @@ void App::SnapObjectsToTerrain() {
             Logger::Get().Log(LogLevel::DEBUG, "[App] Snapped human " + obj.modelId + " to Z=" + std::to_string(obj.pos.z));
             snapped++;
         } else {
-            Logger::Get().Log(LogLevel::WARNING, "[App] Snap FAILED for " + obj.modelId + " at (" + std::to_string(obj.pos.x) + ", " + std::to_string(obj.pos.y) + "). Outside terrain?");
-            failed++;
+            // Keep the authored QSC Z.  This is the engine's own answer to every case
+            // here: when a drop query misses, Game_DropToGround (HOOK 0x4149B0,
+            // src/game/misc.c:75-97) probes down then up and then `return`s with `pos`
+            // untouched — there is no clamp and no default Z — and lightmap placement
+            // moves p.z only `if (hit.found)` (src/graphnode/lightmap.c:325-333,
+            // Coll_DropPointsMat HOOK 0x4CB9F0).  Restoring original_pos.z and clearing
+            // the offset also drops any offset a previous snap left on this object, so
+            // the value written back to the QSC is the authored one.
+            obj.snap_z_offset = 0.0;
+            obj.pos.z = obj.original_pos.z;
+            if (!terrainFound) {
+                // No terrain triangle under (x, y).  Either the point is outside the
+                // terrain octree or its leaf is a DiscardTerrain hole — the engine's own
+                // editor box that "tells the qcube walk to drop the terrain inside it,
+                // and takes collision points that fall inside it away from the terrain"
+                // (src/terredit/discard.c:10-12; DiscardTerrain_Visit HOOK 0x52C0B0 sets
+                // gQCubeSkipCells, :113-117; DiscardTerrain_CollQuery HOOK 0x52BF00,
+                // :75-87).  Terrain::RecursiveGetZ honours the same flag
+                // (source/level/terrain_query.cpp:315).  Normal for interiors,
+                // helipads and lift shafts, so this is information, not a warning.
+                no_terrain++;
+                Logger::Get().Log(LogLevel::INFO, "[App] No terrain under " + obj.modelId + " at (" + std::to_string(obj.pos.x) + ", " + std::to_string(obj.pos.y) + "); keeping authored Z " + std::to_string(obj.original_pos.z));
+            } else if (zDelta < igi::kSnapDeepUnderground) {
+                Logger::Get().Log(LogLevel::INFO, "[App] Deep underground, preserving Z for " + obj.modelId + " (" + obj.name + ") Z=" + std::to_string(obj.pos.z));
+                skipped++;
+            } else {
+                // Non-human prop, or a human on a platform above the surface band / below
+                // the terrain: the authored Z is authoritative.
+                skipped++;
+            }
         }
     }
-    Logger::Get().Log(LogLevel::INFO, "[App] Snap complete. snapped=" + std::to_string(snapped) + " skipped=" + std::to_string(skipped) + " failed=" + std::to_string(failed));
+    Logger::Get().Log(LogLevel::INFO, "[App] Snap complete. snapped=" + std::to_string(snapped) + " skipped=" + std::to_string(skipped) + " no_terrain=" + std::to_string(no_terrain));
 }
 
 void App::UpdateGraphNodeManipulation(int x, int y) {

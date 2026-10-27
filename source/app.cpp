@@ -16,6 +16,7 @@
 #include "mission_flow_loader.h"
 #include "mission_objective_loader.h"
 #include "mission_state_loader.h"
+#include "mission_text_resource.h"
 #include <charconv>
 #include <algorithm>
 #include <array>
@@ -41,27 +42,21 @@ static LRESULT CALLBACK EditorSubclassWndProc(HWND hwnd, UINT msg, WPARAM wParam
 	return CallWindowProc(g_origEditorWndProc, hwnd, msg, wParam, lParam);
 }
 
-static std::string ResolveMissionTextResource(
-	const std::array<std::string, 2>& archive_paths,
-	const std::string& resource_key) {
-	for (const std::string& archive_path : archive_paths) {
-		if (!std::filesystem::exists(archive_path)) {
-			continue;
-		}
-
-		const std::vector<uint8_t> resource_data =
-			RES_Extract(archive_path, resource_key);
-		if (resource_data.empty()) {
-			continue;
-		}
-
-		const auto terminator = std::find(
-			resource_data.begin(),
-			resource_data.end(),
-			static_cast<uint8_t>(0));
-		return std::string(resource_data.begin(), terminator);
-	}
-	return resource_key;
+// Localized mission text (StatusMessage `text`, DefineComputerObjective
+// `name`) is resolved by igi::MissionTextResources, which mirrors the engine's
+// one global resource list: the key is matched by folded full name across every
+// mounted language archive, not against a single archive chosen here. Engine
+// citations are in source/mission_text_resource.h.
+//
+// The resolver's only editor-side addition is a log line when no mounted archive
+// defines a key (the engine renders "RM: <key>" silently); it is wired to
+// Logger here.
+static igi::MissionTextResources MakeMissionTextResources(const std::string& game_root) {
+	return igi::MissionTextResources(
+		igi::MissionTextArchivePaths(game_root),
+		[](LogLevel level, const std::string& message) {
+			Logger::Get().Log(level, message);
+		});
 }
 
 /*
@@ -2378,14 +2373,11 @@ void App::SetupRuntimeMissionState() {
 	igi::AuthoredMissionStateDefinitions definitions =
 		igi::LoadAuthoredMissionStateDefinitions(task_sources);
 	const std::string game_root = Utils::GetIGIRootPath();
-	const std::array<std::string, 2> mission_text_archive_paths = {
-		game_root + "\\language\\ENGLISH\\objectives.res",
-		game_root + "\\language\\USA\\objectives.res",
-	};
+	const igi::MissionTextResources mission_text_resources =
+		MakeMissionTextResources(game_root);
 	for (igi::AuthoredMissionStatusMessage& status_message :
 		definitions.status_messages) {
-		status_message.display_text = ResolveMissionTextResource(
-			mission_text_archive_paths,
+		status_message.display_text = mission_text_resources.Resolve(
 			status_message.text_resource);
 	}
 	const size_t area_count = definitions.area_activations.size();
@@ -2769,13 +2761,17 @@ void App::InitializeGameplayMissionObjectives() {
 	}
 
 	const std::string game_root = Utils::GetIGIRootPath();
-	const std::array<std::string, 2> objective_archive_paths = {
-		game_root + "\\language\\ENGLISH\\objectives.res",
-		game_root + "\\language\\USA\\objectives.res",
-	};
+	// The map computer's objective names come from the same global resource
+	// list as StatusMessage text (ComputerObjectives_Draw 0x469110,
+	// src/compmap/objectives.c:148-149), so both call sites share one resolver.
+	// Captured by value: LevelFlow keeps the resolver past this call
+	// (level_flow.cpp:37, used at :146-148), so a reference to a local would
+	// dangle.
+	const igi::MissionTextResources mission_text_resources =
+		MakeMissionTextResources(game_root);
 	igi::MissionObjectiveTextResolver text_resolver =
-		[objective_archive_paths](const std::string& resource_key) {
-			return ResolveMissionTextResource(objective_archive_paths, resource_key);
+		[mission_text_resources](const std::string& resource_key) {
+			return mission_text_resources.Resolve(resource_key);
 		};
 	igi::MissionObjectiveLocationResolver location_resolver =
 		[objective_locations = std::move(objective_locations)](

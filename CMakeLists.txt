@@ -397,6 +397,7 @@ add_executable(igi_tests
     tests/test_audio_asset_resolver.cpp
     tests/test_vanilla_fixture_parity.cpp
     tests/test_mission_objectives.cpp
+    tests/test_mission_text_resource.cpp
     tests/test_mission_expression.cpp
     tests/test_mission_state.cpp
     tests/test_level_weather.cpp
@@ -437,6 +438,7 @@ add_executable(igi_tests
     tests/test_weather_texture.cpp
     tests/test_pickup_rules.cpp
     tests/test_sound_rules.cpp
+    tests/test_terrain_snap_rules.cpp
 )
 
 # Explicit runtime so igi_tests always matches igi-editor (/MDd Debug, /MD Release).
@@ -539,6 +541,7 @@ target_sources(igi_tests PRIVATE
     source/mission_objective_loader.cpp
     source/mission_flow_loader.cpp
     source/mission_state_loader.cpp
+    source/mission_text_resource.cpp
     source/mission_expression.cpp
     source/runtime/runtime_world.cpp
     source/runtime/runtime_session.cpp
