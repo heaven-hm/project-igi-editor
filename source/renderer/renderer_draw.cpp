@@ -415,6 +415,13 @@ void Renderer::Draw(const draw_params_s &params,
   auto objectsEnd = renderStart;
   auto splinesStart = renderStart;
   auto splinesEnd = renderStart;
+  // The 2D overlay tail (graph nodes + HUD text) and the final glFlush are part
+  // of Renderer::Draw but were outside the reported "total" before, which left
+  // the per-frame gap between [FrameProfile] and [RenderProfile] unattributed.
+  auto hudStart = renderStart;
+  auto hudEnd = renderStart;
+  auto flushStart = renderStart;
+  auto flushEnd = renderStart;
 
   SetupUBOMats(*params.view_define_);
 
@@ -499,27 +506,10 @@ void Renderer::Draw(const draw_params_s &params,
                    : 0u);
   }
 
-  if (profileRenderer) {
-    static int frames = 0;
-    static int64_t terrainUs = 0, objectsUs = 0, splinesUs = 0, totalUs = 0;
-    const auto now = ProfileClock::now();
-    const auto micros = [](ProfileClock::time_point begin, ProfileClock::time_point end) {
-      return std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
-    };
-    terrainUs += micros(terrainStart, terrainEnd);
-    objectsUs += micros(objectsStart, objectsEnd);
-    splinesUs += micros(splinesStart, splinesEnd);
-    totalUs += micros(renderStart, now);
-    if (++frames == 30) {
-      Logger::Get().Log(LogLevel::INFO,
-          "[RenderProfile] 30 frames: terrain=" + std::to_string(terrainUs / 30000) +
-          "ms objects=" + std::to_string(objectsUs / 30000) +
-          "ms splines=" + std::to_string(splinesUs / 30000) +
-          "ms total=" + std::to_string(totalUs / 30000) + "ms/frame");
-      frames = 0;
-      terrainUs = objectsUs = splinesUs = totalUs = 0;
-    }
-  }
+  // Everything from here on (graph overlay, 2D HUD text, state restore) is the
+  // overlay tail; it is accumulated at the end of this function so it lands in
+  // the same [RenderProfile] window as the 3D passes.
+  if (profileRenderer) hudStart = ProfileClock::now();
 
   // 3D navigation-graph pass: solid boxes + edges, depth-tested, before the HUD.
   if (graph_overlay_visible_ && !params.fast_scene_preview_)
@@ -3590,7 +3580,38 @@ void Renderer::Draw(const draw_params_s &params,
 
   GL_CHECK_ERROR;
 
+  if (profileRenderer) {
+    hudEnd = ProfileClock::now();
+    flushStart = hudEnd;
+  }
   glFlush();
+  if (profileRenderer) {
+    flushEnd = ProfileClock::now();
+
+    static int frames = 0;
+    static int64_t terrainUs = 0, objectsUs = 0, splinesUs = 0, hudUs = 0;
+    static int64_t flushUs = 0, totalUs = 0;
+    const auto micros = [](ProfileClock::time_point begin, ProfileClock::time_point end) {
+      return std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
+    };
+    terrainUs += micros(terrainStart, terrainEnd);
+    objectsUs += micros(objectsStart, objectsEnd);
+    splinesUs += micros(splinesStart, splinesEnd);
+    hudUs += micros(hudStart, hudEnd);
+    flushUs += micros(flushStart, flushEnd);
+    totalUs += micros(renderStart, flushEnd);
+    if (++frames == 30) {
+      Logger::Get().Log(LogLevel::INFO,
+          "[RenderProfile] 30 frames: terrain=" + std::to_string(terrainUs / 30000) +
+          "ms objects=" + std::to_string(objectsUs / 30000) +
+          "ms splines=" + std::to_string(splinesUs / 30000) +
+          "ms hud=" + std::to_string(hudUs / 30000) +
+          "ms flush=" + std::to_string(flushUs / 30000) +
+          "ms total=" + std::to_string(totalUs / 30000) + "ms/frame");
+      frames = 0;
+      terrainUs = objectsUs = splinesUs = hudUs = flushUs = totalUs = 0;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

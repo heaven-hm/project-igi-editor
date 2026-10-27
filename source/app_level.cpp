@@ -14,6 +14,7 @@
 #include "runtime/pause_menu_state.h"
 #include "runtime/editor_camera_start.h"
 #include <mmsystem.h>
+#include <chrono>
 #include <future>
 #include <set>
 
@@ -81,7 +82,30 @@ bool App::PlayLevelMusic(int level_no) {
 void App::CheckMusicLoop() {
     if (!music_playing_) return;
     char status[64] = {};
+    // IGI_PROFILE-only: the MCI status query is a winmm round trip; measure it
+    // so its per-frame cost is attributable rather than assumed.
+    const bool profile_music = []() {
+        static const bool enabled = getenv("IGI_PROFILE") != nullptr;
+        return enabled;
+    }();
+    const auto music_start = profile_music ? std::chrono::steady_clock::now()
+                                           : std::chrono::steady_clock::time_point{};
     MCIERROR rc = mciSendStringA("status bgmusic mode", status, sizeof(status), nullptr);
+    if (profile_music) {
+        static int64_t acc_us = 0;
+        static int calls = 0;
+        const auto now = std::chrono::steady_clock::now();
+        acc_us += std::chrono::duration_cast<std::chrono::microseconds>(now - music_start).count();
+        if (++calls >= 30) {
+            Logger::Get().Log(LogLevel::INFO,
+                "[MusicProfile] 30 frames: status_query=" +
+                std::to_string(acc_us / 30000) + "ms/frame (" +
+                std::to_string(acc_us / calls) + "us/call, " +
+                std::to_string(calls) + " calls)");
+            acc_us = 0;
+            calls = 0;
+        }
+    }
     if (rc != 0) return; // device gone (e.g. closed externally) — leave music_playing_ as-is, harmless
     if (std::string(status) == "stopped") {
         mciSendStringA("play bgmusic from 0", nullptr, 0, nullptr);

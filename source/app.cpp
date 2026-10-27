@@ -19,6 +19,7 @@
 #include <charconv>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 
 // GameMonitorParam, GameMonitorProc, and HOTKEY_ID_TOGGLE_GAME live in
@@ -695,8 +696,110 @@ void App::OnIdle() {
 	prior_frame_time_ = cur_time;
 }
 
+// IGI_PROFILE-only: attribute App::Frame() to the work before renderer_.Draw(),
+// the Draw call itself, and everything after it (gameplay attachment draws,
+// cursor, glutSwapBuffers). [FrameProfile] measures Frame() as a whole and
+// [RenderProfile] measures the inside of Draw, so this closes the gap between
+// them. Compiled unconditionally but only ever called when IGI_PROFILE is set.
+static void LogFrameBreak(const char *tag, int64_t pre_us, int64_t draw_us,
+                          int64_t post_us) {
+	static int64_t acc_pre = 0, acc_draw = 0, acc_post = 0;
+	static int frames = 0;
+	acc_pre += pre_us;
+	acc_draw += draw_us;
+	acc_post += post_us;
+	if (++frames >= 30) {
+		Logger::Get().Log(LogLevel::INFO,
+			std::string("[FrameBreak] ") + tag + " 30 frames: pre=" +
+			std::to_string(acc_pre / 30000) + "ms draw=" +
+			std::to_string(acc_draw / 30000) + "ms post=" +
+			std::to_string(acc_post / 30000) + "ms/frame");
+		frames = 0;
+		acc_pre = acc_draw = acc_post = 0;
+	}
+}
+
+// IGI_PROFILE-only: split the pre-render phase of App::Frame() (the part that
+// [FrameBreak] reports as `pre`) into its four candidate contributors, so a
+// regression can be attributed without re-instrumenting.
+static void LogFrameBreakPreSplit(int64_t update_us, int64_t level_us,
+                                  int64_t skinui_us, int64_t params_us) {
+	static int64_t acc_update = 0, acc_level = 0, acc_skinui = 0, acc_params = 0;
+	static int frames = 0;
+	acc_update += update_us;
+	acc_level += level_us;
+	acc_skinui += skinui_us;
+	acc_params += params_us;
+	if (++frames >= 30) {
+		Logger::Get().Log(LogLevel::INFO,
+			"[FrameBreak] pre split 30 frames: update=" +
+			std::to_string(acc_update / 30000) + "ms level=" +
+			std::to_string(acc_level / 30000) + "ms skinui=" +
+			std::to_string(acc_skinui / 30000) + "ms params=" +
+			std::to_string(acc_params / 30000) + "ms/frame");
+		frames = 0;
+		acc_update = acc_level = acc_skinui = acc_params = 0;
+	}
+}
+
+// IGI_PROFILE-only: split the `level` segment of the pre-render phase into the
+// three GL buffer mappings and the engine's own Level::Update().
+static void LogFrameBreakPreSplitIo(int64_t map_us, int64_t level_us,
+                                    int64_t unmap_us) {
+	static int64_t acc_map = 0, acc_level = 0, acc_unmap = 0;
+	static int frames = 0;
+	acc_map += map_us;
+	acc_level += level_us;
+	acc_unmap += unmap_us;
+	if (++frames >= 30) {
+		Logger::Get().Log(LogLevel::INFO,
+			"[FrameBreak] pre io split 30 frames: map=" +
+			std::to_string(acc_map / 30000) + "ms level=" +
+			std::to_string(acc_level / 30000) + "ms unmap=" +
+			std::to_string(acc_unmap / 30000) + "ms/frame");
+		frames = 0;
+		acc_map = acc_level = acc_unmap = 0;
+	}
+}
+
+// IGI_PROFILE-only: split the editor's own per-frame work that happens before
+// the renderer is called at all (animations, view define, scene hover pick).
+// [FrameBreak] reports this whole span as part of `pre`; the terrain buffer
+// map/upload calls that live in the same span measure 0 ms, so this is where
+// the cost actually is.
+static void LogFrameBreakPreSplitEditor(int64_t anim_us, int64_t view_us,
+                                        int64_t pick_us, int64_t level_us) {
+	static int64_t acc_anim = 0, acc_view = 0, acc_pick = 0, acc_level = 0;
+	static int frames = 0;
+	acc_anim += anim_us;
+	acc_view += view_us;
+	acc_pick += pick_us;
+	acc_level += level_us;
+	if (++frames >= 30) {
+		Logger::Get().Log(LogLevel::INFO,
+			"[FrameBreak] editor split 30 frames: anim+music=" +
+			std::to_string(acc_anim / 30000) + "ms viewdefine=" +
+			std::to_string(acc_view / 30000) + "ms pick+maps=" +
+			std::to_string(acc_pick / 30000) + "ms levelupdate=" +
+			std::to_string(acc_level / 30000) + "ms/frame");
+		frames = 0;
+		acc_anim = acc_view = acc_pick = acc_level = 0;
+	}
+}
+
 void App::Frame(float delta_seconds) {
 	const bool render_gameplay = IsGameplayRenderTarget();
+	// Per-frame attribution around renderer_.Draw() (IGI_PROFILE only).
+	const bool profile_frame_break = []() {
+		static const bool enabled = getenv("IGI_PROFILE") != nullptr;
+		return enabled;
+	}();
+	using FrameBreakClock = std::chrono::steady_clock;
+	const auto frame_enter = profile_frame_break ? FrameBreakClock::now()
+	                                             : FrameBreakClock::time_point{};
+	const auto frame_us = [](FrameBreakClock::time_point a, FrameBreakClock::time_point b) {
+		return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
+	};
 	const igi::RuntimeRenderSnapshot& render_snapshot =
 		gameplay_host_.GetRenderSnapshot();
 	if (developer_mode_ && (!rendering_editor_window_ || IsEditorInputActive())) {
@@ -859,10 +962,19 @@ void App::Frame(float delta_seconds) {
 			[this](double x, double y) { return level_.GetTerrainNodeId(x, y); };
 		draw_params_.terrain_z_at_world_xy_ =
 			[this](double x, double y, float& z) { return level_.GetTerrainZ(x, y, z); };
+		const auto frame_draw_begin = profile_frame_break ? FrameBreakClock::now()
+		                                                  : FrameBreakClock::time_point{};
 	renderer_.Draw(draw_params_, task_tree_view);
+		const auto frame_draw_end = profile_frame_break ? FrameBreakClock::now()
+		                                                : FrameBreakClock::time_point{};
 
 	DrawCustomCursor();
 	glutSwapBuffers();
+	if (profile_frame_break) {
+		LogFrameBreak("paused", frame_us(frame_enter, frame_draw_begin),
+			frame_us(frame_draw_begin, frame_draw_end),
+			frame_us(frame_draw_end, FrameBreakClock::now()));
+	}
 	return;
     }
 
@@ -960,6 +1072,9 @@ void App::Frame(float delta_seconds) {
 		Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraForward) ||
 		Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraBackward) ||
 		camera_mode_moved_;
+	// IGI_PROFILE: boundary markers for the pre-render split reported below.
+	const auto frame_pre_t1 = profile_frame_break ? FrameBreakClock::now()
+	                                              : FrameBreakClock::time_point{};
 
 	// Update animation playback (auto-play for AI NPCs)
 	if (!cameraNavigating && (!rendering_editor_window_ || IsEditorInputActive())) {
@@ -968,6 +1083,8 @@ void App::Frame(float delta_seconds) {
 		}
 		CheckMusicLoop();
 	}
+	const auto frame_pre_t1anim = profile_frame_break ? FrameBreakClock::now()
+	                                                  : FrameBreakClock::time_point{};
 
 	// Per-frame position-drag velocity: the pad / Z slider accelerate while held in
 	// a direction and keep moving when the cursor is pinned at the window edge.
@@ -985,6 +1102,8 @@ void App::Frame(float delta_seconds) {
 	if (render_gameplay) UpdateGameplayViewDefine();
 	else UpdateViewDefine();
 	if (render_gameplay) CaptureGameplayRenderSnapshot();
+	const auto frame_pre_t1view = profile_frame_break ? FrameBreakClock::now()
+	                                                  : FrameBreakClock::time_point{};
 	const bool pointer_changed = mouse_state_.prior_x_ != last_pick_x_ ||
 		mouse_state_.prior_y_ != last_pick_y_;
 	const bool camMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
@@ -1010,6 +1129,8 @@ void App::Frame(float delta_seconds) {
 	vert_pos_a_uv_s* terrain_vb = renderer_.MapTerrainVB();
 	uint32_t* terrain_ib = renderer_.MapTerrainIB();
 	render_chunk_s* render_chunks = renderer_.GetTerrainRenderChunckBuffer();
+	const auto frame_pre_t1a = profile_frame_break ? FrameBreakClock::now()
+	                                               : FrameBreakClock::time_point{};
 
 	update_params_s update_params = {
 		.frame_ = frame_,
@@ -1023,6 +1144,8 @@ void App::Frame(float delta_seconds) {
 	};
 
 	level_.Update(update_params);
+	const auto frame_pre_t1b = profile_frame_break ? FrameBreakClock::now()
+	                                               : FrameBreakClock::time_point{};
 
 	if (terrain_ib) {
 		renderer_.UnmapTerrainIB();
@@ -1035,6 +1158,8 @@ void App::Frame(float delta_seconds) {
 	if (fsl_vb) {
 		renderer_.UnmapFlatSkyLayersVB();
 	}
+	const auto frame_pre_t2 = profile_frame_break ? FrameBreakClock::now()
+	                                              : FrameBreakClock::time_point{};
 
 	draw_params_.flat_sky_layer_is_visible_ = update_params.flat_sky_layer_is_visible_;
 	draw_params_.num_terrain_render_chunk_ = update_params.num_terrain_render_chunk_;
@@ -1091,6 +1216,8 @@ void App::Frame(float delta_seconds) {
 
 	int propAnimBoneHierarchy; std::vector<int> propAnimIds; int propAnimActiveId; bool propAnimIsPlaying;
 	ComputePropAnimUiState(propAnimBoneHierarchy, propAnimIds, propAnimActiveId, propAnimIsPlaying);
+	const auto frame_pre_t3 = profile_frame_break ? FrameBreakClock::now()
+	                                              : FrameBreakClock::time_point{};
 
 	Renderer::task_tree_view_params_s task_tree_view = {
 		.show_hud_ = render_gameplay ? false : show_hud_,
@@ -1207,7 +1334,24 @@ void App::Frame(float delta_seconds) {
 		.pause_menu_layout_ = PauseMenuLayoutNow(),
 	};
 
+	const auto frame_draw_begin = profile_frame_break ? FrameBreakClock::now()
+	                                                  : FrameBreakClock::time_point{};
+	if (profile_frame_break) {
+		LogFrameBreakPreSplit(frame_us(frame_enter, frame_pre_t1),
+		                      frame_us(frame_pre_t1, frame_pre_t2),
+		                      frame_us(frame_pre_t2, frame_pre_t3),
+		                      frame_us(frame_pre_t3, frame_draw_begin));
+		LogFrameBreakPreSplitIo(frame_us(frame_pre_t1, frame_pre_t1a),
+		                        frame_us(frame_pre_t1a, frame_pre_t1b),
+		                        frame_us(frame_pre_t1b, frame_pre_t2));
+		LogFrameBreakPreSplitEditor(frame_us(frame_pre_t1, frame_pre_t1anim),
+		                            frame_us(frame_pre_t1anim, frame_pre_t1view),
+		                            frame_us(frame_pre_t1view, frame_pre_t1a),
+		                            frame_us(frame_pre_t1a, frame_pre_t1b));
+	}
 	renderer_.Draw(draw_params_, task_tree_view);
+	const auto frame_draw_end = profile_frame_break ? FrameBreakClock::now()
+	                                                : FrameBreakClock::time_point{};
 	DrawGameplayProjectiles();
 	DrawGameplayExplosions();
 	DrawGameplayGuardMuzzleFlashes();
@@ -1354,6 +1498,11 @@ void App::Frame(float delta_seconds) {
 
 	DrawCustomCursor();
 	glutSwapBuffers();
+	if (profile_frame_break) {
+		LogFrameBreak("editor", frame_us(frame_enter, frame_draw_begin),
+		              frame_us(frame_draw_begin, frame_draw_end),
+		              frame_us(frame_draw_end, FrameBreakClock::now()));
+	}
 }
 
 void App::UpdateGameplayFieldOfView() {
@@ -3419,8 +3568,48 @@ void App::UpdateAnimations(float dtSec) {
     // elapsed wall-clock time to `AnimPlayer::AdvanceSeconds`, which steps whole
     // engine frames (gTicksPerFrame, src/lod/boneobj.c:86-90). The editor no
     // longer accumulates ticks itself.
+    // IGI_PROFILE-only: attribute this loop, which [FrameBreak] shows is the
+    // largest single block of App::Frame() outside renderer_.Draw().
+    const bool profile_anim = []() {
+        static const bool enabled = getenv("IGI_PROFILE") != nullptr;
+        return enabled;
+    }();
+    const auto anim_start = profile_anim ? std::chrono::steady_clock::now()
+                                         : std::chrono::steady_clock::time_point{};
+    int64_t slowest_us = 0;
+    int slowest_idx = -1;
     for (auto& [idx, pb] : animPlaybacks_) {
+        const auto one_start = profile_anim ? std::chrono::steady_clock::now()
+                                            : std::chrono::steady_clock::time_point{};
         pb.Update(dtSec * 1000.f);
+        if (profile_anim) {
+            const int64_t one_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - one_start).count();
+            if (one_us > slowest_us) {
+                slowest_us = one_us;
+                slowest_idx = idx;
+            }
+        }
+    }
+    if (profile_anim) {
+        static int64_t acc_us = 0;
+        static int64_t acc_slowest_us = 0;
+        static int64_t acc_count = 0;
+        static int frames = 0;
+        const auto now = std::chrono::steady_clock::now();
+        acc_us += std::chrono::duration_cast<std::chrono::microseconds>(now - anim_start).count();
+        acc_slowest_us += slowest_us;
+        acc_count += (int64_t)animPlaybacks_.size();
+        if (++frames >= 30) {
+            Logger::Get().Log(LogLevel::INFO,
+                "[AnimProfile] 30 frames: playbacks=" +
+                std::to_string(acc_count / 30) + " loop=" +
+                std::to_string(acc_us / 30000) + "ms slowest=" +
+                std::to_string(acc_slowest_us / 30000) + "ms (last slowest idx=" +
+                std::to_string(slowest_idx) + ")");
+            acc_us = acc_slowest_us = acc_count = 0;
+            frames = 0;
+        }
     }
 }
 
