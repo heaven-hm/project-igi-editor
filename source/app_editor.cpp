@@ -859,9 +859,11 @@ void App::CommitPropTextEdit() {
 		// An explicit model-field commit (Enter) IS the import request: never skip
 		// it just because the destination inventory already lists the model —
 		// level archives can carry stale/polluted bytes for a same-name model
-		// (e.g. 001_02_1 natively present in level 12). The staged replace path
-		// skips byte-identical entries, so refreshing a natively-present model
-		// with matching bytes is a safe no-op.
+		// (e.g. 001_02_1, which natively ships in level7/level8's
+		// models/LEVEL*.RES — not level 12, as an earlier revision of this comment
+		// claimed; verified by the retail mtimes on those bundles). The staged
+		// replace path skips byte-identical entries, so refreshing a
+		// natively-present model with matching bytes is a safe no-op.
 		obj.modelMissingInRes = true;
 		// Auto-add the foreign model immediately — no extra keypress needed.
 		std::string addId = obj.modelId;
