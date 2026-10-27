@@ -68,6 +68,15 @@ constexpr const char* kCutSceneKey = "M1_CUT_01";
 constexpr const char* kMessageKey = "M1_MSG_6";
 constexpr const char* kCameraKey = "CAMERASOFFLINE_1MIN";
 constexpr const char* kFailedKey = "MISSION_FAILED";
+constexpr const char* kCompleteKey = "MISSION_COMPLETE";
+
+// The four flat names ComputerObjectives_Draw composes its per-objective line
+// from. They are the mirror image of the StatusMessage keys: they live in
+// objectives.res, not messages.res.
+constexpr const char* kObjectiveWordKey = "OBJECTIVE";
+constexpr const char* kCompleteWordKey = "COMPLETE";
+constexpr const char* kIncompleteWordKey = "INCOMPLETE";
+constexpr const char* kFailedWordKey = "FAILED";
 
 // A resource body is a NUL-terminated C string (the engine hands the resource
 // pointer straight to strcpy: statusmessage.c:656).
@@ -193,6 +202,52 @@ TEST_F(MissionTextResourceTest, ObjectivesArchiveAloneCannotAnswerAMessageKey) {
     EXPECT_TRUE(RES_FindIndexEntry(index, "M1_OBJ1", info));
 }
 
+TEST_F(MissionTextResourceTest, ObjectiveStateWordsResolveFromTheObjectivesArchive) {
+    // The HUD objective card's mission-level branches (MISSION_FAILED /
+    // MISSION_COMPLETE) and its finished-set composition come from two DIFFERENT
+    // archives, and this pins which is which:
+    //
+    //   StatusMessageScreen_AddMessage 0x486650  src/mission/statusmessage.c:653-660
+    //       MISSION_FAILED / MISSION_COMPLETE are StatusMessage text, resolved
+    //       flat; StatusMessages_Load 0x4868A0 mounts LANGUAGE:messages.res (:671)
+    //   ComputerObjectives_Draw        0x469110  src/compmap/objectives.c:137-143
+    //       crt_sprintf(text, "%s %d: ", Resource_Load("OBJECTIVE", 0), i + 1);
+    //       if (obj->failed) s = Resource_Load("FAILED", 0); ...
+    //       OBJECTIVE / FAILED / COMPLETE / INCOMPLETE come from
+    //       LANGUAGE:objectives.res, the archive ComputerRes_Load 0x46B070 mounts
+    //       (src/compmap/res.c:32)
+    const fs::path messages = WriteArchive("MESSAGES.RES", {
+        RESEntry{kFailedKey, Body("Mission Failed!")},
+        RESEntry{kCompleteKey, Body("Mission Complete!")},
+    });
+    const fs::path objectives = WriteArchive("objectives.res", {
+        RESEntry{kObjectiveWordKey, Body("Objective")},
+        RESEntry{kCompleteWordKey, Body("Complete")},
+        RESEntry{kIncompleteWordKey, Body("Incomplete")},
+        RESEntry{kFailedWordKey, Body("Failed!")},
+    });
+
+    const igi::MissionTextResources resources =
+        MakeResources({messages.string(), objectives.string()});
+
+    // The engine's per-objective status words...
+    EXPECT_EQ(resources.Resolve(kObjectiveWordKey), "Objective");
+    EXPECT_EQ(resources.Resolve(kCompleteWordKey), "Complete");
+    EXPECT_EQ(resources.Resolve(kIncompleteWordKey), "Incomplete");
+    EXPECT_EQ(resources.Resolve(kFailedWordKey), "Failed!");
+    // ...and the mission-level StatusMessage key, in one mounted set.
+    EXPECT_EQ(resources.Resolve(kFailedKey), "Mission Failed!");
+    EXPECT_EQ(resources.Resolve(kCompleteKey), "Mission Complete!");
+
+    // A full-name compare, not a prefix one: COMPLETE does not answer
+    // MISSION_COMPLETE (Resource_IsLoaded 0x4B5B90, src/res/resource.c:136-138).
+    EXPECT_NE(resources.Resolve(kCompleteKey),
+              resources.Resolve(kCompleteWordKey));
+
+    EXPECT_TRUE(logged_messages_.empty())
+        << "unexpected diagnostics: " << logged_messages_.front();
+}
+
 // ===========================================================================
 // Engine lookup semantics
 // ===========================================================================
@@ -281,24 +336,55 @@ TEST_F(MissionTextResourceTest, RetailMessagesArchiveCarriesTheReportedKeys) {
     ASSERT_TRUE(RES_BuildIndex(objectives.string(), objectives_index, error))
         << error;
     ResEntryInfo info;
-    for (const char* key : {kCutSceneKey, kMessageKey, kCameraKey, kFailedKey}) {
+    for (const char* key : {kCutSceneKey, kMessageKey, kCameraKey, kFailedKey,
+                            kCompleteKey}) {
         EXPECT_FALSE(RES_FindIndexEntry(objectives_index, key, info))
             << key << " unexpectedly IS in objectives.res";
     }
     // ...while the map computer's objective name IS there.
     EXPECT_TRUE(RES_FindIndexEntry(objectives_index, "M1_OBJ1", info));
 
+    // The other half of the split, on the same shipped data: the four names
+    // ComputerObjectives_Draw composes its objective line from are defined by
+    // objectives.res and by nothing else -- messages.res does not carry them
+    // (src/compmap/objectives.c:137-143 vs src/compmap/res.c:32).
+    std::unordered_map<std::string, ResEntryInfo> messages_index;
+    ASSERT_TRUE(RES_BuildIndex(messages.string(), messages_index, error))
+        << error;
+    for (const char* key : {kObjectiveWordKey, kCompleteWordKey,
+                            kIncompleteWordKey, kFailedWordKey}) {
+        EXPECT_TRUE(RES_FindIndexEntry(objectives_index, key, info))
+            << key << " is not in objectives.res";
+        EXPECT_FALSE(RES_FindIndexEntry(messages_index, key, info))
+            << key << " unexpectedly IS in messages.res";
+    }
+    // And both mission-status keys are in messages.res, the reverse direction.
+    for (const char* key : {kFailedKey, kCompleteKey}) {
+        EXPECT_TRUE(RES_FindIndexEntry(messages_index, key, info))
+            << key << " is not in messages.res";
+        EXPECT_FALSE(RES_FindIndexEntry(objectives_index, key, info))
+            << key << " unexpectedly IS in objectives.res";
+    }
+
     // The engine's mounted set answers all of them, and none of them renders the
     // resource-missing marker.
     const igi::MissionTextResources resources =
         MakeResources({messages.string(), objectives.string()});
     for (const char* key : {kCutSceneKey, kMessageKey, kCameraKey, kFailedKey,
-                            "M1_OBJ1"}) {
+                            kCompleteKey, kObjectiveWordKey, kCompleteWordKey,
+                            kIncompleteWordKey, kFailedWordKey, "M1_OBJ1"}) {
         ASSERT_TRUE(resources.Has(key)) << key << " not found in the retail set";
         const std::string text = resources.Resolve(key);
         EXPECT_FALSE(text.empty()) << key;
         EXPECT_NE(text.rfind("RM: ", 0), 0u) << key << " rendered as " << text;
     }
+
+    // The exact strings the HUD card now shows for the two mission-level states,
+    // straight out of the shipped archive.
+    EXPECT_EQ(resources.Resolve(kFailedKey), "Mission Failed!");
+    EXPECT_EQ(resources.Resolve(kCompleteKey), "Mission Complete!");
+    EXPECT_EQ(resources.Resolve(kObjectiveWordKey), "Objective");
+    EXPECT_EQ(resources.Resolve(kCompleteWordKey), "Complete");
 
     // A clean run of the retail corpus must not report a single missing key:
     // that is exactly the 44-warning defect.

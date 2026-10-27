@@ -96,6 +96,18 @@ public:
     MissionStatus GetStatus() const { return status_; }
     const std::vector<MissionObjective>& GetObjectives() const { return objectives_; }
     uint32_t GetMissionNumber() const { return mission_number_; }
+
+    // The single line the HUD objective card shows, taken from the engine's own
+    // sources -- never from an editor-invented string. See level_flow.cpp for
+    // the per-branch citations:
+    //   Failed    -> the StatusMessage text key MISSION_FAILED
+    //   Success   -> the StatusMessage text key MISSION_COMPLETE
+    //                (both flat in LANGUAGE:<lang>/MESSAGES.RES)
+    //   otherwise -> the pending primary objective's own resource text
+    //                (LANGUAGE:<lang>/objectives.res), or, once the set is
+    //                finished, the engine's composed map-computer status line
+    //                "<OBJECTIVE> <n>: <COMPLETE|FAILED|INCOMPLETE>".
+    // A key no mounted archive defines renders the engine's "RM: <key>".
     std::string GetObjectiveDisplayText() const;
     bool HasAuthoredMissionFlow() const { return has_authored_mission_flow_; }
     bool IsInterfaceTimerEnabled() const {
@@ -119,6 +131,17 @@ private:
         const MissionExpressionEvaluator& expression_evaluator) const;
     bool EvaluateAuthoredMissionFlow(
         const MissionExpressionEvaluator& expression_evaluator);
+
+    // Resolve one bare mission text key the way the engine does (a flat lookup
+    // over the mounted language archives, performed by the injected resolver).
+    // With no resolver injected there is no archive to look in, so the engine's
+    // own miss rendering "RM: <key>" is returned -- the raw key is never shown.
+    std::string ResolveObjectiveText(const std::string& resource_key) const;
+
+    // ComputerObjectives_Draw 0x469110 (src/compmap/objectives.c:137-145)
+    // composes one line per objective: "<OBJECTIVE> <n>: " followed by the
+    // objective's state word (FAILED / COMPLETE / INCOMPLETE).
+    std::string EngineObjectiveStatusLine(const MissionObjective& objective) const;
 
     uint32_t mission_number_ = 1;
     std::vector<MissionObjective> objectives_;

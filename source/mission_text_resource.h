@@ -100,6 +100,16 @@ private:
 
 // "RM: %s" — the engine's rendering when Resource_Find fails
 // (src/mission/statusmessage.c:660, src/compmap/objectives.c:151).
-std::string MissionTextMissingRendering(const std::string& resource_key);
+//
+// Header-inline on purpose: it is pure string formatting with no archive or
+// logger dependency, and level_flow.cpp needs it on the path where no resolver
+// was injected. A non-inline definition would make every caller link this
+// translation unit (and through it the RES reader and Logger), which turns a
+// strictly linked host suite into a lazily linked one.
+inline std::string MissionTextMissingRendering(const std::string& resource_key) {
+    // crt_sprintf(l->text, "RM: %s", m->text);  statusmessage.c:660
+    // crt_sprintf(text, "RM: %s", obj->name);   objectives.c:151
+    return "RM: " + resource_key;
+}
 
 } // namespace igi

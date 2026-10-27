@@ -826,12 +826,16 @@ TEST(RuntimeRenderTest, CapturesAllMapComputerObjectiveRows) {
     const RuntimeRenderSnapshot& snapshot = renderer.GetSnapshot();
     ASSERT_TRUE(snapshot.map_computer_open);
     ASSERT_EQ(snapshot.map_computer_objectives.size(), 2U);
-    EXPECT_EQ(snapshot.map_computer_objectives[0].text, "M1_OBJECTIVE_ONE");
+    // This flow injects no resolver, so neither name resolves. The map computer
+    // draws the objective's `name` through the engine's flat lookup and renders
+    // "RM: %s" when nothing defines it -- it never paints the bare key
+    // (ComputerObjectives_Draw 0x469110, src/compmap/objectives.c:148-153).
+    EXPECT_EQ(snapshot.map_computer_objectives[0].text, "RM: M1_OBJECTIVE_ONE");
     EXPECT_EQ(snapshot.map_computer_objectives[0].link_task_id, 1120);
     EXPECT_TRUE(snapshot.map_computer_objectives[0].has_location);
     EXPECT_EQ(snapshot.map_computer_objectives[0].location,
               glm::vec3(10.0f, 20.0f, 30.0f));
-    EXPECT_EQ(snapshot.map_computer_objectives[1].text, "M1_OBJECTIVE_TWO");
+    EXPECT_EQ(snapshot.map_computer_objectives[1].text, "RM: M1_OBJECTIVE_TWO");
     EXPECT_EQ(snapshot.map_computer_objectives[1].link_task_id, 1121);
 }
 
@@ -2151,7 +2155,13 @@ TEST(RuntimeLevelFlowTest, ActiveObjectiveAdvancesThroughInteraction) {
     EXPECT_EQ(flow.GetObjectiveDisplayText(),
               "Infiltrate the trainyard and download train schedule");
     EXPECT_TRUE(flow.CompleteFirstPendingPrimaryObjective());
-    EXPECT_EQ(flow.GetObjectiveDisplayText(), "Reach the extraction zone");
+    // The only primary of the fallback list is done, so the card shows the
+    // engine's composed objective line rather than the invented string
+    // "Reach the extraction zone" (ComputerObjectives_Draw 0x469110,
+    // src/compmap/objectives.c:137-145). This flow injects no resolver, so the
+    // composition's keys are unresolved and render the engine's own
+    // "RM: <key>" marker (objectives.c:151).
+    EXPECT_EQ(flow.GetObjectiveDisplayText(), "RM: OBJECTIVE 1: RM: COMPLETE");
     EXPECT_FALSE(flow.CompleteFirstPendingPrimaryObjective());
 }
 

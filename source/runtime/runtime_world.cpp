@@ -1,5 +1,6 @@
 #include "runtime_world.h"
 
+#include "../mission_text_resource.h"
 #include "../player_separation.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -141,9 +142,9 @@ bool WeaponProducesMuzzleFlash(const WeaponDefinition& weapon) {
 // (src/humanbase/human.c:1284 HumanView_GetMatrix) and reads column 1 as the look
 // direction (src/game/game.c:909,912). The look direction here is the one the
 // runtime already uses for the aim and interaction rays
-// (source/runtime/runtime_world.cpp:2420 and :2496-2499), `right` is the movement
+// (source/runtime/runtime_world.cpp:2432 and :2508-2511), `right` is the movement
 // basis (source/player_controller.cpp:130-131) and `up` is `right x forward`, the
-// frame order used by the camera builders at :1842-1848.
+// frame order used by the camera builders at :1854-1860.
 ViewFrame BuildPlayerViewFrame(const PlayerController& player) {
     const float yaw_radians = glm::radians(player.GetYaw());
     const float pitch_radians = glm::radians(player.GetPitch());
@@ -1528,7 +1529,18 @@ void RuntimeWorld::SetAuthoredMissionState(
 
     for (AuthoredMissionStatusMessage& status_message : status_messages) {
         if (status_message.display_text.empty()) {
-            status_message.display_text = status_message.text_resource;
+            // The application resolves display_text from the language archives
+            // before calling here (app.cpp: "MissionTextResources::Resolve",
+            // which is the engine's flat Resource_Find/Resource_Load lookup --
+            // StatusMessageScreen_AddMessage 0x486650,
+            // src/mission/statusmessage.c:653-660). Reaching this branch means a
+            // caller passed a bare, unresolved resource name, and the engine
+            // never paints a bare key: it renders "RM: %s"
+            // (src/mission/statusmessage.c:660). Show that marker rather than the
+            // raw name, and keep the message (the engine allocates the slot
+            // before it resolves, :624-625, so it still displays).
+            status_message.display_text =
+                MissionTextMissingRendering(status_message.text_resource);
         }
         MissionStatusMessageRuntime runtime_message;
         runtime_message.definition = std::move(status_message);

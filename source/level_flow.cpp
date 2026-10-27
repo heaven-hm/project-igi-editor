@@ -3,6 +3,13 @@
 
 #include <utility>
 
+// MissionTextMissingRendering: the engine's own "RM: %s" rendering for a mission
+// text key that no mounted archive defines (StatusMessageScreen_AddMessage
+// 0x486650, src/mission/statusmessage.c:660; ComputerObjectives_Draw 0x469110,
+// src/compmap/objectives.c:151). Reused rather than re-spelled so the marker has
+// exactly one definition in the editor.
+#include "mission_text_resource.h"
+
 namespace igi {
 
 LevelFlow::LevelFlow() {
@@ -142,14 +149,14 @@ void LevelFlow::LoadAuthoredObjectiveSet(size_t authored_set_index) {
          ++objective_index) {
         const AuthoredMissionObjectiveDefinition& authored_objective =
             objective_set.objectives[objective_index];
-        std::string display_text = authored_objective.text_resource;
-        if (objective_text_resolver_) {
-            const std::string resolved_text =
-                objective_text_resolver_(authored_objective.text_resource);
-            if (!resolved_text.empty()) {
-                display_text = resolved_text;
-            }
-        }
+        // The objective's `text` parameter is a bare resource name and the engine
+        // resolves it with the same flat lookup it uses for a StatusMessage text
+        // before drawing it (ComputerObjectives_Draw 0x469110,
+        // src/compmap/objectives.c:148-149), rendering "RM: <key>" -- never the
+        // raw key -- when no mounted archive defines it (:151). Resolved once here
+        // so the per-frame display path does not re-read the archive.
+        std::string display_text =
+            ResolveObjectiveText(authored_objective.text_resource);
 
         MissionObjective objective;
         objective.id = static_cast<uint32_t>(objective_index + 1);
@@ -266,20 +273,129 @@ bool LevelFlow::CompleteFirstPendingPrimaryObjective() {
     return true;
 }
 
-std::string LevelFlow::GetObjectiveDisplayText() const {
-    if (status_ == MissionStatus::Failed) {
-        return "MISSION FAILED";
-    }
-    if (status_ == MissionStatus::Success) {
-        return "MISSION COMPLETE";
+std::string LevelFlow::ResolveObjectiveText(const std::string& resource_key) const {
+    if (objective_text_resolver_) {
+        // The injected resolver is the engine's flat lookup: Resource_Find
+        // 0x4B64E0 -> Resource_IsLoaded 0x4B5B90 over the one global resource
+        // list (src/res/resource.c:124-147), and Resource_Load 0x4B5F00 for the
+        // body (src/res/resource.c:247-269). On a genuine miss it returns the
+        // engine's "RM: <key>" (MissionTextResources::Resolve).
+        return objective_text_resolver_(resource_key);
     }
 
+    // No resolver was injected -- LevelFlow() + InitializeMission(mission_number)
+    // builds the fallback objective list (InitializeFallbackObjectives) and this
+    // object owns no archive. The engine never displays a bare key, so the miss
+    // rendering is the honest answer here as well.
+    return MissionTextMissingRendering(resource_key);
+}
+
+std::string LevelFlow::EngineObjectiveStatusLine(
+    const MissionObjective& objective) const {
+    // ComputerObjectives_Draw 0x469110 (src/compmap/objectives.c:137-145):
+    //
+    //   crt_sprintf(text, "%s %d: ", Resource_Load("OBJECTIVE", 0), i + 1);
+    //   if (obj->failed)        s = Resource_Load("FAILED", 0);
+    //   else if (obj->complete) s = Resource_Load("COMPLETE", 0);
+    //   else                    s = Resource_Load("INCOMPLETE", 0);
+    //
+    // OBJECTIVE, FAILED, COMPLETE and INCOMPLETE are flat names in
+    // LANGUAGE:objectives.res -- the archive ComputerRes_Load 0x46B070 mounts
+    // for the map computer (src/compmap/res.c:32). `i + 1` is the objective's
+    // 1-based slot; MissionObjective::id carries the same 1-based position
+    // (LoadAuthoredObjectiveSet sets it to objective_index + 1).
+    //
+    // The engine draws the objective's own text on the FOLLOWING line
+    // (src/compmap/objectives.c:148-155, including its "RM: %s" miss case) --
+    // that text is what GetObjectiveDisplayText() returns while the objective is
+    // still pending, so the editor's one-line card shows one half of the
+    // engine's two-line pair, chosen by whether the objective is still to do.
+    const char* status_key = "INCOMPLETE";
+    if (objective.state == ObjectiveState::Failed) {
+        status_key = "FAILED";
+    } else if (objective.state == ObjectiveState::Completed) {
+        status_key = "COMPLETE";
+    }
+
+    return ResolveObjectiveText("OBJECTIVE") + " " +
+        std::to_string(objective.id) + ": " + ResolveObjectiveText(status_key);
+}
+
+std::string LevelFlow::GetObjectiveDisplayText() const {
+    // (a) Mission failure and (b) mission completion have no dedicated HUD
+    // objective line in the engine: they are StatusMessages. The level's
+    // objects.qsc sends one whose `text` parameter is the bare key
+    // MISSION_FAILED / MISSION_COMPLETE, and wires the LevelFlow failure
+    // expression to that message:
+    //
+    //   MISSIONS/location0/level1/objects.qsc:1208
+    //       Task_New(1391, "StatusMessage", ..., "MISSION_FAILED", ...)
+    //   MISSIONS/location0/level1/objects.qsc:1456
+    //       Task_New(10, "LevelFlow", ..., "CutScene_1204.isFinished",
+    //                "StatusMessage_1391.isSendt", ...)
+    //   MISSIONS/location0/LEVEL14/OBJECTS.QVM
+    //       StatusMessage "Mission Complete" -> text "MISSION_COMPLETE"
+    //       StatusMessage "Mission Failed"   -> text "MISSION_FAILED"
+    //
+    // StatusMessageScreen_AddMessage 0x486650 (src/mission/statusmessage.c:653-660)
+    // resolves that parameter with Resource_Find/Resource_Load -- a flat global
+    // lookup, no archive named at the call site -- and StatusMessages_Load
+    // 0x4868A0 mounts LANGUAGE:messages.res for it (src/mission/statusmessage.c:671).
+    // Both keys are defined there in the shipped data ("Mission Complete!" /
+    // "Mission Failed!"), not in objectives.res.
+    if (status_ == MissionStatus::Failed) {
+        return ResolveObjectiveText("MISSION_FAILED");
+    }
+    if (status_ == MissionStatus::Success) {
+        return ResolveObjectiveText("MISSION_COMPLETE");
+    }
+
+    // (c) The objective the player is on. Its `text` parameter is a bare
+    // resource name too and the engine resolves it the same flat way before
+    // drawing it (ComputerObjectives_Draw 0x469110,
+    // src/compmap/objectives.c:148-149); LoadAuthoredObjectiveSet already
+    // resolved it once through the same resolver, so the display path does not
+    // touch the archive again.
+    //
+    // ComputerObjectives_Draw is the engine's ONLY objective text display: a
+    // search of IGI-RE for "objective" outside src/compmap, src/computer and
+    // the StatusMessage keys finds only the module registration
+    // (src/flow/modules.c:201-210, :368-372) and the symbol table (src/addr.c).
+    // Retail has no in-world HUD objective line at all -- the HUD's top-left
+    // column is StatusMessages (StatusMessageScreen_Draw 0x486020,
+    // src/mission/statusmessage.c:441-463) -- so this card is the editor's
+    // single-line projection of that one engine display.
     for (const auto& objective : objectives_) {
         if (objective.is_primary && objective.state == ObjectiveState::Pending) {
             return objective.description;
         }
     }
-    return "Reach the extraction zone";
+
+    // Nothing is pending. The engine has no generic "go to the extraction zone"
+    // string: in retail that instruction is itself an authored objective with its
+    // own key (e.g. M2_OBJ3 "Proceed to the extraction point." in
+    // LANGUAGE/ENGLISH/objectives.res). What the engine does display for an
+    // objective in this state is its own composed line, so compose that instead
+    // of inventing a prompt. Both the composition and the key set are the
+    // engine's (EngineObjectiveStatusLine, ComputerObjectives_Draw 0x469110).
+    if (objectives_.empty()) {
+        return std::string();
+    }
+
+    // The objective that resolved last is the last PRIMARY of the active set:
+    // CompleteFirstPendingPrimaryObjective and
+    // EvaluateAuthoredObjectiveExpressions both walk the set front-to-back, and
+    // AdvanceAuthoredObjectiveSet replaces the set only when it has a successor.
+    // A set that carries no primary at all (only the editor's fallback list does
+    // that) falls back to its last entry.
+    const MissionObjective* resolved_primary = nullptr;
+    for (const MissionObjective& objective : objectives_) {
+        if (objective.is_primary && objective.state != ObjectiveState::Pending) {
+            resolved_primary = &objective;
+        }
+    }
+    return EngineObjectiveStatusLine(
+        resolved_primary ? *resolved_primary : objectives_.back());
 }
 
 void LevelFlow::EvaluateAuthoredObjectiveExpressions(

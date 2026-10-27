@@ -74,11 +74,9 @@ std::vector<std::string> MissionTextArchivePaths(const std::string& game_root) {
     return paths;
 }
 
-std::string MissionTextMissingRendering(const std::string& resource_key) {
-    // crt_sprintf(l->text, "RM: %s", m->text);  statusmessage.c:660
-    // crt_sprintf(text, "RM: %s", obj->name);   objectives.c:151
-    return "RM: " + resource_key;
-}
+// MissionTextMissingRendering is header-inline (mission_text_resource.h) so that
+// callers which only need the engine's miss marker do not link this translation
+// unit and, through it, the RES reader and Logger.
 
 MissionTextResources::MissionTextResources(std::vector<std::string> archive_paths,
                                            MissionTextLogSink log_sink)

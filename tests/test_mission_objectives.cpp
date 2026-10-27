@@ -147,7 +147,139 @@ TEST(LevelFlowTest, EvaluatesPreservedCompletionExpressionAtFixedUpdateBoundary)
 
     ASSERT_EQ(flow.GetObjectives().size(), 1U);
     EXPECT_EQ(flow.GetObjectives()[0].state, igi::ObjectiveState::Completed);
-    EXPECT_EQ(flow.GetObjectiveDisplayText(), "Reach the extraction zone");
+    // Nothing is pending, so the card shows the engine's composed objective line
+    // (ComputerObjectives_Draw 0x469110, src/compmap/objectives.c:137-145). This
+    // flow injects no resolver, so every key in that composition is unresolved
+    // and renders the engine's "RM: <key>" marker (objectives.c:151) rather than
+    // the raw key. The resolved form is pinned in
+    // FinishedObjectiveSetShowsTheEnginesComposedStatusLine below.
+    EXPECT_EQ(flow.GetObjectiveDisplayText(), "RM: OBJECTIVE 1: RM: COMPLETE");
+}
+
+// ===========================================================================
+// The HUD objective card is the engine's text, never an editor string
+// ===========================================================================
+
+namespace {
+
+// The engine's flat resource lookup, as the injected resolver sees it: the four
+// constants ComputerObjectives_Draw composes from live in
+// LANGUAGE:<lang>/objectives.res (OBJECTIVE / COMPLETE / INCOMPLETE / FAILED,
+// src/compmap/objectives.c:137-143) and the objective's own text is the
+// DefineComputerObjective `name` parameter resolved from the same archive
+// (:148-149). MISSION_FAILED / MISSION_COMPLETE are NOT there -- they are
+// StatusMessage text in LANGUAGE:<lang>/MESSAGES.RES.
+std::string EngineTextResolver(const std::string& resource_key) {
+    if (resource_key == "OBJECTIVE") return "Objective";
+    if (resource_key == "COMPLETE") return "Complete";
+    if (resource_key == "INCOMPLETE") return "Incomplete";
+    if (resource_key == "FAILED") return "Failed!";
+    if (resource_key == "M1_OBJ1") return "Steal the truck near the main entrance.";
+    if (resource_key == "MISSION_FAILED") return "Mission Failed!";
+    if (resource_key == "MISSION_COMPLETE") return "Mission Complete!";
+    return "RM: " + resource_key;
+}
+
+} // namespace
+
+TEST(LevelFlowTest, FinishedObjectiveSetShowsTheEnginesComposedStatusLine) {
+    // The card used to fall back to the invented string "Reach the extraction
+    // zone". The engine has no such string: it draws one line per objective,
+    // composed as "<OBJECTIVE> <n>: " plus the state word (ComputerObjectives_Draw
+    // 0x469110, src/compmap/objectives.c:137-145), so that composition is what the
+    // card shows once the active set is finished.
+    igi::AuthoredMissionObjectiveSet objective_set;
+    objective_set.objectives.push_back({"M1_OBJ1", 1120, "done", ""});
+
+    igi::LevelFlow flow;
+    flow.InitializeMission(1, {objective_set}, EngineTextResolver);
+    ASSERT_EQ(flow.GetObjectiveDisplayText(),
+              "Steal the truck near the main entrance.");
+
+    flow.Update(true, false, [](const std::string& expression) {
+        return expression == "done";
+    });
+
+    ASSERT_EQ(flow.GetObjectives().size(), 1U);
+    EXPECT_EQ(flow.GetObjectives()[0].state, igi::ObjectiveState::Completed);
+    // Resource_Load("OBJECTIVE") + the 1-based slot + Resource_Load("COMPLETE").
+    EXPECT_EQ(flow.GetObjectiveDisplayText(), "Objective 1: Complete");
+}
+
+TEST(LevelFlowTest, PendingObjectiveMissRendersTheEngineMissMarker) {
+    // The objective's `text` parameter is a bare resource name and the engine
+    // resolves it flat before drawing it (ComputerObjectives_Draw 0x469110,
+    // src/compmap/objectives.c:148-149), rendering "RM: <key>" -- never the raw
+    // key -- when no mounted archive defines it (:151). That holds on the pending
+    // path too, both when the resolver misses and when none was injected at all.
+    igi::AuthoredMissionObjectiveSet objective_set;
+    objective_set.objectives.push_back({"M1_OBJ1", 1120, "", ""});
+
+    igi::LevelFlow resolving_flow;
+    resolving_flow.InitializeMission(
+        1, {objective_set}, [](const std::string& key) {
+            return "RM: " + key;   // the archive does not define M1_OBJ1
+        });
+    ASSERT_EQ(resolving_flow.GetObjectives().size(), 1U);
+    EXPECT_EQ(resolving_flow.GetObjectives()[0].text_resource, "M1_OBJ1");
+    EXPECT_EQ(resolving_flow.GetObjectiveDisplayText(), "RM: M1_OBJ1");
+
+    igi::LevelFlow unresolved_flow;
+    unresolved_flow.InitializeMission(1, {objective_set});
+    ASSERT_EQ(unresolved_flow.GetObjectives().size(), 1U);
+    EXPECT_EQ(unresolved_flow.GetObjectiveDisplayText(), "RM: M1_OBJ1");
+}
+
+TEST(LevelFlowTest, MissionFailureShowsTheEngineStatusMessageText) {
+    // Retail sends a StatusMessage whose text parameter is the bare key
+    // MISSION_FAILED and wires LevelFlow's failure expression to it
+    // (MISSIONS/location0/level1/objects.qsc:1208, :1456). The engine resolves
+    // that key flat from LANGUAGE:<lang>/MESSAGES.RES
+    // (StatusMessageScreen_AddMessage 0x486650, src/mission/statusmessage.c:653-660;
+    // StatusMessages_Load 0x4868A0, :671).
+    igi::AuthoredMissionObjectiveSet objective_set;
+    objective_set.objectives.push_back({"M1_OBJ1", 1120, "", ""});
+
+    igi::LevelFlow flow;
+    flow.InitializeMission(1, {objective_set}, EngineTextResolver);
+
+    flow.Update(false, false);
+    ASSERT_EQ(flow.GetStatus(), igi::MissionStatus::Failed);
+    EXPECT_EQ(flow.GetObjectiveDisplayText(), "Mission Failed!");
+}
+
+TEST(LevelFlowTest, MissionCompletionShowsTheEngineStatusMessageText) {
+    // LEVEL14's OBJECTS.QVM carries the mirrored pair: a StatusMessage named
+    // "Mission Complete" with text "MISSION_COMPLETE" and one named
+    // "Mission Failed" with text "MISSION_FAILED". Both are messages.res keys.
+    igi::AuthoredMissionObjectiveSet objective_set;
+    objective_set.objectives.push_back({"M1_OBJ1", 1120, "done", ""});
+
+    igi::LevelFlow flow;
+    flow.InitializeMission(1, {objective_set}, EngineTextResolver);
+    flow.Update(true, true, [](const std::string& expression) {
+        return expression == "done";
+    });
+
+    ASSERT_EQ(flow.GetStatus(), igi::MissionStatus::Success);
+    EXPECT_EQ(flow.GetObjectiveDisplayText(), "Mission Complete!");
+}
+
+TEST(LevelFlowTest, MissionStatusTextFallsBackToTheEngineMissMarker) {
+    // A key no mounted archive defines renders "RM: <key>" in the engine, never
+    // the raw key and never an editor string (statusmessage.c:660,
+    // objectives.c:151).
+    igi::AuthoredMissionObjectiveSet objective_set;
+    objective_set.objectives.push_back({"M1_OBJ1", 1120, "", ""});
+
+    igi::LevelFlow flow;
+    flow.InitializeMission(1, {objective_set}, [](const std::string& key) {
+        return "RM: " + key;   // every key misses
+    });
+
+    flow.Update(false, false);
+    ASSERT_EQ(flow.GetStatus(), igi::MissionStatus::Failed);
+    EXPECT_EQ(flow.GetObjectiveDisplayText(), "RM: MISSION_FAILED");
 }
 
 TEST(LevelFlowTest, SelectsLastAuthoredDefinitionWithValidExpression) {
