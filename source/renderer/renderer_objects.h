@@ -570,6 +570,12 @@ private:
     void LogCrossLevelModelResolution(const std::string& modelId, int resolvedFromLevel,
                                       const std::string& resPath) const;
     bool TextureResolvesForSmoke(const std::string& textureId);
+    // Resolution-only half of GetOrLoadTexture (its steps 1, 1b and 2): does this id
+    // resolve to texture bytes, from any indexed archive or a loose .tex on disk? No
+    // decode, no GL upload. Shared by the smoke check and by the draw path where it
+    // has to answer the same question the loader would (TextureResolvesForSmoke is
+    // the historical name and stays as the smoke entry point).
+    bool TextureIdResolves(const std::string& textureId);
     std::string FindTextureFile(const std::string& textureId) const;
     std::string FindTextureFileInLevel(const std::string& textureId, int levelNo) const;
     std::string GetLevelTexturesPath() const;
@@ -577,7 +583,17 @@ private:
     void LoadDatIntoMap(const std::string& datPath, std::map<std::string, std::vector<std::string>>& outMap);
     void EnsureTextureMapLoaded();
     void EnsureGlobalTextureMapLoaded() const;
-    std::vector<std::string> GetTextureIdsForModel(const std::string& modelId);
+    // The model's texture list, in the engine's own MTP order (ModelFile_Setup,
+    // HOOK 0x4CF080, src/model/model.c:271-314).
+    //
+    // `foundInDat` (optional) answers a different question from "is the list
+    // non-empty": true when a DAT entry for this model was found — the editor's
+    // transcription of the model's own INST record — which may legitimately be an
+    // EMPTY list (a model with no textures at all, e.g. "waypoint"). It stays false
+    // when only another model's list was inferred by the sibling/variant/prefix
+    // fallbacks, because those say nothing about this model's own record.
+    std::vector<std::string> GetTextureIdsForModel(const std::string& modelId,
+                                                   bool* foundInDat = nullptr);
     std::vector<std::string> GetTextureIdsForSourceModel(const std::string& modelId, int sourceLevel);
     GLuint GetOrLoadTexture(const std::string& textureId);
     void ApplyTexturesToMesh(Mesh& mesh, const std::string& modelId, const std::string& parentModelId = "");

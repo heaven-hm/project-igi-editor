@@ -152,6 +152,54 @@ std::string StripTextureFormatSuffix(const std::string& textureId) {
     return textureId;
 }
 
+bool TextureIdHasAlphaSuffix(const std::string& textureId) {
+    static const char* const kAlphaSuffixes[] = {
+        "_argb8888", "_argb1555", "_argb4444",
+        "_a8r8g8b8", "_a1r5g5b5", "_a4r4g4b4"
+    };
+
+    for (const char* suffix : kAlphaSuffixes) {
+        const size_t suffixLength = std::strlen(suffix);
+        if (textureId.size() <= suffixLength) continue;
+
+        bool matches = true;
+        const size_t start = textureId.size() - suffixLength;
+        for (size_t i = 0; i < suffixLength; ++i) {
+            const unsigned char actual = static_cast<unsigned char>(textureId[start + i]);
+            const unsigned char expected = static_cast<unsigned char>(suffix[i]);
+            if (std::tolower(actual) != std::tolower(expected)) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) return true;
+    }
+    return false;
+}
+
+std::string ResolveAiModelTextureId(
+    const std::string& textureId,
+    bool isAiModel,
+    const std::function<bool(const std::string&)>& resolves) {
+    if (!isAiModel || !TextureIdHasAlphaSuffix(textureId)) return textureId;
+
+    const std::string stripped = StripTextureFormatSuffix(textureId);
+    if (stripped == textureId) return textureId;
+
+    // The opaque preference is an editor-only look; it may only be taken when the
+    // opaque texture actually exists. See the header for the IGI-RE basis
+    // (ModelFile_LoadTextures HOOK 0x4CF790, src/model/model.c:452-470).
+    return resolves(stripped) ? stripped : textureId;
+}
+
+bool ModelNameIsTextureIdFallbackAllowed(bool modelFoundInDat) {
+    // The DAT is the editor's transcription of the model's own MTP INST record
+    // (ModelFile_Setup, HOOK 0x4CF080, src/model/model.c:271-314). When it
+    // answered, its list — even an empty one — is the engine's list, so the
+    // model-name guess must not override it.
+    return !modelFoundInDat;
+}
+
 bool IsSharedCommonTextureArchive(const std::string& resPath) {
     std::string path = resPath;
     for (char& c : path) {

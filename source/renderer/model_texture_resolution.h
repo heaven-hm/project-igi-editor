@@ -93,6 +93,58 @@ const ModelTextureSource* FindExactTextureSource(
 // identity and must remain untouched.
 std::string StripTextureFormatSuffix(const std::string& textureId);
 
+// True when the id carries a pixel-format tag that actually holds alpha
+// (_argb8888, _argb1555, _argb4444, _a8r8g8b8, _a1r5g5b5, _a4r4g4b4). The opaque
+// formats StripTextureFormatSuffix also knows (_rgb565, _r5g6b5) are excluded:
+// an opaque variant carries no per-texel transparency, so it is not an overlay.
+//
+// The renderer uses this to decide alpha blending for a resolved texture and to
+// decide whether the AI opaque-body preference applies at all.
+bool TextureIdHasAlphaSuffix(const std::string& textureId);
+
+// Which id to load for one entry of a model's texture list.
+//
+// IGI-RE: the engine loads exactly the ids the model's own texture table names —
+// ModelFile_LoadTextures walks the MTP TEXF names of that model file and calls
+// Texture_LoadFile("LOCAL:textures/<name>.tex") for each, pixel-format suffix and
+// all (HOOK 0x4CF790, src/model/model.c:452-470); ModelFile_Setup is what binds
+// those entries to a lod by GTT index (HOOK 0x4CF080, src/model/model.c:271-314).
+// There is no suffix stripping anywhere in the game.
+//
+// The editor nonetheless prefers the OPAQUE body texture over the small
+// alpha-bearing overlay for AI characters ("009_09_1_argb8888" -> "009_09_1.tex"),
+// which is an editor-only look, not an engine mapping. That preference must never
+// turn an id the engine can resolve into one it cannot: when the stripped id
+// resolves to nothing the engine's own (suffixed) id is the only texture the
+// model can be drawn with, so it is the one that gets loaded. Measured on the
+// retail install, this is the 015_01_1 (AITYPE_ANYA) case: its 8th texture is
+// "000_11_1_argb8888", which exists, while "000_11_1" exists nowhere in the
+// install.
+//
+// `resolves` is asked only about the stripped candidate, and only when there is
+// one. Returns `textureId` when the strip does not apply.
+std::string ResolveAiModelTextureId(
+    const std::string& textureId,
+    bool isAiModel,
+    const std::function<bool(const std::string&)>& resolves);
+
+// Whether the editor may fall back to "the model's own name is a texture id".
+//
+// IGI-RE: a model's texture list IS its own MTP INST record's GTT list
+// (ModelFile_Setup, HOOK 0x4CF080, src/model/model.c:271-314) and the engine
+// binds l->textures[g->texture] only for a group whose index is not 0xFFFF
+// (lod_texture, src/render/render.c:216-219; draw_group, :524-531). An INST
+// record with n == 0 therefore describes a model that HAS no textures — it is
+// not a model whose texture list is unknown — and the engine draws it with the
+// texture stage off. Retail examples: "waypoint" (every level's marker model,
+// INST nTex=0, its only REND group 0xFFFF) and the collision-only shells
+// 700_08_1 / 700_19_1.
+//
+// So the guess is allowed only when the DAT did NOT answer for this model. When
+// it did answer — even with an empty list — the guess would invent a texture id
+// out of a model name, which is a lookup the game never performs.
+bool ModelNameIsTextureIdFallbackAllowed(bool modelFoundInDat);
+
 // True for the shared location0 texture archive.
 bool IsSharedCommonTextureArchive(const std::string& resPath);
 

@@ -118,43 +118,13 @@ int Renderer_Objects::SmokeModelOwnerLevel(const std::string& modelId) {
     return it == model_level_map_.end() ? 0 : it->second;
 }
 
-// Resolution-only half of GetOrLoadTexture (its steps 1, 1b and 2): does this id
-// resolve to texture bytes, from the archive the owning level's DAT entry points
-// at, from any other indexed archive, or from a loose .tex on disk?  No decode,
-// no GL upload.
-//
-// Existence is what this answers, and the archive set searched here is the one
-// GetOrLoadTexture searches: step 1 orders the archives owner-first and calls
-// FindPreviewTextureEntry over all of them, step 1b calls FindTextureData over all
-// of them after lazily indexing the owner level, and step 2 falls back to
-// FindTextureFile.  Order changes which copy wins, never whether one exists.
+// Resolution-only half of GetOrLoadTexture. The body lives next to
+// GetOrLoadTexture (renderer_objects_texture.cpp) because the DRAW path needs the
+// same answer before it commits to a texture id — see the AI opaque-body
+// preference in ApplyTexturesToMesh. This name is kept as the smoke-lane entry
+// point; ResolveModelForSmoke and the smoke CLI use it.
 bool Renderer_Objects::TextureResolvesForSmoke(const std::string& textureId) {
-    if (textureId.empty()) return false;
-
-    EnsureGlobalTextureMapLoaded();
-    auto ownerIt = texture_level_map_.find(textureId);
-    if (ownerIt == texture_level_map_.end()) {
-        const std::string stripped = StripTextureFormatSuffix(textureId);
-        if (stripped != textureId) ownerIt = texture_level_map_.find(stripped);
-    }
-    int targetLvl = -1;
-    if (ownerIt != texture_level_map_.end() && ownerIt->second > 0 &&
-        ownerIt->second != current_level_) {
-        targetLvl = ownerIt->second;
-        LoadResCache(targetLvl, Utils::GetIGIRootPath());
-    }
-
-    if (!FindTextureData(textureId).empty()) return true;
-    for (int lvl = 1; lvl <= 14; ++lvl) {
-        if (lvl == current_level_ || lvl == targetLvl) continue;
-        LoadResCache(lvl, Utils::GetIGIRootPath());
-        if (!FindTextureData(textureId).empty()) return true;
-    }
-
-    const std::string stripped = StripTextureFormatSuffix(textureId);
-    if (!FindTextureFile(textureId).empty()) return true;
-    if (stripped != textureId && !FindTextureFile(stripped).empty()) return true;
-    return false;
+    return TextureIdResolves(textureId);
 }
 
 Renderer_Objects::SmokeModelResolution

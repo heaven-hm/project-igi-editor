@@ -10,20 +10,11 @@
 // (sunglasses lenses, visors) that must be alpha-blended; the opaque pass would
 // otherwise hard-cutout the lens (shader: discard when texColor.a < 0.5) and
 // render it as a distorted black blob. RGB565/_r5g6b5 have no alpha.
+//
+// One definition of the suffix list lives in model_texture_resolution.cpp so the
+// draw path and the (host-portable) policy helper cannot drift apart.
 static bool TextureIdHasAlpha(const std::string& texId) {
-    static const char* const kAlphaSuffixes[] = {
-        "_argb8888", "_argb1555", "_argb4444",
-        "_a8r8g8b8", "_a1r5g5b5", "_a4r4g4b4"
-    };
-    for (const char* suf : kAlphaSuffixes) {
-        const size_t sufLen = std::strlen(suf);
-        if (texId.size() > sufLen) {
-            std::string tail = texId.substr(texId.size() - sufLen);
-            for (auto& c : tail) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (tail == suf) return true;
-        }
-    }
-    return false;
+    return TextureIdHasAlphaSuffix(texId);
 }
 
 std::string Renderer_Objects::GetLevelTexturesPath() const {
@@ -127,13 +118,21 @@ void Renderer_Objects::EnsureGlobalTextureMapLoaded() const {
         "[TEX Native] Global DAT map loaded: " + std::to_string(global_texture_map_.size()) + " models across all levels");
 }
 
-std::vector<std::string> Renderer_Objects::GetTextureIdsForModel(const std::string& modelId) {
+std::vector<std::string> Renderer_Objects::GetTextureIdsForModel(const std::string& modelId,
+                                                                 bool* foundInDat) {
+    if (foundInDat != nullptr) *foundInDat = false;
     EnsureTextureMapLoaded();
 
     // 1. Current level exact match
     {
         auto it = model_texture_map_cache_.find(modelId);
         if (it != model_texture_map_cache_.end()) {
+            // The DAT answered for this model. The list may be empty, and an empty
+            // list is an ANSWER, not a miss: ModelFile_Setup gives a model exactly
+            // the GTT-list of its own INST record (HOOK 0x4CF080, src/model/model.c:
+            // 285-289,296-314), so n == 0 means the model has no textures and the
+            // engine draws it with the texture stage off (src/render/render.c:524-531).
+            if (foundInDat != nullptr) *foundInDat = true;
             return it->second;
         }
     }
@@ -144,10 +143,14 @@ std::vector<std::string> Renderer_Objects::GetTextureIdsForModel(const std::stri
         auto levelIt = model_level_map_.find(modelId);
         if (levelIt != model_level_map_.end()) {
             const auto* source = FindExactTextureSource(texture_sources_, levelIt->second, modelId);
-            if (source != nullptr) return source->textures;
+            if (source != nullptr) {
+                if (foundInDat != nullptr) *foundInDat = true;
+                return source->textures;
+            }
         }
         auto it = global_texture_map_.find(modelId);
         if (it != global_texture_map_.end()) {
+            if (foundInDat != nullptr) *foundInDat = true;
             return it->second;
         }
     }
@@ -364,6 +367,50 @@ std::string Renderer_Objects::FindTextureFileInLevel(const std::string& textureI
         if (!result.empty()) return result;
     }
     return "";
+}
+
+// Resolution-only half of GetOrLoadTexture (its steps 1, 1b and 2): does this id
+// resolve to texture bytes, from the archive the owning level's DAT entry points
+// at, from any other indexed archive, or from a loose .tex on disk?  No decode,
+// no GL upload.
+//
+// Existence is what this answers, and the archive set searched here is the one
+// GetOrLoadTexture searches: step 1 orders the archives owner-first and calls
+// FindPreviewTextureEntry over all of them, step 1b calls FindTextureData over all
+// of them after lazily indexing the owner level, and step 2 falls back to
+// FindTextureFile.  Order changes which copy wins, never whether one exists.
+//
+// Two callers ask this question: the smoke lane (through TextureResolvesForSmoke,
+// which reports a level's missing ids) and ApplyTexturesToMesh, which must know
+// whether the editor's opaque-body substitution for an AI character can actually
+// be satisfied before it commits to that id.
+bool Renderer_Objects::TextureIdResolves(const std::string& textureId) {
+    if (textureId.empty()) return false;
+
+    EnsureGlobalTextureMapLoaded();
+    auto ownerIt = texture_level_map_.find(textureId);
+    if (ownerIt == texture_level_map_.end()) {
+        const std::string stripped = StripTextureFormatSuffix(textureId);
+        if (stripped != textureId) ownerIt = texture_level_map_.find(stripped);
+    }
+    int targetLvl = -1;
+    if (ownerIt != texture_level_map_.end() && ownerIt->second > 0 &&
+        ownerIt->second != current_level_) {
+        targetLvl = ownerIt->second;
+        LoadResCache(targetLvl, Utils::GetIGIRootPath());
+    }
+
+    if (!FindTextureData(textureId).empty()) return true;
+    for (int lvl = 1; lvl <= 14; ++lvl) {
+        if (lvl == current_level_ || lvl == targetLvl) continue;
+        LoadResCache(lvl, Utils::GetIGIRootPath());
+        if (!FindTextureData(textureId).empty()) return true;
+    }
+
+    const std::string stripped = StripTextureFormatSuffix(textureId);
+    if (!FindTextureFile(textureId).empty()) return true;
+    if (stripped != textureId && !FindTextureFile(stripped).empty()) return true;
+    return false;
 }
 
 GLuint Renderer_Objects::GetOrLoadTexture(const std::string& textureId) {
@@ -648,7 +695,8 @@ GLuint Renderer_Objects::GetOrLoadGameTexture(const std::string& name) {
 }
 
 void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelId, const std::string& parentModelId) {
-    std::vector<std::string> textureIds = GetTextureIdsForModel(modelId);
+    bool modelFoundInDat = false;
+    std::vector<std::string> textureIds = GetTextureIdsForModel(modelId, &modelFoundInDat);
     bool isDatMiss = textureIds.empty();
 
     // The model whose DAT entry supplied the list above. Inherited lists belong
@@ -690,12 +738,30 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
     }
 
     // If it's still a DAT miss (not explicitly in dat), fallback to self name first.
-    if (isDatMiss) {
+    //
+    // That guess is only allowed when the DAT did NOT answer for this model. A DAT
+    // entry with an empty list is the engine's own "this model has no textures"
+    // statement — the model's MTP INST record has n == 0 (ModelFile_Setup,
+    // HOOK 0x4CF080, src/model/model.c:285-289,296-314) and every one of its REND
+    // groups carries g->texture == 0xFFFF, which the engine draws with the texture
+    // stage off (src/render/render.c:524-531). Guessing "<model name>" as a texture
+    // id in that case invents a lookup the game never performs and reported, for
+    // example, "[TEX] Texture NOT FOUND: waypoint" for every level's marker model.
+    if (isDatMiss && ModelNameIsTextureIdFallbackAllowed(modelFoundInDat)) {
         textureIds = { modelId };
     }
 
     if (textureIds.empty()) {
-        Logger::Get().Log(LogLevel::INFO, "[TEX Native] No textures mapped for modelId=" + modelId);
+        if (modelFoundInDat) {
+            // Correct outcome, not a gap: the engine binds nothing for a model whose
+            // texture table is empty (see above). Logged at INFO so it is
+            // distinguishable from a texture that really is absent from the data.
+            Logger::Get().Log(LogLevel::INFO,
+                "[TEX Native] Model '" + modelId + "' has no textures in the DAT "
+                "(engine: empty MTP INST record) — binding nothing");
+        } else {
+            Logger::Get().Log(LogLevel::INFO, "[TEX Native] No textures mapped for modelId=" + modelId);
+        }
         return;
     }
 
@@ -730,15 +796,24 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
     // used by the game engine; loading it in the editor gives barely-visible lenses.
     // Non-AI models (guard tower, lattice) need the exact _argb8888.tex for
     // transparent rendering and keep the "exact first" preference.
+    //
+    // The strip is an editor-only look, never an engine mapping: the engine loads
+    // exactly the id the model's own MTP TEXF table names
+    // (ModelFile_LoadTextures, HOOK 0x4CF790, src/model/model.c:452-470). It is
+    // therefore applied ONLY when the opaque id actually exists. When it does not,
+    // the engine's own suffixed id is the one texture that model can be drawn
+    // with — retail 015_01_1 (AITYPE_ANYA) names "000_11_1_argb8888", which
+    // exists, while "000_11_1" exists nowhere in the install; stripping
+    // unconditionally asked for the missing one ("[TEX] Texture NOT FOUND:
+    // 000_11_1") and left that model's 8th render group untextured.
     EnsureAiModelIdsLoaded();
     const bool isAiModel = ai_model_ids_.count(modelId) > 0;
 
     std::vector<GLuint> textures;
     textures.reserve(textureIds.size());
     for (const auto& textureId : textureIds) {
-        const std::string loadId = (isAiModel && TextureIdHasAlpha(textureId))
-            ? StripTextureFormatSuffix(textureId)
-            : textureId;
+        const std::string loadId = ResolveAiModelTextureId(textureId, isAiModel,
+            [this](const std::string& candidate) { return TextureIdResolves(candidate); });
         textures.push_back(GetOrLoadTexture(loadId));
     }
 

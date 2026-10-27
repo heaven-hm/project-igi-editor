@@ -403,6 +403,7 @@ add_executable(igi_tests
     tests/test_level_weather.cpp
     tests/test_weather_toggle.cpp
     tests/test_model_texture_resolution.cpp
+    tests/test_model_texture_policy.cpp
     tests/test_character_texture_resolution.cpp
     tests/test_lod_chain.cpp
     tests/test_lightmap_ref_index.cpp
