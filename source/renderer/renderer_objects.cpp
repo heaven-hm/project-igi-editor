@@ -2,6 +2,7 @@
 #include "igi_transform.h"
 #include "object_lightmap.h"
 #include "lightmap_ref_index.h"
+#include "res_chunks.h"
 #include "../lod/lod_select.h"
 #include "../lod/mef_mesh_header.h"
 #include "../capture_camera.h"
@@ -667,7 +668,18 @@ std::vector<uint8_t> Renderer_Objects::FindTextureDataFromLevel(
 
 // Try to find mesh bytes in the in-memory .res index.
 std::vector<uint8_t> Renderer_Objects::FindMeshData(const std::string& modelId) const {
-    const std::string fname = modelId + ".mef";
+    // The archive index is keyed by the engine's own resource identity: the member name
+    // built the way the engine builds it, upper-cased and backslash-folded
+    // (String_ToUpper 0x4B5AF0, src/res/resource.c:98-104; compared by Resource_IsLoaded
+    // at :136-138).  Mesh_Load (HOOK 0x4CF390) asks for "LOCAL:models/%s.mef"
+    // (src/model/model.c:364), so that is the key to look up.
+    //
+    // This looked up the bare "<id>.mef" and so matched nothing once RES_BuildIndex was
+    // re-keyed -- the same mistake already fixed for textures in
+    // model_texture_resolution.cpp:235-248 and for the menu labels.  It made every model
+    // resolve to nothing, which is why the viewport loaded terrain but no objects.
+    const std::string fname =
+        igi_res::NormalizeResourceName(igi_res::ModelMemberName(modelId));
     for (const auto& ri : res_model_indexes_) {
         auto it = ri.index.find(fname);
         if (it != ri.index.end())
