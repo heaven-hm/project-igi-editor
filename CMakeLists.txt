@@ -403,6 +403,7 @@ add_executable(igi_tests
     tests/test_lightmap_ref_index.cpp
     tests/test_spline_geometry.cpp
     tests/test_placement_splines.cpp
+    tests/test_spline_waypoint_params.cpp
     tests/test_train_rail.cpp
     tests/test_igi_transform.cpp
     tests/test_props_wire_interactables.cpp

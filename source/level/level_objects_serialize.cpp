@@ -134,6 +134,26 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
         }
     };
 
+    // Int32 / bool8 authored parameters.  QSC writes booleans as the bare words
+    // TRUE / FALSE; a numeric token is accepted too because the editor's own writer
+    // emits them that way in some paths.
+    auto readInt = [&](size_t idx, int& out) {
+        if (idx >= obj.argTokens.size()) return;
+        try {
+            out = static_cast<int>(std::stod(obj.argTokens[idx]));
+        } catch (...) {
+        }
+    };
+    auto readBool = [&](size_t idx, bool& out) {
+        if (idx >= obj.argTokens.size()) return;
+        const std::string& token = obj.argTokens[idx];
+        if (token == "TRUE" || token == "true" || token == "1") {
+            out = true;
+        } else if (token == "FALSE" || token == "false" || token == "0") {
+            out = false;
+        }
+    };
+
     if (obj.qscFuncName == "Task_New") {
         if (obj.type == "Container" || obj.type == "Static" || obj.type == "Dynamic" || obj.type == "Level") {
             obj.isContainer = true;
@@ -187,6 +207,7 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(8, obj.rot.z);
             if (obj.argTokens.size() > 13) obj.modelId = unquote(obj.argTokens[13]);
         } else if (obj.type == "SplineObjWaypoint") {
+            obj.isSplineWaypoint = true;
             readDouble(3, obj.rot.x);
             readDouble(4, obj.rot.y);
             readDouble(5, obj.rot.z);
@@ -195,6 +216,16 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(8, obj.pos.z);
             if (obj.argTokens.size() > 9) { obj.modelId = unquote(obj.argTokens[9]); if (obj.modelId == "waypoint") obj.modelId = ""; }
             if (obj.argTokens.size() > 10) obj.segmentModelId = unquote(obj.argTokens[10]);
+            // The remaining authored parameters, at the indices the engine's ParamTable
+            // fixes (SplineObj_Open HOOK 0x502250, src/editobj/spline.c:215-223):
+            //   arg 11 "NumAreas" Int32 -> segments
+            //   arg 12 "Align" bool8 -> straight
+            //   arg 13 "Flip" bool8 -> reversed
+            //   arg 14 "Automatic Orientation" bool8 -> autoOrient
+            readInt(11, obj.splineSegments);
+            readBool(12, obj.splineStraight);
+            readBool(13, obj.splineReversed);
+            readBool(14, obj.splineAutoOrient);
         } else if (obj.type == "SplineObj") {
             // SplineObj container. The position is at args 9-11, NOT at 3-5:
             // IGI-RE SplineObj_Open (HOOK 0x502250, src/editobj/spline.c:204-214)
