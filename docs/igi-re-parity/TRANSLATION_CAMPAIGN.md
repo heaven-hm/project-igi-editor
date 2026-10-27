@@ -15,8 +15,13 @@ Never touch `/Users/haseeb-mir/Documents/Code/project-igi-editor` (original chec
 | gate | result |
 | --- | --- |
 | build gate (`scripts/build-windows.sh`) | x64 link OK, i686 compile OK, exit 0 |
-| host lane (`scripts/run-host-tests.sh`) | OK: 1090 tests passed in 63 suites, exit 0 |
-| Windows suite (i686 `igi_tests` under Wine) | 1521 ran, 1509 passed, 0 failed, exit 0 |
+| host lane (`scripts/run-host-tests.sh`) | OK: 1095 tests passed in 64 suites, exit 0 |
+| Windows suite (i686 `igi_tests` under Wine) | 1526 ran, 1514 passed, 0 failed, exit 0 |
+
+**Trap when re-running the Windows suite:** `build-windows.sh` relinks `bin/igi_tests.exe`
+as **x64** in its gate-1 pass, so a Wine run straight afterwards fails with exit 53
+(wrong architecture). Force an i686 relink first:
+`rm -f bin/igi_tests.exe && cmake --build build-mingw --target igi_tests --parallel`.
 
 The Windows suite is the gate that finds what the host lane cannot, and it is the one
 that mattered: it opened at **19 failures** and reached 0 across rounds 3-7. Every fix in
@@ -51,10 +56,16 @@ labels, the LOD corpus test, and the texture preview. All three were the same de
 The modules are transcribed but several have **no caller**, so the editor does not yet
 use the engine's method on those paths:
 
-1. **`igi::spline`** - `renderer_splines.cpp:218` still calls the editor's own
-   `BendSegmentMesh`. The engine's normals differ by ~22 degrees. The invented
-   `std::clamp(count, 2, 20)` was removed (the engine's rule is a cap, `spline.c:771-772`),
-   but the span inputs are still missing because the parser drops them.
+1. **DONE since this note was written:** the invented clamp is gone; the four parameters
+   are parsed by BOTH parse paths (`LoadRecursive` and `ParseTaskLine` -- they had drifted,
+   and `ParseTaskLine` was silently dropping them); the save path writes them back (it was
+   dropping them too); and `tests/test_spline_waypoint_params.cpp` proves the mapping,
+   including the one-at-a-time boolean cases the retail corpus cannot distinguish.  The
+   remaining step is the draw-path swap itself.
+
+   **`igi::spline` still has no caller** - `renderer_splines.cpp:218` calls the editor's
+   own `BendSegmentMesh`. The engine's normals differ by ~22 degrees. The span inputs the
+   engine's path needs are now parsed and round-tripping.
 
    Verified from the retail data, so this part is not guesswork. The shipped declaration is
    in `MISSIONS/location0/level1/objects.qsc`:
