@@ -157,12 +157,21 @@ std::vector<uint8_t> ReadFileBytes(const std::string& path) {
 
 int Renderer_Objects::SelectLodForDistance(const std::string& modelId, bool isBuilding,
                                            float fov, float dist, float radius, float k) {
-    // The chain is what `ModelObj_GetLOD` walks (IGI-RE src/lod/mesh3d.c:209-227);
-    // a model whose own name does not resolve has lod_count 0 and is not
-    // drawable at all (VirModel_Get, src/model/model.c:118-139).
+    // The chain is what `ModelObj_GetLOD` walks (IGI-RE src/lod/mesh3d.c:209-227).
+    //
+    // A model with NO chain must still be DRAWN, at LOD 0.  lod_select
+    // (src/lod/mesh3d.c:161-208) with `lod_count == 0` computes n = 0, so both loops are
+    // skipped, i is 0, and the cull test `i == n - 1` is `0 == -1`, i.e. false -- it falls
+    // through to `return i`, which is 0.  ModelObj_GetLOD then hands 0 to the caller and
+    // the draw uses vm->lods[0], the model's own mesh (:209-227).
+    //
+    // Returning -1 here instead culled every model the level's lod.qvm does not name.
+    // That is most of them -- lod.qvm covers a few hundred of the corpus -- so it made the
+    // viewport empty apart from the UI.  The -1 cases below are real (they need n >= 1),
+    // but "no chain" is not one of them.
     GetLodChain(modelId, isBuilding);
     auto it = lod_chain_cache_.find(std::to_string(current_level_) + ":" + modelId);
-    if (it == lod_chain_cache_.end() || it->second.count <= 0) return -1;
+    if (it == lod_chain_cache_.end() || it->second.count <= 0) return 0;
     igi::lod::LodChain& chain = it->second;
 
     // `lod_header(vm->lods[i])` — the three MeshHeader words both branches need.
