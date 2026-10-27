@@ -200,9 +200,8 @@ public:
     // (metres x 4096): monotonized and scaled exactly as
     // ModelLODSettings_Changed does (IGI-RE src/animtrig/lodsettings.c:157-171,
     // HOOK 0x4EDB60). False when the model has no authored entry, in which case
-    // VirModel.unk24 stays 0 and the engine would take lod_select's complexity
-    // branch — which this port does not implement, because the editor always has
-    // lod.qvm.
+    // VirModel.unk24 stays 0 and lod_select takes its complexity branch -- see
+    // SelectLodForDistance, which implements BOTH branches.
     bool GetAuthoredLodDistances(const std::string& modelId, float out[5]);
 
     // The LOD to draw for a mesh at view depth `dist` with bounding radius
@@ -210,8 +209,12 @@ public:
     // ported as igi::lod::SelectAuthoredLod). `fov` and `k` are the engine's
     // gTransContext.fov and gLodScale (src/lod/mesh3d.c:224); dist/radius are in
     // raw world units, the same units as GetAuthoredLodDistances' output.
-    // Returns -1 for "too far to draw", and also when the model has no chain or
-    // no authored table (the complexity branch is not ported).
+    // Returns -1 for "too far to draw".  BOTH of lod_select's branches are
+    // implemented: the authored one when the model has a table, and the complexity
+    // branch otherwise -- which is the common case, since lod.qvm names only 450
+    // distinct models of the retail corpus.  (An earlier revision of this comment
+    // claimed the complexity branch was not ported and that the editor "always has
+    // lod.qvm"; both were wrong, and the unauthored models were being culled.)
     int SelectLodForDistance(const std::string& modelId, bool isBuilding,
                              float fov, float dist, float radius, float k);
 
