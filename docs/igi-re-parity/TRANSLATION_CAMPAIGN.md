@@ -119,8 +119,16 @@ use the engine's method on those paths:
    `SplineControlPoint`s, `segments` (the authored NumAreas, already clamped), `rigid`
    (`w->rigid || w->straight`), `reversed` (the authored "Flip"), `spline_min`/`spline_max`
    from `igi::SplineScanModelExtent`, and `matrix[10]` (`ModelObj.matrix`, used by the
-   straight branch only).  Confirm the renderer's actual interleaved stride before writing
-   the copy -- that is the one number not yet pinned down here.
+   straight branch only).  The stride question is now answered: the renderer's interleaved
+   vertex is **10 floats**, not 8 -- `UploadBentSegmentMesh` binds attrib 0 (3 floats, pos),
+   1 (3, normal) and 2 (2, uv) at a 10-float stride (`renderer_splines.cpp:68-73`), and the
+   producer fills the last two from the source vertex's second UV:
+   `AppendBentVertex(verts, bentPositions[i], bentNormals[i], src.uv, src.uv2)`
+   (`spline_geometry.cpp:376`, `submeshVertexCounts.push_back(verts.size() / 10)` at `:379`).
+   So `SplineRenderVertex` (pos/normal/uv only) is NOT a drop-in: the swap has to supply
+   `uv2` per vertex from the corresponding source vertex, which means the output vertex
+   order must line up with the source mesh's.  Confirm that correspondence before writing
+   the copy -- that is the one thing left to establish.
 
    **De-risked for the swap:** no build change is needed. `source/level/spline_geometry.cpp`
    is already compiled into `igi-editor` through the `source/level/*.*` glob
