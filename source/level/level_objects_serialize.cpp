@@ -501,6 +501,15 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
                     setStringToken(9, obj.modelId);
                 }
             }
+        } else if (obj.type == "AIGraph") {
+            // AIGraph's "Graph position" is args 3/4/5 -- the world origin its node
+            // coordinates are local to (the load path reads it at
+            // level_objects.cpp:516-527, and the parse branch above).  Without this branch
+            // a graph moved in the editor never persisted: this function has no generic
+            // fallback, so the chain simply ended and the tokens were left untouched.
+            setToken(3, FormatQscDouble(obj.pos.x));
+            setToken(4, FormatQscDouble(obj.pos.y));
+            setToken(5, FormatQscDouble(obj.pos.z));
         }
     }
 

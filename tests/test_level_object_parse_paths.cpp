@@ -70,6 +70,30 @@ TEST(LevelObjectParsePathsTest, HumanAiGraphIdSurvivesTheLineParser) {
     EXPECT_EQ(obj.name, "guard1");
 }
 
+// Moving a graph must persist.  UpdateCoordinatesInLine has no generic fallback -- its
+// chain simply ended -- so a type it does not name kept its original tokens, and a moved
+// AIGraph silently reverted to its old origin on save.
+TEST(LevelObjectParsePathsTest, MovedAiGraphPersistsItsOrigin) {
+    LevelObjects level;
+    LevelObject obj;
+    level.ParseTaskLine(kAiGraph, obj);
+    ASSERT_EQ(obj.type, "AIGraph");
+    ASSERT_DOUBLE_EQ(obj.pos.x, 1234.5);
+
+    obj.pos.x = 2000.0;
+    obj.pos.y = -3000.0;
+    obj.pos.z = 4000.0;
+    level.UpdateCoordinatesInLine(obj);
+
+    LevelObject reloaded;
+    level.ParseTaskLine(level.GenerateTaskLine(obj), reloaded);
+    EXPECT_DOUBLE_EQ(reloaded.pos.x, 2000.0);
+    EXPECT_DOUBLE_EQ(reloaded.pos.y, -3000.0);
+    EXPECT_DOUBLE_EQ(reloaded.pos.z, 4000.0);
+    // The node count is not a coordinate and must be left alone.
+    EXPECT_EQ(reloaded.graphNodeCount, 137);
+}
+
 // The LOAD path must place a member of the rotating-placement group, not just the line
 // parser.  Every member of that group opens with ObjectPos at args 3/4/5 then Real32x9 at
 // 6/7/8: RotatingObject src/fxobj/rotating.c:81-82, AlarmLight src/fxobj/alarm.c:109-110,
