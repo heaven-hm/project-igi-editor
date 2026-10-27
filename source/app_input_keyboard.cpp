@@ -1531,6 +1531,24 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 			glutReshapeWindow(window_state_.old_viewport_width_, window_state_.old_viewport_height_);
 		}
 
+		// GLUT does not reliably deliver a reshape for a fullscreen transition, and the
+		// viewport is what decides how much of the window gets painted -- a stale one
+		// leaves the uncovered area black (reported as "on a small screen in fullscreen
+		// the rest of the area is black").  So re-apply the viewport from the window's
+		// ACTUAL size rather than depending on the callback, in both directions.
+		// ApplyViewportSize clamps to >= 1 and recomputes fovx_, so this is idempotent
+		// when a reshape does arrive as well.
+		const int w_now = glutGet(GLUT_WINDOW_WIDTH);
+		const int h_now = glutGet(GLUT_WINDOW_HEIGHT);
+		if (w_now > 0 && h_now > 0) {
+			editor_viewport_width_ = w_now;
+			editor_viewport_height_ = h_now;
+			ApplyViewportSize(w_now, h_now);
+			Logger::Get().Log(LogLevel::INFO, "[App] fullscreen " +
+				std::string(window_state_.full_screen_ ? "on" : "off") +
+				": viewport reapplied as " + std::to_string(w_now) + "x" + std::to_string(h_now));
+		}
+
 		return;
 	}
 
