@@ -105,6 +105,23 @@ use the engine's method on those paths:
    own `BendSegmentMesh`. The engine's normals differ by ~22 degrees. The span inputs the
    engine's path needs are now parsed and round-tripping.
 
+   **Swap recipe, for whoever starts it.** The function to replace is
+   `spline_geometry::BendSegmentMesh` (`source/renderer/spline_geometry.cpp:264-386`, 122
+   lines).  Its result type is `BentSegmentMesh { std::vector<float> interleaved;
+   std::vector<int> submeshVertexCounts; }` (`spline_geometry.h:73-76`), and the only
+   consumer is `UploadBentSegmentMesh`, which walks `bent.interleaved` in float counts
+   (`renderer_splines.cpp:49`, `:66`, `:220`).  The engine side is
+   `igi::spline::BuildSplineSpanGeometry` -> `FillSplineSpanVertices` ->
+   `PackSplineMeshSource`, producing `SplineRenderVertex { float pos[3]; float normal[3];
+   float uv[2]; }` (`source/level/spline_geometry.h:197-201`) -- 8 floats per vertex, so the
+   conversion into `interleaved` should be a straight copy plus one
+   `submeshVertexCounts` entry.  `SplineSpanInput` (`:125-140`) wants `from`/`to`
+   `SplineControlPoint`s, `segments` (the authored NumAreas, already clamped), `rigid`
+   (`w->rigid || w->straight`), `reversed` (the authored "Flip"), `spline_min`/`spline_max`
+   from `igi::SplineScanModelExtent`, and `matrix[10]` (`ModelObj.matrix`, used by the
+   straight branch only).  Confirm the renderer's actual interleaved stride before writing
+   the copy -- that is the one number not yet pinned down here.
+
    **De-risked for the swap:** no build change is needed. `source/level/spline_geometry.cpp`
    is already compiled into `igi-editor` through the `source/level/*.*` glob
    (`CMakeLists.txt:76`, `:145`; its object file exists under
