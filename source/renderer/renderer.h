@@ -795,6 +795,19 @@ public:
 	std::string GetOrExtractMefTemp(const std::string& modelId, bool isBuilding) {
 		return objects_.GetOrExtractMefTemp(modelId, isBuilding);
 	}
+	// The mesh side of the engine's `.olm` accept test for one LOD
+	// (lightmapbuild.c:63-64); see Renderer_Objects::GetLodOlmAcceptInput.
+	bool GetLodOlmAcceptInput(const std::string& modelId, bool isBuilding, int level,
+	                          igi::lightmap_rules::OlmAcceptInput* out) {
+		return objects_.GetLodOlmAcceptInput(modelId, isBuilding, level, out);
+	}
+	// VirModel.lod_count (VirModel_InitLods, src/model/model.c:145-163): the number
+	// of lightmap refs the object itself contributes to its set, which are its refs
+	// 0..count-1 (fill_refs, src/sector/sector.c:549-561). 0 when the model does not
+	// resolve. See igi::lightmap::RefMeshIsIdentified.
+	int GetLodCount(const std::string& modelId, bool isBuilding) {
+		return objects_.GetLodChain(modelId, isBuilding).count;
+	}
 	glm::vec3 GetSunDir() const { return objects_.GetSunDir(); }
 	glm::vec3 GetSunFrontColor() const { return objects_.GetSunFrontColor(); }
 	glm::vec3 GetSunBackColor() const { return objects_.GetSunBackColor(); }

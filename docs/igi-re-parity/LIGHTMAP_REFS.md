@@ -97,9 +97,18 @@ exactly the three rules above:
 | `ReserveRefs(lod_count, cursor)` | reserves `lod_count` refs, advancing the cursor; returns `base = -1` and does not advance for `lod_count <= 0` | `sector.c:549`, `:561` |
 | `RefIndexForLod(layout, lod_index)` | `base + lod_index`, or `-1` outside `0..lod_count-1` | `sector.c:557` |
 | `OlmFileName(name, ref_index)` | `"%s_%05d.olm"` | `lightmapbuild.c:59` |
+| `RefMeshIsIdentified(owner_binding, owner_lod_count, entry)` | which resolved `.olm` entries name a ref whose mesh the editor can read: the owner's own LODs `0..lod_count-1`, and only when the list came from the object's own binding | `sector.c:548-561`, `:565-575`; see `LIGHTMAP_BAKE.md` §5c |
 
 It is header-only and has no dependency on GL, Windows, or the renderer, so
 `tests/test_lightmap_ref_index.cpp` exercises it natively.
+
+`RefMeshIsIdentified` is the limit of the engine's four-conjunct `.olm` accept test
+(`lightmapbuild.c:63-64`) on the editor's side: ref `k` of a set is the **owner's**
+LOD `k` only while `k < lod_count`, and the refs after that belong to the object's
+magic parts and rigid children, whose order the editor does not walk. Measured over
+the retail install: of the 25,337 shipped `.olm` files, 1,120 are an owner's own
+LOD; all 1,120 pass the accept test against that LOD's mesh (`LIGHTMAP_BAKE.md`
+§5c).
 
 ## Measured against the retail corpus
 

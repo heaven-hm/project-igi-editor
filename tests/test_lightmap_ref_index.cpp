@@ -24,6 +24,7 @@ using igi::lightmap::OlmFileName;
 using igi::lightmap::OlmFileNameForFirstLod;
 using igi::lightmap::RefIndexForLod;
 using igi::lightmap::RefLayout;
+using igi::lightmap::RefMeshIsIdentified;
 using igi::lightmap::ReserveRefs;
 
 // --------------------------------------------------------------------------
@@ -157,6 +158,34 @@ TEST(LightmapRefIndexTest, GroupPageIndexMapsBothNoPageSpellingsToMinusOne) {
     // A non-format-3 render block has no lightmap field at all; mef_native stores
     // -1 for those (ParsedGeometry::RenderBlock::lightmapSlot).
     EXPECT_EQ(igi::lightmap::PageIndexForGroup(-1), -1);
+}
+
+// --------------------------------------------------------------------------
+// Which entries of a resolved `.olm` list the engine's accept test can be run on
+// --------------------------------------------------------------------------
+
+TEST(LightmapRefIndexTest, OnlyTheOwnersOwnLodsHaveAnIdentifiableMesh) {
+    // fill_refs (src/sector/sector.c:544-563) gives the set's owner refs
+    // 0..lod_count-1, one per LOD, and every later ref belongs to the object's
+    // magic parts or rigid children, whose order the editor does not walk. So only
+    // `entry < owner_lod_count` names a mesh the editor can read the accept test's
+    // `mh->version`/`mh->time`/`mesh->texCount` from (lightmapbuild.c:63-64).
+    EXPECT_TRUE(RefMeshIsIdentified(/*owner_binding=*/true, /*owner_lod_count=*/3, 0));
+    EXPECT_TRUE(RefMeshIsIdentified(true, 3, 2));
+    EXPECT_FALSE(RefMeshIsIdentified(true, 3, 3)) << "ref 3 is a magic/child ref";
+    EXPECT_FALSE(RefMeshIsIdentified(true, 3, 400));
+    EXPECT_FALSE(RefMeshIsIdentified(true, 0, 0)) << "lod_count 0 contributes no refs";
+    EXPECT_FALSE(RefMeshIsIdentified(true, 3, -1));
+}
+
+TEST(LightmapRefIndexTest, APositionResolvedListIsNotThisObjectsOwnBinding) {
+    // A list resolved by authored position (LightmapResolveByPos) belongs to an
+    // ANCESTOR's lightmap binding -- the object's model is merely referenced inside
+    // that tree -- so its entries are not this object's LODs and no mesh may be
+    // assumed for them. Testing one against this object's mesh would reject a valid
+    // file whenever the page counts differ.
+    EXPECT_FALSE(RefMeshIsIdentified(/*owner_binding=*/false, /*owner_lod_count=*/5, 0));
+    EXPECT_FALSE(RefMeshIsIdentified(false, 5, 4));
 }
 
 // --------------------------------------------------------------------------

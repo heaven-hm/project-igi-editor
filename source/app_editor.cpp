@@ -6,6 +6,7 @@
  *****************************************************************************/
 #include "app_internal.h"
 #include "renderer/igi_transform.h"
+#include "renderer/lightmap_ref_index.h"
 #include "runtime/auto_save_policy.h"
 #include "runtime/editor_history.h"
 #include "runtime/lightmap_recalc_policy.h"
@@ -338,7 +339,8 @@ bool EnsureLightmapsUnpacked(const std::string& levelDir, std::string& err) {
 // given an already-decompiled objects.qsc sitting next to the real lightmaps/ dir.
 // Returns the number of textures uploaded (0 = no binding / all conversions failed).
 size_t App::ResolveAndApplyLightmap(LevelObject& obj, const std::string& qscPath,
-                                    bool olm_from_recalc) {
+                                    bool olm_from_recalc, size_t* rejected_by_accept_test) {
+	if (rejected_by_accept_test != nullptr) *rejected_by_accept_test = 0;
 	// taskId="-1" (nested/ATTA tasks) can't be disambiguated by task id — resolve
 	// by the object's authored position instead. The stored lightmap is keyed the
 	// same way (LightmapTaskKey) so the renderer finds it.
@@ -368,23 +370,53 @@ size_t App::ResolveAndApplyLightmap(LevelObject& obj, const std::string& qscPath
 	// is uploaded, not just page 0. 13 shipped `.olm` files carry more than one
 	// page; dropping pages 1..n is what made model 428_02_1's second lightmap page
 	// unreachable.
+	//
+	// THE ENGINE'S ACCEPT TEST RUNS HERE (lightmapbuild.c:63-64): magic, version,
+	// mesh-time < file-time and `mesh->texCount == count`, evaluated by
+	// igi::lightmap_rules::OlmHeaderAccepted inside LoadOlmPages against the mesh
+	// of the ref the entry names. On a rejection the engine flushes the file and
+	// rebuilds (:86, :90-100) rather than using it; the editor cannot bake in
+	// process, so a rejected entry binds nothing — the same outcome as a missing
+	// `.olm`, which is what the draw path already falls back on.
+	//
+	// Which mesh that is: ref k of the set is the OWNER's LOD k only while k is
+	// inside the owner's LOD chain (sector.c:549-561). The refs after it belong to
+	// the object's magic parts and rigid children (sector.c:565-575 and
+	// SectorObject_FillRigidRefs), whose order the editor does not walk, and a list
+	// resolved by POSITION belongs to an ancestor's binding rather than this
+	// object's own — so for those entries no mesh can be identified
+	// (igi::lightmap::RefMeshIsIdentified). They are loaded untested and counted
+	// rather than tested against a guessed mesh, because a wrong mesh would reject
+	// a valid file.
+	const int ownerLodCount = renderer_.GetLodCount(obj.modelId, obj.isBuilding);
+	size_t testedEntries = 0, rejectedEntries = 0, unidentifiedEntries = 0;
 	std::vector<std::vector<GLuint>> lod_pages;
 	lod_pages.reserve(olmPaths.size());
 	size_t uploaded = 0;
-	for (const auto& olmPath : olmPaths) {
+	for (size_t k = 0; k < olmPaths.size(); ++k) {
+		const std::string& olmPath = olmPaths[k];
+		igi::lightmap_rules::OlmAcceptInput meshSide;
+		const bool identified =
+		    igi::lightmap::RefMeshIsIdentified(!byPos, ownerLodCount, static_cast<int>(k)) &&
+		    renderer_.GetLodOlmAcceptInput(obj.modelId, obj.isBuilding, static_cast<int>(k), &meshSide);
 		std::string loadErr;
 		std::vector<GLuint> pages;
-		if (!LoadOlmPages(olmPath, &pages, &loadErr)) {
-			Logger::Get().Log(LogLevel::ERR, "[Lightmap] .olm load failed for " + olmPath + ": " + loadErr);
+		if (!LoadOlmPages(olmPath, identified ? &meshSide : nullptr, &pages, &loadErr)) {
+			Logger::Get().Log(LogLevel::ERR, "[Lightmap] .olm not used for " + olmPath + ": " + loadErr);
+			if (identified) ++rejectedEntries;
 			lod_pages.emplace_back();
 			continue;
 		}
+		if (identified) ++testedEntries; else ++unidentifiedEntries;
 		uploaded += std::count_if(pages.begin(), pages.end(), [](GLuint t) { return t != 0; });
 		lod_pages.push_back(std::move(pages));
 	}
 
 	Logger::Get().Log(LogLevel::INFO, "[Lightmap] Uploaded " + std::to_string(uploaded) + " lightmap page(s) from " +
-		std::to_string(lod_pages.size()) + " .olm file(s) for " + key);
+		std::to_string(lod_pages.size()) + " .olm file(s) for " + key + " (accept test: " +
+		std::to_string(testedEntries) + " checked, " + std::to_string(rejectedEntries) + " rejected, " +
+		std::to_string(unidentifiedEntries) + " not identifiable)");
+	if (rejected_by_accept_test != nullptr) *rejected_by_accept_test = rejectedEntries;
 	// Log first 16 OLM paths so we can verify submesh→OLM assignment order
 	if (key == "1117") {
 		for (size_t i = 0; i < std::min(olmPaths.size(), size_t(16)); ++i) {
@@ -457,18 +489,35 @@ void App::CalculateLightmapForSelectedObject() {
 	Logger::Get().Log(LogLevel::INFO, "[Lightmap] Resolving lightmap for model=" + obj.modelId +
 		" taskId=" + obj.taskId + " qsc=" + qscPath);
 	DrawProgressOverlay("Calculating Lightmap", 55, "loading current .olm");
-	size_t uploaded = ResolveAndApplyLightmap(obj, qscPath);
+	size_t uploaded = 0;
+	size_t rejectedByAcceptTest = 0;
+	{
+		size_t rejected = 0;
+		uploaded = ResolveAndApplyLightmap(obj, qscPath, /*olm_from_recalc=*/false, &rejected);
+		rejectedByAcceptTest += rejected;
+	}
 	const std::vector<int>& children = obj.childrenIndices;
 	for (size_t ci = 0; ci < children.size(); ++ci) {
 		int idx = children[ci];
 		if (idx < 0 || idx >= (int)objects.size()) continue;
-		uploaded += ResolveAndApplyLightmap(objects[idx], qscPath);
+		size_t rejected = 0;
+		uploaded += ResolveAndApplyLightmap(objects[idx], qscPath, /*olm_from_recalc=*/false, &rejected);
+		rejectedByAcceptTest += rejected;
 	}
 
-	if (uploaded == 0) {
+	if (uploaded == 0 && rejectedByAcceptTest == 0) {
 		std::error_code qscEc; std::filesystem::remove(qscPath, qscEc);
 		status_message_ = "Lightmap: no lightmap textures resolved for this object";
 		return;
+	}
+	if (rejectedByAcceptTest > 0) {
+		// The engine's four-conjunct test refused the bake on disk (lightmapbuild.c:63-64):
+		// it is stale or foreign, so it is NOT drawn (the LODs fall back to dynamic
+		// lighting, as in the engine, which flushes and rebuilds at :86). The rebuild
+		// this button performs is exactly that, so it must still run — otherwise a
+		// stale bake would be a dead end.
+		Logger::Get().Log(LogLevel::INFO, "[Lightmap] " + std::to_string(rejectedByAcceptTest) +
+			" .olm entr(ies) refused by the engine's accept test; rebuilding them now");
 	}
 
 	// Step 2: recalc the .olm files using the object's CURRENT position/rotation

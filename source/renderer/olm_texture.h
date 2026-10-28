@@ -1,10 +1,34 @@
 #pragma once
 #include "../pch.h"
+#include "../runtime/lightmap_rules.h"
 #include <string>
 #include <vector>
 
 // Reads an IGI1 `.olm` lightmap straight from disk and uploads EVERY page as its
 // own RGBA GL texture, in page order (`*pages` receives one GLuint per page).
+//
+// THE ENGINE'S ACCEPT TEST RUNS HERE. `mesh` is the MESH side of the four
+// conjuncts `Lightmap_BuildLod` evaluates before it will use a file on disk
+// (lightmapbuild.c:63-64):
+//
+//     file->magic == 0x3DF5C28F
+//     && feq(mh->version, file->version)
+//     && DateTime_Compare(mh->time, file->time) < 0
+//     && mesh->texCount == file->count
+//
+// and it is evaluated by `igi::lightmap_rules::OlmHeaderAccepted`, the same
+// predicate the unit tests pin. On a rejection the engine does NOT use the file:
+// it flushes it (`Resource_Flush(file)`, lightmapbuild.c:86) and builds a fresh
+// `Lightmaps` in memory (:90-100). The editor cannot bake in process (the bake is
+// `igi1conv lightmap recalc`), so the equivalent outcome is that the rejected
+// file binds nothing and the LOD draws dynamic lighting -- exactly what a missing
+// or corrupt `.olm` already does. It never falls back to another file or to
+// another page.
+//
+// `mesh == nullptr` means the CALLER could not identify the mesh of the ref this
+// file belongs to (see `igi::lightmap::RefMeshIsIdentified`), so the engine's test
+// cannot be run; the file is loaded as before. That case is named and counted by
+// the caller rather than silently accepted: the engine always has the ref's mesh.
 //
 // WHY EVERY PAGE, AND NOT JUST THE FIRST. The engine's `Lightmaps` struct holds
 // `count` `LightmapTex` records (src/litmap/litmaptypes.h:36-48) and the draw path
@@ -29,11 +53,6 @@
 // model `428_02_1.mef` is the one whose render groups name page 1 (7 of its
 // blocks; see docs/igi-re-parity/LIGHTMAP_BAKE.md).
 //
-// The magic (0x3DF5C28F) and version (0.1f) are the two file-side conjuncts of
-// the engine's accept test (lightmapbuild.c:26, :63, :98); every one of the
-// 25,337 shipped `.olm` entries and all 2,667 shipped `.mef` MESH headers carry
-// exactly those bits, so checking them here cannot reject retail data.
-//
 // This is the fast load path for applying baked lightmaps: it avoids spawning
 // `igi1conv olm to-png` once per .olm (which was hundreds of subprocesses per
 // building). The igi1conv converter remains the tool for WRITING / recalculating
@@ -41,4 +60,6 @@
 //
 // Returns false on any failure, with `err` set and `*pages` emptied; any texture
 // already created for the file is deleted before returning.
-bool LoadOlmPages(const std::string& olmPath, std::vector<GLuint>* pages, std::string* err);
+bool LoadOlmPages(const std::string& olmPath,
+                  const igi::lightmap_rules::OlmAcceptInput* mesh,
+                  std::vector<GLuint>* pages, std::string* err);

@@ -240,6 +240,30 @@ bool OlmHeaderAccepted(const OlmFileHeader& file, const OlmAcceptInput& mesh) {
     return true;
 }
 
+OlmAcceptInput MakeOlmAcceptInput(float mesh_version, const int (&mesh_time)[7],
+                                  int mesh_tex_count, bool full) {
+    // The mesh side comes out of the .mef's MESH chunk: version at +0x00 and
+    // time[7] at +0x04 (modeltypes.h:9-27), the same seven ints in the same order
+    // as `Lightmaps.time[7]` (litmaptypes.h:39) because both are filled by
+    // DateTime_Get (datetime.c:16-26) -- the .mef side by the model tool, the .olm
+    // side by the bake (`DateTime_Get(lm->time)`, lightmapbuild.c:97). The page
+    // count is `LightmapMesh.texCount`, which `Lightmap_BuildLod` reads from
+    // `mh->data` (lightmapbuild.c:55), the RD3D chunk for format 3
+    // (src/bonemesh/d3drender.c:225-230), at +0x04 (litmaptypes.h:139).
+    OlmAcceptInput mesh;
+    mesh.mesh_version = mesh_version;
+    mesh.mesh_time.year = mesh_time[0];
+    mesh.mesh_time.month = mesh_time[1];
+    mesh.mesh_time.day = mesh_time[2];
+    mesh.mesh_time.hour = mesh_time[3];
+    mesh.mesh_time.minute = mesh_time[4];
+    mesh.mesh_time.second = mesh_time[5];
+    mesh.mesh_time.ms = mesh_time[6];
+    mesh.mesh_tex_count = mesh_tex_count;
+    mesh.full = full;
+    return mesh;
+}
+
 OlmDecision DecideOlmFile(const OlmFileHeader& file, const OlmAcceptInput& mesh) {
     // lightmapbuild.c:60-88. There is no third outcome: a file either passes the
     // four conjuncts and is used (only when `full == 0`), or it is flushed

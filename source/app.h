@@ -338,8 +338,12 @@ private:
 	// shared resolve+convert+upload core. olm_from_recalc: the .olm on disk was
 	// just re-baked toward the object's live pose (record that as bake pose);
 	// otherwise record the authored QSC pose the shipped bake was made at.
+	// `rejected_by_accept_test` (optional) receives how many resolved entries the
+	// engine's four-conjunct test refused (lightmapbuild.c:63-64): they bind
+	// nothing, but the Calculate flow must still be able to rebuild them.
 	size_t ResolveAndApplyLightmap(LevelObject& obj, const std::string& qscPath,
-	                               bool olm_from_recalc = false);
+	                               bool olm_from_recalc = false,
+	                               size_t* rejected_by_accept_test = nullptr);
 	// Bake the current orientation's re-light into one object's .olm files (game
 	// write-back). Returns true if files were rewritten. Used by Save write-back.
 	bool RecalcLightmapToOlm(LevelObject& obj, const std::string& qscPath, bool force = false);

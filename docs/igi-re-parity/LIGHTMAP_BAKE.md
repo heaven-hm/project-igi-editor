@@ -24,6 +24,15 @@ findings 5.1 and 5.2 are therefore fixed; §5b records what changed, the measure
 retail evidence, and the two parts that remain open (the accept test on the live
 path, and the bake-versus-recalculate decision).
 
+**Update 2 (the accept test).** `OlmHeaderAccepted` is no longer test-only: the
+MEF parser now reads the three mesh-side words it needs, and
+`LoadOlmPages` refuses a file that fails the four conjuncts, which is what
+`Lightmap_BuildLod` does with it (`Resource_Flush`, `lightmapbuild.c:86`). §5c
+records the fields parsed, the ref-identification rule, the engine's rejection
+behaviour and the measured retail evidence — including the ground-truth pairing
+for all 14 levels, where **no shipped file is rejected**. §5b's "still open"
+item 1 is therefore closed.
+
 ---
 
 ## 1. The resource names are literals (Rule 1)
@@ -354,7 +363,7 @@ guess.
 | a lightmapped LOD has **one page per mesh page**: `lm->count = mesh->texCount` | `HOOK(0x523D40, Lightmap_BuildLod)` `src/dirlight/lightmapbuild.c:91` | `LoadOlmPages` returns every page, not page 0 |
 | the drawn page is the **render group's own** `LmGroup.lightmap`, i.e. `set->tex[g->lightmap]`; `0xFFFF` = none | `HOOK(0x49DF60, Direct3DRender_DrawRigidMesh)` `src/render/render.c:1014-1048`, the binding at `:1033`; the sentinel tested at `:1098`, `:1114`; `LmGroup.lightmap` at `+0x12` (`src/render/render.c:40-54`) | `ParsedGeometry::RenderBlock::lightmapSlot` (`source/renderer/mef_native.cpp:1058`, already parsed) → `SubMesh.lightmapPage` (`source/renderer/model.{h,cpp}`) → `igi::lightmap::PageIndexForGroup` (`source/renderer/lightmap_ref_index.h`) → the per-submesh bind in `source/renderer/renderer_objects.cpp` |
 | the file is the **drawn LOD's** ref (`o->lightmaps[lod].lightmaps`), and a LOD with no bake binds no atlas | `src/render/render.c:1019`, `:1052-1054` | unchanged (`OwnerLightmapEntryForDrawnLod`), now indexed into a page vector |
-| the file-side identity: `magic == 0x3DF5C28F`, `feq(version, 0.1f)` | `lightmapbuild.c:26`, `:63`, `:98`; `feq` `src/dirlight/dirlight.h:20-23` | validated in `LoadOlmPages` |
+| the accept test: `magic`, `feq(version, 0.1f)`, `mesh_time < file_time`, `texCount == count` | `lightmapbuild.c:26`, `:63-64`, `:98`; `feq` `src/dirlight/dirlight.h:20-23`; rejection `:86` | `OlmHeaderAccepted` called by `LoadOlmPages` with the mesh side from `Renderer_Objects::GetLodOlmAcceptInput` (§5c) |
 
 The storage shape changed with it: the per-task lightmap store is now
 `taskId -> vector<LOD> of vector<page>` (`Renderer_Objects::SetLightmapForTask`),
@@ -393,13 +402,6 @@ indices and the old single `vector<GLuint>` could only express the first.
 
 ### Still open
 
-* **The accept test on the live path.** The four conjuncts also need
-  `MeshHeader.version`, `MeshHeader.time[7]` and `LightmapMesh.texCount`, none of
-  which the editor parses today (`source/lod/mef_mesh_header.h` carries
-  format/center/sphere/complexity/radius; `mef_native.cpp` keeps only the LTMP
-  chunk's size). Wiring `OlmHeaderAccepted` therefore needs those three words
-  added to the MEF parser first. The editor's Calculate flow is a rebuild flow, so
-  this is a reuse-decision refinement, not a correctness hole in what is drawn.
 * **§5.4's staleness rule** is unchanged: the editor still decides reuse from a
   recorded bake pose, not from the engine's timestamp/count test.
 * **`ObjectLightmapManager` (§5.2)** is still the non-oracle loader it was — and it
@@ -410,6 +412,152 @@ indices and the old single `vector<GLuint>` could only express the first.
   lights. That is the decision §5's "next action" leaves to the Lead, and it is
   not made here.
 * **No rendered pixel.** See §7.
+
+---
+
+## 5c. The four-conjunct accept test, wired to the live path
+
+`OlmHeaderAccepted` is now called on the path that binds a shipped `.olm`
+(`App::ResolveAndApplyLightmap` → `LoadOlmPages`), so a file the engine would
+flush and rebuild is not drawn.
+
+### What had to be parsed first
+
+The four conjuncts (`lightmapbuild.c:63-64`) need both sides. The file side was
+already parsed; the mesh side was not, and it lives in two different chunks of the
+LOD's own `.mef`:
+
+| Word | Where it lives | How it is read now |
+|---|---|---|
+| `MeshHeader.version` | MESH ("HSEM") payload +0x00 (`src/model/modeltypes.h:10`) | `igi::lod::ReadMefMeshHeader` (`source/lod/mef_mesh_header.h`), new `version` field |
+| `MeshHeader.time[7]` | MESH payload +0x04, 28 bytes (`modeltypes.h:11`) | same, new `time[7]` field |
+| `LightmapMesh.texCount` | RD3D ("D3DR") payload +0x04 | same, new `lightmap_tex_count` field |
+
+The `texCount` offset needs the engine's own cast, and it is easy to get wrong:
+`Lightmap_BuildLod` reads `mesh = (LightmapMesh *)mh->data` (`lightmapbuild.c:55`)
+and `mh->data` is **not** the LTMP chunk — `Direct3DRender_LoadModel` case 3 sets
+`arg->header->data = find_data(arg->res, ID_RD3D)` and stores the LTMP chunk at
+`r->unk18` instead (`HOOK 0x49FB10`, `src/bonemesh/d3drender.c:224-230`). So the
+`LightmapMesh` view overlays the **RD3D** payload:
+
+```
+LightmapMesh.texCount == RD3D + 0x04    litmaptypes.h:139   <- the accept test
+LightmapMesh.unk8     == RD3D + 0x08    litmaptypes.h:140   <- the second gate, :56
+LightmapMesh.sizes    == RD3D + 0x18    litmaptypes.h:145   == the LTMP pointer
+```
+
+That last line is the identity the corpus test uses: for format 3 the LTMP chunk
+payload **is** the `short[4]` page-size array `lightmapbuild.c:103-107` copies into
+each page's `width`/`height`. MEASURED: in all **5,617** format-3 `.mef` entries of
+the 14 retail level model bundles the LTMP payload is exactly `texCount` records of
+`short[4]`, and all **6,605** MESH headers carry version bits `0x3DCCCCCD` (0.1f) —
+the value `feq(mh->version, file->version)` is asked to match. **96** of the 5,617
+format-3 meshes carry `texCount == 0` and no LTMP chunk at all (the engine
+allocates a zero-page `Lightmaps` for them, `lightmapbuild.c:90-91`).
+
+`source/renderer/renderer_objects_mesh.cpp` turns those words into the input the
+predicate takes (`Renderer_Objects::GetLodOlmAcceptInput`, forwarded by `Renderer`),
+reading the LOD's `.mef` the same way the LOD switch does: the archive entry
+`Mesh_Load` asks for, `"LOCAL:models/%s.mef"` (`src/model/model.c:364`), then the
+on-disk / extracted copy. `igi::lightmap_rules::MakeOlmAcceptInput` is the single
+place the seven `time` ints are mapped onto `DateTime`.
+
+### Which mesh each resolved `.olm` entry belongs to
+
+A resolved list is one **LightmapInfo**'s files: `Lightmap_BuildLod` is called once
+per ref of that object's set and every file is named `info->name` + the ref index
+(`lightmapinfo.c:147-152`, `lightmapbuild.c:59`). So entry `k` names ref `k` of the
+set — and the ref's LOD is the **owner's own LOD `k` only while `k < lod_count`**:
+`fill_refs` gives the set's owner refs `0..lod_count-1`, and every later ref belongs
+to the object's magic parts (`SectorObject_FillMagicRefs`, `sector.c:565-575`) or
+its rigid children (`SectorObject_FillRigidRefs`), whose order the editor does not
+walk. A list resolved by authored **position** is an *ancestor's* binding — the
+object's model is merely referenced inside that tree — so its entries are not this
+object's LODs at all.
+
+That rule is `igi::lightmap::RefMeshIsIdentified(owner_binding, owner_lod_count,
+entry)` (`source/renderer/lightmap_ref_index.h`). Where it is false the editor
+cannot name the mesh, so it loads the file **without** the test and counts it
+rather than testing it against a guessed mesh — a wrong mesh would reject a valid
+file (a child's page count is not the owner's). The aggregate is logged per resolve
+call as `accept test: N checked, K rejected, U not identifiable`.
+
+### What the engine does on a rejection, and what the editor now does
+
+`Lightmap_BuildLod` never uses a file that fails the test: it flushes it
+(`Resource_Flush(file)`, `lightmapbuild.c:86`) and allocates a fresh `Lightmaps`
+(:90-100). There is no clamp, no tolerance and no fallback to another file or page.
+The editor cannot bake in process (the bake is `igi1conv lightmap recalc`), so the
+equivalent outcome is that the rejected entry binds **nothing** and that LOD draws
+with dynamic lighting — exactly what a missing `.olm` already does
+(`Direct3DRender_UploadLightmapMesh(d, NULL)`, `src/render/render.c:1052-1054`).
+`full` is not part of the test and the load path passes `false`, because the
+accept branch only returns inside `if (!full)` (`:65`, `:83`).
+
+One editor-side consequence is handled explicitly: the **Calculate Light Mapping**
+button loads the current `.olm` first (to register the bake pose) and used to abort
+when nothing loaded, which a refused file would now cause — a stale bake would be a
+dead end. `ResolveAndApplyLightmap` therefore reports how many entries the test
+refused, and `CalculateLightmapForSelectedObject` proceeds with the rebuild when
+that count is non-zero (`app_editor.cpp`), which is the engine's own answer to a
+rejection.
+
+### Measured: no shipped file is rejected
+
+Two independent measurements, both read-only against
+`/Users/haseeb-mir/Downloads/IGI`:
+
+1. **The corpus test** (`tests/test_lightmap_rules.cpp`,
+   `LightmapRulesCorpusTest.EveryShippedOlmIsAcceptedAgainstItsMeshSide`) pairs
+   every shipped `.olm` with the meshes of its own level bundle by that page-size
+   signature (the LTMP array) and requires every file to have a passing mesh.
+   Verbatim:
+
+   ```
+   [lightmap-accept] levels=14 meshes=6605 format3=5617 versionOk=6605
+                     texCountMatchesLtmp=5617 zeroTexCount=96 files=25337
+                     withCandidate=25337 accepted=25337 pairs=946960
+                     pairsTimeFail=8724 pairsVersionFail=0 pairsCountFail=0
+   ```
+
+   **All 25,337 shipped files are accepted.** `pairsTimeFail=8724` is the point of
+   the test's non-vacuity: the bundles do contain same-signature meshes that are
+   *newer* than a bake — meshes the engine would rebuild rather than reuse — so the
+   timestamp conjunct is doing real work on retail data.
+
+2. **The ground-truth pairing** (`scratch/probe_lm_truth.py`): level 1's
+   `objects.qsc` — and, for the other 13 levels, `objects.qvm` decompiled with the
+   bundled `igi1conv qvm decompile` into a private stage — gives each
+   `LightmapInfo`'s owning tree and therefore its root model; the owner's chain
+   (last-character increment, `model.c:145-163`) then names the exact mesh of refs
+   `0..lod_count-1`. Across all 14 levels there are **1,120 such refs** and **every
+   one is accepted**, with a 100% page-size-signature match:
+
+   ```
+   [level 1]  lightmap infos=22  olm files=1308  owner refs=79   accepted=79   sig_match=79
+   [level 2]  lightmap infos=17  olm files= 643  owner refs=68   accepted=68   sig_match=68
+   ...
+   [level 14] lightmap infos=121 olm files=4132  owner refs=12   accepted=12   sig_match=12
+   ```
+
+   The other **24,217** entries are the magic-part and rigid-child refs the editor
+   does not identify (for level 1: 1,229 of 1,308), so they are the ones the live
+   path still loads untested — the honest limit of this change, recorded in §8.
+
+3. **An `igi1conv`-written file.** `igi1conv lightmap recalc` was run against a
+   private copy of level 1 (`scratch/lm-recalc/`, the install was not written to)
+   for `435_01_1` / task 1104, which rewrote 11 files. All five of the owner's own
+   refs (`obj00000_00000..00004`, LODs 1..5 of the 5-level chain) pass all four
+   conjuncts against those LODs' meshes, with `count == texCount` and a file
+   timestamp later than the mesh's:
+
+   ```
+   ACCEPTED obj00000_00000.olm mesh=435_01_1 texCount=1 count=1
+   ACCEPTED obj00000_00001.olm mesh=435_01_2 texCount=1 count=1
+   ACCEPTED obj00000_00002.olm mesh=435_01_3 texCount=1 count=1
+   ACCEPTED obj00000_00003.olm mesh=435_01_4 texCount=1 count=1
+   ACCEPTED obj00000_00004.olm mesh=435_01_5 texCount=1 count=1
+   ```
 
 ---
 
@@ -502,6 +650,38 @@ OK: 1268 tests passed in 72 suites
 ==> run-host-tests.sh exit=0
 ```
 
+### After the accept-test wiring (§5c)
+
+```
+$ IGI_HOST_TESTS="tests/test_lightmap_rules.cpp tests/test_lightmap_ref_index.cpp" \
+    bash scripts/run-host-tests.sh
+   PASS  test_lightmap_ref_index              14 passed    0 failed  (14 tests, exit 0)
+   PASS  test_lightmap_rules                  41 passed    0 failed  (41 tests, exit 0)
+OK: 55 tests passed in 2 suites
+==> run-host-tests.sh exit=0
+```
+
+```
+$ clang++ -std=c++20 -Wall -Wextra -Wpedantic -fsyntax-only -I source \
+    -I third_party/glm-1.0.1 -I third_party/GL/include source/runtime/lightmap_rules.cpp
+exit code: 0
+$ clang++ -std=c++20 -Wall -Wextra -Wpedantic -fsyntax-only -I source \
+    -I third_party/glm-1.0.1 -I third_party/GL/include <TU including
+    lod/mef_mesh_header.h + renderer/lightmap_ref_index.h>
+exit code: 0
+```
+
+```
+$ python3 tools/igi-re-parity/tu-check.py --all
+checked 400 translation unit(s), 0 failed
+```
+
+```
+$ bash scripts/run-host-tests.sh                       # whole lane
+OK: 1273 tests passed in 72 suites
+==> run-host-tests.sh exit=0
+```
+
 ```
 $ bash scripts/build-windows.sh
    x64  link gate      : exit 0
@@ -517,10 +697,14 @@ $ file bin/igi_tests.exe
 bin/igi_tests.exe: PE32 executable (console) Intel 80386, for MS Windows
 $ WINEPATH='Z:\...\scratch\wine-smoke\run' IGI_GAME_PATH='Z:\Users\haseeb-mir\Downloads\IGI' \
     wine bin/igi_tests.exe '--gtest_filter=-*VerifyLevel*' --gtest_color=no
-[==========] 1707 tests from 245 test suites ran. (153880 ms total)
-[  PASSED  ] 1695 tests.
+[==========] 1712 tests from 245 test suites ran. (46830 ms total)
+[  PASSED  ] 1700 tests.
 [  SKIPPED ] 12 tests
 ==> exit 0
+$ grep lightmap-accept <the same run's log>
+[lightmap-accept] levels=14 meshes=6605 format3=5617 versionOk=6605 texCountMatchesLtmp=5617
+                  zeroTexCount=96 files=25337 withCandidate=25337 accepted=25337 pairs=946960
+                  pairsTimeFail=8724 pairsVersionFail=0 pairsCountFail=0
 ```
 
 ```
@@ -533,16 +717,20 @@ $ IGI_E2E_STAGE=$PWD/scratch/e2e-lm-pages bash scripts/e2e-headless.sh --fast
 | Claim | Status |
 |---|---|
 | The three rules match IGI-RE | **verified** — citations throughout, quoted from the decompilation |
-| The rules are exercised natively | **verified** — `35 passed 0 failed`, `exit 0` (see §5b for the run after the wiring: 38 + 12) |
+| The rules are exercised natively | **verified** — `41 passed 0 failed` for `test_lightmap_rules` and `14 passed 0 failed` for `test_lightmap_ref_index`, `exit 0` |
 | The corpus numbers | **verified** — printed by the test, 14 bundles / 25,337 files read |
 | The corpus test self-skips without the install | **verified** — `33 passed 2 skipped`, `exit 0` |
-| `-Wall -Wextra -Wpedantic` clean on the module | **verified** — `exit 0`, no diagnostics |
+| `-Wall -Wextra -Wpedantic` clean on the module and the new headers | **verified** — `exit 0`, no diagnostics |
 | The page plan matches the whole-buffer reader on every shipped file | **verified** — `plannedFiles=25337 plannedPages=25351 planMismatches=0` |
 | At least one retail render group names a page other than 0 | **verified** — `offPage0=7` of 11,484 format-3 blocks, all in `428_02_1.mef` |
-| The changed translation units cross-compile for i686 | **verified** — `tools/igi-re-parity/tu-check.py`, 6 units, 0 failed |
-| The Windows `igi_tests` suite | **verified** — 1707 ran / 1695 passed / 12 skipped / **0 failed**, exit 0 (i686 `bin/igi_tests.exe`, `file` = `PE32 ... Intel 80386`, run from the repo root with the retail install) |
+| The mesh side (`version`, `time[7]`, `texCount`) is read from the right offsets | **verified** — unit test on a synthetic `.mef`; `texCountMatchesLtmp=5617/5617` and `versionOk=6605/6605` on the retail bundles |
+| **No shipped `.olm` is rejected** by the four-conjunct test | **verified** — corpus test `accepted=25337/25337`; ground truth for all 14 levels `owner refs=1120, accepted=1120` |
+| An `igi1conv`-written `.olm` is not rejected | **verified** — `lightmap recalc` on a private level-1 copy: all 5 owner refs accepted (§5c) |
+| The changed translation units cross-compile for i686 | **verified** — `tools/igi-re-parity/tu-check.py --all`, 400 units, 0 failed |
+| The Windows `igi_tests` suite | **verified** — 1712 ran / 1700 passed / 12 skipped / **0 failed**, exit 0 (i686 `bin/igi_tests.exe`, `file` = `PE32 ... Intel 80386`, run from the repo root with the retail install) |
 | The headless end-to-end lane | **verified** — `scripts/e2e-headless.sh --fast`: `E2E PASS`, smoke over 14 levels with the level-7 `s332_02_1` defect asserted and 0 missing textures |
 | The build gate | **verified** — `scripts/build-windows.sh`: x64 link 0, i686 compile 0, build integrity 0 |
+| The `LoadOlmPages` rejection branch itself (not just the predicate) | **unverified as a unit test** — it calls GL only *after* the accept test, but the file lives in a GL-linked target, so the host lane cannot link it. The predicate, the mesh-side mapping and the identification rule it is driven by are all host-tested; the call is exercised by compilation, the Windows suite and the e2e lane |
 | Any rendered or in-game lightmap | **unverified** — the GUI needs GL 4.1, this host offers 2.1 |
 
 ## 8. Unverified
@@ -557,8 +745,11 @@ $ IGI_E2E_STAGE=$PWD/scratch/e2e-lm-pages bash scripts/e2e-headless.sh --fast
   entries (`lightmapinfo.c:374-383`); only their *effects* are known (§4). The
   module names them by field, not by label.
 * **`mesh->unk8`**, the second build gate (`lightmapbuild.c:56`), is unnamed in
-  `LightmapMesh` (`litmaptypes.h:138-150`), so what it corresponds to in a `.mef`
-  is not established.
+  `LightmapMesh` (`litmaptypes.h:138-150`). Its offset is now known — it is the
+  RD3D payload's +0x08, the same chunk `texCount` comes from
+  (`src/bonemesh/d3drender.c:224-230`, §5c) — but what it *means*, and therefore
+  what it should be on the editor's side, is still not established. 24 of the
+  2,051 loose format-3 retail meshes carry zero.
 * **`LOCAL:` vs `MISSION:`.** The engine builds `MISSION:lightmaps/...`
   (`lightmap.c:91`, `lightmapbuild.c:59`); the shipped archive stores
   `LOCAL:missions/location0/level<N>/lightmaps/...` (§6). Whether those two
@@ -585,19 +776,35 @@ $ IGI_E2E_STAGE=$PWD/scratch/e2e-lm-pages bash scripts/e2e-headless.sh --fast
   original. The editor uploads the *unpadded* page and does not scale UV2, which
   samples the same texels as the engine's padded surface plus the `vScale`
   multiply; that equivalence is arithmetic, not observed.
+* **The magic-part and rigid-child refs** (§5c). The engine runs the accept test
+  on every ref of the set, but the editor only models the owner's own LODs, so the
+  **24,217** entries that belong to the object's magic parts and rigid children
+  are still loaded untested — 1,229 of level 1's 1,308 files, for example. To
+  close that, the editor would need `SectorObject_LoadLightmaps`' walk
+  (`sector.c:641-680`: `fill_refs` per part, then `SectorObject_FillMagicRefs`,
+  then `SectorObject_FillRigidRefs`), including the ATTA-attached models, so that
+  each ref's `ModelLod` is known. Not done here; the load path reports the count
+  per resolve call instead of guessing.
+* **`mesh->unk8` as a live gate.** The engine's second build gate
+  (`if (!mesh->unk8) return NULL;`, `lightmapbuild.c:56`) is parsed — `unk8` is
+  RD3D + 0x08, and 24 of the 2,051 loose format-3 retail meshes carry zero — but it
+  is **not** applied on the editor's load path, because what the word *means* is
+  unestablished (§8 above). For a mesh with `unk8 == 0` the engine builds no
+  lightmaps at all, so the editor binding one is a divergence that remains open.
 
 ## 9. Files
 
 | Path | What |
 |---|---|
-| `source/runtime/lightmap_rules.h` | the rules, constants and predicates, heavily cited; also the streaming page plan |
+| `source/runtime/lightmap_rules.h` | the rules, constants and predicates, heavily cited; also the streaming page plan and `MakeOlmAcceptInput` (the mesh side) |
 | `source/runtime/lightmap_rules.cpp` | the implementation; every branch carries its IGI-RE line |
-| `source/renderer/olm_texture.{h,cpp}` | the reader: every page of a `.olm`, engine layout, magic/version checked |
+| `source/lod/mef_mesh_header.h` | `MeshHeader.version`/`time[7]` and the format-3 `LightmapMesh.texCount`/`unk8` from the RD3D chunk, plus the LTMP page-size array |
+| `source/renderer/olm_texture.{h,cpp}` | the reader: every page of a `.olm`, engine layout, and the four-conjunct accept test |
 | `source/renderer/model.{h,cpp}` | `SubMesh.lightmapPage` — the render group's `LmGroup.lightmap` |
-| `source/renderer/lightmap_ref_index.h` | `PageIndexForGroup` (rule 5) |
-| `source/renderer/renderer_objects.{h,cpp}`, `renderer.h` | per-LOD page vectors and the per-submesh bind |
-| `source/app_editor.cpp` | `ResolveAndApplyLightmap` loads every page |
-| `tests/test_lightmap_rules.cpp` | 34 unit + 2 corpus tests (page-table plan, pixel offsets) |
-| `tests/test_lightmap_ref_index.cpp` | the page rule plus the format-3 page corpus differential |
+| `source/renderer/lightmap_ref_index.h` | `PageIndexForGroup` (rule 5) and `RefMeshIsIdentified` (which ref's mesh the accept test can name) |
+| `source/renderer/renderer_objects.{h,cpp}`, `renderer.h` | per-LOD page vectors, the per-submesh bind, `GetLodOlmAcceptInput` / `GetLodCount` |
+| `source/app_editor.cpp` | `ResolveAndApplyLightmap` loads every page and applies the accept test where the ref's mesh is identified |
+| `tests/test_lightmap_rules.cpp` | unit tests for the accept test, the mesh side and the `.olm` layout; corpus tests over the real install |
+| `tests/test_lightmap_ref_index.cpp` | the page rule, the ref-identification rule, plus the format-3 page corpus differential |
 | `CMakeLists.txt` | purely additive: one test file and one runtime source |
 | `docs/igi-re-parity/LIGHTMAP_BAKE.md` | this record |

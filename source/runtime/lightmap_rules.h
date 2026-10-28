@@ -349,6 +349,18 @@ struct OlmAcceptInput {
     bool full = false;                     // the `full` argument
 };
 
+// Build the mesh side from the words a `.mef` carries, in the order the structs
+// above use. `mesh_version` is `MeshHeader.version` (modeltypes.h:10, +0x00),
+// `mesh_time` is `MeshHeader.time[7]` (modeltypes.h:11, +0x04) -- the same seven
+// ints, in the same DateTime_Get order (datetime.c:16-26), that `Lightmaps.time[7]`
+// holds on the file side (litmaptypes.h:39), which is why the two are directly
+// comparable at lightmapbuild.c:64 -- and `mesh_tex_count` is
+// `LightmapMesh.texCount` (litmaptypes.h:139, +0x04 of the RD3D payload the
+// engine's `mh->data` points at for format 3: src/bonemesh/d3drender.c:225-230,
+// lightmapbuild.c:55).
+OlmAcceptInput MakeOlmAcceptInput(float mesh_version, const int (&mesh_time)[7],
+                                  int mesh_tex_count, bool full = false);
+
 // What Lightmap_BuildLod does with a file that exists on disk.
 enum class OlmDecision {
     kRebuild,       // flush the file (or never load it) and build a new Lightmaps

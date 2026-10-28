@@ -143,6 +143,32 @@ inline std::string OlmFileNameForFirstLod(const std::string& object_name, const 
     return OlmFileName(object_name, RefIndexForLod(layout, 0));
 }
 
+// Whether the editor can identify the MESH a resolved `.olm` entry belongs to,
+// which is what the engine's accept test needs (lightmapbuild.c:63-64 compares
+// `mh->version`, `mh->time` and `mesh->texCount` of THAT ref's LOD).
+//
+// `owner_binding` is true when the resolved file list came from the object's own
+// lightmap binding (a task-id match), so the `LightmapInfo` is this object's own
+// and ref 0 is this object's LOD 0 (`o->lightmapRefs = &set->refs[*n]`, sector.c:548).
+// A list resolved by authored POSITION belongs to an ancestor's binding -- the
+// object's model is merely referenced inside that tree -- so its entries are not
+// this object's LODs and no mesh can be identified for them.
+//
+// `entry < owner_lod_count` is the second condition: refs 0..lod_count-1 of the
+// set are the owner's own LODs (sector.c:549-561). The refs after them belong to
+// the object's magic parts (`SectorObject_FillMagicRefs`, sector.c:565-575) and
+// its rigid children (`SectorObject_FillRigidRefs`), whose order the editor does
+// not walk -- so for those entries the editor knows the file but not the mesh,
+// and must not guess one: a wrong mesh would reject a valid file.
+//
+// MEASURED over the retail install (all 14 level bundles, 25,337 shipped `.olm`
+// files): only 1,120 entries are an owner's own LOD, and all 1,120 pass the four
+// conjuncts against that LOD's mesh. The other 24,217 entries are the magic and
+// child refs the editor cannot identify. See docs/igi-re-parity/LIGHTMAP_BAKE.md.
+inline bool RefMeshIsIdentified(bool owner_binding, int owner_lod_count, int entry) {
+    return owner_binding && entry >= 0 && entry < owner_lod_count;
+}
+
 // `LmGroup.lightmap` — src/render/render.c:45 (uint16_t) and the `0xFFFF`
 // sentinel the group loops test (render.c:1098, :1114).
 constexpr int kNoLightmapPage = 0xFFFF;

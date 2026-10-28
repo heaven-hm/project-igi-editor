@@ -21,10 +21,12 @@
 
 #include "../source/renderer/res_writer.h"
 #include "../source/runtime/lightmap_rules.h"
+#include "../source/lod/mef_mesh_header.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -266,6 +268,144 @@ OlmAcceptInput MeshFor(const OlmFileHeader& file, bool full = false) {
     mesh.mesh_tex_count = file.count;
     mesh.full = full;
     return mesh;
+}
+
+// ---------------------------------------------------------------------------
+// The mesh side of the test, read out of a .mef
+//
+// A minimal ILFF container: the form, then a MESH ("HSEM") child whose payload is
+// the 0x90-byte MeshHeader, then -- for format 3 -- the RD3D ("D3DR") child the
+// engine's `mh->data` points at (Direct3DRender_LoadModel case 3, HOOK 0x49FB10,
+// src/bonemesh/d3drender.c:224-230) and the LTMP ("PMTL") child that holds the
+// `short[4]` page-size array `LightmapMesh.sizes` names
+// (src/litmap/litmaptypes.h:145, d3drender.c:229). Laid out the way
+// Chunk_FirstChild 0x4B7490 / Chunk_Next 0x4B7470 / Chunk_Data 0x4B74D0 walk it
+// (src/res/chunk.c:9-49) with align 4, as every retail .mef uses: a child header
+// sits at the parent + 0x10-aligned offset and its payload 0x10 bytes later.
+// ---------------------------------------------------------------------------
+
+constexpr std::size_t kMeshPayload = 0x90;   // MeshHeader, in memory 0x90
+constexpr std::size_t kRd3dPayload = 0x38;   // MeshRender (src/bonemesh/bonemesh.h:18-31)
+constexpr std::size_t kLtmpRecord = 8;       // short[4]
+
+std::vector<std::uint8_t> MakeMef(int format, float version, const int time[7], int tex_count,
+                                  int unk8, const std::vector<std::pair<int, int>>& sizes,
+                                  bool with_rd3d = true) {
+    const std::size_t hsem = 0x14;
+    const std::size_t hsem_data = hsem + 0x10;
+    const std::size_t rd3d = hsem_data + kMeshPayload;
+    const std::size_t rd3d_data = rd3d + 0x10;
+    const std::size_t ltmp = rd3d_data + kRd3dPayload;
+    const std::size_t ltmp_data = ltmp + 0x10;
+    const std::size_t total = ltmp_data + sizes.size() * kLtmpRecord;
+    std::vector<std::uint8_t> b(total, 0);
+    auto put_u32 = [&](std::size_t off, std::uint32_t v) { PutU32(b, off, v); };
+    auto put_f32 = [&](std::size_t off, float v) { PutF32(b, off, v); };
+
+    std::memcpy(b.data(), "ILFF", 4);
+    put_u32(0x04, static_cast<std::uint32_t>(total));  // parent size
+    put_u32(0x08, 4);                                  // parent align
+
+    // MESH ("HSEM")
+    std::memcpy(b.data() + hsem, "HSEM", 4);
+    put_u32(hsem + 0x04, static_cast<std::uint32_t>(kMeshPayload));
+    put_u32(hsem + 0x08, 4);
+    put_u32(hsem + 0x0C, static_cast<std::uint32_t>(rd3d - hsem));  // next sibling
+    put_f32(hsem_data + 0x00, version);                             // MeshHeader.version
+    for (int i = 0; i < 7; ++i)
+        put_u32(hsem_data + 0x04 + 4 * i, static_cast<std::uint32_t>(time[i]));
+    put_u32(hsem_data + 0x20, static_cast<std::uint32_t>(format));
+
+    // RD3D ("D3DR"): unk4 is LightmapMesh.texCount, unk8 the second build gate
+    std::memcpy(b.data() + rd3d, "D3DR", 4);
+    put_u32(rd3d + 0x04, static_cast<std::uint32_t>(with_rd3d ? kRd3dPayload : 0));
+    put_u32(rd3d + 0x08, 4);
+    put_u32(rd3d + 0x0C, static_cast<std::uint32_t>(ltmp - rd3d));
+    put_u32(rd3d_data + 0x04, static_cast<std::uint32_t>(tex_count));
+    put_u32(rd3d_data + 0x08, static_cast<std::uint32_t>(unk8));
+
+    // LTMP ("PMTL"): `texCount` records of short[4]
+    std::memcpy(b.data() + ltmp, "PMTL", 4);
+    put_u32(ltmp + 0x04, static_cast<std::uint32_t>(sizes.size() * kLtmpRecord));
+    put_u32(ltmp + 0x08, 4);
+    put_u32(ltmp + 0x0C, 0);  // last sibling
+    for (std::size_t i = 0; i < sizes.size(); ++i) {
+        PutI16(b, ltmp_data + i * kLtmpRecord + 0, static_cast<std::int16_t>(sizes[i].first));
+        PutI16(b, ltmp_data + i * kLtmpRecord + 2, static_cast<std::int16_t>(sizes[i].second));
+    }
+    return b;
+}
+
+TEST(LightmapRulesAcceptTest, MeshSideComesFromTheMeshHeaderAndTheRd3dChunk) {
+    // MeshHeader.version +0x00, time[7] +0x04 (src/model/modeltypes.h:9-27) and
+    // LightmapMesh.texCount = the RD3D payload's +0x04 (src/litmap/litmaptypes.h:139)
+    // are the three mesh-side words of the accept test (lightmapbuild.c:63-64).
+    const int time[7] = {2000, 11, 21, 7, 30, 13, 508};
+    const std::vector<std::uint8_t> mef =
+        MakeMef(3, kOlmVersion, time, /*tex_count=*/2, /*unk8=*/1, {{256, 16}, {256, 8}});
+
+    const igi::lod::MefMeshHeader header = igi::lod::ReadMefMeshHeader(mef);
+    ASSERT_TRUE(header.valid);
+    EXPECT_EQ(header.format, 3);
+    EXPECT_EQ(std::memcmp(&header.version, &kOlmVersionBits, 4), 0)
+        << "version must be read as the raw float bits 0x3DCCCCCD";
+    for (int i = 0; i < 7; ++i) EXPECT_EQ(header.time[i], time[i]) << "field " << i;
+    EXPECT_TRUE(header.has_lightmap_mesh);
+    EXPECT_EQ(header.lightmap_tex_count, 2);
+    EXPECT_EQ(header.lightmap_unk8, 1);
+
+    // The LTMP payload is the page-size array `mesh->sizes` (lightmapbuild.c:103).
+    std::vector<std::array<std::int16_t, 2>> sizes;
+    ASSERT_TRUE(igi::lod::ReadMefLightmapPageSizes(mef, &sizes));
+    ASSERT_EQ(sizes.size(), 2u);
+    EXPECT_EQ(sizes[0][0], 256);
+    EXPECT_EQ(sizes[0][1], 16);
+    EXPECT_EQ(sizes[1][0], 256);
+    EXPECT_EQ(sizes[1][1], 8);
+
+    // The input built from those words accepts a file whose page count and
+    // version match and whose timestamp is later than the mesh's.
+    const auto buffer = MakeOlm({{256, 16}, {256, 8}}, kOlmMagic, kOlmVersion,
+                                DateTime{2000, 11, 21, 7, 30, 14, 0});
+    const OlmFileHeader file = HeaderOf(buffer);
+    const OlmAcceptInput mesh =
+        MakeOlmAcceptInput(header.version, header.time, header.lightmap_tex_count);
+    EXPECT_FALSE(mesh.full) << "the editor's load path is the engine's !full branch (:65)";
+    EXPECT_TRUE(OlmHeaderAccepted(file, mesh));
+
+    // ...and rejects the same file against the SAME mesh with a different page
+    // count -- the conjunct that ties the file to the mesh that baked it (:64).
+    const OlmAcceptInput other =
+        MakeOlmAcceptInput(header.version, header.time, header.lightmap_tex_count + 1);
+    EXPECT_FALSE(OlmHeaderAccepted(file, other));
+
+    // A format-0 mesh has no LightmapMesh at all: `if (mh->format != 3) return
+    // NULL;` (lightmapbuild.c:53-54), so the reader must not report one.
+    const std::vector<std::uint8_t> rigid =
+        MakeMef(0, kOlmVersion, time, 2, 1, {{256, 16}, {256, 8}});
+    const igi::lod::MefMeshHeader rigid_header = igi::lod::ReadMefMeshHeader(rigid);
+    ASSERT_TRUE(rigid_header.valid);
+    EXPECT_EQ(rigid_header.format, 0);
+    EXPECT_FALSE(rigid_header.has_lightmap_mesh);
+}
+
+TEST(LightmapRulesAcceptTest, MakeOlmAcceptInputMapsTheSevenTimeWordsInOrder) {
+    // MeshHeader.time[7] and Lightmaps.time[7] are the same seven ints in
+    // DateTime_Get order (datetime.c:16-26), which is what makes
+    // DateTime_Compare(mh->time, file->time) meaningful (lightmapbuild.c:64).
+    const int time[7] = {2001, 2, 3, 4, 5, 6, 7};
+    const OlmAcceptInput mesh = MakeOlmAcceptInput(0.1f, time, 3, true);
+    EXPECT_EQ(mesh.mesh_time.year, 2001);
+    EXPECT_EQ(mesh.mesh_time.month, 2);
+    EXPECT_EQ(mesh.mesh_time.day, 3);
+    EXPECT_EQ(mesh.mesh_time.hour, 4);
+    EXPECT_EQ(mesh.mesh_time.minute, 5);
+    EXPECT_EQ(mesh.mesh_time.second, 6);
+    EXPECT_EQ(mesh.mesh_time.ms, 7);
+    EXPECT_FLOAT_EQ(mesh.mesh_version, 0.1f);
+    EXPECT_EQ(mesh.mesh_tex_count, 3);
+    EXPECT_TRUE(mesh.full);
+    EXPECT_EQ(FormatDateTime(mesh.mesh_time), "2001-02-03-04-05-06-0007");
 }
 
 TEST(LightmapRulesAcceptTest, AllFourConjunctsMustHold) {
@@ -853,6 +993,261 @@ TEST(LightmapRulesCorpusTest, RefIndicesAreTheSetPositionsOfTheShippedBakes) {
         << "more ref indices than objects: each object owns a contiguous run";
     EXPECT_GT(stats.object_names.size(), 0u);
     EXPECT_EQ(*stats.ref_indices.begin(), 0) << "some object's LOD 0 ships a bake";
+}
+
+// ---------------------------------------------------------------------------
+// Corpus: the four-conjunct accept test against the MESH side of the real install
+//
+// The live path now refuses an `.olm` whose four conjuncts fail
+// (lightmapbuild.c:63-64). The mesh side comes from the LOD's own `.mef`, so this
+// test reads the shipped `.mef` bundles and pairs every shipped `.olm` with the
+// mesh that baked it. The pairing is the one the oracle gives:
+//
+//   `Lightmap_BuildLod` copies `mesh->sizes[i]` into the page's `t->width`/
+//   `t->height` (lightmapbuild.c:103-107), so a shipped `.olm`'s page records ARE
+//   that mesh's `short[4]` page-size array -- the LTMP chunk payload for a format-3
+//   mesh (litmaptypes.h:145, d3drender.c:229). MEASURED: in all 2,051 format-3
+//   .mef files the LTMP chunk size is exactly `texCount * 8`, and the pairing is
+//   by (texCount, sizes) within the level's own model bundle plus the shared
+//   common bundle -- the two archives `Renderer_Objects` resolves a model's `.mef`
+//   from.
+//
+// The assertion is that NO shipped file is rejected: every shipped `.olm` has at
+// least one mesh in its bundle with that page signature, and at least one of them
+// passes all four conjuncts. A mesh whose timestamp is NOT strictly earlier than
+// the file's is a mesh the engine would rebuild rather than reuse, and the corpus
+// does contain such pairs (they are other meshes with the same page signature, so
+// the timestamp conjunct is not vacuous here) -- the test counts them and requires
+// every file to have a passing mesh.
+//
+// The refs BEYOND the owner's own LODs cannot be paired this way: they belong to
+// the object's magic parts and rigid children, whose order needs
+// `SectorObject_LoadLightmaps` (sector.c:641-680). Those entries are exactly the
+// ones the editor does not test (`igi::lightmap::RefMeshIsIdentified`), so this
+// test's "no shipped file is un-acceptable" claim covers what the live path can
+// reject and no more.
+// ---------------------------------------------------------------------------
+
+struct MeshSideIndex {
+    struct Mesh {
+        std::uint32_t version_bits = 0;
+        DateTime time;
+        int tex_count = 0;
+        std::vector<std::pair<int, int>> sizes;
+    };
+    std::map<std::string, std::vector<Mesh>> by_signature;
+    int meshes = 0;
+    int format3 = 0;
+    int version_ok = 0;
+    int tex_count_matches_ltmp = 0;
+    int tex_count_mismatch = 0;
+    int format3_zero_tex_count = 0;
+};
+
+std::string PageSignature(int count, const std::vector<std::pair<int, int>>& sizes) {
+    std::string key = std::to_string(count);
+    for (const auto& s : sizes)
+        key += ":" + std::to_string(s.first) + "x" + std::to_string(s.second);
+    return key;
+}
+
+void AddMeshSide(const std::uint8_t* data, std::size_t size, MeshSideIndex* index) {
+    std::vector<std::uint8_t> bytes(data, data + size);
+    const igi::lod::MefMeshHeader header = igi::lod::ReadMefMeshHeader(bytes);
+    if (!header.valid) return;
+    index->meshes++;
+    std::uint32_t version_bits = 0;
+    std::memcpy(&version_bits, &header.version, 4);
+    if (version_bits == kOlmVersionBits) index->version_ok++;
+    if (!header.has_lightmap_mesh) return;
+    index->format3++;
+
+    std::vector<std::array<std::int16_t, 2>> ltmp;
+    const bool have_sizes = igi::lod::ReadMefLightmapPageSizes(bytes, &ltmp);
+    if (have_sizes) {
+        if (ltmp.size() == static_cast<std::size_t>(header.lightmap_tex_count))
+            index->tex_count_matches_ltmp++;
+        else
+            index->tex_count_mismatch++;
+    } else if (header.lightmap_tex_count == 0) {
+        // A format-3 mesh with texCount 0 and no LTMP chunk at all: the engine
+        // allocates a zero-page `Lightmaps` for it (lightmapbuild.c:90-91), so
+        // "no page records" is the consistent reading, not a mismatch.
+        index->tex_count_matches_ltmp++;
+        index->format3_zero_tex_count++;
+    } else {
+        index->tex_count_mismatch++;
+    }
+
+    MeshSideIndex::Mesh mesh;
+    mesh.version_bits = version_bits;
+    mesh.tex_count = header.lightmap_tex_count;
+    mesh.time = DateTime{header.time[0], header.time[1], header.time[2], header.time[3],
+                         header.time[4], header.time[5], header.time[6]};
+    if (have_sizes) {
+        for (const auto& s : ltmp) mesh.sizes.emplace_back(s[0], s[1]);
+    }
+    index->by_signature[PageSignature(mesh.tex_count, mesh.sizes)].push_back(std::move(mesh));
+}
+
+TEST(LightmapRulesCorpusTest, EveryShippedOlmIsAcceptedAgainstItsMeshSide) {
+    const fs::path root = GameRoot() / "MISSIONS" / "location0";
+    if (!fs::exists(root)) {
+        GTEST_SKIP() << "set IGI_GAME_PATH to an IGI install to enable the corpus test";
+    }
+
+    // The shared bundle every level can resolve a model from
+    // (renderer_objects.cpp: GetModelFilePath / FindMeshData, and the engine's
+    // "LOCAL:models/%s.mef", src/model/model.c:364).
+    MeshSideIndex common;
+    {
+        const fs::path res = root / "common" / "models" / "location0.res";
+        if (fs::exists(res)) {
+            std::string error;
+            const bool walked = RES_ForEachEntry(
+                res.string(),
+                [&](const std::string& name, const std::uint8_t* data, std::size_t size) {
+                    if (name.size() > 4 && name.compare(name.size() - 4, 4, ".mef") == 0)
+                        AddMeshSide(data, size, &common);
+                },
+                error);
+            if (!walked) ADD_FAILURE() << "RES_ForEachEntry failed on " << res << ": " << error;
+        }
+    }
+
+    int levels = 0;
+    int files = 0;
+    int files_with_candidate = 0;
+    int files_accepted = 0;
+    int candidate_pairs = 0;
+    int pairs_time_fail = 0;
+    int pairs_version_fail = 0;
+    int pairs_count_fail = 0;
+    int meshes = 0;
+    int format3 = 0;
+    int version_ok = 0;
+    int tex_count_matches_ltmp = 0;
+    int tex_count_mismatch = 0;
+    int format3_zero_tex_count = 0;
+    std::string worst;
+
+    for (int level = 1; level <= 14; ++level) {
+        const fs::path dir = root / ("level" + std::to_string(level));
+        const fs::path models = dir / "models" / ("level" + std::to_string(level) + ".res");
+        const fs::path archive = dir / "lightmaps" / "lightmaps.res";
+        if (!fs::exists(models) || !fs::exists(archive)) continue;
+        levels++;
+
+        MeshSideIndex index;
+        std::string error;
+        bool walked = RES_ForEachEntry(
+            models.string(),
+            [&](const std::string& name, const std::uint8_t* data, std::size_t size) {
+                if (name.size() > 4 && name.compare(name.size() - 4, 4, ".mef") == 0)
+                    AddMeshSide(data, size, &index);
+            },
+            error);
+        if (!walked) {
+            ADD_FAILURE() << "RES_ForEachEntry failed on " << models << ": " << error;
+            continue;
+        }
+        meshes += index.meshes;
+        format3 += index.format3;
+        version_ok += index.version_ok;
+        tex_count_matches_ltmp += index.tex_count_matches_ltmp;
+        tex_count_mismatch += index.tex_count_mismatch;
+        format3_zero_tex_count += index.format3_zero_tex_count;
+
+        walked = RES_ForEachEntry(
+            archive.string(),
+            [&](const std::string& name, const std::uint8_t* data, std::size_t size) {
+                const std::size_t slash = name.find_last_of("/\\");
+                const std::string bare =
+                    slash == std::string::npos ? name : name.substr(slash + 1);
+                if (bare.size() < 4 || bare.compare(bare.size() - 4, 4, ".olm") != 0) return;
+
+                OlmFileHeader header;
+                std::vector<OlmPage> pages;
+                if (!ReadOlmPages(data, size, &header, &pages)) {
+                    ADD_FAILURE() << "unreadable .olm " << name;
+                    return;
+                }
+                files++;
+                std::uint32_t file_version_bits = 0;
+                std::memcpy(&file_version_bits, &header.version, 4);
+                std::vector<std::pair<int, int>> dims;
+                for (const OlmPage& p : pages) dims.emplace_back(p.width, p.height);
+                const std::string key = PageSignature(header.count, dims);
+
+                int candidates = 0, accepted = 0;
+                for (const MeshSideIndex* table : {&index, &common}) {
+                    const auto it = table->by_signature.find(key);
+                    if (it == table->by_signature.end()) continue;
+                    for (const MeshSideIndex::Mesh& mesh : it->second) {
+                        candidates++;
+                        candidate_pairs++;
+                        float mesh_version = 0.0f;
+                        std::memcpy(&mesh_version, &mesh.version_bits, 4);
+                        int mesh_time[7] = {mesh.time.year, mesh.time.month, mesh.time.day,
+                                            mesh.time.hour, mesh.time.minute, mesh.time.second,
+                                            mesh.time.ms};
+                        const OlmAcceptInput input = MakeOlmAcceptInput(
+                            mesh_version, mesh_time, mesh.tex_count, /*full=*/false);
+                        if (OlmHeaderAccepted(header, input)) {
+                            accepted++;
+                            continue;
+                        }
+                        if (mesh.version_bits != file_version_bits) pairs_version_fail++;
+                        if (mesh.tex_count != header.count) pairs_count_fail++;
+                        if (DateTimeCompare(mesh.time, header.time) >= 0) pairs_time_fail++;
+                    }
+                }
+                if (candidates > 0) files_with_candidate++;
+                if (accepted > 0) {
+                    files_accepted++;
+                } else if (worst.empty()) {
+                    worst = name;
+                }
+            },
+            error);
+        if (!walked) ADD_FAILURE() << "RES_ForEachEntry failed on " << archive << ": " << error;
+    }
+
+    if (levels == 0) {
+        GTEST_SKIP() << "no retail level bundles found under " << root;
+    }
+
+    std::printf("[lightmap-accept] levels=%d meshes=%d format3=%d versionOk=%d texCountMatchesLtmp=%d "
+                "zeroTexCount=%d files=%d withCandidate=%d accepted=%d pairs=%d pairsTimeFail=%d "
+                "pairsVersionFail=%d pairsCountFail=%d\n",
+                levels, meshes, format3, version_ok, tex_count_matches_ltmp,
+                format3_zero_tex_count, files, files_with_candidate, files_accepted, candidate_pairs,
+                pairs_time_fail, pairs_version_fail, pairs_count_fail);
+    if (!worst.empty()) std::printf("[lightmap-accept] first rejected file: %s\n", worst.c_str());
+
+    EXPECT_EQ(levels, 14);
+    EXPECT_GT(meshes, 2000) << "the retail model bundles hold thousands of .mef files";
+    EXPECT_GT(format3, 2000) << "most retail meshes are lightmapped";
+    // Every shipped MESH header carries the version the accept test compares
+    // against (`feq(mh->version, file->version)`, lightmapbuild.c:63): 0.1f. The
+    // engine refuses to even load a mesh whose version is not exactly 0.1f
+    // (Mesh_Load, HOOK 0x4CF390, src/model/model.c:367-373), so this cannot differ.
+    EXPECT_EQ(version_ok, meshes);
+    // `texCount` is RD3D + 0x04 and the LTMP payload is `texCount` records of
+    // short[4] -- the layout the mesh side and the page sizes both come from.
+    EXPECT_EQ(tex_count_mismatch, 0);
+    EXPECT_EQ(tex_count_matches_ltmp, format3);
+    EXPECT_GT(files, 20000) << "the retail corpus is 25,337 .olm entries";
+    // The claim the live path depends on: the engine's four-conjunct test rejects
+    // NO shipped file.
+    EXPECT_EQ(files_with_candidate, files) << "every shipped .olm has a mesh with its page signature";
+    EXPECT_EQ(files_accepted, files) << "no shipped .olm may be rejected by the accept test";
+    // ...and the timestamp conjunct is not vacuous: the corpus does contain
+    // same-signature meshes that are NOT older than a bake, which the engine would
+    // rebuild rather than reuse (:64, :86).
+    EXPECT_GT(pairs_time_fail, 0);
+    EXPECT_EQ(pairs_version_fail, 0) << "version cannot fail on retail data (all 0x3DCCCCCD)";
+    EXPECT_EQ(pairs_count_fail, 0) << "the pairing is by page count, so it cannot differ";
 }
 
 }  // namespace

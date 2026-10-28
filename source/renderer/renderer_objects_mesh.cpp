@@ -236,6 +236,54 @@ int Renderer_Objects::SelectLodForDistance(const std::string& modelId, bool isBu
     return r.lod;
 }
 
+// The mesh side of the engine's `.olm` accept test for one LOD
+// (lightmapbuild.c:63-64). Every word comes out of the LOD's own `.mef`, read
+// with the same resolution the LOD switch uses above: the archive entry
+// Mesh_Load asks for -- "LOCAL:models/%s.mef" (src/model/model.c:364,
+// FindMeshData) -- then the on-disk or extracted-to-temp copy.
+//
+//   MeshHeader.version       +0x00   (src/model/modeltypes.h:10)
+//   MeshHeader.time[7]       +0x04   (src/model/modeltypes.h:11)
+//   LightmapMesh.texCount    RD3D + 0x04, the format-3 `mh->data` view
+//                                    (src/litmap/litmaptypes.h:139;
+//                                    lightmapbuild.c:55, d3drender.c:225-230)
+//
+// A mesh that is not format 3, or that carries no RD3D chunk, has no lightmaps at
+// all in the engine (`if (mh->format != 3) return NULL;`, lightmapbuild.c:53-54),
+// so there is no file to accept and this returns false.
+bool Renderer_Objects::GetLodOlmAcceptInput(const std::string& modelId, bool isBuilding, int level,
+                                            igi::lightmap_rules::OlmAcceptInput* out) {
+    if (out == nullptr) return false;
+    const igi::lod::LodChain& chain = GetLodChain(modelId, isBuilding);
+    if (level < 0 || level >= chain.count) return false;
+
+    const std::string& lodName = chain.names[level];
+    std::vector<uint8_t> bytes = FindMeshData(lodName);
+    if (bytes.empty()) {
+        const std::string path = GetOrExtractMefTemp(lodName, isBuilding);
+        if (!path.empty()) bytes = ReadFileBytes(path);
+    }
+    if (bytes.empty()) {
+        Logger::Get().Log(LogLevel::WARNING, "[Lightmap] LOD " + std::to_string(level) + " of '" +
+            modelId + "' (" + lodName + ") has no readable .mef; the engine's .olm accept test "
+            "cannot be run for it");
+        return false;
+    }
+
+    const igi::lod::MefMeshHeader header = igi::lod::ReadMefMeshHeader(bytes);
+    if (!header.valid || header.format != igi::lightmap_rules::kMeshFormatLightmapped ||
+        !header.has_lightmap_mesh) {
+        return false;
+    }
+    // `full` is NOT part of the accept rule: it is the caller's own rebuild flag,
+    // and `return file;` sits inside `if (!full)` (lightmapbuild.c:65, :83). The
+    // editor's load path is that `!full` branch -- it is loading the file, not
+    // rebuilding it -- so it passes false.
+    *out = igi::lightmap_rules::MakeOlmAcceptInput(header.version, header.time,
+                                                   header.lightmap_tex_count, /*full=*/false);
+    return true;
+}
+
 float Renderer_Objects::GetMeshZOffset(const std::string& modelId, bool isBuilding) {
     return GetOrLoadMesh(modelId, isBuilding).mainZOffset;
 }

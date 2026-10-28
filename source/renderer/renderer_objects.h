@@ -4,6 +4,7 @@
 #include "mef_native.h"
 #include "../level/level_objects.h"
 #include "../lod/lod_chain.h"
+#include "../runtime/lightmap_rules.h"
 #include "dat_writer.h"
 #include "res_writer.h"
 #include "model_texture_resolution.h"
@@ -224,6 +225,28 @@ public:
     // The mesh name of LOD `level` (0-based) in that chain, or "" when out of
     // range. level 0 is always the requested model name.
     std::string GetLodMeshName(const std::string& modelId, bool isBuilding, int level);
+
+    // ── The mesh side of the engine's `.olm` accept test ─────────────────────
+    // `Lightmap_BuildLod` will only use an `.olm` already on disk when four
+    // conjuncts hold (lightmapbuild.c:63-64), three of which come from the mesh:
+    //
+    //     feq(mh->version, file->version)                MeshHeader.version, +0x00
+    //     DateTime_Compare(mh->time, file->time) < 0     MeshHeader.time[7], +0x04
+    //     mesh->texCount == file->count                  LightmapMesh.texCount
+    //
+    // `LightmapMesh` is the view `Lightmap_BuildLod` takes of `mh->data`
+    // (lightmapbuild.c:55), which for format 3 is the RD3D chunk
+    // (Direct3DRender_LoadModel case 3, HOOK 0x49FB10, src/bonemesh/d3drender.c:225-230),
+    // so `texCount` is RD3D + 0x04 (src/litmap/litmaptypes.h:139). All three are
+    // read out of the LOD's own `.mef` by `igi::lod::ReadMefMeshHeader`.
+    //
+    // Fills `*out` for LOD `level` of `modelId` and returns true. Returns false
+    // when the LOD's `.mef` cannot be read, when the mesh is not format 3, or when
+    // it carries no RD3D chunk -- in each of those cases the engine's own
+    // `Lightmap_BuildLod` returns NULL before it looks at any file
+    // (lightmapbuild.c:53-56), so there is no file for the editor to accept.
+    bool GetLodOlmAcceptInput(const std::string& modelId, bool isBuilding, int level,
+                              igi::lightmap_rules::OlmAcceptInput* out);
 
     // The authored ModelLODSettings table for `modelId` in raw world units
     // (metres x 4096): monotonized and scaled exactly as
