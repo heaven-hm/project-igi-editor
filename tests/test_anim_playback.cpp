@@ -73,6 +73,31 @@ AnimationClip MakeBonelessClip() {
     return clip;
 }
 
+// Largest absolute component difference between two poses. Zero means the two
+// poses are BIT-identical, which is the bar the clock-only split has to clear:
+// a skipped pose must not perturb the frame that is later drawn.
+float MaxAbsPoseDiff(const std::vector<glm::mat4>& a, const std::vector<glm::mat4>& b) {
+    if (a.size() != b.size()) return 1.0e30f;
+    float worst = 0.0f;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        for (int c = 0; c < 4; ++c) {
+            for (int r = 0; r < 4; ++r) {
+                const float d = std::fabs(a[i][c][r] - b[i][c][r]);
+                if (d > worst) worst = d;
+            }
+        }
+    }
+    return worst;
+}
+
+// One simulation tick of the GAMEPLAY clock: `AdvanceGameplayAnimationClocks`
+// converts fixed-step tick deltas with `1000 / GameClock::TICK_RATE_HZ`
+// (src/game_clock.h:18, TICK_RATE_HZ = 30).  33.33 ms is deliberately very
+// nearly, but not exactly, one engine frame (160 ticks at 30 fps,
+// src/lod/boneobj.c:86-90), so this value also exercises the sub-frame
+// accumulator rather than only whole-frame steps.
+constexpr float kSimulationTickMs = 1000.0f / 30.0f;
+
 }  // namespace
 
 TEST(AnimPlaybackEngineTest, AdvancesInWholeEngineFrames) {
@@ -401,4 +426,110 @@ TEST(AnimPlaybackEngineTest, ClockOnlyPlaybackStillStopsAtANonLoopingEnd) {
     EXPECT_FLOAT_EQ(playback.currentTimeMs, 480.0f);
     EXPECT_FALSE(playback.playing);
     EXPECT_TRUE(playback.IsFinished());
+}
+
+// ── The GAMEPLAY path's clock (fixed simulation ticks, not wall time) ────────
+//
+// `App::AdvanceGameplayAnimationClocks` drives the gameplay playbacks from the
+// fixed-step simulation tick counter (`GameClock::TICK_RATE_HZ`), not from wall
+// time, and splits them the same way the editor path and the engine do: the
+// playback the gameplay pass actually DRAWS - the one in the 80 m filter's
+// drawn set, `App::GetGameplayDrawnAnimationIndices()` - gets the engine's
+// pose+clock step, and every other playback only advances its clock.  The two
+// tests below pin the two properties that make that skip unobservable.
+
+TEST(AnimPlaybackEngineTest, AdvanceClockBanksTheSubFrameRemainderLikeUpdate) {
+    // The gameplay pass hands BOTH halves the same `elapsed_ms`, and that value
+    // is not a whole number of engine frames (33.33 ms against a 33.33 ms
+    // frame), so the two paths have to agree on the sub-frame accumulator and
+    // not merely on whole-frame steps: a playback that was clock-only and is
+    // then drawn must land on the tick it would have reached anyway.  Same
+    // 10/10/20 ms shape as SubFrameTimeDoesNotAdvanceTheClock, clock-only, plus
+    // a mixed sequence that switches halves mid-accumulation.
+    const AnimationClip clip = MakeEngineClip(4800.0f, true);
+
+    AnimPlayback clock_only;
+    AnimPlayback mixed;
+    clock_only.Start(&clip);
+    mixed.Start(&clip);
+
+    clock_only.AdvanceClock(10.0f);
+    clock_only.AdvanceClock(10.0f);
+    EXPECT_FLOAT_EQ(clock_only.currentTimeMs, 0.0f);   // 20 ms < one frame
+    mixed.Update(10.0f);
+    mixed.AdvanceClock(10.0f);
+    EXPECT_FLOAT_EQ(mixed.currentTimeMs, 0.0f);
+    EXPECT_FLOAT_EQ(mixed.currentTimeMs, clock_only.currentTimeMs);
+
+    clock_only.AdvanceClock(20.0f);                    // 40 ms in total
+    mixed.Update(20.0f);                               // drawn on this frame
+    EXPECT_FLOAT_EQ(clock_only.currentTimeMs, kTicksPerFrame);
+    EXPECT_FLOAT_EQ(mixed.currentTimeMs, clock_only.currentTimeMs);
+}
+
+TEST(AnimPlaybackEngineTest, GameplayTickSplitKeepsEveryClockAndEverySteppingDrawnPoseIdentical) {
+    // The gameplay drawn set changes frame by frame as the player moves: a
+    // playback can be inside the 80 m filter, leave it, and come back.  The rule
+    // that makes skipping its pose safe is that the skip is invisible - the CLOCK
+    // is untouched (`AdvanceGameplayAnimationClocks` still calls `AdvanceClock`
+    // for it every frame) and the pose at every frame it IS drawn is bit-identical
+    // to a playback that was posed on every frame.
+    //
+    // The pose comparison is scoped to the frames where the engine clock actually
+    // moved, and that is not a weakening: `Update` poses BEFORE it advances
+    // (`BoneMagicObj_Run` 0x531620, src/freecam/bonemagic.c:105,110), so on a
+    // frame where the accumulator did not cross a whole engine frame a woken
+    // playback legitimately shows the CURRENT tick's frame - that is retail's
+    // `Human_Wake` 0x45F240 - while an always-posed one redraws the frame it posed
+    // last time.  The two re-converge on the next frame that steps, and the CLOCK
+    // assertion below holds on every frame without exception.
+    constexpr int kCount = 3;
+    constexpr int kFrames = 40;
+
+    std::vector<AnimationClip> clips;
+    clips.reserve(kCount);
+    clips.push_back(MakeEngineClip(4800.0f, true));
+    clips.push_back(MakeEngineClip(2400.0f, true));
+    clips.push_back(MakeEngineClip(1600.0f, true));
+
+    std::vector<AnimPlayback> reference(kCount);   // posed on EVERY frame
+    std::vector<AnimPlayback> split(kCount);       // posed only when drawn
+    for (int i = 0; i < kCount; ++i) {
+        reference[i].Start(&clips[i]);
+        split[i].Start(&clips[i]);
+    }
+
+    int drawn_frames_compared = 0;
+    for (int frame = 0; frame < kFrames; ++frame) {
+        for (int i = 0; i < kCount; ++i) {
+            // Rotate membership so every playback is clock-only for some frames
+            // and drawn for others, and make the LAST frame draw all of them.
+            const bool drawn = (frame == kFrames - 1) || (((frame + i) % 3) != 0);
+
+            reference[i].Update(kSimulationTickMs);
+            const float before_ms = split[i].currentTimeMs;
+            if (drawn) split[i].Update(kSimulationTickMs);
+            else split[i].AdvanceClock(kSimulationTickMs);
+
+            // The clock is the engine's and must not depend on whether the pose
+            // was built - this is the "stopping the clock would be unfaithful"
+            // half of the split.
+            EXPECT_FLOAT_EQ(reference[i].currentTimeMs, split[i].currentTimeMs)
+                << "clock, frame " << frame << " playback " << i;
+
+            if (drawn && split[i].currentTimeMs != before_ms) {
+                // A drawn frame whose Update really stepped: the pose must be the
+                // same numbers, not merely close.
+                EXPECT_EQ(MaxAbsPoseDiff(reference[i].WorldTransforms(),
+                                         split[i].WorldTransforms()),
+                          0.0f)
+                    << "pose, frame " << frame << " playback " << i;
+                ++drawn_frames_compared;
+            }
+        }
+    }
+
+    // Guard against the test passing because no frame ever posed anything.
+    EXPECT_GT(drawn_frames_compared, kFrames);
+    EXPECT_GT(split[0].currentTimeMs, 0.0f);
 }

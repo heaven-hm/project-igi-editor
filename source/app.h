@@ -309,6 +309,10 @@ private:
 	std::unordered_map<int, AnimPlayback> animPlaybacks_; // object index -> playback state
 	std::unordered_map<int, AnimPlayback> gameplayAnimPlaybacks_; // fixed-step runtime state
 	uint64_t lastGameplayAnimationTick_ = 0;
+	// IGI_PROFILE_GAMEPLAYANIMBENCH-only: set once the bench has entered Game Play,
+	// so the automatic entry happens exactly once per process (see
+	// ShouldUseGameplayAnimBench in app.cpp).
+	bool gameplay_anim_bench_entered_ = false;
 	std::unordered_map<int, std::vector<int>> animIdsCache_; // object index -> discovered AIAction_PlayAnimation ids
 	std::unordered_map<uint32_t, uint64_t> runtime_animation_request_serials_;
 	bool show_anim_debug_ = false; // F10: animation status panel (independent of F2/TaskTree)
@@ -337,7 +341,23 @@ private:
 	void UpdateAnimations(float dtSec, const std::unordered_set<int>& posed_object_indices);
 	void SetupRuntimePlayerAnimation();
 	void ApplyRuntimeAiAnimationRequests();
-	void AdvanceGameplayAnimationClocks();
+	// Steps the GAMEPLAY playbacks on the fixed SIMULATION clock - `elapsed_ms`
+	// comes from `GameClock::TICK_RATE_HZ` tick deltas, never wall time - with the
+	// same drawn/undrawn split `UpdateAnimations` uses: `posed_object_indices` is
+	// the set of gameplay playbacks whose live skinned pose the gameplay pass
+	// submits this frame, and it must be the very same set the skinned draw loop
+	// iterates (`skinnedReplacementIndices` in App::Frame, built by
+	// `GetGameplayDrawnAnimationIndices`). Every other playback only advances the
+	// clock; `AnimPlayback::AdvanceClock` is the engine's own split
+	// (`Soldier_Update` 0x45D080 -> `Human_FireAnimTrigger` 0x4613D0 ->
+	// `BoneObj_GetEvents` 0x4D3210 advances the clock with no pose).
+	void AdvanceGameplayAnimationClocks(const std::unordered_set<int>& posed_object_indices);
+	// The gameplay pass's DRAWN SET: `GetSkinnedReplacementObjectIndices(true)`
+	// narrowed by the camera's 80 m gameplay filter - exactly the set the skinned
+	// draw loop in App::Frame iterates. Computed ONCE per frame and used for BOTH
+	// the pose decision and the draw, so the posed set and the drawn set cannot
+	// diverge.
+	std::unordered_set<int> GetGameplayDrawnAnimationIndices();
 	std::string BuildAnimStatusString();
 	int FindHumanAiTaskId(int objIndex) const;
 	const std::vector<int>& GetOrComputeAnimationIds(int objIndex);
