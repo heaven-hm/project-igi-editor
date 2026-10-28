@@ -1,5 +1,122 @@
 # Changelogs
 
+## 4.0.0-pre — IGI-RE Parity Campaign (branch `feature`)
+
+### Credits — this version is built on the original game
+
+This release is a **major** one because it changes what the editor *is*: it is no longer an
+approximation of Project IGI 1, it is **the original `igi.exe`'s own behaviour**, read out of the
+decompiled game and reproduced in the editor. Every loading path, every menu rule, every timing
+constant in this entry was taken from the retail executable rather than invented.
+
+That is only possible because of work other people did first:
+
+- **SlickDaddy** and **BlankName** — for the game's natives. Without a correct map of the
+  engine's own functions there is nothing to be faithful *to*.
+- **The decompilation project** (IGI-RE) — for turning `igi.exe` back into readable source. This
+  campaign's rule was that IGI-RE is the only authority: no web sources, no other ports, and no
+  invented logic. Where the engine has no behaviour to copy, this changelog says so instead of
+  guessing.
+
+**Thank you.** The editor can now be improved toward the original game rather than away from it,
+and that is their work as much as anyone's.
+
+### What this entry covers
+
+Every behaviour in this entry was derived from **IGI-RE**, the decompiled retail source of
+Project IGI 1, and each fix cites the engine function + HOOK address + `file:line` in the code
+and in its commit message. Where the engine has no behaviour to copy, that is stated rather
+than invented.
+
+### Loaders now follow the engine's own path
+
+- **Textures** — mission status text resolves from `LANGUAGE:messages.res` by the engine's flat
+  global name lookup (`StatusMessages_Load` HOOK `0x4868A0`, `src/mission/statusmessage.c:671`;
+  `StatusMessageScreen_AddMessage` HOOK `0x486650`, `:653-656`), not from `objectives.res`, which
+  is the map computer's archive only (`ComputerRes_Load` HOOK `0x46B070`, `src/compmap/res.c:32`).
+  A genuine miss renders the engine's own `RM: <key>` (`:660`). This removed 44 spurious
+  "Resource not found" warnings per session.
+- **Invented texture ids removed** — a model with an empty DAT entry no longer borrows the model
+  name as a texture id (the engine's zero-texture model binds nothing: `0xFFFF` means untextured,
+  `src/render/render.c:524-531`), and the AI opaque-body suffix strip no longer turns a resolvable
+  engine id into an unresolvable one.
+- **ATTA sub-model texture inheritance removed** — the engine never copies one model's texture
+  list into another's; an ATTA child gets its own `ModelLod` and its own INST record's array
+  (`ModelFile_Setup` HOOK `0x4CF080`, `src/model/model.c:251-316`).
+- **Lightmaps** — the `.olm` reader now uses the engine's real layout (`0x3C` header,
+  `count × 0x2C` page records, then the pixel blocks in page order; `src/litmap/litmaptypes.h:11-48`,
+  loader cursor `src/dirlight/lightmapbuild.c:72-78`) instead of a layout that silently dropped
+  pages 1..n on 13 shipped files, and every render group binds **its own** page. The engine's
+  four-conjunct accept test (`Lightmap_BuildLod` HOOK `0x523D40`, `:63-64`) is now applied on the
+  live load path.
+- **Terrain snap** — collision proxies (`colbox`/`colbox2`/`colbox3`/`colbox4`/`colbox66`) are no
+  longer fed to the terrain query, and an off-terrain placement is no longer reported as a failure:
+  the engine never clamps (`Game_DropToGround` HOOK `0x4149B0`, `src/game/misc.c:75-97`).
+
+### Menu and UI
+
+- **The pause menu is editor-only.** The `Game Menu` row that pushed the retail definition's
+  screen 900 — the game's own menu — is removed, and `OpenGameMenu` refuses to push a retail
+  screen. No string that comes from the game's menu data is drawn.
+- **`Quit` is the last row.** The two rows that followed it (`Menu Text`, `Save Menu`, the QVM
+  write side) were removed at the user's request. That capability is consequently no longer
+  reachable from the pause menu; the loaded definition is still read and still on the model as
+  data.
+- **The loading bar now paints at startup.** It was already wired, but the startup load runs
+  inside `App::Init` before GLUT registers its reshape callback, so the viewport was still zero
+  and every overlay frame was dropped — the one load every user sees showed nothing.
+
+### Performance
+
+- **`.res` reads memoised** (`405df37c`) — `ReadMefMeshHeader` was re-reading every `.mef` from
+  disk once per placement per pass per frame (~2832 reads/frame). **2534–5399 ms → 155–163 ms per
+  frame.**
+- **Picking culled like the visual pass** (`1ef70789`) — `DrawForPicking` re-submitted the whole
+  level; it now applies the same conservative view cull. **23 → 7 ms per pick**, with the picked
+  ids bit-identical (a differential, not an assertion).
+- **Animation pose/clock split** (`a2b0cc0d`, `7985e2e4`) — the engine advances the animation
+  **clock** for every active AI whether drawn or not (`Soldier_Update` HOOK `0x45D080` →
+  `Human_FireAnimTrigger` `0x4613D0` → `BoneObj_AnimEventsCB` `0x4D4B60`,
+  `src/boneobj/boneobj.c:884-885`) but builds the **pose** only for what is drawn
+  (`Human_WakeIfVisible` HOOK `0x45F140` → `Human_Wake` `0x45F240`). The editor now does the same:
+  **8 → 0.40 ms/frame** in editor mode and **6068 → 2020 µs/frame** in gameplay.
+- **Per-frame buffer mapping removed** — terrain and flat-sky uploads use orphan-and-upload.
+  Proven in the binary (`__glewMapBuffer` call sites 6 → 3); **no frame-time win was measured**,
+  and that is stated rather than claimed.
+
+### Fixes to reported defects
+
+- **Fullscreen no longer leaves half the screen black.** Root cause: `main.cpp` re-applied the
+  `-w`/`-h` window size *after* `App::Init` had already gone borderless-fullscreen, undoing the
+  viewport. Proven by an A/B trace.
+- **The objective HUD text comes from the engine** — `MISSION_FAILED`/`MISSION_COMPLETE` from
+  `messages.res`, and the map computer's composed `"<OBJECTIVE> <n>: COMPLETE|FAILED|INCOMPLETE"`
+  line (`ComputerObjectives_Draw` HOOK `0x469110`, `src/compmap/objectives.c:137-145`). The
+  invented `"Reach the extraction zone"` is gone: it has no engine resource at all.
+- **`colbox3` is a collision proxy**, not a missing model — it was logged as an ERROR on every
+  level-12 load.
+- **The legacy UBO warning was an emulation artefact**, not a missing binding.
+
+### Build and verification
+
+- **`scripts/check-build-integrity.sh`** detects a mixed-layout build (a stale object beside a
+  rebuilt one produced a binary that crashed the editor) before anyone trusts a gate result.
+- **`scripts/e2e-headless.sh`** loads all 14 levels under Wine with no GL, asserting the pinned
+  baseline: every level loads, **level 7 fails on exactly one id (`s332_02_1`, a known retail
+  defect)**, and zero textures are missing anywhere.
+- Two infrastructure rules learned the hard way and recorded here: **one host lane per output
+  directory** (two lanes sharing one produce a phantom `FAILED` suite), and **never gate a commit
+  while another agent is writing `source/`** (the lane compiles a torn mixture).
+
+### Not done, and why
+
+- **Audio (#70), cutscene UI (#80), vehicle sim (#60)** need subsystems the editor does not have —
+  new construction, not parity fixes.
+- **No in-process lightmap baker.** The engine has **no `.olm` writer at all** (`.olm` appears
+  three times in the decompilation, all read-side; `gLightmapBuilt` is never read), so "bake
+  in-process and save" has no engine behaviour to be faithful to. See
+  `docs/igi-re-parity/LIGHTMAP_BAKE.md` §9.
+
 ## 3.6.11-pre — Weather Controls, Rail Tracks/Spline Accuracy, and Viewport Fixes
 
 ### Weather controls and indoor sheltering
