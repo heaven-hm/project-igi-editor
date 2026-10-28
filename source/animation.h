@@ -210,6 +210,32 @@ struct AnimPlayback {
     // (one Step is gTicksPerFrame = 160 ticks, src/lod/boneobj.c:86-90), never
     // by feeding a tick value into a millisecond parameter.
     void Update(float dtMs);
+    // The same clock advance WITHOUT the pose, for a playback whose pose is not
+    // drawn this frame. The engine does exactly this split for a human: the
+    // per-frame update advances the clock and nothing else
+    // (`Soldier_Update` 0x45D080 -> `Human_FireAnimTrigger` 0x4613D0 ->
+    // `BoneObj_GetEvents` 0x4D3210, src/humanbase/human.c:1368-1387), and the
+    // pose is computed later, at draw time, and only for an object the renderer
+    // actually draws (`Human_WakeIfVisible` 0x45F140, src/humanbase/human.c:262-287
+    // -> `Human_Wake` 0x45F240 -> `BoneObj_Update` 0x4D38C0). Skipping the pose
+    // is therefore faithful; stopping the clock would not be.
+    //
+    // The frame arithmetic, the sub-frame accumulator and the end test are
+    // identical to `Update`, so a playback that switches back to `Update` when
+    // it becomes visible poses at the tick it would have reached anyway.
+    void AdvanceClock(float dtMs);
+    // The pose half of `Update`, at the CURRENT clock, without advancing it -
+    // `Human_Wake` 0x45F240 (src/humanbase/human.c:289-297). Called by the pose
+    // getters when the clock has moved without a pose (`AdvanceClock`), which is
+    // the engine's own "wake a frozen object at draw time" step; a caller only
+    // needs it directly if it wants the bones current before asking for them.
+    void PoseNow();
+    // True when the bones were posed at the tick the next drawn frame should
+    // show. `Update` leaves it true (its pose IS the drawn frame's tick);
+    // `AdvanceClock` clears it, so the next `WorldTransforms()` poses first -
+    // retail's `Human_Wake` 0x45F240 posing an object that has just become
+    // visible. Exposed so the host lane can assert the transition.
+    bool PoseCurrent() const { return pose_current_; }
     // The clip's end, in the engine's own terms: the BEF stores the engine length
     // + 1 (`AnimInit`'s third field), and `BoneObj_AnimEventsCB` calls a
     // non-looping clock finished once `time >= length`
@@ -246,10 +272,19 @@ private:
     // `inst.speed` with gTicksPerFrame, so both have to be re-applied after a
     // (re)play rather than set once.
     void SyncEngineFlags();
+    // The tail both `Update` and `AdvanceClock` share: mirror the engine clock
+    // into `currentTimeMs` (`Anim_GetTime` 0x4D6500) and apply the engine's own
+    // end test. Keeping it in one place is what makes the two paths
+    // interchangeable - a playback may switch between them frame by frame and
+    // the clock, the end test and the sub-frame remainder stay identical.
+    void FinishAdvance();
 
     std::unique_ptr<igi::AnimPlayer> engine_;
     uint32_t engine_flags_ = 0;   // the flags the player was last played with
     float engine_speed_ = 1.0f;   // the multiplier the player was last set to
+    // See `PoseCurrent()`. Starts true: `BuildEnginePlayer` plays the clip and
+    // `Anim_Play`'s immediate path poses once (src/humanplayer/humanplayer.c:1214-1215).
+    bool pose_current_ = true;
 };
 
 // The static mesh may only be replaced when playback is active, the engine can

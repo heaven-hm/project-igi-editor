@@ -364,12 +364,33 @@ void AnimPlayer::Step() {
     BoneObjGetEvents(events_, data_.state, data_.clip, kAnimSmoothAnimsDefault);
 }
 
-void AnimPlayer::AdvanceSeconds(float seconds) {
-    if (!playing_) return;
-    if (!(seconds > 0.0f)) return;
+bool AnimPlayer::StepPose() {
+    if (!data_.valid()) return false;
+    // Human_Wake 0x45F240 (src/humanbase/human.c:289-297) is exactly this: a
+    // pose of the current clock with no advance. The clock is NOT moved here.
+    if (!BoneObjUpdate(data_.state, kIdentity3x3, kFreshMatrixCount)) return false;
+    pose_dirty_ = true;
+    return true;
+}
+
+void AnimPlayer::StepClock() {
+    if (!data_.valid() || !playing_) return;
+
+    // The clock half of Step() alone, i.e. `Human_FireAnimTrigger` 0x4613D0
+    // (src/humanbase/human.c:1368-1387) -> `BoneObj_GetEvents` 0x4D3210
+    // (src/boneobj/boneobj.c:112-129). No pose: `BoneObj_GetEvents` reads only
+    // `bone->blend` and the blend tree, and it is what sets BONE_EVENTS_DONE on
+    // the root bone, so `Done()` stays correct.
+    events_.clear();
+    BoneObjGetEvents(events_, data_.state, data_.clip, kAnimSmoothAnimsDefault);
+}
+
+int AnimPlayer::AdvanceSeconds(float seconds) {
+    if (!playing_) return 0;
+    if (!(seconds > 0.0f)) return 0;
     advance_seconds_ += seconds;
     const float frame_seconds = FrameSeconds(ticks_per_frame_);
-    if (!(frame_seconds > 0.0f)) return;
+    if (!(frame_seconds > 0.0f)) return 0;
     int steps = 0;
     while (advance_seconds_ >= frame_seconds && steps < kMaxStepsPerAdvance) {
         Step();
@@ -378,6 +399,27 @@ void AnimPlayer::AdvanceSeconds(float seconds) {
         if (!playing_) break;
     }
     if (steps >= kMaxStepsPerAdvance) advance_seconds_ = 0.0f;
+    return steps;
+}
+
+int AnimPlayer::AdvanceSecondsClockOnly(float seconds) {
+    // Same frame arithmetic and the same accumulator as AdvanceSeconds, so a
+    // playback that was clock-only for N frames and then starts posing poses at
+    // exactly the tick it would have reached had it posed all along.
+    if (!playing_) return 0;
+    if (!(seconds > 0.0f)) return 0;
+    advance_seconds_ += seconds;
+    const float frame_seconds = FrameSeconds(ticks_per_frame_);
+    if (!(frame_seconds > 0.0f)) return 0;
+    int steps = 0;
+    while (advance_seconds_ >= frame_seconds && steps < kMaxStepsPerAdvance) {
+        StepClock();
+        advance_seconds_ -= frame_seconds;
+        ++steps;
+        if (!playing_) break;
+    }
+    if (steps >= kMaxStepsPerAdvance) advance_seconds_ = 0.0f;
+    return steps;
 }
 
 void AnimPlayer::SetSpeed(float multiplier) {

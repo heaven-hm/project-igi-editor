@@ -168,11 +168,50 @@ public:
     // first would shift every frame by one tick.
     void Step();
 
+    // One engine frame of the CLOCK ONLY: `BoneObj_GetEvents` 0x4D3210 with no
+    // `BoneObj_Update` 0x4D38C0 in front of it. This is the retail order for an
+    // object the renderer does not draw, and it is not an invention: a soldier's
+    // per-frame update advances the clock and nothing else, and the pose is
+    // computed later, at draw time, by `Human_Wake` 0x45F240 (see `StepPose`).
+    //
+    //   Soldier_Update        0x45D080  src/soldier/soldier.c:855-905
+    //     -> Human_FireAnimTrigger 0x4613D0  src/humanbase/human.c:1368-1387
+    //       -> BoneObj_GetEvents   0x4D3210  src/boneobj/boneobj.c:112-129
+    //         -> BoneObj_AnimEventsCB  src/boneobj/boneobj.c:873-941
+    //            `inst->time += inst->speed` at boneobj.c:884-885
+    //
+    // `BoneObj_GetEvents` touches only `bone->blend` and the blend tree, so it
+    // reads nothing the pose would have written: it is valid on its own, exactly
+    // as it is in the engine, where `Human_FireAnimTrigger` runs it against a
+    // bone array that the previous frame's draw left behind.
+    //
+    // The bones keep whatever the last pose produced, and `Done()` still works:
+    // `BoneObj_AnimEventsCB` is what sets BONE_EVENTS_DONE (boneobj.c:893-895),
+    // and `HumanPlayer_AnimDone` 0x489F50 reads it off the root bone.
+    void StepClock();
+
+    // The pose half of `Step()`, on its own: `BoneObj_Update` 0x4D38C0 over the
+    // CURRENT clock, without advancing it. This is the engine's draw-time pose -
+    // `Human_WakeIfVisible` 0x45F140 (src/humanbase/human.c:262-287) calls
+    // `Human_Wake` 0x45F240 (src/humanbase/human.c:289-297), which is
+    // `BoneObj_Update(h->matrix.m, h->anim)` and nothing else - so a caller that
+    // needs the pose of an object whose clock moved without it can reproduce
+    // retail exactly. Returns false when the clip cannot be posed.
+    bool StepPose();
+
     // Editor convenience, NOT engine logic: accumulate wall-clock seconds and
     // call Step() once per whole engine frame at the current frame rate. The
     // engine itself advances exactly one `gTicksPerFrame` per Step, which is why
-    // it needs no accumulator.
-    void AdvanceSeconds(float seconds);
+    // it needs no accumulator. Returns the number of engine frames stepped, so a
+    // caller can tell "the clock moved (and the bones were posed)" from "this
+    // frame was shorter than one engine frame (nothing moved at all)".
+    int AdvanceSeconds(float seconds);
+
+    // The same accumulator over `StepClock()`: whole engine frames of the clock
+    // with no pose. Used for a playback whose pose is not drawn this frame
+    // (`AnimPlayback::AdvanceClock`); the frame arithmetic - and therefore the
+    // clock value the next pose will see - is identical to `AdvanceSeconds`.
+    int AdvanceSecondsClockOnly(float seconds);
 
     // Anim_SetSpeed HOOK 0x4D6580 (src/boneobj/anim.c:172-179):
     // `inst->speed = gTicksPerFrame * speed;` then the reverse bit is set iff

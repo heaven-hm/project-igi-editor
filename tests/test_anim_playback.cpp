@@ -290,3 +290,115 @@ TEST(AnimPlaybackEngineTest, IsFinishedUsesTheEngineLengthNotTheBefPlusOne) {
     EXPECT_FALSE(playback.playing);
     EXPECT_TRUE(playback.IsFinished());
 }
+
+// ── The engine's clock-only step (`AnimPlayback::AdvanceClock`) ─────────────
+//
+// The engine steps a soldier's animation clock every frame it updates the AI
+// (`Soldier_Update` 0x45D080 -> `Human_FireAnimTrigger` 0x4613D0 ->
+// `BoneObj_GetEvents` 0x4D3210, src/humanbase/human.c:1368-1387) but computes the
+// bone POSE only for an object the renderer draws (`Human_WakeIfVisible` 0x45F140
+// -> `Human_Wake` 0x45F240 -> `BoneObj_Update` 0x4D38C0, src/humanbase/human.c:262-297,
+// reached only from `Human_DrawHandler` 0x45F280 / `Human_NearClipHandler` 0x45F050).
+// `AdvanceClock` is that clock-only step, and these tests pin the two things that
+// make it a pure cost saving rather than a behaviour change: the CLOCK it
+// produces is bit-identical to `Update`'s, and the POSE it leaves is the one
+// retail would show, because the next pose getter wakes it at draw time.
+
+TEST(AnimPlaybackEngineTest, AdvanceClockMovesTheClockExactlyLikeUpdate) {
+    const AnimationClip clip = MakeEngineClip(4800.0f, false);
+    AnimPlayback posed;
+    AnimPlayback clock_only;
+    posed.Start(&clip);
+    clock_only.Start(&clip);
+
+    // 120 ms is 3.6 engine frames -> 3 * 160 ticks, and the remainder is banked.
+    for (int i = 0; i < 4; ++i) {
+        posed.Update(120.0f);
+        clock_only.AdvanceClock(120.0f);
+    }
+    EXPECT_FLOAT_EQ(posed.currentTimeMs, clock_only.currentTimeMs);
+    EXPECT_FLOAT_EQ(posed.currentTimeMs, 2240.0f);   // 480 ms -> 14 frames
+    EXPECT_TRUE(clock_only.playing);
+}
+
+TEST(AnimPlaybackEngineTest, AdvanceClockStopsPosingAndTheDrawWakesIt) {
+    const AnimationClip clip = MakeEngineClip(4800.0f, true);
+    AnimPlayback playback;
+    playback.Start(&clip);
+    playback.Update(120.0f);           // posed at tick 320, clock now 480
+    ASSERT_TRUE(playback.PoseCurrent());
+    const std::vector<glm::mat4> posed_at_draw = playback.WorldTransforms();
+    ASSERT_EQ(posed_at_draw.size(), 2u);
+
+    // Clock-only for the next 120 ms: 120 ms of Update banked 20 ms, so 140 ms
+    // is 4 whole engine frames (not 3) - the clock moves, the bones do not.
+    // `PoseCurrent()` is the observable that says no pose ran - the bone records
+    // themselves are only reachable through a getter, and reading one is the
+    // wake-at-draw itself.
+    playback.AdvanceClock(120.0f);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 1120.0f);   // 480 + 4 * 160
+    EXPECT_FALSE(playback.PoseCurrent());
+
+    // The first pose getter is the wake-at-draw (`Human_Wake` 0x45F240), and it
+    // poses the CURRENT clock, not the stale one.
+    const std::vector<glm::mat4> woken = playback.WorldTransforms();
+    EXPECT_TRUE(playback.PoseCurrent());
+    ASSERT_EQ(woken.size(), 2u);
+
+    igi::AnimPlayer reference;
+    ASSERT_TRUE(reference.Build(clip, clip.animId));
+    ASSERT_TRUE(reference.Play(igi::kAnimLoop));
+    reference.SetTime(1120.0f);
+    const std::vector<glm::mat4> at_clock_tick = reference.PoseModelLocal();
+    EXPECT_NEAR(glm::length((woken[1] * glm::vec4(0.0f, 1.0f, 0.0f, 1.0f)) -
+                            (at_clock_tick[1] * glm::vec4(0.0f, 1.0f, 0.0f, 1.0f))),
+                0.0f, 1e-5f);
+}
+
+TEST(AnimPlaybackEngineTest, ClockOnlyThenVisibleIsTheSamePlaybackAsAlwaysVisible) {
+    // The fidelity claim that makes the skip safe: an object that was clock-only
+    // for N frames and is then posed ends up at the same tick and the same pose
+    // as one that was posed on every one of those frames. If this holds, the
+    // skipped work cannot be observed.
+    const AnimationClip clip = MakeEngineClip(4800.0f, true);
+    AnimPlayback always_visible;
+    AnimPlayback hidden_then_visible;
+    always_visible.Start(&clip);
+    hidden_then_visible.Start(&clip);
+
+    for (int i = 0; i < 5; ++i) {
+        always_visible.Update(120.0f);           // 3 engine frames each time
+        hidden_then_visible.AdvanceClock(120.0f);
+    }
+    ASSERT_FLOAT_EQ(always_visible.currentTimeMs, hidden_then_visible.currentTimeMs);
+
+    // Both are now drawn. The always-visible one poses as usual; the other is
+    // woken by its first pose getter.
+    always_visible.Update(120.0f);
+    hidden_then_visible.Update(120.0f);
+    EXPECT_FLOAT_EQ(always_visible.currentTimeMs, hidden_then_visible.currentTimeMs);
+
+    const std::vector<glm::mat4>& a = always_visible.WorldTransforms();
+    const std::vector<glm::mat4>& b = hidden_then_visible.WorldTransforms();
+    ASSERT_EQ(a.size(), b.size());
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        for (int c = 0; c < 4; ++c) {
+            for (int r = 0; r < 4; ++r) {
+                EXPECT_FLOAT_EQ(a[i][c][r], b[i][c][r]) << "bone " << i;
+            }
+        }
+    }
+}
+
+TEST(AnimPlaybackEngineTest, ClockOnlyPlaybackStillStopsAtANonLoopingEnd) {
+    // The end test lives in `FinishAdvance`, which both paths share, so a
+    // clock-only playback must still stop: `BoneObj_AnimEventsCB` sets
+    // BONE_EVENTS_DONE and that is what `HumanPlayer_AnimDone` 0x489F50 reads.
+    const AnimationClip clip = MakeEngineClip(480.0f, false);
+    AnimPlayback playback;
+    playback.Start(&clip);
+    playback.AdvanceClock(120.0f);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 480.0f);
+    EXPECT_FALSE(playback.playing);
+    EXPECT_TRUE(playback.IsFinished());
+}

@@ -62,7 +62,8 @@ AnimPlayback::AnimPlayback(AnimPlayback&& other) noexcept
       forceLoop(other.forceLoop),
       engine_(std::move(other.engine_)),
       engine_flags_(other.engine_flags_),
-      engine_speed_(other.engine_speed_) {
+      engine_speed_(other.engine_speed_),
+      pose_current_(other.pose_current_) {
     other.clip = nullptr;
     other.currentTimeMs = 0.0f;
     other.playing = false;
@@ -78,6 +79,7 @@ AnimPlayback& AnimPlayback::operator=(AnimPlayback&& other) noexcept {
         engine_ = std::move(other.engine_);
         engine_flags_ = other.engine_flags_;
         engine_speed_ = other.engine_speed_;
+        pose_current_ = other.pose_current_;
         other.clip = nullptr;
         other.currentTimeMs = 0.0f;
         other.playing = false;
@@ -89,6 +91,11 @@ void AnimPlayback::BuildEnginePlayer() {
     engine_.reset();
     engine_flags_ = 0;
     engine_speed_ = 1.0f;
+    // `Anim_Play`'s immediate path poses once (src/humanplayer/humanplayer.c:1214-1215),
+    // so a freshly built player has a pose at tick 0. Restored here rather than
+    // after Play() so a failed build (engine_ == nullptr) cannot leave a stale
+    // "posed" claim behind for the next clip.
+    pose_current_ = true;
     if (clip == nullptr) return;
 
     // `AnimPlayer::Build` constructs the engine's own records - the Bone array
@@ -159,9 +166,46 @@ void AnimPlayback::Update(float dtMs) {
         // REAL milliseconds in, engine ticks out: one Step() per whole engine
         // frame at the current frame rate (160 ticks at 30 fps), which is the
         // only way the retail loop advances the clock.
-        engine_->AdvanceSeconds(dtMs * 0.001f);
+        if (engine_->AdvanceSeconds(dtMs * 0.001f) > 0) {
+            // At least one Step ran, and `Step()` is pose-then-advance, so the
+            // bones hold the frame this draw should show (see the header). A
+            // sub-frame tick steps nothing and leaves the flag alone.
+            pose_current_ = true;
+        }
     }
 
+    FinishAdvance();
+}
+
+void AnimPlayback::AdvanceClock(float dtMs) {
+    if (clip == nullptr) return;
+    if (!engine_) return;
+    SyncEngineFlags();
+
+    if (playing && dtMs > 0.0f) {
+        // The engine's per-frame clock for an object it does not draw:
+        // `Soldier_Update` 0x45D080 -> `Human_FireAnimTrigger` 0x4613D0 ->
+        // `BoneObj_GetEvents` 0x4D3210 (src/humanbase/human.c:1368-1387,
+        // src/boneobj/boneobj.c:112-129). No pose - that is `Human_Wake`'s job
+        // at draw time (0x45F240, src/humanbase/human.c:289-297).
+        engine_->AdvanceSecondsClockOnly(dtMs * 0.001f);
+        // The bones no longer sit at the tick the next drawn frame should show,
+        // so the first getter call poses them (retail's wake-at-draw).
+        pose_current_ = false;
+    }
+
+    FinishAdvance();
+}
+
+void AnimPlayback::PoseNow() {
+    if (!engine_) return;
+    // Human_Wake 0x45F240 (src/humanbase/human.c:289-297): pose the current
+    // clock without moving it.
+    engine_->StepPose();
+    pose_current_ = true;
+}
+
+void AnimPlayback::FinishAdvance() {
     // Mirror the engine clock. Anim_GetTime 0x4D6500 returns the instance's
     // tick count; the pose drawn this frame is one Step() behind it by design
     // (retail poses, then advances - freecam/bonemagic.c:105,110).
@@ -184,14 +228,24 @@ const std::vector<glm::mat4>& AnimPlayback::WorldTransforms() {
         static const std::vector<glm::mat4> kEmpty;
         return kEmpty;
     }
-    // The pose the last Step produced, NOT a fresh pose at the mirrored clock:
-    // retail draws the frame it posed before advancing (see the header).
+    // A clock that moved without a pose (`AdvanceClock`, i.e. this object was
+    // not drawn last frame) leaves the bones older than the frame about to be
+    // drawn. Retail poses at draw time for exactly this reason:
+    // `Human_WakeIfVisible` 0x45F140 -> `Human_Wake` 0x45F240 ->
+    // `BoneObj_Update(h->matrix.m, h->anim)` (src/humanbase/human.c:289-297).
+    if (!pose_current_) PoseNow();
+    // Otherwise: the pose the last Step produced, NOT a fresh pose at the
+    // mirrored clock: retail draws the frame it posed before advancing (see the
+    // header).
     return engine_->PoseFromLastStep();
 }
 
 const std::vector<igi::BoneTransform>& AnimPlayback::RawBoneTransforms() {
     static const std::vector<igi::BoneTransform> kEmpty;
     if (!engine_) return kEmpty;
+    // Same wake-at-draw as `WorldTransforms()`: the skinner reads `Bone::matrix`
+    // and `Bone::pos`, which are written by the pose.
+    if (!pose_current_) PoseNow();
     // `Skin()`'s stale guard (anim_player.cpp) re-poses only when the bone
     // records were never captured; after Play()/Update() they always are.
     if (engine_->RawBoneTransforms().size() !=

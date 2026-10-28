@@ -329,7 +329,12 @@ private:
 	void ApplyWeatherMode(); // Apply authored or forced weather (matching OpenIGI MissionWeather)
 	void CycleWeatherMode(); // Cycle: Default -> Rain -> Snow -> Off -> Default
 	igi::LevelWeatherSettings authored_weather_;
-	void UpdateAnimations(float dtSec);
+	// Steps the editor's per-object playbacks. `posed_object_indices` is the set
+	// of object indices whose live skinned pose is submitted to the renderer
+	// this frame (`skinnedReplacementIndices` in App::Frame): those playbacks run
+	// the engine's full pose+clock step, every other playback only advances the
+	// clock. That split is the engine's own - see AnimPlayback::AdvanceClock.
+	void UpdateAnimations(float dtSec, const std::unordered_set<int>& posed_object_indices);
 	void SetupRuntimePlayerAnimation();
 	void ApplyRuntimeAiAnimationRequests();
 	void AdvanceGameplayAnimationClocks();

@@ -921,6 +921,23 @@ static void LogPickBench(int64_t bench_us, const std::string& ids) {
 	}
 }
 
+// IGI_PROFILE_ANIMBENCH-only: the smoke run is driven by the physical mouse and
+// in practice never selects an object, so a frame there has an EMPTY posed set
+// and the animation loop measures "0 of 30 posed".  That is a real case, but it
+// is not the editor's workload: with an object selected, one of the 30 poses is
+// drawn (App::Frame's editor-mode filter over skinnedReplacementIndices) and 29
+// are not.  With IGI_PROFILE_ANIMBENCH set, App::Frame forces
+// `selected_object_index_` to the lowest-indexed object that has an active,
+// posable, skinned playback, so every frame poses and draws exactly ONE of the
+// 30 and the two workloads are measured separately.  It goes through the real
+// selection, so the frame it produces is a real editor frame.  Like
+// IGI_PROFILE_PICKBENCH it adds a known constant to every frame, so it must not
+// be on while the [FrameProfile]/[FrameBreak] attribution is being read.
+static bool ShouldUseAnimBench() {
+	static const bool enabled = getenv("IGI_PROFILE_ANIMBENCH") != nullptr;
+	return enabled;
+}
+
 // IGI_PROFILE-only: the scene hover pick is a FULL scene colour pass into the
 // pick FBO plus a synchronous glReadPixels, so its call RATE matters as much as
 // its per-call cost: a pick issued once per frame costs a whole extra scene
@@ -1327,10 +1344,66 @@ void App::Frame(float delta_seconds) {
 	const auto frame_pre_t1 = profile_frame_break ? FrameBreakClock::now()
 	                                              : FrameBreakClock::time_point{};
 
+	// All AI with an active, playing clip are skinned-replaced simultaneously
+	// (skinnedReplacementIndices must outlive renderer_.Draw() below, so it's a
+	// local in this Frame() call, not a temporary).
+	// Live AI poses are also part of the editor preview.  The old gameplay-only
+	// gate left the editor's animation clocks advancing while the static meshes
+	// continued to render, which made the log claim animations were playing even
+	// though no animated pose was ever submitted in editor mode.
+	//
+	// This set is also the ANSWER to "which playbacks need a pose this frame", so
+	// it is computed BEFORE the animation update instead of after it: the engine
+	// poses only what it draws (`Human_WakeIfVisible` 0x45F140 ->
+	// `Human_Wake` 0x45F240 -> `BoneObj_Update` 0x4D38C0, called from
+	// `Human_DrawHandler` 0x45F280 / `Human_NearClipHandler` 0x45F050), and
+	// `AnimPlayback::AdvanceClock` reproduces that for everything else.  Moving
+	// it here cannot change what is drawn: nothing between this point and the
+	// renderer reads or writes it.
+	std::unordered_set<int> skinnedReplacementIndices;
+	draw_params_.fast_scene_preview_ = igi::ShouldUseFastScenePreview(
+		cameraNavigating, render_gameplay,
+		Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera));
+	if (!draw_params_.fast_scene_preview_) {
+		skinnedReplacementIndices = GetSkinnedReplacementObjectIndices(render_gameplay);
+		if (!render_gameplay) {
+			// IGI_PROFILE_ANIMBENCH-only: see ShouldUseAnimBench.  Force one
+			// fixed animated object to be the selection, so the frame poses and
+			// draws exactly one of the 30 playbacks.
+			if (ShouldUseAnimBench()) {
+				int bench_idx = -1;
+				for (int idx : skinnedReplacementIndices) {
+					if (bench_idx < 0 || idx < bench_idx) bench_idx = idx;
+				}
+				if (bench_idx >= 0) selected_object_index_ = bench_idx;
+			}
+			std::unordered_set<int> editorSkinned;
+			if (selected_object_index_ >= 0 &&
+				skinnedReplacementIndices.count(selected_object_index_)) {
+				editorSkinned.insert(selected_object_index_);
+			}
+			skinnedReplacementIndices.swap(editorSkinned);
+		} else {
+			const glm::vec3 cam = gameplay_viewer_.pos_;
+			const float maxSkin = 80.0f * WORLD_UNITS_PER_METER;
+			const float maxSkinSq = maxSkin * maxSkin;
+			const auto& objs = GetActiveRenderLevelObjects().GetObjects();
+			for (auto it = skinnedReplacementIndices.begin(); it != skinnedReplacementIndices.end(); ) {
+				if (*it == selected_object_index_ || *it < 0 || *it >= (int)objs.size()) {
+					++it;
+					continue;
+				}
+				const glm::vec3 delta = glm::vec3(objs[*it].pos) - cam;
+				if (glm::dot(delta, delta) > maxSkinSq) it = skinnedReplacementIndices.erase(it);
+				else ++it;
+			}
+		}
+	}
+
 	// Update animation playback (auto-play for AI NPCs)
 	if (!cameraNavigating && (!rendering_editor_window_ || IsEditorInputActive())) {
 		if (!render_gameplay) {
-			UpdateAnimations(delta_seconds);
+			UpdateAnimations(delta_seconds, skinnedReplacementIndices);
 		}
 		CheckMusicLoop();
 	}
@@ -1435,42 +1508,9 @@ void App::Frame(float delta_seconds) {
 	draw_params_.level_objects_ = &GetActiveRenderLevelObjects();
 	draw_params_.selected_object_index_ = render_gameplay ? -1 : selected_object_index_;
 	draw_params_.show_magic_obj_spheres_ = !cameraNavigating && !render_gameplay && show_magic_obj_spheres_;
-	// All AI with an active, playing clip are skinned-replaced simultaneously
-	// (skinnedReplacementIndices must outlive renderer_.Draw() below, so it's a
-	// local in this Frame() call, not a temporary).
-	// Live AI poses are also part of the editor preview.  The old gameplay-only
-	// gate left the editor's animation clocks advancing while the static meshes
-	// continued to render, which made the log claim animations were playing even
-	// though no animated pose was ever submitted in editor mode.
-	std::unordered_set<int> skinnedReplacementIndices;
-	draw_params_.fast_scene_preview_ = igi::ShouldUseFastScenePreview(
-		cameraNavigating, render_gameplay,
-		Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera));
-	if (!draw_params_.fast_scene_preview_) {
-		skinnedReplacementIndices = GetSkinnedReplacementObjectIndices(render_gameplay);
-		if (!render_gameplay) {
-			std::unordered_set<int> editorSkinned;
-			if (selected_object_index_ >= 0 &&
-				skinnedReplacementIndices.count(selected_object_index_)) {
-				editorSkinned.insert(selected_object_index_);
-			}
-			skinnedReplacementIndices.swap(editorSkinned);
-		} else {
-			const glm::vec3 cam = gameplay_viewer_.pos_;
-			const float maxSkin = 80.0f * WORLD_UNITS_PER_METER;
-			const float maxSkinSq = maxSkin * maxSkin;
-			const auto& objs = GetActiveRenderLevelObjects().GetObjects();
-			for (auto it = skinnedReplacementIndices.begin(); it != skinnedReplacementIndices.end(); ) {
-				if (*it == selected_object_index_ || *it < 0 || *it >= (int)objs.size()) {
-					++it;
-					continue;
-				}
-				const glm::vec3 delta = glm::vec3(objs[*it].pos) - cam;
-				if (glm::dot(delta, delta) > maxSkinSq) it = skinnedReplacementIndices.erase(it);
-				else ++it;
-			}
-		}
-	}
+	// `skinnedReplacementIndices` (and `fast_scene_preview_`, which decides
+	// whether it is filled at all) is computed above, before UpdateAnimations,
+	// because it is also the set of playbacks that need a live pose this frame.
 	camera_mode_moved_ = false;
 	draw_params_.skip_static_draw_indices_ = &skinnedReplacementIndices;
 	draw_params_.terrain_id_at_world_xy_ =
@@ -3838,7 +3878,7 @@ float App::GetSelectedObjectScale() const {
 // (Per-object auto-play init now lives in LoadLevel's parallel resolution pass;
 //  see app_level.cpp. There is no single-object initializer anymore.)
 
-void App::UpdateAnimations(float dtSec) {
+void App::UpdateAnimations(float dtSec, const std::unordered_set<int>& posed_object_indices) {
     // Skip if global pause is on
     // (renderer pause check is done in the renderer)
 
@@ -3846,6 +3886,40 @@ void App::UpdateAnimations(float dtSec) {
     // elapsed wall-clock time to `AnimPlayer::AdvanceSeconds`, which steps whole
     // engine frames (gTicksPerFrame, src/lod/boneobj.c:86-90). The editor no
     // longer accumulates ticks itself.
+    //
+    // ONLY THE PLAYBACKS WHOSE POSE IS DRAWN GET THE POSE.  The engine splits
+    // these two things itself, and the split is the reason this loop is not
+    // simply "step all 30 playbacks":
+    //
+    //   * the CLOCK runs for every active AI, drawn or not -
+    //     `Soldier_Update` 0x45D080 calls `Human_FireAnimTrigger` 0x4613D0
+    //     unconditionally (src/soldier/soldier.c:877), and that is
+    //     `BoneObj_GetEvents` 0x4D3210 (src/humanbase/human.c:1376), which
+    //     advances `inst.time` (src/boneobj/boneobj.c:884-885).  A deactivated
+    //     human stops here too - `HumanAI_Update` 0x44F410 only sends the control
+    //     message that reaches `Soldier_Update` `if (Human_IsActive(...))`
+    //     (src/humanai/humanai.c:387, `vulnerable` from `Human_Reset` 0x45ECD0,
+    //     src/soldier/human.c:422) - so the clock must NOT be stopped by
+    //     visibility;
+    //   * the full bone POSE (the expensive part: `BoneObj_Update` 0x4D38C0
+    //     recurses over the whole bone tree) is computed at DRAW time and only
+    //     for what is drawn - `Human_WakeIfVisible` 0x45F140 returns unless
+    //     `Mesh3D_Exclude` 0x4D03D0 says the bounding sphere is visible and
+    //     `Mesh3D_GetBoneMeshLOD` is not -1 (too far to draw)
+    //     (src/humanbase/human.c:262-287), and it is called only from
+    //     `Human_DrawHandler` 0x45F280 and `Human_NearClipHandler` 0x45F050,
+    //     which run over the camera's sector and the sectors the portal flood
+    //     reaches (`SectorObject_Render` 0x4DD310 -> `Sector_DrawVisible`
+    //     0x4DD5D0 -> `Sector_Render` 0x4DD1C0, src/sector/sector.c:928-1057).
+    //
+    // `posed_object_indices` is `skinnedReplacementIndices` - the objects whose
+    // live skinned pose the renderer submits this frame.  In editor mode that is
+    // the selected object alone, so this is the difference between 30 poses and
+    // 1.  A playback that leaves the set keeps a live clock and stops posing;
+    // when it re-enters, `Update` poses it again in the same frame, before the
+    // draw, at the tick the clock had reached - which is what retail does when
+    // `Human_Wake` poses an object that has just come into view.
+    //
     // IGI_PROFILE-only: attribute this loop, which [FrameBreak] shows is the
     // largest single block of App::Frame() outside renderer_.Draw().
     const bool profile_anim = []() {
@@ -3856,13 +3930,28 @@ void App::UpdateAnimations(float dtSec) {
                                          : std::chrono::steady_clock::time_point{};
     int64_t slowest_us = 0;
     int slowest_idx = -1;
+    int posed_count = 0;
+    // The two halves of the loop are timed apart: the whole point of the split
+    // is that the pose is expensive and the clock is not, and the integer
+    // ms/frame the line used to report cannot show that (both halves round to
+    // 0 ms at 30 playbacks).  Microseconds per frame per half can.
+    int64_t posed_us = 0;
+    int64_t clock_us = 0;
     for (auto& [idx, pb] : animPlaybacks_) {
         const auto one_start = profile_anim ? std::chrono::steady_clock::now()
                                             : std::chrono::steady_clock::time_point{};
-        pb.Update(dtSec * 1000.f);
+        const bool posed = posed_object_indices.count(idx) != 0;
+        if (posed) {
+            ++posed_count;
+            pb.Update(dtSec * 1000.f);
+        } else {
+            pb.AdvanceClock(dtSec * 1000.f);
+        }
         if (profile_anim) {
             const int64_t one_us = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - one_start).count();
+            if (posed) posed_us += one_us;
+            else clock_us += one_us;
             if (one_us > slowest_us) {
                 slowest_us = one_us;
                 slowest_idx = idx;
@@ -3873,19 +3962,30 @@ void App::UpdateAnimations(float dtSec) {
         static int64_t acc_us = 0;
         static int64_t acc_slowest_us = 0;
         static int64_t acc_count = 0;
+        static int64_t acc_posed = 0;
+        static int64_t acc_posed_us = 0;
+        static int64_t acc_clock_us = 0;
         static int frames = 0;
         const auto now = std::chrono::steady_clock::now();
         acc_us += std::chrono::duration_cast<std::chrono::microseconds>(now - anim_start).count();
         acc_slowest_us += slowest_us;
         acc_count += (int64_t)animPlaybacks_.size();
+        acc_posed += posed_count;
+        acc_posed_us += posed_us;
+        acc_clock_us += clock_us;
         if (++frames >= 30) {
             Logger::Get().Log(LogLevel::INFO,
                 "[AnimProfile] 30 frames: playbacks=" +
-                std::to_string(acc_count / 30) + " loop=" +
-                std::to_string(acc_us / 30000) + "ms slowest=" +
+                std::to_string(acc_count / 30) + " posed=" +
+                std::to_string(acc_posed / 30) + " loop=" +
+                std::to_string(acc_us / 30000) + "ms (" +
+                std::to_string(acc_us / 30) + "us/frame: posed=" +
+                std::to_string(acc_posed_us / 30) + "us clockonly=" +
+                std::to_string(acc_clock_us / 30) + "us) slowest=" +
                 std::to_string(acc_slowest_us / 30000) + "ms (last slowest idx=" +
                 std::to_string(slowest_idx) + ")");
-            acc_us = acc_slowest_us = acc_count = 0;
+            acc_us = acc_slowest_us = acc_count = acc_posed = 0;
+            acc_posed_us = acc_clock_us = 0;
             frames = 0;
         }
     }
