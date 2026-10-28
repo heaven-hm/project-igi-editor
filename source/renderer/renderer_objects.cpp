@@ -7,6 +7,10 @@
 #include "../lod/mef_mesh_header.h"
 #include "../capture_camera.h"
 #include "../level/terrain_snap_rules.h"
+// The ONE view-cone test the visual pass and the animation pose set share
+// (source/runtime/anim_pose_set.h).  Sharing it is what makes "posed" a subset
+// of "drawn" by construction instead of by two copies of the same arithmetic.
+#include "../runtime/anim_pose_set.h"
 
 
 
@@ -883,6 +887,53 @@ void Renderer_Objects::Shutdown() {
 }
 
 // ─── InitPickingFBO ───────────────────────────────────────────────────────────
+int Renderer_Objects::SelectObjectDrawLod(const LevelObject& obj,
+                                          const glm::vec3& camera_pos,
+                                          const glm::vec3& cameraFwd,
+                                          float tan_half_fovx) {
+    // The engine's per-frame LOD for one object, extracted verbatim from the draw
+    // loop below so that the animation pose set can ask the same question with the
+    // same inputs and the same arithmetic — see source/runtime/anim_pose_set.h for
+    // why the pose set has to be a subset of what this pass draws.
+    //
+    // `ModelObj_GetLOD` HOOK 0x4CFCB0 (src/lod/mesh3d.c:209-227) builds the query
+    // and `lod_select` (src/lod/mesh3d.c:161-208) answers it; the draw then uses
+    // `vm->lods[lod]` (src/render/render.c:957) and a NEGATIVE result is the
+    // engine's "culled this frame" (render.c:955-956), not an error.
+    //
+    // Returns 0 — i.e. "draw LOD 0", never "culled" — in the two cases the loop
+    // also leaves `drawnLod` at 0: a mesh with no vertices, and a model whose LOD0
+    // header is unreadable.  That is deliberate and matches the loop's behaviour
+    // before this extraction.
+    if (!(tan_half_fovx > 0.0f)) return 0;
+    if (GetOrLoadMesh(obj.modelId, obj.isBuilding).vertexCount == 0) return 0;
+    const igi::lod::MefMeshHeader lod0h = GetLod0MeshHeader(obj.modelId);
+    if (!lod0h.valid) return 0;
+
+    igi::lod::RigidLodQuery q;
+    q.hasModel = true;
+    q.objPos[0] = obj.pos.x;
+    q.objPos[1] = obj.pos.y;
+    q.objPos[2] = obj.pos.z;
+    q.camPos[0] = camera_pos.x;
+    q.camPos[1] = camera_pos.y;
+    q.camPos[2] = camera_pos.z;
+    // gTransContext.matrix.m[6..8]: the view matrix's Z row.
+    q.viewZ[0] = cameraFwd.x;
+    q.viewZ[1] = cameraFwd.y;
+    q.viewZ[2] = cameraFwd.z;
+    q.lod0Center[0] = lod0h.center[0];
+    q.lod0Center[1] = lod0h.center[1];
+    q.lod0Center[2] = lod0h.center[2];
+    q.lod0Sphere = lod0h.sphere;
+    q.objScale[0] = q.objScale[1] = q.objScale[2] = static_cast<float>(obj.scale);
+    q.fov = tan_half_fovx;
+    return SelectLodForDistance(
+        obj.modelId, obj.isBuilding, tan_half_fovx,
+        static_cast<float>(igi::lod::RigidViewDepth(q)),
+        static_cast<float>(igi::lod::MaxScale(q.objScale) * lod0h.sphere), 1.0f);
+}
+
 void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                             const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts,
                             const glm::vec3& camera_pos, bool show_magic_obj_spheres, const std::unordered_set<int>* skip_static_draw_indices,
@@ -1092,54 +1143,38 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         // feeds lod_select (src/lod/mesh3d.c:161-208), and the draw then uses
         // vm->lods[lod] (src/render/render.c:957).  A negative result is the engine's
         // "culled this frame" (render.c:955-956), not an error.
+        //
+        // The query itself is `SelectObjectDrawLod` so that the animation pose set
+        // (App::GetEditorDrawnAnimationIndices) asks the SAME question this pass
+        // answers: the pose set must be a subset of what is drawn here.
         const Mesh* meshPtr = &GetOrLoadMesh(obj.modelId, obj.isBuilding);
         int drawnLod = 0;
         if (meshPtr->vertexCount != 0 && tan_half_fovx > 0.0f) {
-            const igi::lod::MefMeshHeader lod0h = GetLod0MeshHeader(obj.modelId);
-            if (lod0h.valid) {
-                igi::lod::RigidLodQuery q;
-                q.hasModel = true;
-                q.objPos[0] = obj.pos.x;
-                q.objPos[1] = obj.pos.y;
-                q.objPos[2] = obj.pos.z;
-                q.camPos[0] = camera_pos.x;
-                q.camPos[1] = camera_pos.y;
-                q.camPos[2] = camera_pos.z;
-                // gTransContext.matrix.m[6..8]: the view matrix's Z row.
-                q.viewZ[0] = cameraFwd.x;
-                q.viewZ[1] = cameraFwd.y;
-                q.viewZ[2] = cameraFwd.z;
-                q.lod0Center[0] = lod0h.center[0];
-                q.lod0Center[1] = lod0h.center[1];
-                q.lod0Center[2] = lod0h.center[2];
-                q.lod0Sphere = lod0h.sphere;
-                q.objScale[0] = q.objScale[1] = q.objScale[2] = static_cast<float>(obj.scale);
-                q.fov = tan_half_fovx;
-                const int lod = SelectLodForDistance(
-                    obj.modelId, obj.isBuilding, tan_half_fovx,
-                    static_cast<float>(igi::lod::RigidViewDepth(q)),
-                    static_cast<float>(igi::lod::MaxScale(q.objScale) * lod0h.sphere), 1.0f);
-                if (lod < 0) {  // render.c:955-956
-                    if (profileObjects) ++profCulledLod;
-                    continue;
-                }
-                drawnLod = lod;
-                const std::string lodName = GetLodMeshName(obj.modelId, obj.isBuilding, lod);
-                if (!lodName.empty() && lodName != obj.modelId) {
-                    meshPtr = &GetOrLoadMesh(lodName, obj.isBuilding);
-                }
+            const int lod = SelectObjectDrawLod(obj, camera_pos, cameraFwd, tan_half_fovx);
+            if (lod < 0) {  // render.c:955-956
+                if (profileObjects) ++profCulledLod;
+                continue;
+            }
+            drawnLod = lod;
+            const std::string lodName = GetLodMeshName(obj.modelId, obj.isBuilding, lod);
+            if (!lodName.empty() && lodName != obj.modelId) {
+                meshPtr = &GetOrLoadMesh(lodName, obj.isBuilding);
             }
         }
         const Mesh& mesh = *meshPtr;
         if (mesh.vertexCount == 0) continue;
 
+        // `toObject` and `distSq` are ALSO read further down by the ATTA
+        // attachment distance cull, so they stay here; the view test itself is the
+        // one the animation pose set shares (source/runtime/anim_pose_set.h):
+        // reject only a bounding sphere wholly behind the eye plane, or outside a
+        // cone of half-angle atan(1/2) widened by the radius.
         const glm::vec3 toObject = glm::vec3(obj.pos) - camera_pos;
         const float boundRadius = glm::length(mesh.halfExtents) * 40.96f * std::max(obj.scale, 0.001f);
         const float distSq = glm::dot(toObject, toObject);
-        if (cameraFwdLen > 0.01f && !keepVisible) {
-            const float facing = glm::dot(toObject, cameraFwd);
-            if (facing < -boundRadius) continue;
-            if (distSq > boundRadius * boundRadius && facing < std::sqrt(distSq) * 0.5f - boundRadius) continue;
+        if (!keepVisible &&
+            !igi::PassesEditorViewCone(toObject, boundRadius, cameraFwd, cameraFwdLen)) {
+            continue;
         }
 
         // Flag objects whose model is absent from the level .res: tint magenta so the

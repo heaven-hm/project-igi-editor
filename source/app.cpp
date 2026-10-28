@@ -11,6 +11,9 @@
 #include "runtime/map_computer_camera.h"
 #include "runtime/auto_save_policy.h"
 #include "runtime/editor_hover_policy.h"
+// The engine's "pose what is drawn" rule for the editor's viewport
+// (`Human_WakeIfVisible` 0x45F140) - see the header for the citations.
+#include "runtime/anim_pose_set.h"
 #include "runtime/progress_overlay_policy.h"
 #include "runtime/window_style_policy.h"
 #include "runtime/viewport_size_policy.h"
@@ -938,18 +941,15 @@ static void LogPickBench(int64_t bench_us, const std::string& ids) {
 	}
 }
 
-// IGI_PROFILE_ANIMBENCH-only: the smoke run is driven by the physical mouse and
-// in practice never selects an object, so a frame there has an EMPTY posed set
-// and the animation loop measures "0 of 30 posed".  That is a real case, but it
-// is not the editor's workload: with an object selected, one of the 30 poses is
-// drawn (App::Frame's editor-mode filter over skinnedReplacementIndices) and 29
-// are not.  With IGI_PROFILE_ANIMBENCH set, App::Frame forces
+// IGI_PROFILE_ANIMBENCH-only: with IGI_PROFILE_ANIMBENCH set, App::Frame forces
 // `selected_object_index_` to the lowest-indexed object that has an active,
-// posable, skinned playback, so every frame poses and draws exactly ONE of the
-// 30 and the two workloads are measured separately.  It goes through the real
-// selection, so the frame it produces is a real editor frame.  Like
-// IGI_PROFILE_PICKBENCH it adds a known constant to every frame, so it must not
-// be on while the [FrameProfile]/[FrameBreak] attribution is being read.
+// posable, skinned playback.  The editor's default posed set is now every AI the
+// viewport draws (App::GetEditorDrawnAnimationIndices), so this flag's job is to
+// pin down the OTHER workload for comparison - the same run with exactly one
+// object selected, which the pose rule exempts from the view and LOD culls.  It
+// goes through the real selection, so the frame it produces is a real editor
+// frame.  Like IGI_PROFILE_PICKBENCH it adds a known constant to every frame, so
+// it must not be on while the [FrameProfile]/[FrameBreak] attribution is read.
 static bool ShouldUseAnimBench() {
 	static const bool enabled = getenv("IGI_PROFILE_ANIMBENCH") != nullptr;
 	return enabled;
@@ -1425,11 +1425,13 @@ void App::Frame(float delta_seconds) {
 	const auto frame_pre_t1 = profile_frame_break ? FrameBreakClock::now()
 	                                              : FrameBreakClock::time_point{};
 
-	// All AI with an active, playing clip are skinned-replaced simultaneously.
-	// Live AI poses are also part of the editor preview.  The old gameplay-only
-	// gate left the editor's animation clocks advancing while the static meshes
+	// Every AI with an active, playing clip that the editor's viewport DRAWS is
+	// skinned-replaced, and the AI whose clock runs but whose pose is not drawn
+	// keeps a live clock (AnimPlayback::AdvanceClock).  The old gameplay-only gate
+	// left the editor's animation clocks advancing while the static meshes
 	// continued to render, which made the log claim animations were playing even
-	// though no animated pose was ever submitted in editor mode.
+	// though no animated pose was ever submitted in editor mode; the follow-up fix
+	// posed the SELECTED object alone, which left every other AI looking frozen.
 	//
 	// This set is also the ANSWER to "which playbacks need a pose this frame", so
 	// it is built BEFORE the animation update instead of after it: the engine
@@ -1448,23 +1450,26 @@ void App::Frame(float delta_seconds) {
 		Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera));
 	if (!draw_params_.fast_scene_preview_) {
 		if (!render_gameplay) {
-			skinnedReplacementIndices = GetSkinnedReplacementObjectIndices(false);
 			// IGI_PROFILE_ANIMBENCH-only: see ShouldUseAnimBench.  Force one
-			// fixed animated object to be the selection, so the frame poses and
-			// draws exactly one of the 30 playbacks.
+			// fixed animated object to be the selection, so a run can compare the
+			// one-selected workload against the default one.
 			if (ShouldUseAnimBench()) {
+				std::unordered_set<int> bench_candidates =
+					GetSkinnedReplacementObjectIndices(false);
 				int bench_idx = -1;
-				for (int idx : skinnedReplacementIndices) {
+				for (int idx : bench_candidates) {
 					if (bench_idx < 0 || idx < bench_idx) bench_idx = idx;
 				}
 				if (bench_idx >= 0) selected_object_index_ = bench_idx;
 			}
-			std::unordered_set<int> editorSkinned;
-			if (selected_object_index_ >= 0 &&
-				skinnedReplacementIndices.count(selected_object_index_)) {
-				editorSkinned.insert(selected_object_index_);
-			}
-			skinnedReplacementIndices.swap(editorSkinned);
+			// The posed set IS the drawn set: the AI whose pose the skinned draw
+			// loop below submits.  In editor mode that is every playback the
+			// viewport would draw - NOT just the selected one, which is what made
+			// an unselected AI look frozen while its clock ran.  See
+			// App::GetEditorDrawnAnimationIndices for the engine rule
+			// (`Human_WakeIfVisible` 0x45F140) and the two tests it reuses from
+			// the visual pass.
+			skinnedReplacementIndices = GetEditorDrawnAnimationIndices();
 		}
 		// render_gameplay: already computed above, before the pose. Deliberately
 		// NOT recomputed here - one set, so the posed set and the drawn set cannot
@@ -3985,11 +3990,13 @@ void App::UpdateAnimations(float dtSec, const std::unordered_set<int>& posed_obj
     //
     // `posed_object_indices` is `skinnedReplacementIndices` - the objects whose
     // live skinned pose the renderer submits this frame.  In editor mode that is
-    // the selected object alone, so this is the difference between 30 poses and
-    // 1.  A playback that leaves the set keeps a live clock and stops posing;
-    // when it re-enters, `Update` poses it again in the same frame, before the
-    // draw, at the tick the clock had reached - which is what retail does when
-    // `Human_Wake` poses an object that has just come into view.
+    // every playback the viewport draws (App::GetEditorDrawnAnimationIndices:
+    // the visual pass's view cone and the engine's own LOD cull), so an AI with a
+    // playing clip is posed as soon as it is on screen instead of only while it
+    // is selected.  A playback that leaves the set keeps a live clock and stops
+    // posing; when it re-enters, `Update` poses it again in the same frame,
+    // before the draw, at the tick the clock had reached - which is what retail
+    // does when `Human_Wake` poses an object that has just come into view.
     //
     // IGI_PROFILE-only: attribute this loop, which [FrameBreak] shows is the
     // largest single block of App::Frame() outside renderer_.Draw().
@@ -4122,6 +4129,78 @@ std::unordered_set<int> App::GetGameplayDrawnAnimationIndices() {
 		const glm::vec3 delta = glm::vec3(objs[*it].pos) - cam;
 		if (glm::dot(delta, delta) > maxSkinSq) it = drawn.erase(it);
 		else ++it;
+	}
+	return drawn;
+}
+
+std::unordered_set<int> App::GetEditorDrawnAnimationIndices() {
+	// The engine's rule, and the reason this function exists at all: an AI's POSE
+	// is built only for what is DRAWN (`Human_WakeIfVisible` 0x45F140 ->
+	// `Human_Wake` 0x45F240 -> `BoneObj_Update` 0x4D38C0, reached only from
+	// `Human_DrawHandler` 0x45F280 / `Human_NearClipHandler` 0x45F050,
+	// src/humanbase/human.c:235-320), while its CLOCK runs whether it is drawn or
+	// not (`Soldier_Update` 0x45D080 -> `Human_FireAnimTrigger` 0x4613D0 ->
+	// `BoneObj_GetEvents` 0x4D3210, src/soldier/soldier.c:877,
+	// src/humanbase/human.c:1368-1387).  The editor therefore has to answer
+	// "which AI does my viewport draw" to decide which playbacks get a pose - and
+	// the answer must be the visual pass's own, not a second guess.
+	//
+	// That is what this set is.  It starts from every editor playback that COULD
+	// be skinned-drawn (clip playing, engine can pose it, object alive, skin
+	// geometry loaded - ShouldUseSkinnedReplacement, source/animation.h:295) and
+	// then applies the visual pass's two tests through the SAME code the pass uses:
+	//
+	//   * `igi::PassesEditorViewCone` - the conservative view cull
+	//     (`Renderer_Objects::Draw`), the editor's stand-in for the engine's
+	//     `Mesh3D_Exclude` 0x4D03D0 frustum test;
+	//   * `Renderer::GetObjectDrawLod` - `ModelObj_GetLOD` 0x4CFCB0 over
+	//     `lod_select`, the same call the pass makes before it draws an object; a
+	//     negative result is the engine's "too far to draw"
+	//     (src/render/render.c:955-956) and `Mesh3D_GetBoneMeshLOD` 0x4CFF70
+	//     refuses to pose those (`lod != -1`, src/humanbase/human.c:281-283).
+	//
+	// Before this, editor mode posed the SELECTED object alone (one entry, or
+	// none), so 29 of level 1's 30 AI advanced their clocks every frame and were
+	// never posed - a running animation nobody could see.  Nothing else about the
+	// frame changes: this set is still the one variable that is both handed to
+	// `UpdateAnimations` (pose decision) and installed as
+	// `draw_params_.skip_static_draw_indices_` (the skinned draw loop iterates the
+	// same set), so the posed set and the drawn set cannot diverge.
+	const auto& objs = GetActiveRenderLevelObjects().GetObjects();
+	std::unordered_set<int> drawn = GetSkinnedReplacementObjectIndices(false);
+
+	const glm::vec3 cam = viewer_.pos_;
+	const glm::vec3 fwd_raw = viewer_.forward_;
+	const float fwd_len = glm::length(fwd_raw);
+	const glm::vec3 fwd = (fwd_len > 0.01f) ? fwd_raw / fwd_len : glm::vec3(0.0f);
+	const float tan_half_fovx = view_define_.tan_half_fovx_;
+
+	for (auto it = drawn.begin(); it != drawn.end(); ) {
+		const int idx = *it;
+		if (idx < 0 || idx >= (int)objs.size()) {
+			++it;
+			continue;
+		}
+		const LevelObject& obj = objs[idx];
+		const bool is_selected = (idx == selected_object_index_);
+		// The bounding radius is the visual pass's own (`Renderer_Objects::Draw`):
+		// the mesh's extent diagonal in MEF units, scaled to world units by the
+		// 40.96 the model matrix uses, times the object's own scale.
+		const float bound_radius =
+			renderer_.GetMeshRadius(obj.modelId, obj.isBuilding) * 40.96f *
+			std::max(obj.scale, 0.001f);
+		const bool in_cone = igi::PassesEditorViewCone(glm::vec3(obj.pos) - cam,
+		                                              bound_radius, fwd, fwd_len);
+		// The LOD question is only worth asking for an object that is in view (and
+		// is skipped for the selected object, which the pose rule exempts).
+		const int draw_lod = (is_selected || in_cone)
+			? renderer_.GetObjectDrawLod(obj, cam, fwd, tan_half_fovx)
+			: -1;
+		if (igi::ShouldPoseAnimationNow(is_selected, in_cone, draw_lod)) {
+			++it;
+		} else {
+			it = drawn.erase(it);
+		}
 	}
 	return drawn;
 }

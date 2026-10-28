@@ -26,6 +26,9 @@
 
 #include "animation.h"
 #include "runtime/anim_player.h"
+// The engine's "pose only what is drawn" rule, mapped onto the editor's
+// viewport (Human_WakeIfVisible 0x45F140) - see the header.
+#include "runtime/anim_pose_set.h"
 
 #include <cmath>
 #include <utility>
@@ -532,4 +535,138 @@ TEST(AnimPlaybackEngineTest, GameplayTickSplitKeepsEveryClockAndEverySteppingDra
     // Guard against the test passing because no frame ever posed anything.
     EXPECT_GT(drawn_frames_compared, kFrames);
     EXPECT_GT(split[0].currentTimeMs, 0.0f);
+}
+
+// ── The pose SET: which AI the editor poses on a frame ──────────────────────
+//
+// The engine builds a pose only for the humans it is about to draw:
+// `Human_WakeIfVisible` 0x45F140 (src/humanbase/human.c:262-287) wakes one only
+// when `Mesh3D_Exclude` 0x4D03D0 says the bounding sphere is in view AND
+// `Mesh3D_GetBoneMeshLOD` 0x4CFF70 is not -1 (and is < 4), and it is called from
+// the draw handlers alone.  The editor maps that onto its own viewport by
+// reusing the visual pass's two tests, which is what lets an AI that is NOT
+// selected animate (see source/runtime/anim_pose_set.h).
+
+// The visual pass's cull as it was written inline before the extraction
+// (`Renderer_Objects::Draw`), restated here on purpose: this is a DIFFERENTIAL
+// against the production helper, so it must stay an independent copy of the two
+// original comparisons rather than call the helper it checks.
+static bool ViewConeAsTheDrawLoopHadIt(const glm::vec3& to_object, float bound_radius,
+                                       const glm::vec3& camera_fwd, float camera_fwd_len) {
+    const float dist_sq = glm::dot(to_object, to_object);
+    if (camera_fwd_len > 0.01f) {
+        const float facing = glm::dot(to_object, camera_fwd);
+        if (facing < -bound_radius) return false;
+        if (dist_sq > bound_radius * bound_radius &&
+            facing < std::sqrt(dist_sq) * 0.5f - bound_radius) {
+            return false;
+        }
+    }
+    return true;
+}
+
+TEST(AnimPoseSetTest, ViewConeMatchesTheDrawLoopsOwnTestOnEveryConfiguration) {
+    // A grid of camera/object configurations, including the two boundaries the
+    // cull is written around: the eye plane (facing == -radius) and the cone
+    // (facing == sqrt(distSq) * 0.5 - radius).
+    const glm::vec3 fwd(0.0f, 1.0f, 0.0f);
+    int checked = 0;
+    int rejected = 0;
+    for (float x = -3000.0f; x <= 3000.0f; x += 500.0f) {
+        for (float y = -3000.0f; y <= 3000.0f; y += 500.0f) {
+            for (float radius : {0.0f, 50.0f, 400.0f}) {
+                const glm::vec3 to_object(x, y, 0.0f);
+                const bool expected = ViewConeAsTheDrawLoopHadIt(to_object, radius, fwd, 1.0f);
+                const bool actual = igi::PassesEditorViewCone(to_object, radius, fwd, 1.0f);
+                EXPECT_EQ(expected, actual) << "x=" << x << " y=" << y << " r=" << radius;
+                if (!actual) ++rejected;
+                ++checked;
+            }
+        }
+    }
+    // Guard against the grid passing because nothing was ever rejected.
+    EXPECT_GT(checked, 100);
+    EXPECT_GT(rejected, 0);
+}
+
+TEST(AnimPoseSetTest, NoUsableCameraForwardMeansNothingIsCulled) {
+    // The draw loop only applies the cone test `if (cameraFwdLen > 0.01f)`; with
+    // no usable forward vector it draws everything, so an object straight behind
+    // the camera is still "in view".
+    EXPECT_TRUE(igi::PassesEditorViewCone(glm::vec3(0.0f, -1000.0f, 0.0f), 10.0f,
+                                          glm::vec3(0.0f, 0.0f, 0.0f), 0.0f));
+    EXPECT_TRUE(igi::PassesEditorViewCone(glm::vec3(0.0f, -1000.0f, 0.0f), 10.0f,
+                                          glm::vec3(0.0f, 0.0f, 0.0f), 0.01f));
+}
+
+TEST(AnimPoseSetTest, ViewConeRejectsOnlyWhatCannotProjectIntoTheViewport) {
+    const glm::vec3 fwd(0.0f, 1.0f, 0.0f);
+    // Straight ahead: drawn.
+    EXPECT_TRUE(igi::PassesEditorViewCone(glm::vec3(0.0f, 1000.0f, 0.0f), 10.0f, fwd, 1.0f));
+    // Wholly behind the eye plane: the engine's cull.
+    EXPECT_FALSE(igi::PassesEditorViewCone(glm::vec3(0.0f, -1000.0f, 0.0f), 10.0f, fwd, 1.0f));
+    // Behind, but the bounding sphere straddles the eye plane: kept, because the
+    // test is on the SPHERE, not the centre.
+    EXPECT_TRUE(igi::PassesEditorViewCone(glm::vec3(0.0f, -5.0f, 0.0f), 10.0f, fwd, 1.0f));
+    // Far to the side, well outside the >= 120 degree cone: culled.
+    EXPECT_FALSE(igi::PassesEditorViewCone(glm::vec3(5000.0f, 100.0f, 0.0f), 10.0f, fwd, 1.0f));
+    // Same, but a radius large enough to reach back into the cone: kept.
+    EXPECT_TRUE(igi::PassesEditorViewCone(glm::vec3(5000.0f, 100.0f, 0.0f), 4000.0f, fwd, 1.0f));
+}
+
+TEST(AnimPoseSetTest, SelectedObjectIsPosedEvenWhenItIsNotDrawn) {
+    // The editor affordance: the object being inspected keeps its pose (and its
+    // skinned draw) even when it is behind the camera or LOD-culled, which is
+    // what the editor did before this rule existed.
+    EXPECT_TRUE(igi::ShouldPoseAnimationNow(/*is_selected=*/true, /*in_cone=*/false, -1));
+    EXPECT_TRUE(igi::ShouldPoseAnimationNow(true, true, igi::kLastPosedLod));
+}
+
+TEST(AnimPoseSetTest, UnselectedAiIsPosedOnlyWhenTheViewportWouldDrawIt) {
+    // In view at a drawable LOD: posed.  This is the case that used to be a
+    // clock-only step, leaving the AI visibly frozen.
+    EXPECT_TRUE(igi::ShouldPoseAnimationNow(false, true, 0));
+    EXPECT_TRUE(igi::ShouldPoseAnimationNow(false, true, 1));
+    // `Mesh3D_GetBoneMeshLOD` 0x4CFF70's -1: too far to draw, so no pose
+    // (src/humanbase/human.c:281-283).
+    EXPECT_FALSE(igi::ShouldPoseAnimationNow(false, true, -1));
+    // The engine's own `lod < 4` guard: the coarsest level is not woken.
+    EXPECT_FALSE(igi::ShouldPoseAnimationNow(false, true, igi::kLastPosedLod));
+    EXPECT_TRUE(igi::ShouldPoseAnimationNow(false, true, igi::kLastPosedLod - 1));
+    // Behind the camera / outside the view cone: the clock keeps running but no
+    // pose is built - the engine's `Mesh3D_Exclude` branch.
+    EXPECT_FALSE(igi::ShouldPoseAnimationNow(false, false, 0));
+}
+
+TEST(AnimPoseSetTest, ClockOnlyIsWhatAnUndrawnAiGetsAndItStillAdvances) {
+    // The two halves the rule keeps apart: an AI the viewport does not draw is
+    // NOT posed, but its clock still moves, so when it comes into view it is at
+    // the tick the game would show.  `ShouldPoseAnimationNow` decides the first;
+    // `AnimPlayback::AdvanceClock` (asserted in the tests above) does the second.
+    const bool poses_when_hidden = igi::ShouldPoseAnimationNow(false, false, -1);
+    EXPECT_FALSE(poses_when_hidden);
+
+    const AnimationClip clip = MakeEngineClip(4800.0f, true);
+    AnimPlayback hidden;
+    hidden.Start(&clip);
+    ASSERT_TRUE(hidden.EngineReady());
+    const float clock_at_start = hidden.currentTimeMs;
+    hidden.AdvanceClock(kSimulationTickMs * 4.0f);
+    EXPECT_GT(hidden.currentTimeMs, clock_at_start);
+    // Not posed while it was hidden ...
+    EXPECT_FALSE(hidden.PoseCurrent());
+    // ... and the draw wakes it at the tick the clock reached (Human_Wake
+    // 0x45F240), which is the same pose an always-visible playback shows.
+    AnimPlayback visible;
+    visible.Start(&clip);
+    ASSERT_TRUE(visible.EngineReady());
+    visible.Update(kSimulationTickMs * 4.0f);
+    EXPECT_EQ(hidden.WorldTransforms().size(), visible.WorldTransforms().size());
+    EXPECT_TRUE(hidden.PoseCurrent());
+    // Both clocks are on the same engine tick, so one more drawn frame on each
+    // must produce the SAME pose: the wake-at-draw is not a lost frame.
+    EXPECT_FLOAT_EQ(hidden.currentTimeMs, visible.currentTimeMs);
+    hidden.Update(kSimulationTickMs);
+    visible.Update(kSimulationTickMs);
+    EXPECT_EQ(MaxAbsPoseDiff(hidden.WorldTransforms(), visible.WorldTransforms()), 0.0f);
 }
