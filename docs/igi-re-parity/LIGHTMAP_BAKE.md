@@ -792,7 +792,89 @@ $ IGI_E2E_STAGE=$PWD/scratch/e2e-lm-pages bash scripts/e2e-headless.sh --fast
   unestablished (§8 above). For a mesh with `unk8 == 0` the engine builds no
   lightmaps at all, so the editor binding one is a divergence that remains open.
 
-## 9. Files
+## 9. The bake-versus-recalculate decision
+
+The pause menu's `Calculate Lightmaps` row is the editor's only bake entry point, and it
+**shells out to `igi1conv`** rather than baking in-process. That is a decision, not an
+omission, and this section records the oracle evidence behind it.
+
+### 9.1 What the engine does
+
+`Lightmap_BuildLod` (HOOK **0x523D40**, `src/dirlight/lightmapbuild.c:44-445`) is a
+**load-or-rebuild, never a save**:
+
+* gate `mesh->format == 3 && mesh->unk8` (`:53-56`);
+* the file name is `MISSION:lightmaps/<obj%05d>_<%05d>.olm` (`:59`; `Lightmap_GetDir`
+  HOOK 0x5210C0, `src/litmap/lightmap.c:89-94`);
+* accept iff `magic == 0x3DF5C28F` **and** `feq(version)` **and** `mesh time < file time`
+  **and** `texCount == count` (`:63-64`), else `Resource_Flush` (`:86`);
+* accepted **and** `!full` -> use the file's pages as they are (`:66-84`, `info = NULL`);
+* otherwise build **in memory**: `texCount` pages, every texel `-1`, per-texel
+  weight/normal/position arrays, then the UV-space coverage pass (`:90-124`, `:128-442`).
+
+Lighting is a **separate GPU pipeline**, not part of `Lightmap_BuildLod`. Its only caller is
+`LightmapInfo_Changed` (HOOK **0x523930**, `src/dirlight/lightmapinfo.c:97-200`, call at
+`:150`, with `full = stale || unkDC || edited` at `:149`). The light passes are
+`Dirlight_TraceVertices` (HOOK **0x525460**, `src/dirlight/dirtrace.c:27-198`, rays through
+`Coll_LineOfSight`) and `Hemicube_DrawLightmapSet` (HOOK **0x521E40**,
+`src/litmap/hemirender.c:58-318`) over `Hemicube_DrawTriangle` / `Hemicube_ClipTriangle`
+(HOOKs **0x521110** / **0x521960**, `src/litmap/hemicube.c:94-227`, `:269-325`). Each page is
+a D3D texture (`LightmapTex_Alloc` HOOK **0x525320**, `lightmapinfo.c:242-250`) filled by
+`Texture_Download(..., t->pixels)` (`LightmapTex_Upload` HOOK **0x525410**, `:283-289`).
+
+### 9.2 There is no writer anywhere in the oracle
+
+**The decompilation mentions `.olm` exactly three times**: the format string at
+`lightmapbuild.c:59` (used only with `Resource_Exists` `:60` and `Resource_Load` `:63`/`:71`)
+and two comments (`lightmapbuild.c:1`, `src/litmap/litmaptypes.h:35`). `gLightmapBuilt` is
+**written** (`lightmapbuild.c:95`), **cleared** (`lightmap.c:85`) and **never read**.
+`lightmaps.res` is only loaded and unloaded (`lightmap.c:200-201`, `:315-316`).
+
+Related, and worth knowing: an accepted disk bake is **always rebuilt on the next parameter
+change** - the load sets `info = NULL` (`:69`) and `lightmapinfo.c:111-114` counts that as
+`missing` -> `full`. The engine therefore treats the shipped `.olm` as a **cache**, not as
+authored content.
+
+### 9.3 What the editor does now
+
+`Calculate Lightmaps` (`app_pause_menu.cpp:419-420`) and the property button
+(`renderer_draw.cpp:2724`) call `App::CalculateLightmapForSelectedObject`
+(`app_editor.cpp:442-570`): unpack `lightmaps.res`, decompile `objects.qvm`, resolve and apply
+the shipped `.olm` under the accept test, then shell out
+`igi1conv lightmap recalc --model --qsc --task-id --mef --rot-orig --rot-new --sun-dir
+--sun-color --ambient` (`utils_igi1conv.cpp:201-221`, driven by `App::RecalcLightmapToOlm`,
+`app_editor.cpp:577-607`), then repack `lightmaps.res` (`:544-562`).
+
+`igi1conv` is a **prebuilt external tool** (`CMakeLists.txt:321-327`) whose source is another
+repository and is **not in the oracle**, so its maths cannot be cited. All the editor knows is
+its interface - a pose delta plus the live sun, i.e. a re-light of the existing bake toward the
+new pose (`runtime/lightmap_recalc_policy.h:7-12`). The editor has **no light solver of its
+own**: `BakeAllLightmaps` merely loads shipped files (`renderer/object_lightmap.cpp:20-23`) and
+has zero callers.
+
+### 9.4 The decision
+
+The **faithful half is the read path** - the four-conjunct accept test (section 5c) and
+per-page binding - and it is implemented and verified.
+
+A faithful **in-process rebuild** would mean porting the coverage pass
+(`lightmapbuild.c:128-442`) plus the hemicube and D3D light passes, and it would *still* not
+produce a game-loadable bake, **because the engine has no writer**. So "faithful" cannot mean
+"bake in-process and save": there is no engine behaviour to be faithful to for *calculate and
+save*.
+
+What would be **invented**, and is therefore rejected:
+
+* any in-process `.olm` or `lightmaps.res` **writer** - there is no oracle serialiser, and the
+  bytes plus the version/timestamp fields the accept test reads would be writer-chosen;
+* any **home-grown light model** - `Lightmap_BuildLod` does no lighting at all (9.1).
+
+**Decision: keep the external recalc and present it as an editor tool action, not an
+engine-equivalent bake. Do not build a baker.** If in-process baking is ever wanted, the first
+citable step is the coverage pass, and any writer must be labelled an editor extension whose
+output is checked against the engine's own accept test.
+
+## 10. Files
 
 | Path | What |
 |---|---|
