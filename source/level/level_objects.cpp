@@ -536,6 +536,53 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                     }
                     break;
             }
+            // Elevator (GitHub issue #40, the moving platform): the four fields
+            // above are followed by "SplineObj taskid" (Int32) @10, "Linear"
+            // (bool8) @11, "Force orientation" (bool8) @12 and "Pos" (Real32)
+            // @13. See LevelObject's elevator block for the full derivation, and
+            // `Elevator_Init` HOOK 0x43CC70 (src/elevator/elevator.c:44-83).
+            // Nothing read them before, so an elevator had no rail and was drawn
+            // at its authored spot with no path.
+            //
+            // This block lives HERE, not in the `isPlacementMatrixGroup` branch
+            // below: every type in that branch's list is also in
+            // `isMissingGeneric`, and this `else if` chain tests
+            // `isMissingGeneric` first, so that branch is unreachable for all of
+            // them and the four fields were never read.  Kept as its own
+            // type-gated switch rather than extra `case` labels so it cannot
+            // steal an argument from the model scan above.
+            if (typeStr == "Elevator") {
+                switch (arg_idx) {
+                    case 10: obj.splineTaskId = TaskIdFromArg(cur_a); break;
+                    case 11: if (cur_a->type_ == QSC::arg_s::type_t::BOOL) obj.elevatorLinear = cur_a->bool_ != 0; break;
+                    case 12: if (cur_a->type_ == QSC::arg_s::type_t::BOOL) obj.elevatorForceOrientation = cur_a->bool_ != 0; break;
+                    case 13: if (cur_a->type_ == QSC::arg_s::type_t::DBL) obj.elevatorStartHeight = cur_a->dbl_; break;
+                }
+            }
+            // AlarmLight (GitHub issue #43): its model is at a FIXED argument,
+            // not at "whatever the first model-shaped string is".  The
+            // ParamTable is
+            //   place ObjectPos @3/4/5, placeMatrix Real32x9 @6/7/8,
+            //   cond VarString @9 ("On expression"), offModel String16 @10
+            //   (authored "On model"), onModel String16 @11 (authored
+            //   "Off model"), deadModel @12, onSound @13, deadSound @14
+            //   -- AlarmLight_Init HOOK 0x4397C0, src/fxobj/alarm.c:108-115.
+            // The model the engine installs when the task is created or edited
+            // is the one in the `onModel` field --
+            // RigidDynCubeObj_SetModel(al, VirModel_Find(al->onModel)),
+            // AlarmLight_Changed HOOK 0x43A450, src/elevator/alarmlight.c:98 --
+            // which the ParamTable fills from the AUTHORED "Off model", arg 11.
+            // The scan above cannot find it: it only accepts an 8-character
+            // "NNN_NN_N" id, and retail lamp models such as "1729_01_1" are 9
+            // characters, so an AlarmLight used to load with NO model at all.
+            if (typeStr == "AlarmLight" && arg_idx == 11 &&
+                cur_a->type_ == QSC::arg_s::type_t::STR) {
+                const std::string lamp = Utils::Trim(cur_a->str_);
+                if (!lamp.empty()) {
+                    obj.modelId = lamp;
+                    obj.modelIdArgIdx = 11;
+                }
+            }
         } else if (isGraph) {
             // AIGraph "Graph position" (args 3/4/5) is the world origin its
             // graph<taskId>.dat node coordinates are local to. arg@7 is Graphdata's
@@ -575,21 +622,15 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 case 7: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
                 case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
             }
-            // Elevator (GitHub issue #40, the moving platform): the four fields
-            // above are followed by "SplineObj taskid" (Int32) @10, "Linear"
-            // (bool8) @11, "Force orientation" (bool8) @12 and "Pos" (Real32)
-            // @13. See LevelObject's elevator block for the full derivation, and
-            // `Elevator_Init` HOOK 0x43CC70 (src/elevator/elevator.c:44-83).
-            // Nothing read them before, so an elevator had no rail and was drawn
-            // at its authored spot with no path.
-            if (typeStr == "Elevator") {
-                switch (arg_idx) {
-                    case 10: obj.splineTaskId = TaskIdFromArg(cur_a); break;
-                    case 11: if (cur_a->type_ == QSC::arg_s::type_t::BOOL) obj.elevatorLinear = cur_a->bool_ != 0; break;
-                    case 12: if (cur_a->type_ == QSC::arg_s::type_t::BOOL) obj.elevatorForceOrientation = cur_a->bool_ != 0; break;
-                    case 13: if (cur_a->type_ == QSC::arg_s::type_t::DBL) obj.elevatorStartHeight = cur_a->dbl_; break;
-                }
-            }
+            // NOTE: this branch is unreachable for every type in its own list.
+            // `isPlacementMatrixGroup`'s list is a subset of `isMissingGeneric`'s
+            // (AlarmLight, AIStationaryGunHolder, Elevator, Generator,
+            // GenericPickup, GenericTBA, Plane, Radio, RotatingObject, Siren,
+            // StationaryGun), and the `else if` chain above tests
+            // `isMissingGeneric` first -- which reads the same pos@3-5/ori@6-8
+            // plus the model scan.  Only AnimTask and CutScene reach this branch.
+            // Elevator's four trailing fields were read here and therefore never
+            // took effect; they now live in the `isMissingGeneric` branch above.
         } else {
             // No explicit branch for this type. IGI's own convention for the task types
             // the editor does not model individually is "Position"/"ObjectPos" as the

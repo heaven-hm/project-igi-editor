@@ -311,12 +311,29 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(6, obj.rot.x);
             readDouble(7, obj.rot.y);
             readDouble(8, obj.rot.z);
-            for (size_t i = 9; i < obj.argTokens.size(); ++i) {
-                std::string val = unquote(obj.argTokens[i]);
-                if (val.length() == 8 && val[3] == '_' && val[6] == '_') {
-                    obj.modelId = val;
-                    obj.modelIdArgIdx = (int)i;
-                    break;
+            // AlarmLight's model is at a FIXED argument -- the authored
+            // "Off model" at arg 11, which is the `onModel` field
+            // AlarmLight_Changed installs (RigidDynCubeObj_SetModel(al,
+            // VirModel_Find(al->onModel)), HOOK 0x43A450,
+            // src/elevator/alarmlight.c:98; ParamTable_Add order at
+            // src/fxobj/alarm.c:108-115).  The shape scan below cannot find it:
+            // it only accepts an 8-character "NNN_NN_N" id and retail lamp
+            // models such as "1729_01_1" are 9 characters (issue #43).
+            if (obj.type == "AlarmLight" && obj.argTokens.size() > 11) {
+                const std::string lamp = unquote(obj.argTokens[11]);
+                if (!lamp.empty()) {
+                    obj.modelId = lamp;
+                    obj.modelIdArgIdx = 11;
+                }
+            }
+            if (obj.modelId.empty()) {
+                for (size_t i = 9; i < obj.argTokens.size(); ++i) {
+                    std::string val = unquote(obj.argTokens[i]);
+                    if (val.length() == 8 && val[3] == '_' && val[6] == '_') {
+                        obj.modelId = val;
+                        obj.modelIdArgIdx = (int)i;
+                        break;
+                    }
                 }
             }
             // Elevator (GitHub issue #40): "SplineObj taskid" @10 (Int32),

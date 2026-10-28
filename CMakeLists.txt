@@ -703,6 +703,11 @@ add_executable(igi_mcp
     source/level/qvm_compiler.cpp
     source/level/qvm_decompiler.cpp
     source/level/task_schema.cpp
+    # task_schema.cpp derives the Smoke and AlarmLight inspector rows from these
+    # two modules' authored parameter tables (issue #43), so this binary needs
+    # them to link.  Both are pure logic -- no Windows, GL or level headers.
+    source/runtime/smoke.cpp
+    source/runtime/alarm_light.cpp
     source/renderer/res_writer.cpp
 )
 target_include_directories(igi_mcp PRIVATE source)

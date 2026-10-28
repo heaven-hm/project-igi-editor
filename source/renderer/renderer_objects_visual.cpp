@@ -5,7 +5,9 @@
  *****************************************************************************/
 #include "renderer_objects_internal.h"
 #include "igi_transform.h"
+#include "runtime/alarm_light.h"
 #include "runtime/pickup_rules.h"
+#include "runtime/smoke.h"
 
 #include <cstring>
 
@@ -1216,6 +1218,98 @@ void DrawPropsGizmos(const LevelObject& obj, GLuint ubo_mats, GLuint ubo_binding
         FlushGizmo(b, prog, ubo_mats, ubo_binding, geometry,
                    glm::vec4(0.45f, 0.85f, 0.45f, 1.0f),   // base frame
                    glm::vec4(0.85f, 0.45f, 0.95f, 1.0f));  // AI detection cone
+        return;
+    }
+
+    // ── Smoke (the retail particle emitter, issue #43) ───────────────────────
+    // A placement indicator, not a simulation: the game has no gizmo, and the
+    // emitter's particles only exist at run time.  Everything drawn here is an
+    // authored value of the task:
+    //   * the origin is the "Position" parameter (ParamTable slot 0,
+    //     Smoke_Init HOOK 0x437510, src/fxobj/smoke.c:167),
+    //   * the emission axis is the one Smoke_Changed builds --
+    //       Matrix_RotateZ(&rz, &id, t->yaw); Matrix_RotateX(&rx, &rz, t->pitch);
+    //       dir = (rx.m[2], rx.m[5], rx.m[8]);
+    //     i.e. (sin yaw * sin pitch, -cos yaw * sin pitch, cos pitch), +Z at zero
+    //     pitch (HOOK 0x438000, smoke.c:361-365), with "Alpha" the pitch and
+    //     "Gamma" the yaw (smoke.c:168-169),
+    //   * the cone's half-angle is "Maximum Random Angle" (smoke.c:172) and its
+    //     base ring radius is "Radius" (smoke.c:171).
+    // The cone's LENGTH is a presentation choice: the engine emits at random
+    // speeds up to "Maximum Velocity" (smoke.c:173-174), so the cloud has no
+    // authored extent.
+    if (obj.type == "Smoke") {
+        igi::SmokeParams sp;
+        if (!igi::ParseSmokeParams(obj.argTokens, &sp)) return;
+
+        const glm::vec3 o((float)sp.origin[0], (float)sp.origin[1], (float)sp.origin[2]);
+        // smoke.c:363-365, in the emitter's own frame.
+        const float cp = std::cos(sp.alpha), sin_p = std::sin(sp.alpha);
+        const float cy = std::cos(sp.gamma), sin_y = std::sin(sp.gamma);
+        glm::vec3 axis(sin_y * sin_p, -cy * sin_p, cp);
+        if (glm::length(axis) < 1e-6f) axis = glm::vec3(0.0f, 0.0f, 1.0f);
+        axis = glm::normalize(axis);
+
+        glm::vec3 ref(0.0f, 0.0f, 1.0f);
+        if (std::fabs(glm::dot(ref, axis)) > 0.99f) ref = glm::vec3(1.0f, 0.0f, 0.0f);
+        const glm::vec3 u = glm::normalize(glm::cross(axis, ref));
+        const glm::vec3 v = glm::normalize(glm::cross(axis, u));
+
+        GzBatch b;
+        const float arm = kGizmoRefLen * 0.25f;
+        // Position marker.
+        b.line(o - ax * arm, o + ax * arm);
+        b.line(o - ay * arm, o + ay * arm);
+        b.line(o - az * arm, o + az * arm);
+        const size_t geometry = b.count();
+
+        // The emission cone: the axis +/- "Maximum Random Angle", 1 m long, with
+        // its base ring at "Radius" (0 when the level authors none).
+        const float half = std::max(0.0f, std::min(sp.spread, glm::half_pi<float>()));
+        const float len = kGizmoRefLen;
+        const float ring = (float)sp.radius;
+        const glm::vec3 tip = o + axis * len;
+        constexpr int kSeg = 24;
+        for (int i = 0; i < kSeg; ++i) {
+            const float a0 = glm::two_pi<float>() * (float)i / (float)kSeg;
+            const float a1 = glm::two_pi<float>() * (float)(i + 1) / (float)kSeg;
+            const glm::vec3 d0 = axis * std::cos(half) +
+                                 (u * std::cos(a0) + v * std::sin(a0)) * std::sin(half);
+            const glm::vec3 d1 = axis * std::cos(half) +
+                                 (u * std::cos(a1) + v * std::sin(a1)) * std::sin(half);
+            b.line(tip, o + d0 * len);
+            b.line(o + d0 * len, o + d1 * len);
+        }
+        if (ring > 0.0f) Arc(b, o, u, v, 0.0f, glm::two_pi<float>(), ring, kSeg);
+
+        FlushGizmo(b, prog, ubo_mats, ubo_binding, geometry,
+                   glm::vec4(0.85f, 0.85f, 0.85f, 1.0f),   // emitter position
+                   glm::vec4(0.55f, 0.75f, 0.95f, 1.0f));  // emission cone + radius
+        return;
+    }
+
+    // ── AlarmLight (the only retail light-with-state task type, issue #43) ───
+    // Position and orientation are ParamTable slots 0 and 1 (AlarmLight_Init
+    // HOOK 0x4397C0, src/fxobj/alarm.c:109-110); the orientation is authored as
+    // three Euler angles (ParamReal32x9_Parse 0x4EFBA0, paramops.c:423-435).
+    // This is the lamp's placement frame only: the reflector's blink and flare
+    // (AlarmLightReflector_DrawFlare HOOK 0x439F10, alarm.c:208-244) are run-time
+    // state and are deliberately not drawn.
+    if (obj.type == "AlarmLight") {
+        GzBatch b;
+        const float arm = kGizmoRefLen * 0.25f;
+        b.line(origin - ax * arm, origin + ax * arm);
+        b.line(origin - ay * arm, origin + ay * arm);
+        b.line(origin - az * arm, origin + az * arm);
+        const size_t geometry = b.count();
+        // The authored Euler triple, Rz*Ry*Rx (Matrix_SetEuler HOOK 0x4B38E0,
+        // src/math/matrix.c:99-110), which is the frame `obj.rot` already holds.
+        b.line(origin, origin + ax * kGizmoRefLen);
+        b.line(origin, origin + ay * kGizmoRefLen);
+        b.line(origin, origin + az * kGizmoRefLen);
+        FlushGizmo(b, prog, ubo_mats, ubo_binding, geometry,
+                   glm::vec4(0.95f, 0.85f, 0.35f, 1.0f),   // position
+                   glm::vec4(0.95f, 0.55f, 0.20f, 1.0f));  // authored orientation
         return;
     }
 }

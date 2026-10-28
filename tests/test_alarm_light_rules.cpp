@@ -22,6 +22,7 @@
 // 9 and 14, and the authored declaration itself.
 
 #include "../source/level/qvm_parser.h"
+#include "../source/level/task_schema.h"
 #include "../source/runtime/alarm_light.h"
 
 #include <gtest/gtest.h>
@@ -735,4 +736,67 @@ TEST(AlarmLightCorpus, DeclaredParametersMatchTheParameterTable) {
     }
     // The retail typo is part of the data, not of this port.
     EXPECT_EQ(declared[5 * 2], "Destroyde model");
+}
+
+// ===========================================================================
+// The inspector schema (GitHub issue #43)
+// ===========================================================================
+//
+// The editor's inspector rows for "AlarmLight" are DERIVED from
+// AlarmLightParamTable() (source/level/task_schema.cpp). The oracle for the
+// rows is AlarmLight_Init's ParamTable (HOOK 0x4397C0, src/fxobj/alarm.c:108-115)
+// and the retail Task_DeclareParameters("AlarmLight", ...) line; the offsets are
+// the running token sum from arg 3, in the LevelObject::argTokens layout.
+
+TEST(AlarmLightSchema, EveryAuthoredParameterHasAnInspectorRowInParamTableOrder) {
+    const TaskSchemaNS::TaskSchema* schema =
+        TaskSchemaNS::GetBuiltinSchema("AlarmLight");
+    ASSERT_NE(schema, nullptr) << "AlarmLight must have a built-in schema";
+    ASSERT_EQ(schema->size(), static_cast<std::size_t>(igi::kAlarmLightParamCount));
+
+    const igi::AlarmLightParamDesc* table = igi::AlarmLightParamTable();
+    for (int i = 0; i < igi::kAlarmLightParamCount; ++i) {
+        const TaskSchemaNS::FieldDef& f = (*schema)[static_cast<std::size_t>(i)];
+        EXPECT_EQ(f.name, table[i].authored_name) << "slot " << i;
+        EXPECT_EQ(f.typeName, table[i].type_name) << "slot " << i;
+        EXPECT_EQ(f.argCount, table[i].token_count) << "slot " << i;
+    }
+    // The retail typo is data, and the inspector shows the level file's word.
+    EXPECT_EQ((*schema)[5].name, "Destroyde model");
+}
+
+TEST(AlarmLightSchema, OffsetsAreTheRunningTokenSumFromArgThree) {
+    const TaskSchemaNS::TaskSchema* schema =
+        TaskSchemaNS::GetBuiltinSchema("AlarmLight");
+    ASSERT_NE(schema, nullptr);
+    const igi::AlarmLightParamDesc* table = igi::AlarmLightParamTable();
+
+    int expected = 3;
+    for (int i = 0; i < igi::kAlarmLightParamCount; ++i) {
+        EXPECT_EQ((*schema)[static_cast<std::size_t>(i)].argOffset, expected) << "slot " << i;
+        expected += table[i].token_count;
+    }
+    // 12 tokens: 3 for ObjectPos, 3 for the Real32x9 Euler triple
+    // (paramops.c:423-435), then six single-token scalars.
+    EXPECT_EQ(expected, 3 + igi::kAlarmLightTokenCount);
+    EXPECT_EQ(expected, 15);
+}
+
+TEST(AlarmLightSchema, TheModelSlotsAreAtTheirRealArgumentsNotAtArgNine) {
+    // The row this schema replaced said "Model, String16, @9".  Arg 9 is the
+    // "On expression" condition (alarm.c:111), so the inspector labelled the
+    // activation expression a model and the lamp's real model slots (args 10,
+    // 11, 12 -- the three String16 fields alarm.c:113 registers as
+    // `l.offModel + 0x10 * i`) were invisible.
+    const TaskSchemaNS::TaskSchema* schema =
+        TaskSchemaNS::GetBuiltinSchema("AlarmLight");
+    ASSERT_NE(schema, nullptr);
+    EXPECT_EQ((*schema)[2].name, "On expression");
+    EXPECT_EQ((*schema)[2].argOffset, 9);
+    EXPECT_EQ((*schema)[2].typeName, "VarString");
+    EXPECT_EQ((*schema)[3].name, "On model");
+    EXPECT_EQ((*schema)[3].argOffset, 10);
+    EXPECT_EQ((*schema)[4].name, "Off model");
+    EXPECT_EQ((*schema)[4].argOffset, 11);
+    EXPECT_EQ((*schema)[5].argOffset, 12);
 }

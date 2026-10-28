@@ -22,6 +22,7 @@
 // against that human-readable text.
 
 #include "../source/level/qvm_parser.h"
+#include "../source/level/task_schema.h"
 #include "../source/runtime/smoke.h"
 
 #include <gtest/gtest.h>
@@ -1294,5 +1295,80 @@ TEST(SmokeRulesCorpus, DeclaredParametersMatchTheParameterTable) {
     for (int i = 0; i < igi::kSmokeParamCount; ++i) {
         EXPECT_EQ(from_text[static_cast<std::size_t>(i) * 2], table[i].authored_name) << "slot " << i;
         EXPECT_EQ(from_text[static_cast<std::size_t>(i) * 2 + 1], table[i].type_name) << "slot " << i;
+    }
+}
+
+// ===========================================================================
+// The inspector schema (GitHub issue #43)
+// ===========================================================================
+//
+// The editor's inspector rows for "Smoke" are DERIVED from SmokeParamTable()
+// (source/level/task_schema.cpp), so these tests pin the two properties that
+// derivation must have: the rows are the table's rows in order, and each row's
+// argOffset is the running sum of the token counts starting at 3 -- the
+// LevelObject::argTokens layout ([0]=id, [1]=type, [2]=name, [3]=parameter 0).
+// The oracle for both is Smoke_Init's ParamTable (HOOK 0x437510,
+// src/fxobj/smoke.c:166-187) plus paramops.c:180-186 for the per-type argument
+// counts.
+
+TEST(SmokeSchema, EveryAuthoredParameterHasAnInspectorRowInParamTableOrder) {
+    const TaskSchemaNS::TaskSchema* schema =
+        TaskSchemaNS::GetBuiltinSchema("Smoke");
+    ASSERT_NE(schema, nullptr) << "Smoke must have a built-in schema";
+    ASSERT_EQ(schema->size(), static_cast<std::size_t>(igi::kSmokeParamCount));
+
+    const igi::SmokeParamDesc* table = igi::SmokeParamTable();
+    for (int i = 0; i < igi::kSmokeParamCount; ++i) {
+        const TaskSchemaNS::FieldDef& f = (*schema)[static_cast<std::size_t>(i)];
+        EXPECT_EQ(f.name, table[i].authored_name) << "slot " << i;
+        EXPECT_EQ(f.typeName, table[i].type_name) << "slot " << i;
+        EXPECT_EQ(f.argCount, table[i].token_count) << "slot " << i;
+        // The type name is one the inspector already knows how to draw.
+        EXPECT_GT(f.argCount, 0) << "slot " << i;
+    }
+}
+
+TEST(SmokeSchema, OffsetsAreTheRunningTokenSumFromArgThree) {
+    const TaskSchemaNS::TaskSchema* schema =
+        TaskSchemaNS::GetBuiltinSchema("Smoke");
+    ASSERT_NE(schema, nullptr);
+    const igi::SmokeParamDesc* table = igi::SmokeParamTable();
+
+    int expected = 3;
+    for (int i = 0; i < igi::kSmokeParamCount; ++i) {
+        EXPECT_EQ((*schema)[static_cast<std::size_t>(i)].argOffset, expected) << "slot " << i;
+        expected += table[i].token_count;
+    }
+    // 25 tokens: 3 for ObjectPos, 3 for RGB, 19 scalars (paramops.c:180-186).
+    EXPECT_EQ(expected, 3 + igi::kSmokeTokenCount);
+    EXPECT_EQ(expected, 28);
+}
+
+TEST(SmokeSchema, TheThreeTokenRowsAreTheObjectPosAndTheColour) {
+    // ObjectPos is an alias of Real64x3 and RGB of Real32x3 (paramops.c:183,180),
+    // so exactly two rows consume three tokens each; every other row is one.
+    const TaskSchemaNS::TaskSchema* schema =
+        TaskSchemaNS::GetBuiltinSchema("Smoke");
+    ASSERT_NE(schema, nullptr);
+    std::vector<std::string> three;
+    for (const TaskSchemaNS::FieldDef& f : *schema) {
+        if (f.argCount == 3) three.push_back(f.name);
+        else EXPECT_EQ(f.argCount, 1) << f.name;
+    }
+    ASSERT_EQ(three.size(), 2u);
+    EXPECT_EQ(three[0], "Position");
+    EXPECT_EQ(three[1], "Colour");
+}
+
+TEST(SmokeSchema, ThereIsNoOrientationRowBecauseSmokeHasNoMatrixSlot) {
+    // Smoke_Init's ParamTable has no Real32x9 entry (smoke.c:167-187), so an
+    // "Orientation" row would be an invention. "Alpha" and "Gamma" are emission
+    // angles (Smoke_Changed smoke.c:361-365), not an object rotation.
+    const TaskSchemaNS::TaskSchema* schema =
+        TaskSchemaNS::GetBuiltinSchema("Smoke");
+    ASSERT_NE(schema, nullptr);
+    for (const TaskSchemaNS::FieldDef& f : *schema) {
+        EXPECT_NE(f.name, "Orientation");
+        EXPECT_NE(f.typeName, "Real32x9");
     }
 }

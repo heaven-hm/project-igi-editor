@@ -2,6 +2,13 @@
 
 #include <cmath>
 
+// The authored parameter tables of the two retail FX task types (issue #43).
+// Deriving the inspector rows from these keeps one source of truth: every row is
+// already cited to IGI-RE inside the modules and corpus-tested against the
+// shipping declaration.
+#include "runtime/alarm_light.h"
+#include "runtime/smoke.h"
+
 namespace TaskSchemaNS {
 
 int TypeArgCount(const std::string& t) {
@@ -164,8 +171,12 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
           add(sc, "Model",    "String16",  7); }
         // Generic positioned objects: pos@3, ori@6, model scanned from arg 9+
         // GunPickup is deliberately NOT in this list: its third parameter is not
-        // a model. See the dedicated block below.
-        for (const char* t : {"AlarmLight","Elevator","Generator",
+        // a model. See the dedicated block below.  AlarmLight is NOT either: its
+        // arg 9 is the fourth float of the orientation matrix, and the first
+        // STRING it has (arg 15) is the activation expression, so the generic
+        // "Model @9" row was label and offset both wrong.  It has its own block
+        // at the end of this function (issue #43).
+        for (const char* t : {"Elevator","Generator",
                                "GenericPickup","GenericTBA","Plane","Radio",
                                "RotatingObject","Siren"}) {
             add(s[t], "Position",    "ObjectPos", 3);
@@ -251,6 +262,51 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
           add(sc, "Orientation", "Real32x9",     6);
           add(sc, "ID",          "EnumString32", 9);
           add(sc, "Ammo",        "Int16",       10); }
+
+        // ─── The two retail FX task types (issue #43) ────────────────────────
+        //
+        // Both rows are DERIVED FROM THE PORTED ORACLE TABLES rather than
+        // hand-copied here, so the inspector cannot drift from IGI-RE: the
+        // modules already carry the authored name / declared type / token count
+        // of every parameter, and their corpus tests compare those rows against
+        // the shipping declaration in the QVM bytecode and the decompiled
+        // objects.qsc.
+        //
+        // Smoke: ParamTable_New(21) + the 21 ParamTable_Add calls of Smoke_Init
+        // (HOOK 0x437510, src/fxobj/smoke.c:166-187), which agree entry for entry
+        // with Task_DeclareParameters("Smoke", ...) in the retail data
+        // (MISSIONS/location0/LEVEL2/objects.qsc:59-61): 25 script arguments,
+        // because "Position" is ObjectPos (3 args, paramops.c:183-185) and
+        // "Colour" is RGB (3 args, paramops.c:180).
+        //
+        // There is deliberately no "Orientation" row: Smoke has no Real32x9
+        // slot, which is why Smoke is not in the placement-matrix group above.
+        // Its "Alpha" and "Gamma" are emission angles, not an object rotation.
+        { auto& sc = s["Smoke"];
+          int offset = 3;  // LevelObject::argTokens: [0]=id, [1]=type, [2]=name
+          for (int i = 0; i < igi::kSmokeParamCount; ++i) {
+              const igi::SmokeParamDesc& p = igi::SmokeParamTable()[i];
+              add(sc, p.authored_name, p.type_name, offset);
+              offset += p.token_count;
+          } }
+        //
+        // AlarmLight: ParamTable_New(8) + its 8 ParamTable_Add calls
+        // (HOOK 0x4397C0, src/fxobj/alarm.c:108-115), which agree entry for entry
+        // with Task_DeclareParameters("AlarmLight", ...) in the retail data:
+        // 18 arguments (3 for ObjectPos, 9 for Real32x9, then six single-token
+        // scalars).  The retail typo "Destroyde model" is reproduced as data.
+        //
+        // The three String16 model slots are the engine's own slot order
+        // (`l.offModel + 0x10 * i`, alarm.c:113), and the authored names do NOT
+        // line up with the runtime use — alarm_light.h records that; the editor
+        // shows the authored names because that is what the level file says.
+        { auto& sc = s["AlarmLight"];
+          int offset = 3;
+          for (int i = 0; i < igi::kAlarmLightParamCount; ++i) {
+              const igi::AlarmLightParamDesc& p = igi::AlarmLightParamTable()[i];
+              add(sc, p.authored_name, p.type_name, offset);
+              offset += p.token_count;
+          } }
 
         return s;
     }();
