@@ -4,6 +4,45 @@ This document tracks all known rendering bugs, engine limitations, and editor wo
 
 ---
 
+## 0. Status as of 4.0.0-pre — the IGI-RE parity campaign
+
+This release is **major** because the editor now reproduces the **original `igi.exe`'s own
+behaviour**, read out of the decompiled game (IGI-RE), instead of approximating it. Credits for
+that are in `CHANGELOGS.md` (4.0.0-pre): **SlickDaddy** and **BlankName** for the game natives,
+and the decomp project.
+
+**Closed by this campaign** — each with the engine citation in the code and in its commit:
+
+| Was | Now |
+|---|---|
+| Mission status text read from the wrong archive (44 warnings/session) | `LANGUAGE:messages.res`, the engine's flat lookup (`StatusMessages_Load` HOOK `0x4868A0`) |
+| Invented texture ids (`waypoint`; the AI `_argb8888` strip) | the engine's own ids; a zero-texture model binds nothing (`0xFFFF`) |
+| ATTA sub-models borrowing the parent hull's textures | removed — the engine never copies texture lists between models |
+| `.olm` reader dropping lightmap pages 1..n on 13 shipped files | the engine's real page layout, and each group binds **its own** page |
+| The `.olm` accept test never called | applied on the live load path (`Lightmap_BuildLod` HOOK `0x523D40`) |
+| Collision proxies fed to the terrain snap; off-terrain reported as a failure | proxies skipped; the engine never clamps (`Game_DropToGround` HOOK `0x4149B0`) |
+| The game's own menu reachable from the pause menu | editor-only; `OpenGameMenu` refuses to push a retail screen |
+| The startup loading bar never painting | fixed (the reshape callback did not exist yet during `App::Init`) |
+| Fullscreen leaving half the screen black | fixed (the `-w`/`-h` re-apply was undoing the borderless switch) |
+| 2534–5399 ms/frame | **~40 ms/frame** (memoised `.res` reads, pick cull, animation pose/clock split) |
+
+**Still open, and stated rather than implied:**
+
+* **§1b x64** — still links-only: no x64 `freeglut.dll`/`glew32.dll` exists to stage, so the
+  runnable build remains the i686 one. Unchanged by this campaign.
+* **Audio, cutscene UI and vehicle simulation** — the editor has **no such subsystems at all**.
+  Those are new construction, not parity fixes.
+* **No in-process lightmap baker** — a recorded decision, not a gap: the engine has **no `.olm`
+  writer** (`.olm` appears three times in the decompilation, all read-side; `gLightmapBuilt` is
+  never read), so "bake in-process and save" has no engine behaviour to be faithful to. See
+  `docs/igi-re-parity/LIGHTMAP_BAKE.md` §9.
+* **On-screen verification** — the GUI needs OpenGL 4.1 and the build host offers 2.1, so the
+  rendering fixes above are proven by engine citations, unit tests, corpus measurements and the
+  editor's own log lines, **not by looking at the screen**. A Windows viewport run is still the
+  only confirmation for the visual ones.
+
+---
+
 ## 🏔️ 1. Rendering and Model Issues
 
 ### 🎥 Camera Orientation
