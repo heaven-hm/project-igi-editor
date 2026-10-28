@@ -793,11 +793,12 @@ std::string FindRetailRoot() {
 
 TEST(MenuUiFallback, RowCountMatchesTheExistingPauseMenuRows) {
     // The fallback must not change what the pause menu shows:
-    // igi::PauseMenuRowCount (source/runtime/pause_menu_layout.h:26-30) is 16
-    // collapsed and 21 with the terrain options expanded, and renderer_draw.cpp
-    // builds exactly that many rows.
-    EXPECT_EQ(igi::app_menu::EditorFallbackRowCount(false), 16);
-    EXPECT_EQ(igi::app_menu::EditorFallbackRowCount(true), 21);
+    // igi::PauseMenuRowCount (source/runtime/pause_menu_layout.h) is 17
+    // collapsed and 22 with the terrain options expanded, and renderer_draw.cpp
+    // builds exactly that many rows.  (It was 16/21 before the editor's own
+    // "Weather Speed" preview row was added.)
+    EXPECT_EQ(igi::app_menu::EditorFallbackRowCount(false), 17);
+    EXPECT_EQ(igi::app_menu::EditorFallbackRowCount(true), 22);
     EXPECT_EQ(igi::app_menu::EditorFallbackRowCount(false),
               igi::PauseMenuRowCount(false));
     EXPECT_EQ(igi::app_menu::EditorFallbackRowCount(true), igi::PauseMenuRowCount(true));
@@ -806,15 +807,15 @@ TEST(MenuUiFallback, RowCountMatchesTheExistingPauseMenuRows) {
         igi::app_menu::BuildEditorFallbackMenu(false, MenuUiBuildOptions{});
     ASSERT_TRUE(collapsed.ok) << collapsed.error;
     ASSERT_NE(collapsed.CurrentScreen(), nullptr);
-    EXPECT_EQ(collapsed.CurrentScreen()->entries.size(), 16u);
-    EXPECT_EQ(collapsed.SelectableCount(), 16);
+    EXPECT_EQ(collapsed.CurrentScreen()->entries.size(), 17u);
+    EXPECT_EQ(collapsed.SelectableCount(), 17);
     EXPECT_TRUE(collapsed.fallback);
     EXPECT_EQ(collapsed.source, "fallback:editor-rows");
 
     const MenuUiModel expanded =
         igi::app_menu::BuildEditorFallbackMenu(true, MenuUiBuildOptions{});
     ASSERT_TRUE(expanded.ok);
-    EXPECT_EQ(expanded.CurrentScreen()->entries.size(), 21u);
+    EXPECT_EQ(expanded.CurrentScreen()->entries.size(), 22u);
 }
 
 TEST(MenuUiFallback, RowOrderAndActionsMirrorTheLegacyRowList) {
@@ -826,18 +827,19 @@ TEST(MenuUiFallback, RowOrderAndActionsMirrorTheLegacyRowList) {
 
     const char* expected_labels[] = {
         "Resume", "Mode", "Collision", "Font", "Select Level", "Auto Save", "Logging",
-        "Log Level", "Music", "Weather", "Lightmap", "Calculate Lightmaps",
-        "Terrain Options", "Reset Level", "Save Level", "Quit"};
+        "Log Level", "Music", "Weather", "Weather Speed", "Lightmap",
+        "Calculate Lightmaps", "Terrain Options", "Reset Level", "Save Level", "Quit"};
     const igi::MenuUiAction expected_actions[] = {
         igi::MenuUiAction::Resume, igi::MenuUiAction::ToggleMode,
         igi::MenuUiAction::ToggleCollision, igi::MenuUiAction::ToggleFont,
         igi::MenuUiAction::SelectLevel, igi::MenuUiAction::ToggleAutoSave,
         igi::MenuUiAction::ToggleLogging, igi::MenuUiAction::CycleLogLevel,
         igi::MenuUiAction::ToggleMusic, igi::MenuUiAction::CycleWeather,
+        igi::MenuUiAction::CycleWeatherSpeed,
         igi::MenuUiAction::ToggleLightmaps, igi::MenuUiAction::CalculateLightmaps,
         igi::MenuUiAction::ToggleTerrainOptions, igi::MenuUiAction::ResetLevel,
         igi::MenuUiAction::SaveLevel, igi::MenuUiAction::Quit};
-    ASSERT_EQ(screen->entries.size(), 16u);
+    ASSERT_EQ(screen->entries.size(), 17u);
     for (size_t i = 0; i < screen->entries.size(); ++i) {
         EXPECT_EQ(screen->entries[i].label, expected_labels[i]) << "row " << i;
         EXPECT_EQ(screen->entries[i].editor_action, expected_actions[i]) << "row " << i;
@@ -850,14 +852,14 @@ TEST(MenuUiFallback, RowOrderAndActionsMirrorTheLegacyRowList) {
     ASSERT_TRUE(expanded.ok);
     const igi::MenuUiScreen* exp = expanded.CurrentScreen();
     ASSERT_NE(exp, nullptr);
-    ASSERT_EQ(exp->entries.size(), 21u);
-    EXPECT_EQ(exp->entries[12].label, "Terrain Options");
-    EXPECT_EQ(exp->entries[13].label, "Texture");
-    EXPECT_EQ(exp->entries[14].label, "Height");
-    EXPECT_EQ(exp->entries[15].label, "Discard");
-    EXPECT_EQ(exp->entries[16].label, "Fog");
-    EXPECT_EQ(exp->entries[17].label, "Fog Intensity");
-    EXPECT_EQ(exp->entries[18].label, "Reset Level");
+    ASSERT_EQ(exp->entries.size(), 22u);
+    EXPECT_EQ(exp->entries[13].label, "Terrain Options");
+    EXPECT_EQ(exp->entries[14].label, "Texture");
+    EXPECT_EQ(exp->entries[15].label, "Height");
+    EXPECT_EQ(exp->entries[16].label, "Discard");
+    EXPECT_EQ(exp->entries[17].label, "Fog");
+    EXPECT_EQ(exp->entries[18].label, "Fog Intensity");
+    EXPECT_EQ(exp->entries[19].label, "Reset Level");
 }
 
 TEST(MenuUiFallback, HitBoxesReproduceTheLegacyRowBands) {
@@ -877,7 +879,7 @@ TEST(MenuUiFallback, HitBoxesReproduceTheLegacyRowBands) {
         igi::BuildPauseMenuLayout(viewport_w, viewport_h, false, options.metrics.line_height);
     const igi::MenuUiScreen* screen = model.CurrentScreen();
     ASSERT_NE(screen, nullptr);
-    ASSERT_EQ(screen->entries.size(), 16u);
+    ASSERT_EQ(screen->entries.size(), 17u);
 
     // The panel rect round-trips to the legacy layout rect.
     const MenuUiRect panel = model.ToViewport(screen->frame);
@@ -912,7 +914,7 @@ TEST(MenuUiFallback, MissingRetailFileFallsBackWithAReason) {
     ASSERT_TRUE(menu.model.ok);
     EXPECT_TRUE(menu.model.fallback);
     EXPECT_EQ(menu.model.fallback_reason, menu.reason);
-    EXPECT_EQ(menu.model.SelectableCount(), 16);
+    EXPECT_EQ(menu.model.SelectableCount(), 17);
 
     // An empty root is the same path, not a crash.
     const igi::app_menu::EditorMenu empty =
@@ -1237,13 +1239,13 @@ TEST(MenuUiRetail, EditorOptionsIsTheOnlyAddedEntry) {
     ASSERT_NE(options, nullptr);
     EXPECT_TRUE(options->editor_added);
     EXPECT_EQ(options->entries.size(),
-              21u + static_cast<size_t>(igi::app_menu::kEditorAddedRowCount));
+              22u + static_cast<size_t>(igi::app_menu::kEditorAddedRowCount));
     for (const MenuUiEntry& row : options->entries) {
         EXPECT_TRUE(row.editor_added);
         EXPECT_TRUE(row.collected);
         EXPECT_NE(row.editor_action, igi::MenuUiAction::None);
     }
-    const size_t first_added = 21u;
+    const size_t first_added = 22u;
     // The user's requirement: "the last option should be quit ... after that there are
     // two options ... you need to remove them".  The `Menu Text` and `Save Menu` rows
     // that used to follow `Quit` are gone, so `Quit` is the last row and nothing is
@@ -1265,9 +1267,9 @@ TEST(MenuUiRetail, EditorOptionsIsTheOnlyAddedEntry) {
     // The whole editor row list is reachable from the added entry.
     ASSERT_TRUE(menu.model.OpenScreen(igi::app_menu::kEditorOptionsScreenId));
     EXPECT_EQ(menu.model.CurrentScreen()->entries.size(),
-              21u + static_cast<size_t>(igi::app_menu::kEditorAddedRowCount));
+              22u + static_cast<size_t>(igi::app_menu::kEditorAddedRowCount));
     EXPECT_EQ(menu.model.SelectableCount(),
-              21 + igi::app_menu::kEditorAddedRowCount);
+              22 + igi::app_menu::kEditorAddedRowCount);
     EXPECT_EQ(menu.model.FocusedEntryIndex(), 0);
 }
 
