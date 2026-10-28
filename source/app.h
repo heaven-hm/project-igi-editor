@@ -86,6 +86,11 @@ public:
   // screen (source/renderer/renderer_draw.cpp); these methods are the row actions.
   void EnsurePauseMenu();                       // load once, then open the editor's own screen
   void RebuildPauseMenu();                      // re-derive the model (font/terrain change)
+  // Logs one line naming every string the draw layer will put on the pause menu's
+  // current screen.  The strings logged are the DRAWN ones (the editor's own), never
+  // the game's `MenuUiEntry::label` / `display_label`, so a run on a host that cannot
+  // show the window still proves what the menu shows.
+  void LogPauseMenuDrawnText() const;
   igi::MenuUiBuildOptions PauseMenuBuildOptions() const;
   igi::PauseMenuLayout PauseMenuLayoutNow() const;
   igi::PauseMenuRowState PauseMenuRowStateNow() const;

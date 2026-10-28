@@ -85,12 +85,15 @@ constexpr int PauseMenuRowCount(bool terrainOptionsExpanded) noexcept {
 }
 
 // The editor-added rows the loaded game menu appends to the editor's own screen
-// (`app_menu.cpp`: the entry that opens the retail screens, the menu-text edit and
-// the menu save).  They are editor-side -- the retail definition declares none of
-// them -- so they are counted ON TOP of `PauseMenuRowCount`.  A menu built without
-// a retail definition (`BuildEditorFallbackMenu`) has none of them, which is why
-// this is a separate constant and not part of `PauseMenuRowCount`.
-constexpr int kPauseMenuEditorExtraRows = 3;
+// (`app_menu.cpp`: the menu-text edit and the menu save -- the row that opened the
+// retail screens was removed, because that screen is the game's menu and the editor's
+// pause menu is editor-only).  They are editor-side -- the retail definition declares
+// none of them -- so they are counted ON TOP of `PauseMenuRowCount`.  A menu built
+// without a retail definition (`BuildEditorFallbackMenu`) has none of them, which is
+// why this is a separate constant and not part of `PauseMenuRowCount`.  It must stay
+// equal to `app_menu::kEditorAddedRowCount`, which is what the live menu passes
+// (`App::PauseMenuExtraRows`).
+constexpr int kPauseMenuEditorExtraRows = 2;
 
 constexpr PauseMenuLayout BuildPauseMenuLayout(
     int viewportWidth, int viewportHeight, bool terrainOptionsExpanded,

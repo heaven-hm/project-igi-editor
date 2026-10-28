@@ -157,6 +157,36 @@ void App::EnsurePauseMenu() {
 	}
 }
 
+void App::LogPauseMenuDrawnText() const {
+	const igi::MenuUiScreen* screen = pause_menu_.model.CurrentScreen();
+	if (screen == nullptr) {
+		return;
+	}
+	// Exactly the strings the draw layer puts on this screen
+	// (source/renderer/renderer_draw.cpp: an editor-added screen's own two title lines,
+	// then each visible row's text: `editor_label` for a retail row, the live
+	// `PauseMenuRowLabel` for an editor row -- and nothing else).  Only the DRAWN text
+	// is logged; the game's `label` / `display_label` never reaches this line.
+	const igi::PauseMenuRowState state = PauseMenuRowStateNow();
+	std::string line = "pause menu: screen " + std::to_string(screen->id) + " draws";
+	if (screen->editor_added) {
+		line += " \"IGI EDITOR\" \"PAUSED\"";
+	}
+	for (const igi::MenuUiEntry& entry : screen->entries) {
+		if (!entry.visible) {
+			continue;
+		}
+		const std::string drawn = entry.editor_added
+			? igi::PauseMenuRowLabel(entry.editor_action, state)
+			: entry.editor_label;
+		if (drawn.empty()) {
+			continue;
+		}
+		line += " \"" + drawn + "\"";
+	}
+	Logger::Get().Log(LogLevel::INFO, line);
+}
+
 void App::RebuildPauseMenu() {
 	if (!pause_menu_loaded_) {
 		EnsurePauseMenu();
@@ -427,7 +457,15 @@ bool App::ActivateFocusedPauseMenuRow() {
 		pause_menu_.model.PushScreen(igi::app_menu::kEditorOptionsScreenId);
 		return true;
 	case igi::MenuUiAction::OpenGameMenu:
-		pause_menu_.model.PushScreen(pause_menu_.model.declared_screen_id);
+		// The editor's pause menu is editor-only: the loaded retail screens are the
+		// GAME's menu, and the user's requirement is that the editor shows its own
+		// text only.  No row of the live menu carries this action any more
+		// (source/app_menu.cpp, `BuildModelInto`), and the push is refused here as
+		// well so a re-added row cannot silently reopen the game's menu.  The
+		// retail screens stay in the model as data; nothing draws them.
+		Logger::Get().Log(LogLevel::WARNING,
+		                  "pause menu: refused to open the retail menu screen (the editor's "
+		                  "menu is editor-only)");
 		return true;
 	case igi::MenuUiAction::EditMenuText: {
 		std::string error;

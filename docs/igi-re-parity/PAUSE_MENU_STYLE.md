@@ -17,10 +17,19 @@ One thing did change after this document was written: the ROW LIST is no longer
 hard-coded in the renderer. It is the loaded menu tree
 (`igi::app_menu::EditorMenu`, issue #74's live wiring — see `MENU_UI.md` "The live
 wiring"), and the editor's own screen is one screen of it. That is also why the
-game's text was briefly *reachable*: the editor's screen carries a `Game Menu` row
-that opens the definition's own screen 900, which the draw layer rendered from the
+game's text was briefly *reachable*: the editor's screen carried a `Game Menu` row
+that opened the definition's own screen 900, which the draw layer rendered from the
 definition — its title, its five items and their colours — because that is what the
 engine draws there.
+
+That row has since been **removed**. Relabelling the retail rows (the rule below) made
+the drawn text the editor's, but the screen that opened was still the game's menu, and
+the user's requirement is that the pause menu is the editor's only. The editor's own
+screen now carries no row that opens a retail screen, and
+`App::ActivateFocusedPauseMenuRow` refuses `MenuUiAction::OpenGameMenu` if it is ever
+reached (`source/app_pause_menu.cpp`). Screen 900 stays in the model as data — the
+`Menu Text` and `Save Menu` rows edit and write that tree — and the mapping below is
+what the editor would draw if it were ever shown, which is what its tests assert.
 
 ## The editor's own strings come first (the rule this file exists to keep)
 

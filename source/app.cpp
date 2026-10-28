@@ -2147,6 +2147,9 @@ void App::TogglePauseMenu() {
 		EnsurePauseMenu();
 		igi::app_menu::OpenEditorPauseMenu(pause_menu_);
 		Logger::Get().Log(LogLevel::INFO, "pause menu: opened");
+		// What the menu shows, in the editor's own words: the only evidence a run on
+		// this host can give (Wine maps no visible window here).
+		LogPauseMenuDrawnText();
 		// The menu is mouse-driven: the pointer must be visible. Gameplay
 		// motion handlers return early while paused, so nothing else would
 		// restore the cursor here — an invisible pointer made the menu

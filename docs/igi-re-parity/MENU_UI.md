@@ -384,27 +384,39 @@ to be listed here as "not applied" became:
 (`source/app_menu.cpp`) positions the model on the editor's own screen
 (`kEditorOptionsScreenId`, −2000) every time the menu opens, so the editor's own
 strings are what the user sees first — the decision recorded in "Editor-added
-entry". The loaded retail screens are one row away: the editor's screen carries the
-`Game Menu` row, which is `MenuManager_PushScreen` HOOK 0x417690
-(src/game/menumanager.c:226-235) to the definition's declared screen (900), and
-Escape is `MenuManager_PopScreen` HOOK 0x417710 (:237-247) back. With nothing on the
-stack Escape closes the menu, which is what screen 900's own `On Press Escape`
-(`MenuManager_LeaveMenus(900, MENUMANAGER_IDLE)`) does in retail.
+entry". The loaded retail screens are **not reachable from the pause menu**: the
+editor's screen has no row that opens them, so the menu the user sees is entirely the
+editor's own (see "The rows the editor adds", below, for why the `Game Menu` row was
+removed). The model still carries the definition's screens as data and can be
+addressed to them programmatically (`MenuUiModel::PushScreen` /
+`MenuManager_PushScreen` HOOK 0x417690, src/game/menumanager.c:226-235;
+`MenuUiModel::PopScreen` / HOOK 0x417710, :237-247), which is what the editor's own
+tests use; Escape with nothing on the stack closes the menu, which is what screen
+900's own `On Press Escape` (`MenuManager_LeaveMenus(900, MENUMANAGER_IDLE)`) does in
+retail.
 
-**The three rows the editor adds to its own screen when a retail definition is
-loaded** (they do not exist in the fallback, because there is nothing to open, edit
-or save):
+**The rows the editor adds to its own screen when a retail definition is loaded**
+(they do not exist in the fallback, because there is nothing to edit or save):
 
 | row | action | what it does |
 | --- | --- | --- |
-| `Game Menu` | `OpenGameMenu` | opens the definition's declared screen (900) and draws it from the definition: its own title, its five items, their colours and the `Editor Options` entry |
 | `Menu Text` | `EditMenuText` | sets the retail main screen's title `Text Resource` to the next string of `app_menu::kEditorMenuTitleCycle` through the mutable accessors of `MenuDefinition`, then rebuilds the model so the change is drawn |
 | `Save Menu` | `SaveMenu` | `app_menu::SaveEditorMenu(menu, "", &error)` — writes `menu.definition` back to the container it was read from |
 
+There was a third row, `Game Menu` (`MenuUiAction::OpenGameMenu`), which pushed the
+definition's declared screen (900). It is **removed**: screen 900 is the GAME's menu
+("Game Paused", "Resume Game", "Restart Mission", …), and the user's requirement is
+that the pause menu shows the editor's own text only. Relabelling its rows (below) was
+not enough — the game's menu was still what opened — so no row opens it, and
+`App::ActivateFocusedPauseMenuRow` refuses the action (with a log line) if it is ever
+reached. The constant `app_menu::kGameMenuLabel` and the action stay, so the label
+mapping and the refusal remain explicit and testable. The definition's screens stay in
+the model as data: the two rows above are what edit and save them.
+
 The edit and the save are the issue's acceptance criteria in one path: an edit made
-through `qvm_image.h`'s mutable accessors changes what the model draws and is what
-`SaveEditorMenu` writes. `tests/test_menu_ui.cpp` (`MenuUiLive`) proves it host-side;
-the live path is proved by a Wine run (below).
+through `qvm_image.h`'s mutable accessors changes what the model stores and is what
+`SaveEditorMenu` writes. `tests/test_menu_ui.cpp` (`MenuUiLive`, `MenuUiEditorOnly`)
+proves it host-side; the live path is proved by a Wine run (below).
 
 **What the draw layer keeps.** The retail frame (`MenuScreen_DrawFrame` HOOK
 0x421CD0), the palette (`gMenuColors`), the row pitch and the font metrics are
@@ -492,6 +504,14 @@ and activating it resumed, which is `MenuManager_LeaveMenus(900, MENUMANAGER_IDL
 That row is DRAWN as `Resume`: the editor's own text for it
 (`app_menu::EditorLabelForRetailEntry`). `Menu Text` and `Save Menu` are the
 editor's own added rows on its own screen.
+
+That log is from the run that still had the `Game Menu` row. The row has since been
+removed (see "The rows the editor adds", above), so `pause menu: activated row 'Game
+Menu' (OpenGameMenu, screen -2000)` can no longer be produced by the live menu: the
+row is not built, and `App::ActivateFocusedPauseMenuRow` refuses the action with
+`pause menu: refused to open the retail menu screen (the editor's menu is
+editor-only)` if it is ever reached. `Resume Game` on screen 900 is likewise no
+longer reachable from the menu — the screen stays in the model as data.
 
 and the container that click wrote:
 

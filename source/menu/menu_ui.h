@@ -172,9 +172,13 @@ enum class MenuUiAction {
     Quit,
     // Editor-only: opens the editor's own options screen (app_menu's added entry).
     OpenEditorOptions,
-    // Editor-only, on the editor's own screen: opens the loaded retail screens
-    // (the in-game menu's own screen 900 and, from it, the editor's screen again),
-    // edits the loaded definition's text, and writes the definition back.
+    // Editor-only, on the editor's own screen: the loaded retail screens (the
+    // in-game menu's own screen 900 and, from it, the editor's screen again), the
+    // loaded definition's text, and the write back.  `OpenGameMenu` is NO LONGER
+    // offered by the live menu -- the retail screen is the game's menu, and the
+    // editor's pause menu is editor-only, so the row was removed and the action is
+    // refused if it is ever reached (source/app_pause_menu.cpp).  `EditMenuText`
+    // and `SaveMenu` are still live rows.
     OpenGameMenu,
     EditMenuText,
     SaveMenu,
@@ -415,20 +419,26 @@ inline constexpr char kRetailMenuRelativePath[] = "menusystem/ingamemenu.qvm";
 inline constexpr int kEditorOptionsScreenId = -2000;
 inline constexpr char kEditorOptionsLabel[] = "Editor Options";
 
-// The three entries the editor appends to its OWN screen when the retail
-// definition is loaded.  They are the live menu's write side (issue #74): the
-// entry that opens the loaded retail screens, the menu-tree edit, and the save
-// back to the container.  They are editor strings and editor-added rows; the
-// retail definition declares none of them, and without a retail definition
-// (`fallback == true`) none of them exists, because there is nothing to open,
-// edit or save.
+// The rows the editor appends to its OWN screen when the retail definition is
+// loaded.  They are the live menu's write side (issue #74): the menu-tree edit and
+// the save back to the container.  They are editor strings and editor-added rows;
+// the retail definition declares none of them, and without a retail definition
+// (`fallback == true`) neither exists, because there is nothing to edit or save.
+//
+// `kGameMenuLabel` is the editor's own name for the action that opened the loaded
+// retail screens (`MenuUiAction::OpenGameMenu`).  NO live row carries it any more:
+// that screen is the GAME's menu, and the user's requirement is that the pause menu
+// shows the editor's own text only, so the row was removed rather than relabelled
+// (source/app_menu.cpp `BuildModelInto`, source/app_pause_menu.cpp
+// `ActivateFocusedPauseMenuRow`).  The constant and the action stay so the label
+// mapping and the refusal remain explicit and testable.
 inline constexpr char kGameMenuLabel[] = "Game Menu";
 inline constexpr char kMenuTextLabel[] = "Menu Text";
 inline constexpr char kSaveMenuLabel[] = "Save Menu";
 
 // How many rows those add to the editor's own screen (the panel grows by them,
 // `kPauseMenuEditorExtraRows`, source/runtime/pause_menu_layout.h).
-constexpr int kEditorAddedRowCount = 3;
+constexpr int kEditorAddedRowCount = 2;
 
 // The strings `EditEditorMenuText` cycles the retail main screen's title text
 // through, in order.  They are the EDITOR's own strings: the retail menu's text
@@ -550,9 +560,9 @@ bool SaveEditorMenu(const EditorMenu& menu, const std::string& path, std::string
 // layer, exactly as before.
 //
 // `added_rows` are editor-added rows appended after the editor's own list (the
-// live menu's "Game Menu" / "Menu Text" / "Save Menu" when a retail definition is
-// loaded); the panel grows by them.  Empty for the fallback proper, which has
-// nothing to open, edit or save.
+// live menu's "Menu Text" / "Save Menu" when a retail definition is loaded); the
+// panel grows by them.  Empty for the fallback proper, which has nothing to edit or
+// save.
 struct EditorAddedRow {
     const char* label = "";
     MenuUiAction action = MenuUiAction::None;

@@ -289,10 +289,15 @@ void DrawMenuUiScreen(const MenuUiModel& model, const MenuUiScreen& screen,
         }
         // The editor draws its OWN text for a retail row, never the game's:
         // `editor_label` is set by `app_menu::EditorLabelForRetailEntry`
-        // (source/app_menu.cpp) on the live path.  A model built without that
-        // wiring (a hand-built definition, a test) has no editor label, and only
-        // then does this presenter fall back to the model's own text.
-        const std::string& text = entry.editor_label.empty() ? entry.label : entry.editor_label;
+        // (source/app_menu.cpp) on the live path.  There is deliberately NO
+        // fallback to the model's own text here: `label` / `display_label` are the
+        // GAME's words (the script key and the language archive's answer), and the
+        // pause menu must show editor text only.  An entry with no editor label is
+        // one the editor has nothing to draw for -- a container, or a row with no
+        // text -- and it is skipped, exactly like the live draw layer
+        // (source/renderer/renderer_draw.cpp, which draws `entry.editor_label` and
+        // nothing else).
+        const std::string& text = entry.editor_label;
         if (text.empty()) {
             continue;
         }

@@ -37,6 +37,7 @@
 
 #include "../source/menu/menu_ui.h"
 #include "../source/runtime/pause_menu_layout.h"
+#include "../source/runtime/pause_menu_rows.h"
 #include "../source/level/qvm_decompiler.h"
 #include "../source/level/qvm_parser.h"
 
@@ -1231,8 +1232,7 @@ TEST(MenuUiRetail, EditorOptionsIsTheOnlyAddedEntry) {
     EXPECT_EQ(editor.rect.x, ((main->frame.w - editor.rect.w) >> 1) + main->frame.x);
 
     // The added screen is the editor's row list, expanded as requested, plus the
-    // three write-side rows the live menu needs (open the game menu, edit its text,
-    // save it).
+    // write-side rows the live menu needs (edit the loaded tree's text, save it).
     const MenuUiScreen* options = menu.model.FindScreen(igi::app_menu::kEditorOptionsScreenId);
     ASSERT_NE(options, nullptr);
     EXPECT_TRUE(options->editor_added);
@@ -1244,12 +1244,10 @@ TEST(MenuUiRetail, EditorOptionsIsTheOnlyAddedEntry) {
         EXPECT_NE(row.editor_action, igi::MenuUiAction::None);
     }
     const size_t first_added = 21u;
-    EXPECT_EQ(options->entries[first_added + 0].label, igi::app_menu::kGameMenuLabel);
-    EXPECT_EQ(options->entries[first_added + 0].editor_action, igi::MenuUiAction::OpenGameMenu);
-    EXPECT_EQ(options->entries[first_added + 1].label, igi::app_menu::kMenuTextLabel);
-    EXPECT_EQ(options->entries[first_added + 1].editor_action, igi::MenuUiAction::EditMenuText);
-    EXPECT_EQ(options->entries[first_added + 2].label, igi::app_menu::kSaveMenuLabel);
-    EXPECT_EQ(options->entries[first_added + 2].editor_action, igi::MenuUiAction::SaveMenu);
+    EXPECT_EQ(options->entries[first_added + 0].label, igi::app_menu::kMenuTextLabel);
+    EXPECT_EQ(options->entries[first_added + 0].editor_action, igi::MenuUiAction::EditMenuText);
+    EXPECT_EQ(options->entries[first_added + 1].label, igi::app_menu::kSaveMenuLabel);
+    EXPECT_EQ(options->entries[first_added + 1].editor_action, igi::MenuUiAction::SaveMenu);
     // The added rows sit below the editor's own rows, inside the (grown) panel, and
     // are hit-testable like every other row.
     for (size_t i = first_added; i < options->entries.size(); ++i) {
@@ -1397,7 +1395,7 @@ TEST(MenuUiSave, AnEmptyPathWritesTheFileTheMenuWasReadFrom) {
 // host-side half of that wiring; the draw and input layers are the other half
 // (`source/renderer/renderer_draw.cpp`, `source/app_input_mouse.cpp`).
 
-TEST(MenuUiLive, ThePauseMenuOpensOnTheEditorsOwnScreenAndReachesTheGameMenu) {
+TEST(MenuUiLive, ThePauseMenuOpensOnTheEditorsOwnScreenAndCannotReachTheGameMenu) {
     const std::string root = FindRetailRoot();
     if (root.empty()) {
         GTEST_SKIP() << "retail corpus not reachable (set IGI_GAME_PATH)";
@@ -1429,9 +1427,6 @@ TEST(MenuUiLive, ThePauseMenuOpensOnTheEditorsOwnScreenAndReachesTheGameMenu) {
     }
 
     // The write-side rows are on it, with the actions the live dispatch handles.
-    const MenuUiEntry* game = EntryByLabel(menu.model, igi::app_menu::kGameMenuLabel);
-    ASSERT_NE(game, nullptr);
-    EXPECT_EQ(game->editor_action, igi::MenuUiAction::OpenGameMenu);
     const MenuUiEntry* edit = EntryByLabel(menu.model, igi::app_menu::kMenuTextLabel);
     ASSERT_NE(edit, nullptr);
     EXPECT_EQ(edit->editor_action, igi::MenuUiAction::EditMenuText);
@@ -1439,17 +1434,25 @@ TEST(MenuUiLive, ThePauseMenuOpensOnTheEditorsOwnScreenAndReachesTheGameMenu) {
     ASSERT_NE(save, nullptr);
     EXPECT_EQ(save->editor_action, igi::MenuUiAction::SaveMenu);
 
-    // The game menu the row opens is the loaded definition's own screen, and its
-    // rows are the definition's rows — not editor rows, not hard-coded labels.
-    const MenuUiEntry* focused = menu.model.FocusedEntry();
-    ASSERT_NE(focused, nullptr);
-    ASSERT_TRUE(menu.model.FocusEntry(game - editor->entries.data()));
-    const igi::MenuUiActivation activation = menu.model.Activate();
-    ASSERT_TRUE(activation.hit);
-    ASSERT_EQ(activation.editor_action, igi::MenuUiAction::OpenGameMenu);
+    // ... and NO row opens the loaded retail screens.  That screen is the GAME's
+    // menu ("Game Paused", "Resume Game", ...), and the user's requirement is that
+    // the pause menu shows the editor's own text only, so the `Game Menu` row is
+    // gone (source/app_menu.cpp `BuildModelInto`) and the action is refused if it is
+    // ever reached (source/app_pause_menu.cpp `ActivateFocusedPauseMenuRow`).
+    EXPECT_EQ(EntryByLabel(menu.model, igi::app_menu::kGameMenuLabel), nullptr);
+    for (const MenuUiScreen& screen : menu.model.screens) {
+        for (const MenuUiEntry& row : screen.entries) {
+            EXPECT_NE(row.editor_action, igi::MenuUiAction::OpenGameMenu)
+                << "screen " << screen.id << " row '" << row.label << "'";
+        }
+    }
 
-    // `MenuManager_PushScreen` HOOK 0x417690 (src/game/menumanager.c:226-235) pushes
-    // the current screen id and opens the requested one.
+    // The loaded definition's screen 900 is still on the model as DATA -- the editor
+    // edits and saves that tree, and its rows keep the game's text verbatim in
+    // `label` / `display_label` -- and the model can still be addressed to it
+    // programmatically.  What the LIVE menu never does is put it on screen: no row
+    // reaches it (above), and the draw layer draws `editor_label`, never the game's
+    // text (MenuUiEditorOnly, below).
     ASSERT_TRUE(menu.model.PushScreen(900));
     const MenuUiScreen* main = menu.model.CurrentScreen();
     ASSERT_NE(main, nullptr);
@@ -1464,12 +1467,13 @@ TEST(MenuUiLive, ThePauseMenuOpensOnTheEditorsOwnScreenAndReachesTheGameMenu) {
     ASSERT_NE(resume, nullptr);
     EXPECT_FALSE(resume->editor_added);
     EXPECT_EQ(resume->editor_action, igi::MenuUiAction::Resume);
+    EXPECT_EQ(resume->editor_label, "Resume");  // the editor's own text, not the game's
     const MenuUiEntry* quit = EntryByLabel(menu.model, "Quit to Main Menu");
     ASSERT_NE(quit, nullptr);
     EXPECT_TRUE(quit->inert);
     EXPECT_FALSE(quit->inert_reason.empty());
-    EXPECT_FALSE(EntryByLabel(menu.model, igi::app_menu::kGameMenuLabel) != nullptr)
-        << "the game menu is not the editor's screen";
+    EXPECT_EQ(EntryByLabel(menu.model, igi::app_menu::kGameMenuLabel), nullptr)
+        << "the game menu row is not on the editor's screen";
 
     // `MenuManager_PopScreen` HOOK 0x417710 (src/game/menumanager.c:237-247) comes
     // back to the screen that pushed.
@@ -1861,4 +1865,167 @@ TEST(MenuUiEditorText, EditorAddedRowsKeepTheirOwnLabels) {
     ASSERT_NE(options, nullptr);
     EXPECT_TRUE(options->editor_added);
     EXPECT_EQ(options->editor_label, std::string(igi::app_menu::kEditorOptionsLabel));
+}
+
+// ── the editor-only rule: the pause menu draws the editor's text, never the game's ─
+//
+// The user's requirement, verbatim: "it has text from game igi.exe which i dont
+// want i want editor only got it".  These tests hold the two structural facts that
+// make it true of the LIVE model, not merely of the strings the editor happens to
+// pass today:
+//
+//   1. no row anywhere is wired to `MenuUiAction::OpenGameMenu`, so the loaded retail
+//      screens -- the game's own menu, with "Game Paused", "Resume Game", ... -- are
+//      not reachable from the editor's pause menu (the `Game Menu` row was removed,
+//      source/app_menu.cpp `BuildModelInto`);
+//   2. every string the live draw path (source/renderer/renderer_draw.cpp:1960-2086)
+//      would draw is the editor's own: never an entry's `label` (the retail script
+//      key) nor its `display_label` (the language archive's answer, resolved through
+//      `MenuManager_GetString` HOOK 0x418EA0, src/menu/menumanager.c:832-852).
+//
+// The retail definition stays on the model as data -- the editor edits and saves it
+// through the `Menu Text` / `Save Menu` rows -- which is exactly why the second
+// invariant compares the DRAWN strings against the GAME strings instead of trusting
+// that the two sets happen not to overlap.
+
+namespace {
+
+// The string the live draw layer draws for an entry: an editor-added row's live label
+// (`PauseMenuRowLabel`, source/runtime/pause_menu_rows.h) or a retail row's
+// `editor_label` (source/app_menu.cpp `EditorLabelForRetailEntry`).  Empty means the
+// row draws nothing.
+std::string DrawnTextFor(const MenuUiEntry& entry) {
+    const igi::PauseMenuRowState state;
+    return entry.editor_added ? igi::PauseMenuRowLabel(entry.editor_action, state)
+                              : entry.editor_label;
+}
+
+// Collects the strings the model would draw and the strings that come from the game's
+// own data, over EVERY screen (the pause menu can be positioned on any of them), and
+// asserts the two sets are disjoint.  Also asserts that a text row does not silently
+// vanish: a retail row with text must have the editor's own text to draw.
+void ExpectTheDrawnTextIsNeverTheGames(const MenuUiModel& model) {
+    std::vector<std::string> game_strings;
+    std::vector<std::string> drawn_strings;
+    for (const MenuUiScreen& screen : model.screens) {
+        for (const MenuUiEntry& entry : screen.entries) {
+            if (!entry.editor_added) {
+                if (!entry.label.empty()) {
+                    game_strings.push_back(entry.label);
+                }
+                if (!entry.display_label.empty()) {
+                    game_strings.push_back(entry.display_label);
+                }
+            }
+            const std::string drawn = DrawnTextFor(entry);
+            if (drawn.empty()) {
+                if (entry.has_text && !entry.label.empty()) {
+                    ADD_FAILURE() << "screen " << screen.id << " row '" << entry.label
+                                  << "' draws no text";
+                }
+                continue;
+            }
+            drawn_strings.push_back(drawn);
+        }
+    }
+    ASSERT_FALSE(drawn_strings.empty());
+    for (const std::string& drawn : drawn_strings) {
+        EXPECT_EQ(std::find(game_strings.begin(), game_strings.end(), drawn),
+                  game_strings.end())
+            << "the menu draws the game's own text: '" << drawn << "'";
+    }
+}
+
+}  // namespace
+
+TEST(MenuUiEditorOnly, NoRowOpensTheRetailScreens) {
+    igi::app_menu::EditorMenu menu;
+    menu.definition = RetailShapedFixture();
+    ASSERT_TRUE(igi::app_menu::RebuildEditorMenuModel(menu, MenuUiBuildOptions{}));
+
+    // No row of any screen opens the loaded definition's screen 900: the row that
+    // used to (`Game Menu`) is gone, and the action is refused if it is ever reached
+    // (source/app_pause_menu.cpp `ActivateFocusedPauseMenuRow`).
+    for (const MenuUiScreen& screen : menu.model.screens) {
+        for (const MenuUiEntry& row : screen.entries) {
+            EXPECT_NE(row.editor_action, igi::MenuUiAction::OpenGameMenu)
+                << "screen " << screen.id << " row '" << row.label << "'";
+        }
+    }
+
+    // Opening the pause menu puts the user on the editor's own screen, and that
+    // screen is a closed set: every row on it is editor-added, none opens a retail
+    // screen, and none opens another screen at all.
+    ASSERT_TRUE(igi::app_menu::OpenEditorPauseMenu(menu));
+    const MenuUiScreen* own = menu.model.CurrentScreen();
+    ASSERT_NE(own, nullptr);
+    EXPECT_EQ(own->id, igi::app_menu::kEditorOptionsScreenId);
+    EXPECT_EQ(menu.model.SelectableCount(),
+              igi::app_menu::EditorFallbackRowCount(false) +
+                  igi::app_menu::kEditorAddedRowCount);
+    for (const MenuUiEntry& row : own->entries) {
+        EXPECT_TRUE(row.editor_added) << row.label;
+        EXPECT_NE(row.editor_action, igi::MenuUiAction::OpenGameMenu) << row.label;
+        EXPECT_NE(row.editor_action, igi::MenuUiAction::OpenEditorOptions) << row.label;
+    }
+
+    // The retail screens are still the model's data, not deleted from it.
+    EXPECT_NE(menu.model.FindScreen(900), nullptr);
+}
+
+TEST(MenuUiEditorOnly, TheDrawnTextIsNeverTheGames) {
+    igi::app_menu::EditorMenu menu;
+    menu.definition = RetailShapedFixture();
+    ASSERT_TRUE(igi::app_menu::RebuildEditorMenuModel(menu, MenuUiBuildOptions{}));
+    ExpectTheDrawnTextIsNeverTheGames(menu.model);
+}
+
+TEST(MenuUiEditorOnly, TheRetailCorpusDrawnTextIsNeverTheGames) {
+    const std::string root = FindRetailRoot();
+    if (root.empty()) {
+        GTEST_SKIP() << "retail corpus not reachable (set IGI_GAME_PATH)";
+    }
+    igi::app_menu::EditorMenu menu =
+        igi::app_menu::LoadEditorMenu(root, false, MenuUiBuildOptions{});
+    ASSERT_TRUE(menu.retail) << "fell back: " << menu.reason;
+
+    // The comparison is not vacuous: the shipped file's own strings are on the model.
+    std::size_t game_strings = 0;
+    for (const MenuUiScreen& screen : menu.model.screens) {
+        for (const MenuUiEntry& entry : screen.entries) {
+            if (!entry.editor_added && !entry.display_label.empty()) {
+                ++game_strings;
+            }
+        }
+    }
+    EXPECT_GT(game_strings, 0u);
+    ExpectTheDrawnTextIsNeverTheGames(menu.model);
+
+    // The retail title is the game's ("Game Paused" in the shipped file) and what the
+    // editor draws in its place is one of the editor's own titles, whatever the
+    // definition currently carries (the `Menu Text` row cycles them).
+    const MenuUiScreen* main = menu.model.FindScreen(900);
+    ASSERT_NE(main, nullptr);
+    const MenuUiEntry* title = nullptr;
+    for (const MenuUiEntry& entry : main->entries) {
+        if (entry.widget_type == "MenuText") {
+            title = &entry;
+            break;
+        }
+    }
+    ASSERT_NE(title, nullptr);
+    bool is_editor_title = false;
+    for (int i = 0; i < igi::app_menu::kEditorMenuTitleCycleCount; ++i) {
+        is_editor_title =
+            is_editor_title || title->editor_label == igi::app_menu::kEditorMenuTitleCycle[i];
+    }
+    EXPECT_TRUE(is_editor_title) << "the drawn title is '" << title->editor_label << "'";
+    EXPECT_FALSE(title->label.empty());
+
+    // ... and no row of the screen the user is on reaches that screen.
+    ASSERT_TRUE(igi::app_menu::OpenEditorPauseMenu(menu));
+    ASSERT_NE(menu.model.CurrentScreen(), nullptr);
+    for (const MenuUiEntry& row : menu.model.CurrentScreen()->entries) {
+        EXPECT_NE(row.editor_action, igi::MenuUiAction::OpenGameMenu) << row.label;
+    }
 }

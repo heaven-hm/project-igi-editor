@@ -50,6 +50,15 @@
 
 namespace igi {
 namespace app_menu {
+
+// The live menu grows the panel by `App::PauseMenuExtraRows`, which returns
+// `kEditorAddedRowCount`; `kPauseMenuEditorExtraRows` is the same number as the layout
+// constant the layout tests assert against.  They must agree, or the panel is sized
+// for a different number of rows than it draws.
+static_assert(kEditorAddedRowCount == igi::kPauseMenuEditorExtraRows,
+              "kEditorAddedRowCount and kPauseMenuEditorExtraRows must stay equal "
+              "(App::PauseMenuExtraRows passes the former to BuildPauseMenuLayout)");
+
 namespace {
 
 std::string Squashed(const std::string& text) {
@@ -453,13 +462,23 @@ void BuildModelInto(EditorMenu& menu, const MenuUiBuildOptions& options) {
         }
     }
 
-    // The editor's own screen, plus the three rows that are the live menu's write
-    // side (issue #74): open the loaded retail screens, edit the loaded tree, and
-    // save it back.  They exist only when a retail definition was loaded -- with
-    // no definition there is nothing to open, edit or save, which is why the
-    // fallback proper has none of them.
+    // The editor's own screen, plus the rows that are the live menu's write side
+    // (issue #74): edit the loaded tree and save it back.  They exist only when a
+    // retail definition was loaded -- with no definition there is nothing to edit
+    // or save, which is why the fallback proper has none of them.
+    //
+    // There is deliberately NO row that opens the loaded retail screens.  The
+    // `Game Menu` row used to push the definition's declared screen (900) and draw
+    // it; that screen is the GAME's menu, and the user's requirement is that the
+    // pause menu shows the editor's own text only ("it has text from game igi.exe
+    // which i dont want i want editor only").  Even with every retail row relabelled
+    // by `EditorLabelForRetailEntry`, opening the game's menu is what the user
+    // objected to, so the row is gone: no retail screen is reachable from the
+    // editor's pause menu, and `MenuUiAction::OpenGameMenu` is refused in
+    // `App::ActivateFocusedPauseMenuRow` (source/app_pause_menu.cpp).  The loaded
+    // definition's screens stay in the model as data -- the `Menu Text` edit and
+    // `Save Menu` below operate on it -- but nothing draws them.
     const std::vector<EditorAddedRow> editor_added_rows = {
-        {kGameMenuLabel, MenuUiAction::OpenGameMenu, "game-menu"},
         {kMenuTextLabel, MenuUiAction::EditMenuText, "edit-menu-text"},
         {kSaveMenuLabel, MenuUiAction::SaveMenu, "save-menu"},
     };
