@@ -3,8 +3,40 @@
 #include "../source/runtime/auto_save_policy.h"
 #include "../source/runtime/editor_hover_policy.h"
 #include "../source/runtime/editor_history.h"
+#include "../source/runtime/viewport_size_policy.h"
 
 #include <vector>
+
+// The viewport must be the size the window ACTUALLY has.  The regression these
+// pin: App::Init's borderless-fullscreen path sizes the window to the monitor
+// (1680x1050 on the reporting machine) with a direct SetWindowPos, and main.cpp
+// then stamped the `-w`/`-h` default (1280x720) over the viewport.  The window
+// stayed monitor-sized, only 1280x720 of it was ever painted, and the rest was
+// black -- reported as "half screen and half black".
+TEST(ViewportSizePolicyTest, RealClientSizeBeatsAStaleGlutSize) {
+    EXPECT_EQ(igi::ResolveViewportExtent(/*client=*/1680, /*glut=*/1280,
+                                        /*requested=*/1280),
+              1680);
+}
+
+TEST(ViewportSizePolicyTest, GlutIsTheFallbackWhenTheClientRectIsUnavailable) {
+    // GetClientRect cannot be called before the window exists / on non-Win32.
+    EXPECT_EQ(igi::ResolveViewportExtent(/*client=*/0, /*glut=*/1680,
+                                        /*requested=*/1280),
+              1680);
+}
+
+TEST(ViewportSizePolicyTest, RequestedSizeIsOnlyASeed) {
+    EXPECT_EQ(igi::ResolveViewportExtent(0, 0, 1280), 1280);
+    EXPECT_EQ(igi::ResolveViewportExtent(-1, -1, 720), 720);
+}
+
+TEST(ViewportSizePolicyTest, NeverResolvesBelowOne) {
+    // ApplyViewportSize derives fovx_ from width/height, so a zero would divide
+    // by zero; a window reported as 0x0 (minimized) must not reach it.
+    EXPECT_EQ(igi::ResolveViewportExtent(0, 0, 0), 1);
+    EXPECT_EQ(igi::ResolveViewportExtent(-5, -5, -5), 1);
+}
 
 TEST(AutoSavePolicyTest, TimerRequiresEveryEligibilityCondition) {
     for (bool editor_mode : {false, true}) {

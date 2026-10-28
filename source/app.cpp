@@ -13,6 +13,7 @@
 #include "runtime/editor_hover_policy.h"
 #include "runtime/progress_overlay_policy.h"
 #include "runtime/window_style_policy.h"
+#include "runtime/viewport_size_policy.h"
 #include "mission_flow_loader.h"
 #include "mission_objective_loader.h"
 #include "mission_state_loader.h"
@@ -208,9 +209,12 @@ bool App::Init(int argc, char** argv) {
 		UpdateViewerVectors();
 	}
 
-	int wnd_w = Arg_ReadInt(argc, argv, "-w", 800);
-	int wnd_h = Arg_ReadInt(argc, argv, "-h", 600);
-	OnWindowResize(wnd_w, wnd_h);
+	// Re-apply the viewport from the window that main.cpp has already created.
+	// This used to read -w/-h here with its own defaults (800x600) that disagreed
+	// with main.cpp's (1280x720), so with no -w/-h on the command line the
+	// viewport described a window size that never existed.  The window is the
+	// authority; -w/-h only ever reached it through glutInitWindowSize.
+	ApplyClientViewport("startup seed");
 
 	prior_frame_time_ = Sys_Milliseconds();
 
@@ -268,12 +272,14 @@ bool App::Init(int argc, char** argv) {
 			// deliver a reshape for it, so the GL viewport keeps the pre-fullscreen size
 			// and the uncovered area is never painted -- reported as "in fullscreen on a
 			// small screen the rest of the area is black".  Re-apply the viewport from the
-			// monitor rectangle we just set, exactly as the reshape path would.
+			// window's real client size, exactly as the reshape path would.  The monitor
+			// rectangle is only the fallback seed for the (impossible on a borderless
+			// popup) case where the client rectangle cannot be queried at all.
 			const int fs_w = monitor_info.rcMonitor.right - monitor_info.rcMonitor.left;
 			const int fs_h = monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top;
 			editor_viewport_width_ = (std::max)(1, fs_w);
 			editor_viewport_height_ = (std::max)(1, fs_h);
-			ApplyViewportSize(editor_viewport_width_, editor_viewport_height_);
+			ApplyClientViewport("borderless fullscreen");
 			Logger::Get().Log(LogLevel::INFO, "[App] borderless fullscreen: viewport reapplied as " +
 				std::to_string(editor_viewport_width_) + "x" + std::to_string(editor_viewport_height_));
 			Logger::Get().Log(LogLevel::INFO, "[App] Editor window switched to borderless fullscreen");
@@ -447,16 +453,71 @@ int	App::GetTerrainModOptions() const {
 void App::OnWindowResize(int width, int height) {
 	editor_viewport_width_ = std::max(1, width);
 	editor_viewport_height_ = std::max(1, height);
-	ApplyViewportSize(editor_viewport_width_, editor_viewport_height_);
+	// Same-window gameplay: the editor and the gameplay surface are one GLUT
+	// window (runtime/gameplay_window.cpp), so a reshape of that window is a
+	// resize of BOTH.  GLUT never delivers a gameplay reshape -- the gameplay
+	// callbacks App::InitializeGameplayWindow is handed are stored nowhere and
+	// OnGameplayWindowResize is unreachable -- so if this left the gameplay pair
+	// behind, the gameplay render would keep drawing at the old size.
+	gameplay_viewport_width_ = editor_viewport_width_;
+	gameplay_viewport_height_ = editor_viewport_height_;
+	ApplyViewportSize(editor_viewport_width_, editor_viewport_height_, "editor reshape");
 }
 
 void App::OnGameplayWindowResize(int width, int height) {
 	gameplay_viewport_width_ = std::max(1, width);
 	gameplay_viewport_height_ = std::max(1, height);
-	ApplyViewportSize(gameplay_viewport_width_, gameplay_viewport_height_);
+	// Mirror of the above: the gameplay surface is the editor window, so a
+	// gameplay resize has to move the editor pair too.
+	editor_viewport_width_ = gameplay_viewport_width_;
+	editor_viewport_height_ = gameplay_viewport_height_;
+	ApplyViewportSize(gameplay_viewport_width_, gameplay_viewport_height_, "gameplay reshape");
 }
 
-void App::ApplyViewportSize(int width, int height) {
+// The single authoritative viewport update: the presenting window's CLIENT
+// rectangle, applied to both viewport pairs and to window_state_.
+//
+// Why this exists.  There is only ONE GLUT window: GameplayWindowHost::Create
+// aliases gameplay_window_id_ onto editor_window_id_ and discards the gameplay
+// callbacks, so "the gameplay window" is the editor window.  There is therefore
+// exactly one size that can be correct for the GL viewport, yet the code keeps
+// two pairs of it and the gameplay renderer reads the GAMEPLAY pair
+// (App::UpdateGameplayViewDefine copies gameplay_viewport_* into
+// camera.viewport_width/height) while the pause menu, the UI hit-tests and the
+// debug overlay read window_state_.viewport_*, which ApplyViewportSize sets from
+// whichever pair called it last.  Any caller that applies a size the window does
+// not currently have therefore paints only part of the surface and leaves the
+// rest black -- the reported "half screen and half black".
+//
+// The client rectangle is authoritative rather than glutGet(): the borderless
+// fullscreen path (App::Init) resizes the Win32 window with a direct
+// SetWindowPos, which never goes through GLUT, so GLUT's own size can lag.
+// igi::ResolveViewportExtent encodes the fallback order (client, then GLUT, then
+// the last known-good value) and is host-tested in tests/test_editor_policy.cpp.
+void App::ApplyClientViewport(const char *reason) {
+	int client_w = 0;
+	int client_h = 0;
+#ifdef _WIN32
+	if (editor_hwnd_) {
+		RECT client_rect = {0, 0, 0, 0};
+		if (GetClientRect(editor_hwnd_, &client_rect)) {
+			client_w = client_rect.right - client_rect.left;
+			client_h = client_rect.bottom - client_rect.top;
+		}
+	}
+#endif
+	const int width = igi::ResolveViewportExtent(
+		client_w, glutGet(GLUT_WINDOW_WIDTH), editor_viewport_width_);
+	const int height = igi::ResolveViewportExtent(
+		client_h, glutGet(GLUT_WINDOW_HEIGHT), editor_viewport_height_);
+	editor_viewport_width_ = width;
+	editor_viewport_height_ = height;
+	gameplay_viewport_width_ = width;
+	gameplay_viewport_height_ = height;
+	ApplyViewportSize(width, height, reason);
+}
+
+void App::ApplyViewportSize(int width, int height, const char *reason) {
 	width = std::max(1, width);
 	height = std::max(1, height);
 	window_state_.viewport_width_ = width;
@@ -481,10 +542,33 @@ void App::ApplyViewportSize(int width, int height) {
 	view_define_.half_viewport_width_div_tan_half_fovx_ = window_state_.viewport_width_ * 0.5f / tan_half_fovx;
 	view_define_.half_viewport_height_div_tan_half_fovy_ = window_state_.viewport_height_ * 0.5f / tan_half_fovy;
 
+	// Opt-in attribution.  Several independent callers write this one state and
+	// only the last one is observable afterwards, so a stale viewport is
+	// invisible without the caller's name next to the size the window really has.
+	// IGI_VIEWPORT_TRACE=1 logs every application; unset (the default) it costs
+	// one cached-bool test.
+	static const bool trace_viewport = getenv("IGI_VIEWPORT_TRACE") != nullptr;
+	if (trace_viewport) {
+		std::string detail = "; glut window " +
+			std::to_string(glutGet(GLUT_WINDOW_WIDTH)) + "x" +
+			std::to_string(glutGet(GLUT_WINDOW_HEIGHT));
+#ifdef _WIN32
+		RECT client_rect = {0, 0, 0, 0};
+		if (editor_hwnd_ && GetClientRect(editor_hwnd_, &client_rect)) {
+			detail += "; client " +
+				std::to_string(client_rect.right - client_rect.left) + "x" +
+				std::to_string(client_rect.bottom - client_rect.top);
+		}
+#endif
+		Logger::Get().Log(LogLevel::INFO,
+			"[App] viewport applied " + std::to_string(width) + "x" +
+			std::to_string(height) + " from " + (reason ? reason : "unlabelled") +
+			detail);
+	}
 }
 
 void App::RestoreEditorViewport() {
-	ApplyViewportSize(editor_viewport_width_, editor_viewport_height_);
+	ApplyClientViewport("restore editor viewport");
 }
 
 void App::OnDisplay() {
@@ -501,7 +585,7 @@ void App::OnDisplay() {
 	// Repaint the editor surface from its authoring state while gameplay owns
 	// the other window. The render-only flag prevents this zero-delta repaint
 	// from advancing physics, consuming input, or changing runtime objects.
-	ApplyViewportSize(editor_viewport_width_, editor_viewport_height_);
+	ApplyClientViewport("editor display");
 	rendering_editor_window_ = in_game_mode_;
 	Frame(0.0f);
 	rendering_editor_window_ = false;
@@ -512,10 +596,16 @@ bool App::InitializeGameplayWindow(
 	int width,
 	int height,
 	const igi::GameplayWindowCallbacks& callbacks) {
+	// -w/-h is only a headless fallback: the gameplay surface is the editor
+	// window, so both viewport pairs have to describe THAT window, not the size
+	// the command line asked for (Init may already have gone borderless
+	// fullscreen and resized it to the monitor).
 	gameplay_viewport_width_ = std::max(1, width);
 	gameplay_viewport_height_ = std::max(1, height);
-	return gameplay_host_.InitializeGameplayWindow(
+	const bool created = gameplay_host_.InitializeGameplayWindow(
 		editor_window_id, width, height, callbacks);
+	ApplyClientViewport("gameplay window init");
+	return created;
 }
 
 void App::ShutdownGameplayWindow() {
@@ -525,12 +615,10 @@ void App::ShutdownGameplayWindow() {
 void App::OnGameplayDisplay() {
 	if (!in_game_mode_) return;
 	// Same-window gameplay fills whatever size the shared window is now; the
-	// startup -w/-h values are only a fallback for headless contexts.
-	int width = glutGet(GLUT_WINDOW_WIDTH);
-	int height = glutGet(GLUT_WINDOW_HEIGHT);
-	gameplay_viewport_width_ = std::max(1, width);
-	gameplay_viewport_height_ = std::max(1, height);
-	ApplyViewportSize(gameplay_viewport_width_, gameplay_viewport_height_);
+	// startup -w/-h values are only a fallback for headless contexts.  The real
+	// client size wins over glutGet() because the borderless-fullscreen path
+	// resizes the window behind GLUT's back (App::ApplyClientViewport).
+	ApplyClientViewport("gameplay display");
 	Frame(0.0f);
 }
 
@@ -543,7 +631,7 @@ void App::FocusGameplayWindow() {
 	if (!in_game_mode_) return;
 
 	gameplay_host_.FocusGameplayWindow();
-	ApplyViewportSize(gameplay_viewport_width_, gameplay_viewport_height_);
+	ApplyClientViewport("gameplay focus");
 	glutSetCursor(GLUT_CURSOR_NONE);
 	mouse_state_.prior_x_ = gameplay_viewport_width_ >> 1;
 	mouse_state_.prior_y_ = gameplay_viewport_height_ >> 1;
@@ -669,9 +757,7 @@ void App::OnIdle() {
 		gameplay_host_.MakeGameplayWindowCurrent();
 		// Track the live shared-window size so gameplay always fills the
 		// window (resize/maximize during a run included).
-		gameplay_viewport_width_ = std::max(1, glutGet(GLUT_WINDOW_WIDTH));
-		gameplay_viewport_height_ = std::max(1, glutGet(GLUT_WINDOW_HEIGHT));
-		ApplyViewportSize(gameplay_viewport_width_, gameplay_viewport_height_);
+		ApplyClientViewport("gameplay idle");
 		Frame(delta_time * 0.001f); // convert to seconds
 		gameplay_host_.GetInputRouter().SetMapComputerOpen(
 			gameplay_host_.GetWorld().IsMapComputerOpen());
@@ -684,7 +770,7 @@ void App::OnIdle() {
 		gameplay_host_.Update(cur_time);
 		gameplay_host_.GetInputRouter().SetMapComputerOpen(
 			gameplay_host_.GetWorld().IsMapComputerOpen());
-		ApplyViewportSize(editor_viewport_width_, editor_viewport_height_);
+		ApplyClientViewport("editor idle while gameplay active");
 		rendering_editor_window_ = true;
 		Frame(delta_time * 0.001f); // editor camera and authoring tools still tick
 		rendering_editor_window_ = false;
@@ -780,6 +866,80 @@ static void LogFrameBreakPreSplitIo(int64_t map_us, int64_t level_us,
 	}
 }
 
+// IGI_PROFILE-only: the `pre` span of the PAUSED frame.  [FrameBreak] reports
+// this whole span as `pre`, but the paused early-return path shares none of the
+// work the editor split covers (no UpdateAnimations, no buffer maps, no
+// Level::Update), so it needs its own attribution instead of being assumed to
+// mirror the editor path.
+static void LogFrameBreakPausedSplit(int64_t head_us, int64_t view_us,
+                                     int64_t pick_us, int64_t ui_us,
+                                     int64_t params_us) {
+	static int64_t acc_head = 0, acc_view = 0, acc_pick = 0, acc_ui = 0, acc_params = 0;
+	static int frames = 0;
+	acc_head += head_us;
+	acc_view += view_us;
+	acc_pick += pick_us;
+	acc_ui += ui_us;
+	acc_params += params_us;
+	if (++frames >= 30) {
+		Logger::Get().Log(LogLevel::INFO,
+			"[FrameBreak] paused split 30 frames: head=" +
+			std::to_string(acc_head / 30000) + "ms viewdefine=" +
+			std::to_string(acc_view / 30000) + "ms pick=" +
+			std::to_string(acc_pick / 30000) + "ms ui=" +
+			std::to_string(acc_ui / 30000) + "ms params=" +
+			std::to_string(acc_params / 30000) + "ms/frame");
+		frames = 0;
+		acc_head = acc_view = acc_pick = acc_ui = acc_params = 0;
+	}
+}
+
+// IGI_PROFILE-only: the scene hover pick is a FULL scene colour pass into the
+// pick FBO plus a synchronous glReadPixels, so its call RATE matters as much as
+// its per-call cost: a pick issued once per frame costs a whole extra scene
+// render. The 33 ms hover throttle cannot prevent that once the frame time
+// itself exceeds 33 ms, so count the calls instead of assuming the throttle.
+static void LogPickProfile(int64_t pick_us, bool called) {
+	static int64_t acc_us = 0;
+	static int calls = 0;
+	static int frames = 0;
+	acc_us += pick_us;
+	if (called) ++calls;
+	if (++frames >= 30) {
+		Logger::Get().Log(LogLevel::INFO,
+			"[FrameBreak] pick profile 30 frames: calls=" +
+			std::to_string(calls) + "/30 time=" +
+			std::to_string(acc_us / 30000) + "ms/frame" +
+			(calls ? " (" + std::to_string(acc_us / calls / 1000) + "ms/call)" : ""));
+		frames = 0;
+		acc_us = 0;
+		calls = 0;
+	}
+}
+
+// IGI_PROFILE-only: split the `pick+maps` span of the editor path into the
+// scene hover pick and each of the three per-frame GL buffer mappings, because
+// the aggregate cannot say whether the cost is the pick or the maps.
+static void LogFrameBreakMapSplit(int64_t pick_us, int64_t mapsky_us,
+                                  int64_t mapvb_us, int64_t mapib_us) {
+	static int64_t acc_pick = 0, acc_sky = 0, acc_vb = 0, acc_ib = 0;
+	static int frames = 0;
+	acc_pick += pick_us;
+	acc_sky += mapsky_us;
+	acc_vb += mapvb_us;
+	acc_ib += mapib_us;
+	if (++frames >= 30) {
+		Logger::Get().Log(LogLevel::INFO,
+			"[FrameBreak] pick/map split 30 frames: pick=" +
+			std::to_string(acc_pick / 30000) + "ms mapsky=" +
+			std::to_string(acc_sky / 30000) + "ms mapvb=" +
+			std::to_string(acc_vb / 30000) + "ms mapib=" +
+			std::to_string(acc_ib / 30000) + "ms/frame");
+		frames = 0;
+		acc_pick = acc_sky = acc_vb = acc_ib = 0;
+	}
+}
+
 // IGI_PROFILE-only: split the editor's own per-frame work that happens before
 // the renderer is called at all (animations, view define, scene hover pick).
 // [FrameBreak] reports this whole span as part of `pre`; the terrain buffer
@@ -846,15 +1006,28 @@ void App::Frame(float delta_seconds) {
 	}
 
 	if (pause_mode_ && !rendering_editor_window_) {
+		// IGI_PROFILE: boundary markers for the paused-path pre-render split.
+		const auto paused_t_head = profile_frame_break ? FrameBreakClock::now()
+		                                               : FrameBreakClock::time_point{};
 		// Skip all updates when paused, just render
 		if (render_gameplay) UpdateGameplayViewDefine();
 		else UpdateViewDefine();
 		if (render_gameplay) CaptureGameplayRenderSnapshot();
+		const auto paused_t_view = profile_frame_break ? FrameBreakClock::now()
+		                                               : FrameBreakClock::time_point{};
+		int64_t paused_pick_us = 0;
+		bool paused_pick_called = false;
 		if (igi::ShouldPickSceneHover(
 			mouse_state_.prior_x_ != last_pick_x_ || mouse_state_.prior_y_ != last_pick_y_,
 			mouse_state_.left_button_down_, Sys_Milliseconds(), last_hover_pick_ms_, 33,
 			Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera))) {
+			const auto paused_t_pick = profile_frame_break ? FrameBreakClock::now()
+			                                               : FrameBreakClock::time_point{};
 			hover_object_index_ = PickObjectAtScreenPos(mouse_state_.prior_x_, mouse_state_.prior_y_);
+			if (profile_frame_break) {
+				paused_pick_us = frame_us(paused_t_pick, FrameBreakClock::now());
+				paused_pick_called = true;
+			}
 			if (hover_object_index_ >= Renderer::kAttaPickBase) hover_object_index_ = -1; // ATTA hovered (clickable; promote on click)
 			last_pick_x_ = mouse_state_.prior_x_;
 			last_pick_y_ = mouse_state_.prior_y_;
@@ -864,6 +1037,8 @@ void App::Frame(float delta_seconds) {
 		level_.GetTerrainZ(active_viewer.pos_.x, active_viewer.pos_.y, ground_z);
 		int propAnimBoneHierarchy; std::vector<int> propAnimIds; int propAnimActiveId; bool propAnimIsPlaying;
 		ComputePropAnimUiState(propAnimBoneHierarchy, propAnimIds, propAnimActiveId, propAnimIsPlaying);
+		const auto paused_t_ui = profile_frame_break ? FrameBreakClock::now()
+		                                             : FrameBreakClock::time_point{};
 		Renderer::task_tree_view_params_s task_tree_view = {
 			.show_hud_ = show_hud_,
 			.hud_overlay_visible_ = hud_overlay_visible_,
@@ -992,6 +1167,12 @@ void App::Frame(float delta_seconds) {
 		LogFrameBreak("paused", frame_us(frame_enter, frame_draw_begin),
 			frame_us(frame_draw_begin, frame_draw_end),
 			frame_us(frame_draw_end, FrameBreakClock::now()));
+		LogFrameBreakPausedSplit(frame_us(frame_enter, paused_t_head),
+		                         frame_us(paused_t_head, paused_t_view),
+		                         frame_us(paused_t_view, paused_t_ui),
+		                         0,
+		                         frame_us(paused_t_ui, frame_draw_begin));
+		LogPickProfile(paused_pick_us, paused_pick_called);
 	}
 	return;
     }
@@ -1127,6 +1308,8 @@ void App::Frame(float delta_seconds) {
 	const bool camMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
 	const bool overPanel = prop_editor_open_ &&
 		mouse_state_.prior_x_ < (PropPanel::kLeft + PropPanel::kWidth);
+	int64_t editor_pick_us = 0;
+	bool editor_pick_called = false;
 	if (IsEditorInputActive() && pointer_changed) {
 		if (camMode || cameraNavigating || overPanel) {
 			hover_object_index_ = -1;
@@ -1135,17 +1318,31 @@ void App::Frame(float delta_seconds) {
 			last_hover_pick_ms_ = Sys_Milliseconds();
 		} else if (igi::ShouldPickSceneHover(pointer_changed,
 			mouse_state_.left_button_down_, Sys_Milliseconds(), last_hover_pick_ms_)) {
+			const auto editor_t_pick = profile_frame_break ? FrameBreakClock::now()
+			                                               : FrameBreakClock::time_point{};
 			hover_object_index_ = PickObjectAtScreenPos(mouse_state_.prior_x_, mouse_state_.prior_y_);
+			if (profile_frame_break) {
+				editor_pick_us = frame_us(editor_t_pick, FrameBreakClock::now());
+				editor_pick_called = true;
+			}
 			if (hover_object_index_ >= Renderer::kAttaPickBase) hover_object_index_ = -1; // ATTA hovered (clickable; promote on click)
 			last_pick_x_ = mouse_state_.prior_x_;
 			last_pick_y_ = mouse_state_.prior_y_;
 			last_hover_pick_ms_ = Sys_Milliseconds();
 		}
 	}
+	const auto frame_pre_t1pick = profile_frame_break ? FrameBreakClock::now()
+	                                                  : FrameBreakClock::time_point{};
 
 	vert_flat_sky_layer_s * fsl_vb = renderer_.MapFlatSkyLayersVB();
+	const auto map_t_sky = profile_frame_break ? FrameBreakClock::now()
+	                                           : FrameBreakClock::time_point{};
 	vert_pos_a_uv_s* terrain_vb = renderer_.MapTerrainVB();
+	const auto map_t_vb = profile_frame_break ? FrameBreakClock::now()
+	                                          : FrameBreakClock::time_point{};
 	uint32_t* terrain_ib = renderer_.MapTerrainIB();
+	const auto map_t_ib = profile_frame_break ? FrameBreakClock::now()
+	                                          : FrameBreakClock::time_point{};
 	render_chunk_s* render_chunks = renderer_.GetTerrainRenderChunckBuffer();
 	const auto frame_pre_t1a = profile_frame_break ? FrameBreakClock::now()
 	                                               : FrameBreakClock::time_point{};
@@ -1368,6 +1565,11 @@ void App::Frame(float delta_seconds) {
 		                            frame_us(frame_pre_t1anim, frame_pre_t1view),
 		                            frame_us(frame_pre_t1view, frame_pre_t1a),
 		                            frame_us(frame_pre_t1a, frame_pre_t1b));
+		LogFrameBreakMapSplit(frame_us(frame_pre_t1view, frame_pre_t1pick),
+		                      frame_us(frame_pre_t1pick, map_t_sky),
+		                      frame_us(map_t_sky, map_t_vb),
+		                      frame_us(map_t_vb, map_t_ib));
+		LogPickProfile(editor_pick_us, editor_pick_called);
 	}
 	renderer_.Draw(draw_params_, task_tree_view);
 	const auto frame_draw_end = profile_frame_break ? FrameBreakClock::now()

@@ -906,8 +906,17 @@ int main(int argc, char **argv) {
   UpdateChooseLevelMenuText();
   UpdateScaleMenuText();
 
-  // Start in windowed mode (ALT+ENTER toggles fullscreen)
-  g_app.OnWindowResize(wnd_w, wnd_h);
+  // Start in windowed mode (ALT+ENTER toggles fullscreen).
+  //
+  // This must NOT re-apply the requested -w/-h here.  App::Init has already run
+  // the borderless-fullscreen path, which resizes the window to the monitor with
+  // a direct SetWindowPos and applies the matching viewport; stamping the -w/-h
+  // default (1280x720) over it afterwards leaves the viewport smaller than the
+  // window, so only that rectangle is painted and the rest of the screen stays
+  // black -- the reported "half screen and half black".  Apply the window's real
+  // client size instead (App::ApplyClientViewport falls back to the last
+  // known-good size, which is what -w/-h seeded in App::Init).
+  g_app.ApplyClientViewport("startup after Init");
 
   try {
     // enter main loop

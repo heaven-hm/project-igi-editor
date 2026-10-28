@@ -134,6 +134,13 @@ public:
 
   // events
   void OnWindowResize(int width, int height);
+  // Applies the presenting window's real client size to BOTH viewport pairs and
+  // window_state_.  Public because main.cpp calls it once Init has finished:
+  // Init may already have resized the window to the monitor (borderless
+  // fullscreen), so re-applying the requested -w/-h there would stamp a viewport
+  // smaller than the window and leave the rest of the surface black.
+  // `reason` only labels the opt-in IGI_VIEWPORT_TRACE diagnostic.
+  void ApplyClientViewport(const char *reason = nullptr);
   void OnDisplay();
   bool InitializeGameplayWindow(
       int editor_window_id,
@@ -603,7 +610,9 @@ private:
   void UpdateGraphNodeManipulation(int x, int y);
 
   void Frame(float delta_seconds);
-  void ApplyViewportSize(int width, int height);
+  // `reason` is only used by the opt-in IGI_VIEWPORT_TRACE diagnostic, which
+  // names the caller that last set the viewport (see App::ApplyViewportSize).
+  void ApplyViewportSize(int width, int height, const char *reason = nullptr);
   void RestoreEditorViewport();
   void DrawGameplayPlayerWeapon();
   void DrawGameplayProjectiles();
