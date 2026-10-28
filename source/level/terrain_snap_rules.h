@@ -96,8 +96,23 @@ inline constexpr double kSnapDeepUnderground = -1000000.0;
 inline TerrainSnapDecision DecideTerrainSnap(bool terrainFound, bool isHuman, double zDelta) {
     if (!terrainFound) return TerrainSnapDecision::KeepAuthoredZ;
     if (!isHuman) return TerrainSnapDecision::KeepAuthoredZ;
-    if (zDelta > kSnapSurfaceBandAbove || zDelta < 0.0) return TerrainSnapDecision::KeepAuthoredZ;
-    if (zDelta < kSnapDeepUnderground) return TerrainSnapDecision::KeepAuthoredZ;
+    // A NEGATIVE delta is snapped, not kept.  Game_DropToGround (HOOK 0x4149B0,
+    // src/game/misc.c:88-95) probes DOWN first, and when that misses it probes UP
+    // (`dz = -dz`) before giving up:
+    //     if (!hit.found) { dz = -dz; Coll_DropPoints(...);
+    //                       if (!hit.found) return; }
+    //     memcpy(&pos->z, &hit.pos.z, sizeof(double));
+    // so an object sitting BELOW the terrain surface is lifted onto it - that is the
+    // engine's own answer for a sunk placement.  Refusing to snap a negative delta
+    // left every half-buried soldier exactly where the QSC put it, which is the
+    // reported "some part above ground some below it".
+    //
+    // The genuine underground case never reaches this line: a bunker floor sits under
+    // a DiscardTerrain hole, so the query misses and rule 1 (no terrain -> keep) has
+    // already returned (src/terredit/discard.c:10-12; DiscardTerrain_Visit HOOK
+    // 0x52C0B0, :113-117).  A human standing on a platform ABOVE the surface is still
+    // kept by the band test below.
+    if (zDelta > kSnapSurfaceBandAbove) return TerrainSnapDecision::KeepAuthoredZ;
     return TerrainSnapDecision::SnapToTerrain;
 }
 

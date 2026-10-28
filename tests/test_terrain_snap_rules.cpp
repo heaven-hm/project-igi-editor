@@ -111,11 +111,27 @@ TEST(TerrainSnapRules, HumansOffTheSurfaceKeepTheirAuthoredZ) {
               igi::TerrainSnapDecision::KeepAuthoredZ);
     EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, 4096.0),
               igi::TerrainSnapDecision::KeepAuthoredZ);
-    // Below the terrain at all: underground bunker / interior floor under the surface.
+}
+
+// A NEGATIVE delta SNAPS.  This is the engine's own answer for a sunk placement:
+// Game_DropToGround (HOOK 0x4149B0, src/game/misc.c:88-95) probes DOWN first and,
+// when that misses, probes UP (`dz = -dz`) before giving up, so an object below the
+// terrain surface is lifted onto it.  The old rule kept the authored Z for every
+// negative delta, which left half-buried soldiers exactly where the QSC put them --
+// the reported "some part above ground some below it".
+TEST(TerrainSnapRules, HumansBelowTheSurfaceAreLiftedOntoIt) {
     EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, -0.5),
-              igi::TerrainSnapDecision::KeepAuthoredZ);
-    // ANYA_HQ sits at ~-13M world units below the terrain.
+              igi::TerrainSnapDecision::SnapToTerrain);
+    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, -4096.0),
+              igi::TerrainSnapDecision::SnapToTerrain);
     EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, -13000000.0),
+              igi::TerrainSnapDecision::SnapToTerrain);
+    // The boundary is exact: 0 snaps, and just above the band still keeps.
+    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, 0.0),
+              igi::TerrainSnapDecision::SnapToTerrain);
+    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, 100.0),
+              igi::TerrainSnapDecision::SnapToTerrain);
+    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, 100.0001),
               igi::TerrainSnapDecision::KeepAuthoredZ);
 }
 
