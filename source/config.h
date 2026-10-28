@@ -92,6 +92,11 @@ struct ConfigData {
     bool musicEnabled; // Escape-menu Music checkbox preference — persists across level loads/game launches
     bool weatherEnabled; // Authored rain/snow visibility — toggle in the pause menu
     int  weatherMode;    // 0 = Default (Authored), 1 = Rain (Forced), 2 = Snow (Forced), 3 = Off
+    // The editor's weather PREVIEW speed step (igi::WeatherSpeed): 0 = frozen,
+    // 1 = the engine's own rate, 2 = double. NO engine counterpart — the engine's
+    // speed is `speed = r->snow ? kSnowSpeed : kRainSpeed` (Rain_Update, HOOK
+    // 0x499CF0, src/dxinit/rain.c:572; constants at src/dxinit/rain.c:122-123).
+    int  weatherSpeed;
 
     // NEW: Advanced QED Settings
     int consoleAutoActivate;

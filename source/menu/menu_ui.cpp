@@ -400,6 +400,7 @@ const char* MenuUiActionName(MenuUiAction action) {
         case MenuUiAction::CycleLogLevel: return "CycleLogLevel";
         case MenuUiAction::ToggleMusic: return "ToggleMusic";
         case MenuUiAction::CycleWeather: return "CycleWeather";
+        case MenuUiAction::CycleWeatherSpeed: return "CycleWeatherSpeed";
         case MenuUiAction::ToggleLightmaps: return "ToggleLightmaps";
         case MenuUiAction::CalculateLightmaps: return "CalculateLightmaps";
         case MenuUiAction::ToggleTerrainOptions: return "ToggleTerrainOptions";

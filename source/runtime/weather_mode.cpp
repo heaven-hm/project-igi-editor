@@ -42,4 +42,35 @@ const char* WeatherModeLabel(WeatherMode mode) noexcept {
     return "Default";
 }
 
+// See the header for why this control has no engine counterpart: the engine's
+// speed is `speed = r->snow ? kSnowSpeed : kRainSpeed` (Rain_Update, HOOK
+// 0x499CF0, src/dxinit/rain.c:572, constants at rain.c:122-123) and nothing
+// scales it. The steps below are the editor's own preview rates.
+float WeatherSpeedScale(int step) noexcept {
+    switch (static_cast<WeatherSpeed>(step)) {
+    case WeatherSpeed::Frozen: return 0.0f;
+    case WeatherSpeed::Authored: return 1.0f;
+    case WeatherSpeed::Double: return 2.0f;
+    }
+    return 1.0f;  // out of range -> the engine's authored rate
+}
+
+int NextWeatherSpeed(int step) noexcept {
+    switch (static_cast<WeatherSpeed>(step)) {
+    case WeatherSpeed::Frozen: return static_cast<int>(WeatherSpeed::Authored);
+    case WeatherSpeed::Authored: return static_cast<int>(WeatherSpeed::Double);
+    case WeatherSpeed::Double: return static_cast<int>(WeatherSpeed::Frozen);
+    }
+    return kWeatherSpeedDefault;
+}
+
+const char* WeatherSpeedLabel(int step) noexcept {
+    switch (static_cast<WeatherSpeed>(step)) {
+    case WeatherSpeed::Frozen: return "0x";
+    case WeatherSpeed::Authored: return "1x";
+    case WeatherSpeed::Double: return "2x";
+    }
+    return "1x";
+}
+
 } // namespace igi

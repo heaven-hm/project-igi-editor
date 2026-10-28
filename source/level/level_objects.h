@@ -118,10 +118,26 @@ struct LevelObject {
     // separately so the QSC round-trip stays lossless, and folds it into rot.z for
     // display (the renderer only ever sees rot).
     double yawOffset = 0.0;
-    std::string splineTaskId;      // For Train (RailroadQTaskID)
+    std::string splineTaskId;      // For Train (RailroadQTaskID); also an Elevator's rail
     bool linearSegments = false;   // If true, straight lines; if false, curved
     int splineSegmentCount = 20;   // Number of sub-segments per waypoint segment
     glm::dmat3 orientationMatrix = glm::dmat3(1.0); // 3x3 rotation matrix for Splines/Joints
+
+    // ── Elevator / moving platform (GitHub issue #40) ────────────────────────
+    // `Elevator_Init` HOOK 0x43CC70 (src/elevator/elevator.c:44-83) declares 25
+    // parameters; the four this editor reads are, in registration order,
+    // "SplineObj taskid" (Int32), "Linear" (bool8), "Force orientation" (bool8)
+    // and "Pos" (Real32). `Param_ObjectPos` consumes 3 script tokens and
+    // `Param_Real32x9` 3 (ParamReal32x9_Parse HOOK 0x4EFBA0,
+    // src/physobj/paramops.c:423-435), so their QSC argument indices are
+    // 3 + 3 + N = 10, 11, 12, 13. The rail id shares `splineTaskId` with Train:
+    // both fields are a reference to a `SplineObj` task and mean the same thing.
+    // The retail LEVEL3 script confirms every index — `Task_New(698, "Elevator",
+    // "", x, y, z, 0, 0, 0, "200_01_1", 699, TRUE, FALSE, 0, ...)` where 699 is
+    // the `SplineObj` declared immediately above it.
+    bool elevatorLinear = false;            // arg 11, "Linear"
+    bool elevatorForceOrientation = false;  // arg 12, "Force orientation"
+    double elevatorStartHeight = 0.0;       // arg 13, "Pos": scalar along the rail
 
     // Lighting
     float dirlightR = 1.0f, dirlightG = 1.0f, dirlightB = 1.0f;

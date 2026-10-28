@@ -159,6 +159,11 @@ enum class MenuUiAction {
     CycleLogLevel,
     ToggleMusic,
     CycleWeather,
+    // Editor-only: the weather PREVIEW speed step (igi::WeatherSpeed).  The
+    // engine has no such control -- its fall speed is the fixed pair of
+    // constants at src/dxinit/rain.c:122-123 selected by `r->snow` at
+    // src/dxinit/rain.c:572 (Rain_Update, HOOK 0x499CF0).
+    CycleWeatherSpeed,
     ToggleLightmaps,
     CalculateLightmaps,
     ToggleTerrainOptions,

@@ -332,6 +332,10 @@ private:
 	void ToggleLightmaps(); // Escape-menu Lightmaps checkbox: enable/disable applying calculated lightmaps during render
 	void ApplyWeatherMode(); // Apply authored or forced weather (matching OpenIGI MissionWeather)
 	void CycleWeatherMode(); // Cycle: Default -> Rain -> Snow -> Off -> Default
+	// The editor's preview speed (igi::WeatherSpeed). NO engine counterpart: the
+	// engine's fall speed is a fixed pair of constants selected by the snow flag
+	// (Rain_Update HOOK 0x499CF0, src/dxinit/rain.c:572, constants :122-123).
+	void CycleWeatherSpeed(); // Cycle: Frozen -> Authored -> Double -> Frozen
 	igi::LevelWeatherSettings authored_weather_;
 	// Steps the editor's per-object playbacks. `posed_object_indices` is the set
 	// of object indices whose live skinned pose is submitted to the renderer
@@ -358,6 +362,17 @@ private:
 	// the pose decision and the draw, so the posed set and the drawn set cannot
 	// diverge.
 	std::unordered_set<int> GetGameplayDrawnAnimationIndices();
+	// The EDITOR pass's DRAWN SET: `GetSkinnedReplacementObjectIndices(false)`
+	// narrowed to the objects the editor's viewport would draw this frame, by the
+	// SAME two tests the visual pass applies - the conservative view cone
+	// (`igi::PassesEditorViewCone`) and the engine's own LOD cull
+	// (`Renderer::GetObjectDrawLod`, `Mesh3D_GetBoneMeshLOD` 0x4CFF70).  Computed
+	// once per frame and used for BOTH the pose decision and the skinned draw, so
+	// an AI with a playing clip is posed - and therefore visibly animating - as
+	// soon as it is on screen, not only while it is selected.  The selected object
+	// is exempt, exactly as the visual pass exempts it.  Engine rule and
+	// citations: source/runtime/anim_pose_set.h.
+	std::unordered_set<int> GetEditorDrawnAnimationIndices();
 	std::string BuildAnimStatusString();
 	int FindHumanAiTaskId(int objIndex) const;
 	const std::vector<int>& GetOrComputeAnimationIds(int objIndex);

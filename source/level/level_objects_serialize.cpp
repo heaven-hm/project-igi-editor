@@ -319,6 +319,27 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
                     break;
                 }
             }
+            // Elevator (GitHub issue #40): "SplineObj taskid" @10 (Int32),
+            // "Linear" @11 and "Force orientation" @12 (bool8), "Pos" @13
+            // (Real32). `Elevator_Init` HOOK 0x43CC70
+            // (src/elevator/elevator.c:44-83) is the parameter order; the retail
+            // LEVEL3 call confirms the indices (see LevelObject's elevator
+            // block). The other members of this group have no such fields, so
+            // the reads are guarded on the type rather than on the size alone.
+            if (obj.type == "Elevator") {
+                if (obj.argTokens.size() > 10) obj.splineTaskId = unquote(obj.argTokens[10]);
+                auto readBool = [&](size_t idx, bool& out) {
+                    if (idx >= obj.argTokens.size()) return;
+                    std::string val = unquote(obj.argTokens[idx]);
+                    std::transform(val.begin(), val.end(), val.begin(),
+                                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                    if (val == "true" || val == "1") out = true;
+                    else if (val == "false" || val == "0") out = false;
+                };
+                readBool(11, obj.elevatorLinear);
+                readBool(12, obj.elevatorForceOrientation);
+                readDouble(13, obj.elevatorStartHeight);
+            }
         } else if (obj.argTokens.size() > 8) {
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);
@@ -500,6 +521,23 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
                 } else if (obj.argTokens.size() > 9) {
                     setStringToken(9, obj.modelId);
                 }
+            }
+            // Elevator (GitHub issue #40): the rail reference and the three
+            // authored fields after it must round-trip, or a level saved after a
+            // load loses the platform's rail. "SplineObj taskid" @10 (Int32 — a
+            // task id, written unquoted), "Linear" @11 and "Force orientation"
+            // @12 (bool8, written as the engine's TRUE/FALSE) and "Pos" @13
+            // (Real32). `Elevator_Init` HOOK 0x43CC70
+            // (src/elevator/elevator.c:44-83) is the parameter order; the retail
+            // LEVEL3 call confirms the indices.
+            if (obj.type == "Elevator") {
+                if (!obj.splineTaskId.empty() || obj.argTokens.size() > 10)
+                    setToken(10, obj.splineTaskId.empty() ? "-1" : obj.splineTaskId);
+                if (obj.argTokens.size() > 11) setToken(11, obj.elevatorLinear ? "TRUE" : "FALSE");
+                if (obj.argTokens.size() > 12)
+                    setToken(12, obj.elevatorForceOrientation ? "TRUE" : "FALSE");
+                if (obj.argTokens.size() > 13)
+                    setToken(13, FormatQscDouble(obj.elevatorStartHeight));
             }
         } else if (obj.type == "AIGraph") {
             // AIGraph's "Graph position" is args 3/4/5 -- the world origin its node

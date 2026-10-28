@@ -236,6 +236,9 @@ struct WeatherState {
     float spawn = 0.0f;                           // Rain::spawn (rain.c:619-636)
     float fade = 0.0f;                            // Rain::fade, 0 at Rain_New (rain.c:155)
     int snow = 0;                                 // rain.c:153
+    // The editor's preview multiplier on the engine's fall speed. 1.0 == the
+    // engine's own kSnowSpeed/kRainSpeed (rain.c:122-123); not a Rain_New field.
+    float speed_scale = 1.0f;
     unsigned color = 0;                           // Rain::color, Rain_SetAlpha (rain.c:648)
     bool falling = false;                         // Rain::falling (Rain_SetFalling)
     // Rain::cells, re-indexed to the 10x10 window the clip and the draw use
@@ -308,8 +311,15 @@ void SetWeatherAlpha(WeatherState& s, float alpha) {
 // Rain_Update HOOK 0x499CF0 (rain.c:565-637): the fade ramp, the fall, the snow
 // sway/wrap and the spawn accumulator. RainEffect_Run calls it once per tick
 // whether or not the effect is falling (fxobj/rain.c:104).
+//
+// `speed_scale` is the EDITOR's preview multiplier and has no engine
+// counterpart: the engine's speed is the pair of constants at rain.c:122-123
+// selected by `r->snow` at rain.c:572. Scaling that single value scales the
+// fall, the wrap, the spawn accumulator and the spawn z together, which is the
+// only way the preview stays internally consistent.
 void UpdateWeather(WeatherState& s) {
-    const float speed = igi::rain::SpeedUnitsPerTick(s.snow != 0);  // rain.c:572
+    const float speed =
+        igi::rain::SpeedUnitsPerTick(s.snow != 0) * s.speed_scale;  // rain.c:572
 
     // rain.c:573-585 - one kFadeStep per tick, clamped, and the update stops
     // dead at zero (Rain_Render skips the draw there too, rain.c:209-212).
@@ -369,7 +379,9 @@ void UpdateWeather(WeatherState& s) {
         d.y = RandomUnit(s) * igi::rain::kTileUnitsF;            // rain.c:628
         d.x = x;
         d.timer = 0;                                             // rain.c:630
-        d.z = igi::rain::SpawnZUnits(s.snow != 0);               // rain.c:631
+        // rain.c:631 - `d->z = kLayer - speed`, the SAME `speed` the fall and
+        // the accumulator use, so the preview multiplier applies here too.
+        d.z = igi::rain::kLayerUnits - speed;
         d.kind = RandomInt(s, igi::rain::DropKindCount());       // rain.c:632
         // rain.c:626-632 never initialises dx/dy; the engine reads whatever the
         // slot held. The port pins them to 0 instead of reading uninitialised
@@ -749,6 +761,10 @@ void Renderer_Rain::DrawCells(GLuint ubo_mats, const Camera& camera, double z,
 void Renderer_Rain::Draw(GLuint ubo_mats, const Camera& camera, bool cameraIsSheltered,
                          GLuint snowTexture) {
     WeatherState& s = Weather();
+
+    // The editor's preview multiplier, carried on the state the update reads
+    // (there is no engine field for it: rain.c:122-123,572).
+    s.speed_scale = speed_scale_;
 
     // RainEffect_Run HOOK 0x436990 (fxobj/rain.c:98-105) re-evaluates the "Is
     // Active" expression every tick, calls Rain_SetFalling with it and then

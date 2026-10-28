@@ -80,8 +80,9 @@ struct PauseMenuLayout {
 
 constexpr int PauseMenuRowCount(bool terrainOptionsExpanded) noexcept {
     // Resume, mode, collision, font, level, autosave, logging, log level,
-    // music, weather, lightmaps, calculate-lightmaps, terrain header, reset, save, quit.
-    return terrainOptionsExpanded ? 21 : 16;
+    // music, weather, weather speed, lightmaps, calculate-lightmaps, terrain
+    // header, reset, save, quit.
+    return terrainOptionsExpanded ? 22 : 17;
 }
 
 // The editor-added rows the loaded game menu appends to the editor's own screen

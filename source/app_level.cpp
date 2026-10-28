@@ -164,6 +164,11 @@ void App::ApplyWeatherMode() {
     renderer_.SetWeatherEnabled(weather.enabled);
     renderer_.SetRainEffect(weather.active, weather.is_snow, weather.start_meters,
                             weather.end_meters, weather.alpha);
+    // The editor's preview speed. NO engine counterpart: the engine's fall speed
+    // is `speed = r->snow ? kSnowSpeed : kRainSpeed` (Rain_Update, HOOK
+    // 0x499CF0, src/dxinit/rain.c:572; kSnowSpeed 204.8f / kRainSpeed 2048.0f at
+    // src/dxinit/rain.c:122-123). Step 1 is that authored rate.
+    renderer_.SetRainSpeedScale(igi::WeatherSpeedScale(cfg.weatherSpeed));
 
     if (!weather.active) {
         Logger::Get().Log(LogLevel::INFO, "[Weather] Weather disabled (OFF)");
@@ -171,12 +176,14 @@ void App::ApplyWeatherMode() {
         Logger::Get().Log(LogLevel::INFO, "[Weather] Authored " +
             std::string(weather.is_snow ? "SNOW" : "RAIN") +
             " active: start=" + std::to_string(weather.start_meters) +
-            "m end=" + std::to_string(weather.end_meters) + "m alpha=" + std::to_string(weather.alpha));
+            "m end=" + std::to_string(weather.end_meters) + "m alpha=" + std::to_string(weather.alpha) +
+            " speed=" + igi::WeatherSpeedLabel(cfg.weatherSpeed));
     } else {
         Logger::Get().Log(LogLevel::INFO, "[Weather] Forced " +
             std::string(weather.is_snow ? "SNOW" : "RAIN") +
             " active: start=" + std::to_string(weather.start_meters) +
-            "m end=" + std::to_string(weather.end_meters) + "m alpha=" + std::to_string(weather.alpha));
+            "m end=" + std::to_string(weather.end_meters) + "m alpha=" + std::to_string(weather.alpha) +
+            " speed=" + igi::WeatherSpeedLabel(cfg.weatherSpeed));
     }
 }
 
@@ -190,6 +197,18 @@ void App::CycleWeatherMode() {
     Config::Save();
 
     status_message_ = std::string("Weather: ") + igi::WeatherModeLabel(static_cast<igi::WeatherMode>(cfg.weatherMode));
+}
+
+// The editor's preview speed (igi::WeatherSpeed). Not a parity control: the
+// engine's fall speed is the fixed pair of constants at src/dxinit/rain.c:122-123,
+// selected by `r->snow` at src/dxinit/rain.c:572 (Rain_Update, HOOK 0x499CF0).
+void App::CycleWeatherSpeed() {
+    auto& cfg = Config::Get();
+    cfg.weatherSpeed = igi::NextWeatherSpeed(cfg.weatherSpeed);
+    ApplyWeatherMode();
+    Config::Save();
+
+    status_message_ = std::string("Weather speed: ") + igi::WeatherSpeedLabel(cfg.weatherSpeed);
 }
 
 void App::LoadLevel(int level_no) {

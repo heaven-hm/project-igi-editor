@@ -406,7 +406,12 @@ const Mesh& Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isB
                 } catch (...) {}
 
                 Mesh mesh = loadObjModelFromMemory(meshBytes, modelId);
-                ApplyTexturesToMesh(mesh, modelId);
+                // The archive these bytes came from is the archive the engine would
+                // have read the model's textures from: one gModelDir supplies both
+                // (Model_SetDir HOOK 0x4CFBD0, src/lod/modelfile.c:153-157;
+                // ModelFile_Setup's "textures/<name>.res", src/model/model.c:261,
+                // HOOK 0x4CF080).
+                ApplyTexturesToMesh(mesh, modelId, "", ModelArchiveOwnerLevel(meshRes));
                 mesh_cache_[cacheKey] = mesh;
                 Logger::Get().Log(LogLevel::DEBUG, "[Renderer_Objects] Loaded '" + modelId +
                     "' from ResCache (" + std::to_string(mesh.vertexCount) + " vertices)");
@@ -435,7 +440,9 @@ const Mesh& Renderer_Objects::GetOrLoadMesh(const std::string& modelId, bool isB
     // Load and cache
     try {
         Mesh mesh = loadObjModel(filepath, "");
-        ApplyTexturesToMesh(mesh, modelId);
+        // A loose .mef on disk is not in any level archive, so there is no level
+        // whose directory supplied it: 0 keeps the editor's texture-id fallback.
+        ApplyTexturesToMesh(mesh, modelId, "", 0);
         mesh_cache_[cacheKey] = mesh;
         Logger::Get().Log(LogLevel::DEBUG, "[Renderer_Objects] Success: Loaded model '" + modelId +
             "' from disk " + filepath + " (" + std::to_string(mesh.vertexCount) + " vertices)");

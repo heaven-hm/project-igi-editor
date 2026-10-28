@@ -168,3 +168,96 @@ TEST(LevelObjectParsePathsTest, LoadPathPlacesAnimTask) {
     EXPECT_DOUBLE_EQ(found->rot.y, 0.2);
     EXPECT_DOUBLE_EQ(found->rot.z, 0.3);
 }
+
+// ─── Elevator / moving platform (GitHub issue #40) ──────────────────────────
+// `Elevator` is the retail moving platform. `Elevator_Init` HOOK 0x43CC70
+// (src/elevator/elevator.c:44-83) declares, in registration order: "Position"
+// ObjectPos, "Orientation" Real32x9, "Model" String16, "SplineObj taskid" Int32,
+// "Linear" bool8, "Force orientation" bool8, "Pos" Real32, "Max speed" Real32,
+// "Speed inertia" Real32, "Floor down"/"Floor up"/"Can start" VarString,
+// "Wanted floor 0..9" VarString, "Start/Stop/Move sound" String32.
+// Param_ObjectPos is 3 script tokens and Param_Real32x9 is 3
+// (ParamReal32x9_Parse HOOK 0x4EFBA0, src/physobj/paramops.c:423-435), so the
+// QSC indices are 3 + N: rail id 10, Linear 11, Force orientation 12, Pos 13.
+//
+// The fixture is the shipped LEVEL3 call, as the editor's own decompiler emits
+// it, with rail 699 declared immediately above it:
+//   Task_New(698, "Elevator", "", 24557880.0, -55710968.0, 174421536.0, 0, 0, 0,
+//            "200_01_1", 699, TRUE, FALSE, 0, 5.0, 1, "", "", <expr>, <expr>,
+//            <expr>, "", "", "", "", "", "", "", "", "elv_start_1", "elv_stop_1",
+//            "elv_move_1")
+constexpr const char* kRetailElevator =
+    "Task_New(698, \"Elevator\", \"\", 24557880.0, -55710968.0, 174421536.0, "
+    "0, 0, 0, \"200_01_1\", 699, TRUE, FALSE, 0, 5.0, 1, \"\", \"\", "
+    "\"Door_689.isClosed && Door_690.isClosed\", "
+    "\"(Elevator_698.vFloor == 1 && Switch_697.isLastPressed)\", "
+    "\"(Elevator_698.vFloor == 0 && Switch_697.isLastPressed)\", "
+    "\"\", \"\", \"\", \"\", \"\", \"\", \"\", \"\", "
+    "\"elv_start_1\", \"elv_stop_1\", \"elv_move_1\")";
+
+TEST(LevelObjectParsePathsTest, ElevatorRailAndFlagsSurviveTheLineParser) {
+    LevelObjects level;
+    LevelObject obj;
+    level.ParseTaskLine(kRetailElevator, obj);
+
+    ASSERT_EQ(obj.type, "Elevator");
+    EXPECT_EQ(obj.splineTaskId, "699");
+    EXPECT_TRUE(obj.elevatorLinear);
+    EXPECT_FALSE(obj.elevatorForceOrientation);
+    EXPECT_DOUBLE_EQ(obj.elevatorStartHeight, 0.0);
+    // The ObjectPos/Orientation half must still come through unchanged.
+    EXPECT_DOUBLE_EQ(obj.pos.x, 24557880.0);
+    EXPECT_DOUBLE_EQ(obj.pos.y, -55710968.0);
+    EXPECT_DOUBLE_EQ(obj.pos.z, 174421536.0);
+}
+
+TEST(LevelObjectParsePathsTest, ElevatorRailAndFlagsRoundTripThroughTheWriter) {
+    LevelObjects level;
+    LevelObject obj;
+    level.ParseTaskLine(kRetailElevator, obj);
+    ASSERT_EQ(obj.splineTaskId, "699");
+
+    // Edit the three editable fields the way the inspector would, then save.
+    obj.elevatorStartHeight = 12345.5;
+    obj.elevatorLinear = false;
+    obj.elevatorForceOrientation = true;
+    level.UpdateCoordinatesInLine(obj);
+
+    LevelObject reloaded;
+    level.ParseTaskLine(level.GenerateTaskLine(obj), reloaded);
+    EXPECT_EQ(reloaded.type, "Elevator");
+    EXPECT_EQ(reloaded.splineTaskId, "699");
+    EXPECT_FALSE(reloaded.elevatorLinear);
+    EXPECT_TRUE(reloaded.elevatorForceOrientation);
+    EXPECT_DOUBLE_EQ(reloaded.elevatorStartHeight, 12345.5);
+    // A field the writer must not touch keeps its authored value.
+    EXPECT_DOUBLE_EQ(reloaded.pos.z, 174421536.0);
+}
+
+TEST(LevelObjectParsePathsTest, LoadPathReadsTheElevatorRail) {
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "igi_elevator.qsc";
+    {
+        std::ofstream out(path, std::ios::trunc);
+        ASSERT_TRUE(out.is_open());
+        out << kRetailElevator << ";\n";
+    }
+
+    QSC qsc;
+    qsc.Load(path.string().c_str());
+
+    LevelObjects objects;
+    objects.Load(nullptr, &qsc);
+
+    const LevelObject* found = nullptr;
+    for (const LevelObject& o : objects.GetObjects()) {
+        if (o.type == "Elevator") found = &o;
+    }
+    std::filesystem::remove(path);
+    ASSERT_NE(found, nullptr) << "the loader produced no Elevator";
+
+    EXPECT_EQ(found->splineTaskId, "699");
+    EXPECT_TRUE(found->elevatorLinear);
+    EXPECT_FALSE(found->elevatorForceOrientation);
+    EXPECT_DOUBLE_EQ(found->elevatorStartHeight, 0.0);
+}

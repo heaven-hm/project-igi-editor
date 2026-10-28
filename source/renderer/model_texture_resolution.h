@@ -283,3 +283,31 @@ std::vector<uint8_t> FindModelSourceEntry(
 std::vector<ModelSourceArchiveIndex> OrderTextureArchivesByOwner(
     const std::vector<ModelSourceArchiveIndex>& archives,
     const std::string& ownerResPath);
+
+// The level whose archive supplied a model's bytes, read back out of the archive
+// path the editor resolved them from: "...\level7\models\level7.res" -> 7,
+// "...\common\models\location0.res" -> 0. 0 also means "not a level archive", which
+// is the only answer a caller may treat as unknown.
+//
+// IGI-RE: a model file and its textures always come from ONE level directory.
+// `Model_SetDir` copies the level's directory into `gModelDir` before that level's
+// models are loaded (src/game/game.c:411-418; HOOK(0x4CFBD0) at
+// src/lod/modelfile.c:153-157), and `ModelFile_Load` / `ModelFile_Setup` read the
+// model's `.mtp`, its `models/<name>.res` and its `textures/<name>.res` out of that
+// same directory (src/model/model.c:233, :261, :267, HOOK(0x4CF080)). So the archive
+// a model was actually read from is the archive its textures must be searched in —
+// there is no cross-level search in the engine at all.
+int ModelArchiveOwnerLevel(const std::string& resPath);
+
+// Which level's texture archive a model's textures must be searched in first:
+// the level whose archive supplied the MODEL's bytes (`meshOwnerLevel`, from
+// ModelArchiveOwnerLevel), falling back to the editor's texture-id owner
+// (`textureIdOwnerLevel`: the first level whose DAT lists that texture id) only
+// when the model's archive is not a level archive (0).
+//
+// IGI-RE: the model file and its textures come from one directory, so the model's
+// own archive decides — never the first level whose DAT happens to list the
+// texture id, and never the level being previewed. The texture-id owner is the
+// editor's fallback for a model read from the shared/common archive, where the
+// engine has no level answer to reproduce. Levels are 1..14; 0 means none.
+int TextureOwnerLevelForModel(int meshOwnerLevel, int textureIdOwnerLevel);

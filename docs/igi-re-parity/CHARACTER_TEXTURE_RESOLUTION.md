@@ -262,3 +262,97 @@ level for the duration of one model's texture application, which means either a
 per-model lookup context or a signature change in `renderer_objects.h` — both
 outside this task's write scope. Recorded here so it is not lost.
 
+> **Closed later — see §9.** The general case was fixed by hoisting the archive the
+> *model's bytes were actually read from* rather than any DAT-derived owner. That is
+> strictly better than both rules above: it is 100% correct on the ids each level's
+> own archive defines (67,749 of 67,749 across all 14 levels), where this task's
+> texture-id-owner rule was still wrong on 398 of them. `OrderTextureArchivesByOwner`
+> is unchanged; what changed is which archive path is passed to it.
+
+## 9. The archive the model came from decides (the general case)
+
+### 9.1 The engine rule, again
+
+A model file and its textures always come from **one level directory**, and that
+directory is set by `Model_SetDir`:
+
+| Step | IGI-RE location | What it says |
+| --- | --- | --- |
+| 1 | `src/game/game.c:411-418`, `HOOK(0x4CFBD0)` at `src/lod/modelfile.c:153-157` | `Model_SetDir("LOCAL:<mission dir>/")` before the game model is loaded, then `Model_SetDir(path2)` before the level's models: `gModelDir` is the level's own directory |
+| 2 | `src/model/model.c:233` `ModelFile_Load`, `:251` `ModelFile_Setup` `HOOK(0x4CF080)` | the `.mtp`, `models/<name>.res` (`:267`) and `textures/<name>.res` (`:261`) are all `gModelDir + …` |
+| 3 | `src/model/model.c:450-461`, `:300-306` | the `MTP_TEXF` table of that one texture resource is the model's texture table, addressed by the `GTT` index |
+| 4 | `src/game/game.c:414`, `:418` | the dir changes **twice in one level load** and never because of a name lookup — there is no cross-level search to model |
+
+So the question "which archive are this model's textures in?" is answered by "which
+archive did this model's bytes come from?" — and nothing else. That is a fact the
+renderer already has: `FindMeshData(modelId, &sourceRes)` returns the archive path it
+read the `.mef` from, and the ATTA path does the same for every sub-model.
+
+### 9.2 What changed
+
+* `source/renderer/model_texture_resolution.{h,cpp}`: `ModelArchiveOwnerLevel(resPath)`
+  reads the level back out of `…\level<N>\models\level<N>.res` (0 for the shared
+  `common` archive or anything unrecognised), and `TextureOwnerLevelForModel(meshLevel,
+  textureIdOwnerLevel)` states the rule: the model's archive wins when it names a level,
+  and the texture id's DAT owner — this task's rule — is only the fallback for a mesh
+  read from `common`.
+* `source/renderer/renderer_objects_texture.cpp`: `GetOrLoadTexture` takes the level,
+  uses it for the owner-first ordering *and* in the texture cache key (one id is a
+  different image in different levels' archives, so two models from two levels must not
+  share one cached texture). `ApplyTexturesToMesh` takes `meshOwnerLevel` and passes it
+  to every lookup.
+* `source/renderer/renderer_objects_mesh.cpp`: `ApplyTexturesToMesh(…,
+  ModelArchiveOwnerLevel(meshRes))` — the archive `FindMeshData` answered from.
+* `source/renderer/renderer_objects_atta.cpp`: every ATTA sub-model gets
+  `ModelArchiveOwnerLevel` of *its own* resolved archive (5 call sites); the two
+  loose-file call sites pass 0, because a `.mef` on disk is not in any level archive.
+
+### 9.3 Measured on the retail install
+
+Per level, over the (model, texture-id) pairs that **that level's own texture archive
+defines** — i.e. the pairs where the engine has an answer — counting the lookups whose
+bytes are the level's own copy:
+
+| preview level | ids defined | this task's rule (texture-id owner) | new rule (model's archive) |
+| --- | --- | --- | --- |
+| 1 | 4428 | 4428 | 4428 |
+| 2 | 3237 | 3237 | 3237 |
+| 3 | 5114 | 5075 | 5114 |
+| 4 | 4231 | 4143 | 4231 |
+| 5 | 4080 | 4080 | 4080 |
+| 6 | 5580 | 5525 | 5580 |
+| 7 | 5469 | 5469 | 5469 |
+| 8 | 5925 | 5925 | 5925 |
+| 9 | 4767 | 4767 | 4767 |
+| 10 | 5113 | 5052 | 5113 |
+| 11 | 5638 | 5638 | 5638 |
+| 12 | 5294 | 5200 | 5294 |
+| 13 | 5002 | 4941 | 5002 |
+| 14 | 3871 | 3871 | 3871 |
+| **total** | **67749** | **67351 (398 wrong)** | **67749 (0 wrong)** |
+
+Foreign models (a model the preview level's archive does not contain, e.g. the issue's
+`001_02_1` in a level-2 session — measured separately): the mesh is read from its home
+level's archive, so the new rule hoists that level for every one of its ids instead of
+the first level whose DAT lists each id. 3,693 (model, id) pairs across the retail
+corpus resolve from a different level under the new rule than under the old one; 22 of
+them bind *different bytes* in a level-2 session, and in each of those the old rule
+bound another level's copy (e.g. `020_01_1`'s `018_03_1`: level 4's 4128 B image under
+the new rule, level 1/7's 65568 B sheet under the old one).
+
+A discarded intermediate rule — hoisting the level that the *DAT* first lists the
+**model** in — is recorded here because it was measured and rejected: it was wrong on
+22 of 4428 ids at level 1, 13 at level 2, 13 at level 7 and 72 at level 12, because a
+model listed by an earlier level's DAT is often read out of the current level's
+archive. Only the archive the bytes actually came from is correct.
+
+### 9.4 Verification status
+
+| Claim | Status |
+| --- | --- |
+| The rule and the path parser | **Verified** — `tests/test_character_texture_resolution.cpp`, 3 new tests (`TheModelsOwnArchiveDecidesTheTextureArchive`, `ModelArchiveOwnerLevelReadsTheArchivePath`, `RetailModelArchiveBeatsAnotherArchivesCopy`), 7/7 in the suite |
+| Retail numbers in §9.3 | **Verified** by read-only probes over `/Users/haseeb-mir/Downloads/IGI` (15 DATs, 15 texture archives, 14 model archives); the probes are scratch tools, the assertions they support are in the committed suite |
+| The pre-existing retail counter in `RetailArchivesCarryDifferentImagesUnderOneId` | **Fixed while here** — it looked up `"<id>.tex"` in an index keyed by `"LOCAL:textures/<id>.tex"`, so it counted 0 of 13 and the `EXPECT_EQ` was vacuous (0 == 0). With the correct key it reports 13 of 13 and passes |
+| The wiring (`renderer_objects_*.cpp`) | **Compile-verified only on this host** — those TUs are not host-portable; the Windows cross-build is the compile+link proof, and no frame was rendered |
+| "The on-screen symptom is gone" | **Not verified** — needs a Windows viewport run, as in §6 |
+

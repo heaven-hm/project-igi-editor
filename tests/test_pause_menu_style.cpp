@@ -343,6 +343,18 @@ TEST(PauseMenuRows, StateIsAppendedToTheRowLabel) {
     EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::CycleWeather, state), "Weather: [OFF]");
     state.weather_mode = 0;
 
+    // The editor's weather preview speed. The label is the editor's own -- the
+    // engine has no speed control (src/dxinit/rain.c:122-123,572).
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::CycleWeatherSpeed, state),
+              "Weather Speed: [1x]");
+    state.weather_speed = 0;
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::CycleWeatherSpeed, state),
+              "Weather Speed: [0x]");
+    state.weather_speed = 2;
+    EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::CycleWeatherSpeed, state),
+              "Weather Speed: [2x]");
+    state.weather_speed = 1;
+
     EXPECT_EQ(igi::PauseMenuRowLabel(igi::MenuUiAction::ToggleLightmaps, state),
               "Lightmap: [Default]");
     state.lightmap_mode = "Baked";

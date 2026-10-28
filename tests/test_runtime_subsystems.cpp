@@ -298,14 +298,17 @@ TEST(PauseMenuLayoutTest, ExpandedTerrainOptionsKeepQuitRowOnScreen) {
     EXPECT_GE(layout.menu_left, 0);
     EXPECT_LE(layout.menu_top + layout.menu_height, 480);
     EXPECT_LE(layout.menu_left + layout.menu_width, 640);
-    EXPECT_EQ(layout.row_count, 21);
+    EXPECT_EQ(layout.row_count, 22);
     const int quitY = PauseMenuRowCenter(layout, layout.row_count - 1);
     EXPECT_TRUE(IsPauseMenuRowHit(layout, layout.row_count - 1, quitY));
 }
 
 TEST(PauseMenuLayoutTest, IncludesLoggingToggleAndSeverityRows) {
-    EXPECT_EQ(PauseMenuRowCount(false), 16);
-    EXPECT_EQ(PauseMenuRowCount(true), 21);
+    // 17 collapsed / 22 expanded: the editor's own rows, now including the
+    // "Weather Speed" preview row (source/app_menu.cpp kFallbackRows).  The
+    // count must equal app_menu::EditorFallbackRowCount for the same state.
+    EXPECT_EQ(PauseMenuRowCount(false), 17);
+    EXPECT_EQ(PauseMenuRowCount(true), 22);
 }
 
 TEST(RuntimeRenderTargetTest, PauseMenuUsesOnlyTheNativeMouseCursor) {

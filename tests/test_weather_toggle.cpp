@@ -200,4 +200,83 @@ TEST(WeatherParticle, PoolIsEightyDropsForBothModes) {
     EXPECT_EQ(igi::rain::DropKindCount(), 4);
 }
 
+// ============================================================
+// WeatherSpeed — the editor's preview multiplier (NO engine oracle)
+// ============================================================
+//
+// The engine's fall speed is `speed = r->snow ? kSnowSpeed : kRainSpeed`
+// (Rain_Update, HOOK 0x499CF0, src/dxinit/rain.c:572) with kSnowSpeed = 204.8f
+// and kRainSpeed = 2048.0f (src/dxinit/rain.c:122-123).  Nothing in the oracle
+// scales it -- no cvar, no task parameter, no global -- so these tests pin the
+// EDITOR's own control, and the one property that matters is that step 1 is
+// exactly the engine's rate (the multiplier is 1.0 and changes nothing).
+
+TEST(WeatherSpeed, AuthoredStepIsExactlyTheEngineRate) {
+    EXPECT_FLOAT_EQ(igi::WeatherSpeedScale(static_cast<int>(igi::WeatherSpeed::Authored)), 1.0f);
+    EXPECT_EQ(igi::kWeatherSpeedDefault, static_cast<int>(igi::WeatherSpeed::Authored));
+    // 1.0x times the engine's own constant is the engine's own constant.
+    EXPECT_FLOAT_EQ(igi::rain::kSnowSpeedUnitsPerTick *
+                        igi::WeatherSpeedScale(igi::kWeatherSpeedDefault),
+                    igi::rain::kSnowSpeedUnitsPerTick);
+    EXPECT_FLOAT_EQ(igi::rain::kRainSpeedUnitsPerTick *
+                        igi::WeatherSpeedScale(igi::kWeatherSpeedDefault),
+                    igi::rain::kRainSpeedUnitsPerTick);
+}
+
+TEST(WeatherSpeed, FrozenIsZeroAndDoubleIsTwo) {
+    EXPECT_FLOAT_EQ(igi::WeatherSpeedScale(static_cast<int>(igi::WeatherSpeed::Frozen)), 0.0f);
+    EXPECT_FLOAT_EQ(igi::WeatherSpeedScale(static_cast<int>(igi::WeatherSpeed::Double)), 2.0f);
+}
+
+TEST(WeatherSpeed, CycleIsFrozenAuthoredDoubleFrozen) {
+    int step = static_cast<int>(igi::WeatherSpeed::Frozen);
+    step = igi::NextWeatherSpeed(step);
+    EXPECT_EQ(step, static_cast<int>(igi::WeatherSpeed::Authored));
+    step = igi::NextWeatherSpeed(step);
+    EXPECT_EQ(step, static_cast<int>(igi::WeatherSpeed::Double));
+    step = igi::NextWeatherSpeed(step);
+    EXPECT_EQ(step, static_cast<int>(igi::WeatherSpeed::Frozen));
+}
+
+TEST(WeatherSpeed, OutOfRangeStepFallsBackToTheAuthoredRate) {
+    // A hand-edited config must never freeze the preview by accident.
+    for (int bad : {-1, igi::kWeatherSpeedCount, 99, -99}) {
+        EXPECT_FLOAT_EQ(igi::WeatherSpeedScale(bad), 1.0f) << "step " << bad;
+        EXPECT_EQ(igi::NextWeatherSpeed(bad), igi::kWeatherSpeedDefault) << "step " << bad;
+        EXPECT_STREQ(igi::WeatherSpeedLabel(bad), "1x") << "step " << bad;
+    }
+}
+
+TEST(WeatherSpeed, LabelsAreTheValueBoxText) {
+    EXPECT_STREQ(igi::WeatherSpeedLabel(static_cast<int>(igi::WeatherSpeed::Frozen)), "0x");
+    EXPECT_STREQ(igi::WeatherSpeedLabel(static_cast<int>(igi::WeatherSpeed::Authored)), "1x");
+    EXPECT_STREQ(igi::WeatherSpeedLabel(static_cast<int>(igi::WeatherSpeed::Double)), "2x");
+}
+
+TEST(WeatherSpeed, FrozenStopsTheSpawnAccumulatorToo) {
+    // The multiplier scales the ONE value the engine derives everything from, so
+    // a frozen preview also stops emitting: with speed 0 the accumulator
+    // `acc = speed + r->spawn` (rain.c:619) never crosses kSpawnStep, and the
+    // engine always leaves `r->spawn` below kSpawnStep at the end of a tick
+    // (`acc = r->spawn - kSpawnStep`, rain.c:634-635).
+    const float rain_speed = igi::rain::kRainSpeedUnitsPerTick *
+                             igi::WeatherSpeedScale(static_cast<int>(igi::WeatherSpeed::Frozen));
+    EXPECT_FLOAT_EQ(rain_speed, 0.0f);
+    float accumulator = 0.0f;
+    for (int tick = 0; tick < 600; ++tick) {
+        EXPECT_EQ(igi::rain::SpawnCountForTick(rain_speed, accumulator, 0), 0) << "tick " << tick;
+    }
+    EXPECT_FLOAT_EQ(accumulator, 0.0f);
+}
+
+TEST(WeatherSpeed, DoubleRateDoublesBothTheFallAndTheSpawnRate) {
+    // rain.c:587-589 (fall) and rain.c:619 (spawn) read the same `speed`, so the
+    // steady-state spawn rate is speed / kSpawnStep (rain.c:689) and doubles.
+    const float authored = igi::rain::SpawnRatePerTick(false);
+    const float doubled = (igi::rain::kRainSpeedUnitsPerTick *
+                           igi::WeatherSpeedScale(static_cast<int>(igi::WeatherSpeed::Double))) /
+                          igi::rain::kSpawnStep;
+    EXPECT_NEAR(doubled, authored * 2.0f, 1e-4f);
+}
+
 } // namespace

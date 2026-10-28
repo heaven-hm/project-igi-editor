@@ -66,6 +66,15 @@ public:
     void SetParams(bool active, bool is_snow, float startMeters, float endMeters, float alpha);
     void SetWeatherEnabled(bool enabled) { weather_enabled_ = enabled; }
 
+    // The editor's preview speed multiplier (see igi::WeatherSpeed,
+    // source/runtime/weather_mode.h). The engine has no such control: its speed
+    // is `speed = r->snow ? kSnowSpeed : kRainSpeed` (Rain_Update, HOOK
+    // 0x499CF0, src/dxinit/rain.c:572) with the constants at rain.c:122-123.
+    // The scale multiplies that one value, so the fall, the wrap, the spawn
+    // accumulator and the spawn z all stay consistent with each other.
+    // Not a Rain_New argument, so it never rebuilds the object.
+    void SetSpeedScale(float scale) { speed_scale_ = scale; }
+    float SpeedScale() const { return speed_scale_; }
     void Draw(GLuint ubo_mats, const Camera& camera, bool cameraIsSheltered,
               GLuint snowTexture);
     bool IsActive() const { return active_ && weather_enabled_; }
@@ -90,6 +99,9 @@ private:
     bool active_ = false;
     bool weather_enabled_ = true;
     bool is_snow_ = false;
+    // The editor's preview multiplier on the engine's own fall speed. 1.0 is the
+    // engine's rate; there is no engine value to diverge from (rain.c:122-123).
+    float speed_scale_ = 1.0f;
     // RainEffect_Changed rebuilds the Rain object whenever anything but the
     // alpha changes (fxobj/rain.c:131-146), so the object exists as soon as a
     // level has weather and the fields below are its construction arguments.

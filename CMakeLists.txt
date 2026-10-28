@@ -428,6 +428,7 @@ add_executable(igi_tests
     tests/test_loading_bar_style.cpp
     tests/test_magic_object_expand.cpp
     tests/test_mission_fog.cpp
+    tests/test_elevator_rules.cpp
     tests/test_spline_rules.cpp
     tests/test_anim_rules.cpp
     tests/test_lightmap_rules.cpp
@@ -566,6 +567,7 @@ target_sources(igi_tests PRIVATE
     source/runtime/map_computer_projection.cpp
     source/runtime/level_weather.cpp
     source/runtime/mission_fog.cpp
+    source/runtime/elevator_rules.cpp
     source/runtime/spline_rules.cpp
     # The engine's own span render path (`igi::spline`). The renderer's
     # BuildEngineSpanMesh adapter calls it, so the host lane needs it to link

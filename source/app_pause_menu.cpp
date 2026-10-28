@@ -101,6 +101,7 @@ igi::PauseMenuRowState App::PauseMenuRowStateNow() const {
 		.log_level = Config::Get().logLevelThreshold,
 		.music_on = music_playing_,
 		.weather_mode = Config::Get().weatherMode,
+		.weather_speed = Config::Get().weatherSpeed,
 		.lightmap_mode = igi::ObjectLightmapManager::Get().GetRenderModeName(),
 		.terrain_expanded = pause_terrain_expanded_,
 		.terrain_texture = (terrain_mod_options_ & TERRAIN_TEXTURE_MOD) != 0,
@@ -412,6 +413,9 @@ bool App::ActivateFocusedPauseMenuRow() {
 		return true;
 	case igi::MenuUiAction::CycleWeather:
 		CycleWeatherMode();
+		return true;
+	case igi::MenuUiAction::CycleWeatherSpeed:
+		CycleWeatherSpeed();
 		return true;
 	case igi::MenuUiAction::ToggleLightmaps:
 		igi::ObjectLightmapManager::Get().CycleRenderMode();

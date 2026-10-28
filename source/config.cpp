@@ -8,6 +8,7 @@
 #include "level/qvm_parser.h"
 #include "level/qvm_decompiler.h"
 #include "runtime/log_policy.h"
+#include "runtime/weather_mode.h"
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -178,6 +179,8 @@ void Config::CreateDefault() {
     data_.musicEnabled = true;
     data_.weatherEnabled = true;
     data_.weatherMode = 0;
+    // igi::kWeatherSpeedDefault == 1 == the engine's own fall rate (rain.c:122-123).
+    data_.weatherSpeed = igi::kWeatherSpeedDefault;
     data_.consoleAutoActivate = 2;
     data_.searchType = 133577004;
     data_.invertMouse = false;
@@ -293,6 +296,14 @@ void Config::Load(bool configQvmReady) {
                     else if (val == "Rain" || val == "1") { data_.weatherMode = 1; data_.weatherEnabled = true; }
                     else if (val == "Snow" || val == "2") { data_.weatherMode = 2; data_.weatherEnabled = true; }
                     else if (val == "Off" || val == "OFF" || val == "3") { data_.weatherMode = 3; data_.weatherEnabled = false; }
+                }
+                // The editor's preview speed step. Out-of-range values fall back to
+                // the authored rate (igi::WeatherSpeedScale does the same), so a
+                // hand-edited config can never freeze the preview by accident.
+                else if (key == "WeatherSpeed") {
+                    int v = std::stoi(val);
+                    data_.weatherSpeed = (v >= 0 && v < igi::kWeatherSpeedCount)
+                                             ? v : igi::kWeatherSpeedDefault;
                 }
                 else if (key == "ConsoleAutoActivate") data_.consoleAutoActivate = std::stoi(val);
                 else if (key == "SearchType") data_.searchType = std::stoll(val);
@@ -492,6 +503,7 @@ void Config::Save() {
         else if (data_.weatherMode == 2) wmodeName = "Snow";
         else if (data_.weatherMode == 3) wmodeName = "Off";
         file << "QEDWeatherMode(\"" << wmodeName << "\");\n";
+        file << "QEDWeatherSpeed(" << data_.weatherSpeed << ");\n";
         file << "QEDUseEditorFont(" << (data_.useEditorFont ? "TRUE" : "FALSE") << ");\n";
         file << "QEDSystemFontSize(" << data_.systemFontSize << ");\n";
         file << "QEDFindTaskName(\"" << data_.findTaskName << "\");\n";

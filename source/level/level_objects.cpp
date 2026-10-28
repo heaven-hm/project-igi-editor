@@ -575,6 +575,21 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 case 7: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.y = cur_a->dbl_; obj.original_rot.y = cur_a->dbl_; } break;
                 case 8: if (cur_a->type_ == QSC::arg_s::type_t::DBL) { obj.rot.z = cur_a->dbl_; obj.original_rot.z = cur_a->dbl_; } break;
             }
+            // Elevator (GitHub issue #40, the moving platform): the four fields
+            // above are followed by "SplineObj taskid" (Int32) @10, "Linear"
+            // (bool8) @11, "Force orientation" (bool8) @12 and "Pos" (Real32)
+            // @13. See LevelObject's elevator block for the full derivation, and
+            // `Elevator_Init` HOOK 0x43CC70 (src/elevator/elevator.c:44-83).
+            // Nothing read them before, so an elevator had no rail and was drawn
+            // at its authored spot with no path.
+            if (typeStr == "Elevator") {
+                switch (arg_idx) {
+                    case 10: obj.splineTaskId = TaskIdFromArg(cur_a); break;
+                    case 11: if (cur_a->type_ == QSC::arg_s::type_t::BOOL) obj.elevatorLinear = cur_a->bool_ != 0; break;
+                    case 12: if (cur_a->type_ == QSC::arg_s::type_t::BOOL) obj.elevatorForceOrientation = cur_a->bool_ != 0; break;
+                    case 13: if (cur_a->type_ == QSC::arg_s::type_t::DBL) obj.elevatorStartHeight = cur_a->dbl_; break;
+                }
+            }
         } else {
             // No explicit branch for this type. IGI's own convention for the task types
             // the editor does not model individually is "Position"/"ObjectPos" as the

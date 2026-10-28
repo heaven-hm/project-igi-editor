@@ -268,7 +268,13 @@ TEST(CharacterTextureResolution, RetailArchivesCarryDifferentImagesUnderOneId) {
         const TexHeader header = ReadTexHeader(bytes);
         std::printf("[tex] 001_02_1 -> %-10s bytes=%-6zu %dx%d\n", id.c_str(), bytes.size(),
                     header.valid ? header.width : -1, header.valid ? header.height : -1);
-        const auto inLevel7 = level7.entries.find(id + ".tex");
+        // The archive index is keyed by the engine's own member identity, not by the
+        // bare leaf (RES_BuildIndex / ModelFile_LoadTextures,
+        // src/model/model.c:467, HOOK 0x4CF790), so the counter below is only
+        // meaningful with the "LOCAL:textures/<id>.tex" key.  With the bare
+        // "<id>.tex" it matched nothing and the assertion was vacuous (0 == 0).
+        const auto inLevel7 = level7.entries.find(
+            igi_res::NormalizeResourceName("LOCAL:textures/" + id + ".tex"));
         if (inLevel7 == level7.entries.end()) continue;
         ++ownedByLevel7;
         if (RES_ReadEntry(level7Res, inLevel7->second) == bytes) ++resolvedInLevel7;
@@ -276,4 +282,98 @@ TEST(CharacterTextureResolution, RetailArchivesCarryDifferentImagesUnderOneId) {
     std::printf("[tex] 001_02_1: %zu of 13 ids defined by level7, %zu resolved there\n",
                 ownedByLevel7, resolvedInLevel7);
     EXPECT_EQ(resolvedInLevel7, ownedByLevel7);
+}
+
+// The archive a model's bytes were read from is the archive its textures must be
+// searched in. One gModelDir supplies both in the engine: Model_SetDir copies the
+// level's directory into gModelDir before that level's models are loaded
+// (src/game/game.c:411-418; HOOK(0x4CFBD0) src/lod/modelfile.c:153-157), and
+// ModelFile_Setup reads "models/<name>.res" and "textures/<name>.res" from it
+// (src/model/model.c:267, :261, HOOK 0x4CF080). The texture id's own DAT owner is
+// only the fallback for a mesh read from the shared/common archive.
+TEST(CharacterTextureResolution, TheModelsOwnArchiveDecidesTheTextureArchive) {
+    EXPECT_EQ(TextureOwnerLevelForModel(7, 1), 7);
+    EXPECT_EQ(TextureOwnerLevelForModel(4, 1), 4);
+    EXPECT_EQ(TextureOwnerLevelForModel(12, 7), 12);
+    // No level archive (shared common, or a loose .mef): the editor's texture-id
+    // owner stands, and 0 when even that is unknown.
+    EXPECT_EQ(TextureOwnerLevelForModel(0, 1), 1);
+    EXPECT_EQ(TextureOwnerLevelForModel(0, 0), 0);
+}
+
+TEST(CharacterTextureResolution, ModelArchiveOwnerLevelReadsTheArchivePath) {
+    EXPECT_EQ(ModelArchiveOwnerLevel(
+                  "Z:\\IGI\\missions\\location0\\level7\\models\\level7.res"), 7);
+    EXPECT_EQ(ModelArchiveOwnerLevel(
+                  "/igi/missions/location0/LEVEL12/models/LEVEL12.RES"), 12);
+    EXPECT_EQ(ModelArchiveOwnerLevel(
+                  "Z:\\IGI\\missions\\location0\\common\\models\\location0.res"), 0);
+    EXPECT_EQ(ModelArchiveOwnerLevel(
+                  "Z:\\IGI\\missions\\location0\\level7\\textures\\level7.res"), 0);
+    EXPECT_EQ(ModelArchiveOwnerLevel(""), 0);
+}
+
+// Retail evidence for the rule. `020_01_1` is read from level4's models archive, and
+// one of the ids its own record lists (018_03_1) is defined by BOTH level4's and
+// level7's texture archives with different bytes (4128 B and 65568 B; measured, and
+// the same id/archives table as docs/igi-re-parity/CHARACTER_TEXTURE_RESOLUTION.md
+// section 2). The old texture-id-owner rule hoisted a level listed first by the DATs
+// (level1, whose copy is byte-identical to level7's); the engine's rule hoists the
+// archive the model came from, so level4's copy is the one that is bound.
+TEST(CharacterTextureResolution, RetailModelArchiveBeatsAnotherArchivesCopy) {
+    const char* root = InstallRoot();
+    if (root == nullptr) {
+        GTEST_SKIP() << "set IGI_TEX_ROOT to an IGI install to run the retail cases";
+    }
+    const std::string igi = root;
+    const std::string level4Models = igi + "/missions/location0/level4/models/level4.res";
+    const std::string level4Res = igi + "/missions/location0/level4/textures/level4.res";
+    const std::string level7Res = igi + "/missions/location0/level7/textures/level7.res";
+    if (!std::filesystem::exists(level4Models) || !std::filesystem::exists(level4Res) ||
+        !std::filesystem::exists(level7Res)) {
+        GTEST_SKIP() << "no retail level4/level7 archives under " << igi;
+    }
+
+    // The model really is in that archive, and the archive path names the level.
+    ModelSourceArchiveIndex models;
+    models.resPath = level4Models;
+    std::string error;
+    ASSERT_TRUE(RES_BuildIndex(level4Models, models.entries, error)) << error;
+    const std::string member =
+        igi_res::NormalizeResourceName(igi_res::ModelMemberName("020_01_1"));
+    EXPECT_NE(models.entries.find(member), models.entries.end());
+    const int meshLevel = ModelArchiveOwnerLevel(level4Models);
+    EXPECT_EQ(meshLevel, 4);
+    // The DAT owner of this id is level1; the rule must still choose the model's
+    // own archive.
+    EXPECT_EQ(TextureOwnerLevelForModel(meshLevel, /*textureIdOwnerLevel=*/1), 4);
+
+    // And the two archives really do hold different images under the one id.
+    std::vector<ModelSourceArchiveIndex> all(2);
+    all[0].resPath = level4Res;
+    all[1].resPath = level7Res;
+    for (auto& archive : all) {
+        ASSERT_TRUE(RES_BuildIndex(archive.resPath, archive.entries, error))
+            << archive.resPath << ": " << error;
+    }
+    const std::string key =
+        igi_res::NormalizeResourceName("LOCAL:textures/018_03_1.tex");
+    const auto level4Entry = all[0].entries.find(key);
+    const auto level7Entry = all[1].entries.find(key);
+    ASSERT_NE(level4Entry, all[0].entries.end());
+    ASSERT_NE(level7Entry, all[1].entries.end());
+    const std::vector<uint8_t> level4Bytes = RES_ReadEntry(level4Res, level4Entry->second);
+    const std::vector<uint8_t> level7Bytes = RES_ReadEntry(level7Res, level7Entry->second);
+    ASSERT_FALSE(level4Bytes.empty());
+    ASSERT_FALSE(level7Bytes.empty());
+    EXPECT_NE(level4Bytes, level7Bytes);
+
+    // The model's own archive wins; another level's copy is what the other order
+    // binds, which is the defect.
+    EXPECT_EQ(FindPreviewTextureEntry(OrderTextureArchivesByOwner(all, level4Res),
+                                      "018_03_1", ReadFromDisk),
+              level4Bytes);
+    EXPECT_EQ(FindPreviewTextureEntry(OrderTextureArchivesByOwner(all, level7Res),
+                                      "018_03_1", ReadFromDisk),
+              level7Bytes);
 }

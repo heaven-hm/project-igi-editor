@@ -734,6 +734,17 @@ public:
 	// MeshHeader.radius -- the value the pickup touch range uses
 	// (src/comprun/pickup.c:172-177). NOT GetMeshRadius above (extent diagonal).
 	float					GetMeshHeaderRadius(const std::string& modelId, bool isBuilding) { return objects_.GetMeshHeaderRadius(modelId, isBuilding); }
+	// The engine's per-frame draw LOD for one object, from the SAME implementation
+	// the visual pass uses (Renderer_Objects::SelectObjectDrawLod). -1 = the
+	// engine's "culled this frame" (src/render/render.c:955-956). The animation
+	// pose set asks this so a posed object is always a drawn object -- see
+	// source/runtime/anim_pose_set.h.
+	int						GetObjectDrawLod(const LevelObject& obj,
+											 const glm::vec3& camera_pos,
+											 const glm::vec3& camera_forward,
+											 float tan_half_fovx) {
+		return objects_.SelectObjectDrawLod(obj, camera_pos, camera_forward, tan_half_fovx);
+	}
 	glm::vec3				GetMeshCenter(const std::string& modelId, bool isBuilding) { return objects_.GetMeshCenter(modelId, isBuilding); }
 	float					GetMeshZOffset(const std::string& modelId, bool isBuilding) { return objects_.GetMeshZOffset(modelId, isBuilding); }
 	int						PickObjectAtScreen(int x, int y, int w, int h,
@@ -833,6 +844,11 @@ public:
 		rain_.SetGroundQuery(std::move(query));
 	}
 	void SetWeatherEnabled(bool enabled) { rain_.SetWeatherEnabled(enabled); }
+	// The editor's preview speed multiplier (igi::WeatherSpeed, source/runtime/
+	// weather_mode.h). No engine counterpart exists: the engine's speed is
+	// `speed = r->snow ? kSnowSpeed : kRainSpeed` (Rain_Update, HOOK 0x499CF0,
+	// src/dxinit/rain.c:572, constants at :122-123).
+	void SetRainSpeedScale(float scale) { rain_.SetSpeedScale(scale); }
 	void ClearSuppressedAttas() { objects_.ClearSuppressedAttas(); }
 	bool SuppressAttachmentInMef(const std::string& parentModelId, const std::string& attModelId, const glm::vec3& localPos) {
 		return objects_.SuppressAttachmentInMef(parentModelId, attModelId, localPos);

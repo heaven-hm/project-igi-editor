@@ -1058,11 +1058,18 @@ void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool
                                  (isBuilding ? "building:" : "object:") + att.modelId;
             if (mesh_cache_.find(subKey) == mesh_cache_.end()) {
                 bool loaded = false;
-                std::vector<uint8_t> subBytes = FindMeshData(att.modelId);
+                std::string subRes;
+                std::vector<uint8_t> subBytes = FindMeshData(att.modelId, &subRes);
                 if (!subBytes.empty()) {
                     try {
                         Mesh subMesh = loadObjModelFromMemory(subBytes, att.modelId);
-                        ApplyTexturesToMesh(subMesh, att.modelId, modelId);
+                        // The ATTA child's textures are read from the archive the
+                        // child's own bytes came from: one gModelDir supplies the
+                        // model and its textures (Model_SetDir HOOK 0x4CFBD0,
+                        // src/lod/modelfile.c:153-157; ModelFile_Setup's
+                        // "textures/<name>.res", src/model/model.c:261, HOOK 0x4CF080).
+                        ApplyTexturesToMesh(subMesh, att.modelId, modelId,
+                                            ModelArchiveOwnerLevel(subRes));
                         mesh_cache_[subKey] = subMesh;
                         loaded = true;
                     } catch (...) {}
@@ -1072,7 +1079,7 @@ void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool
                     if (!subFile.empty()) {
                         try {
                             Mesh subMesh = loadObjModel(subFile, "");
-                            ApplyTexturesToMesh(subMesh, att.modelId, modelId);
+                            ApplyTexturesToMesh(subMesh, att.modelId, modelId, 0);
                             mesh_cache_[subKey] = subMesh;
                             loaded = true;
                         } catch (...) {}
@@ -1080,11 +1087,13 @@ void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool
                         // FindModelFile may have lazily indexed a cross-level .res as a
                         // side effect (its cross-level lookup block) -- retry the ResCache
                         // now that the owning level's models.res is indexed.
-                        std::vector<uint8_t> lazyBytes = FindMeshData(att.modelId);
+                        std::string lazyRes;
+                        std::vector<uint8_t> lazyBytes = FindMeshData(att.modelId, &lazyRes);
                         if (!lazyBytes.empty()) {
                             try {
                                 Mesh subMesh = loadObjModelFromMemory(lazyBytes, att.modelId);
-                                ApplyTexturesToMesh(subMesh, att.modelId, modelId);
+                                ApplyTexturesToMesh(subMesh, att.modelId, modelId,
+                                                    ModelArchiveOwnerLevel(lazyRes));
                                 mesh_cache_[subKey] = subMesh;
                                 loaded = true;
                             } catch (...) {}
@@ -1143,11 +1152,16 @@ void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool
                              (isBuilding ? "building:" : "object:") + spawnModelId;
         if (mesh_cache_.find(subKey) == mesh_cache_.end()) {
             bool loaded = false;
-            std::vector<uint8_t> subBytes = FindMeshData(spawnModelId);
+            std::string subRes;
+            std::vector<uint8_t> subBytes = FindMeshData(spawnModelId, &subRes);
             if (!subBytes.empty()) {
                 try {
                     Mesh subMesh = loadObjModelFromMemory(subBytes, spawnModelId);
-                    ApplyTexturesToMesh(subMesh, spawnModelId, modelId);
+                    // The sub-model's textures come from the archive its own bytes
+                    // came from (one gModelDir supplies both; Model_SetDir
+                    // HOOK 0x4CFBD0, src/lod/modelfile.c:153-157).
+                    ApplyTexturesToMesh(subMesh, spawnModelId, modelId,
+                                        ModelArchiveOwnerLevel(subRes));
                     mesh_cache_[subKey] = subMesh;
                     Logger::Get().Log(LogLevel::INFO,
                         "[Renderer_Objects] ATTA sub-model loaded from ResCache: " + aname +
@@ -1164,11 +1178,13 @@ void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool
                     // FindModelFile may have lazily indexed a cross-level .res as a side
                     // effect (its cross-level lookup block) -- retry the ResCache now that
                     // the owning level's models.res is indexed, before giving up.
-                    std::vector<uint8_t> lazyBytes = FindMeshData(spawnModelId);
+                    std::string lazyRes;
+                    std::vector<uint8_t> lazyBytes = FindMeshData(spawnModelId, &lazyRes);
                     if (!lazyBytes.empty()) {
                         try {
                             Mesh subMesh = loadObjModelFromMemory(lazyBytes, spawnModelId);
-                            ApplyTexturesToMesh(subMesh, spawnModelId, modelId);
+                            ApplyTexturesToMesh(subMesh, spawnModelId, modelId,
+                                                ModelArchiveOwnerLevel(lazyRes));
                             mesh_cache_[subKey] = subMesh;
                             Logger::Get().Log(LogLevel::INFO,
                                 "[Renderer_Objects] ATTA sub-model loaded from ResCache (lazy): " + aname +
@@ -1187,7 +1203,7 @@ void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool
                 } else {
                     try {
                         Mesh subMesh = loadObjModel(subFile, "");
-                        ApplyTexturesToMesh(subMesh, spawnModelId, modelId);
+                        ApplyTexturesToMesh(subMesh, spawnModelId, modelId, 0);
                         mesh_cache_[subKey] = subMesh;
                         Logger::Get().Log(LogLevel::INFO,
                             "[Renderer_Objects] ATTA sub-model loaded from disk: " + aname +

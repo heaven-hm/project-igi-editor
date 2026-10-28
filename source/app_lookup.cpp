@@ -5,6 +5,7 @@
  *****************************************************************************/
 #include "app_internal.h"
 #include "renderer/spline_geometry.h"
+#include "runtime/elevator_rules.h"
 
 static bool containsIgnoreCase(const std::string& str, const std::string& substr) {
     if (substr.empty()) return true;
@@ -385,6 +386,12 @@ void App::EvaluateTrainTrackPositions() {
 		// (src/tagitem/spline.c:824-830), not the chord sum.
 		spline_geometry::RailPath rail;
 		double totalLen = 0.0;
+		// The AUTHORED first and last waypoint points (`w->point`, which
+		// SplineObj_GetWaypointPos HOOK 0x502200 returns, src/editobj/spline.c:155-163).
+		// An Elevator whose "Linear" flag is set interpolates between exactly these
+		// two, not between curve joints.
+		glm::dvec3 firstWaypoint{0.0};
+		glm::dvec3 lastWaypoint{0.0};
 	};
 
 	// The engine reads a train's Flip Direction (arg 9) and uses it to pick the
@@ -459,6 +466,10 @@ void App::EvaluateTrainTrackPositions() {
 		}
 		sd.rail = spline_geometry::BuildRailPath(spans);
 		sd.totalLen = sd.rail.length;
+		// SplineObj_GetWaypointPos(graph, 0) and (graph, count - 1): the authored
+		// waypoint points, which the Elevator "Linear" branch interpolates.
+		sd.firstWaypoint = objects[spline.childrenIndices.front()].pos;
+		sd.lastWaypoint = objects[spline.childrenIndices.back()].pos;
 		splineCache[id] = sd;
 		return &splineCache[id];
 	};
@@ -567,5 +578,55 @@ void App::EvaluateTrainTrackPositions() {
 
 	if (evaluated > 0)
 		Logger::Get().Log(LogLevel::INFO, "[App] Evaluated track positions for " + std::to_string(evaluated) + " train objects.");
+
+	// ── Elevator / moving platform (GitHub issue #40) ────────────────────────
+	// `Elevator` is the retail "moving platform": the shipped missions place it in
+	// LEVEL3/5/8/11/12/13/14. Its authored fields are parsed into LevelObject by
+	// level_objects.cpp (see the elevator block there) and the placement rule is
+	// `Elevator_UpdatePlace` HOOK 0x43D960 (src/props/elevator.c:41-83), ported in
+	// runtime/elevator_rules.h. Before this pass an elevator had no rail at all,
+	// so it was drawn at its authored spot with no path — the issue's
+	// "moving platforms/conveyors have no path or animation preview".
+	//
+	// The placement is idempotent: the rail comes from the waypoints' authored
+	// points and the scalar from arg 13 ("Pos"), neither of which this pass
+	// writes, so a second call lands in the same place.
+	int elevatorsPlaced = 0;
+	for (int i = 0; i < (int)objects.size(); ++i) {
+		auto& obj = objects[i];
+		if (obj.type != "Elevator" || obj.deleted || obj.splineTaskId.empty()) continue;
+
+		igi::ElevatorParams params;
+		params.parsed = true;
+		params.graph = 0;   // non-(-1): the rail reference itself is resolved below
+		params.linear = obj.elevatorLinear;
+		params.force_orientation = obj.elevatorForceOrientation;
+		params.start_height = obj.elevatorStartHeight;
+
+		const SplineData* sd = getSpline(obj.splineTaskId);
+		if (!sd || sd->totalLen <= 0.0) continue;
+
+		igi::ElevatorRail rail;
+		rail.path = sd->rail;
+		rail.first_waypoint = sd->firstWaypoint;
+		rail.last_waypoint = sd->lastWaypoint;
+
+		// "Orientation" (args 6/7/8) is the authored `placeMatrix`, which
+		// `Elevator_ParamsChanged` HOOK 0x43DDB0 (src/props/elevator.c:114-144)
+		// copies into the object's frame before calling the placement rule.
+		const glm::dmat3 placeMatrix = spline_geometry::EngineEulerMatrix(obj.rot);
+
+		const igi::ElevatorPlacement placed = igi::PlaceElevatorOnRail(rail, params, placeMatrix);
+		if (!placed.found) continue;
+
+		obj.pos = placed.position;
+		obj.original_pos = placed.position;
+		obj.rot = spline_geometry::EngineMatrixToEuler(placed.matrix);
+		obj.original_rot = obj.rot;
+		++elevatorsPlaced;
+	}
+
+	if (elevatorsPlaced > 0)
+		Logger::Get().Log(LogLevel::INFO, "[App] Evaluated rail positions for " + std::to_string(elevatorsPlaced) + " elevator objects.");
 }
 

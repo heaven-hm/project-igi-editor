@@ -194,6 +194,21 @@ public:
     // (level, model) instead of once per object per pass per frame.  Cleared
     // with the .res indexes it is derived from (ClearResCache).
     const igi::lod::MefMeshHeader& GetLod0MeshHeader(const std::string& modelId);
+    // The engine's per-frame draw LOD for ONE object, exactly as this class's Draw
+    // computes it: `ModelObj_GetLOD` HOOK 0x4CFCB0 (src/lod/mesh3d.c:209-227) over
+    // `lod_select` (src/lod/mesh3d.c:161-208).  -1 is the engine's "culled this
+    // frame" (src/render/render.c:955-956); 0 is "draw LOD 0", which is also what
+    // an unreadable LOD0 header or an empty mesh returns (the Draw loop leaves
+    // `drawnLod` at 0 there too).  `cameraFwd` is the normalised camera forward
+    // and `tan_half_fovx` is the frame's `gTransContext.fov`
+    // (`view_define_.tan_half_fovx_`).
+    //
+    // Exposed so the ANIMATION POSE SET can ask the same question the draw pass
+    // answers: the engine poses only what it draws (`Human_WakeIfVisible`
+    // 0x45F140 -> `Mesh3D_GetBoneMeshLOD` 0x4CFF70, src/humanbase/human.c:262-287),
+    // and one implementation is what keeps "posed" a subset of "drawn".
+    int SelectObjectDrawLod(const LevelObject& obj, const glm::vec3& camera_pos,
+                            const glm::vec3& cameraFwd, float tan_half_fovx);
     glm::vec3 GetMeshCenter(const std::string& modelId, bool isBuilding);
     bool IsCameraInsideBuildingBounds(const std::vector<LevelObject>& objects,
                                       const glm::vec3& cameraPos);
@@ -632,8 +647,21 @@ private:
     std::vector<std::string> GetTextureIdsForModel(const std::string& modelId,
                                                    bool* foundInDat = nullptr);
     std::vector<std::string> GetTextureIdsForSourceModel(const std::string& modelId, int sourceLevel);
-    GLuint GetOrLoadTexture(const std::string& textureId);
-    void ApplyTexturesToMesh(Mesh& mesh, const std::string& modelId, const std::string& parentModelId = "");
+    // `ownerLevel` is the level whose archive supplied the MODEL's bytes
+    // (ModelArchiveOwnerLevel over the archive the mesh was read from), 0 when that
+    // archive is not a level archive. IGI-RE: a model's textures come from the same
+    // level directory as the model's own file — ModelFile_Load / ModelFile_Setup
+    // read the `.mtp`, `models/<name>.res` and `textures/<name>.res` out of
+    // `gModelDir` (src/model/model.c:233, :261, :267, HOOK 0x4CF080), which
+    // Model_SetDir set to that level — so the model's archive decides the texture
+    // archive, not the first level whose DAT lists the texture id
+    // (TextureOwnerLevelForModel, source/renderer/model_texture_resolution.h).
+    GLuint GetOrLoadTexture(const std::string& textureId, int ownerLevel = 0);
+    // `meshOwnerLevel` is the level whose archive supplied this mesh's bytes
+    // (ModelArchiveOwnerLevel); it decides which archive the textures are searched
+    // in first (see GetOrLoadTexture). 0 keeps the editor's texture-id fallback.
+    void ApplyTexturesToMesh(Mesh& mesh, const std::string& modelId,
+                             const std::string& parentModelId = "", int meshOwnerLevel = 0);
     void InitSelectionBox();
     void InitPickingFBO(int w, int h);
     void DrawForPicking(GLuint ubo_mats,

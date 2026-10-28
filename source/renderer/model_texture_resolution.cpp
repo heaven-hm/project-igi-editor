@@ -243,6 +243,53 @@ std::vector<ModelSourceArchiveIndex> OrderTextureArchivesByOwner(
     return ordered;
 }
 
+int ModelArchiveOwnerLevel(const std::string& resPath) {
+    if (resPath.empty()) return 0;
+
+    // Fold exactly the way every other archive-path comparison in the editor does
+    // (RES_BuildIndex keys and SameArchivePath are case-insensitive).
+    std::string path = resPath;
+    for (char& c : path) {
+        if (c == '\\') c = '/';
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+
+    // ".../level<N>/models/level<N>.res" -- the archive LoadResCache indexes for a
+    // level (renderer_objects.cpp: addModel(missionDir + "\\models\\" + levelName)).
+    // The engine's own expression is "%smodels/%s.res" with gModelDir set to the
+    // level's dir (src/model/model.c:267, HOOK(0x4CF080)), and Model_SetDir was
+    // handed "LOCAL:<mission dir>/" (src/game/game.c:411-418, HOOK(0x4CFBD0)
+    // src/lod/modelfile.c:153-157), so the directory name IS the level identity.
+    const std::string marker = "/models/level";
+    const size_t at = path.rfind(marker);
+    if (at == std::string::npos) return 0;  // common, or an archive from another root
+    size_t digit = at + marker.size();
+    const size_t digitsBegin = digit;
+    int level = 0;
+    while (digit < path.size() && path[digit] >= '0' && path[digit] <= '9') {
+        level = level * 10 + (path[digit] - '0');
+        if (level > 999) return 0;  // not a level number
+        ++digit;
+    }
+    if (digit == digitsBegin) return 0;
+    if (path.compare(digit, std::string::npos, ".res") != 0) return 0;
+    return level >= 1 && level <= 14 ? level : 0;
+}
+
+int TextureOwnerLevelForModel(int meshOwnerLevel, int textureIdOwnerLevel) {
+    // Model_SetDir (HOOK 0x4CFBD0, src/lod/modelfile.c:153-157) is called once per
+    // model set during a level load (src/game/game.c:411-418), and every model read
+    // afterwards takes its .mtp (src/model/model.c:233), its "textures/<name>.res"
+    // (:261, HOOK 0x4CF080) and its "models/<name>.res" (:267) from that one
+    // directory. A model's file and its textures therefore cannot come from
+    // different levels: the archive the model's bytes were read from is the archive
+    // its textures must be searched in. The texture-id owner is the editor's
+    // fallback for a model read from the shared/common archive (0), which is the one
+    // case the engine has no level answer for.
+    if (meshOwnerLevel > 0) return meshOwnerLevel;
+    return textureIdOwnerLevel;
+}
+
 ModelEntryHit FindModelEntryByIdentity(
     const std::vector<ModelSourceArchiveIndex>& archives,
     const std::string& modelId,

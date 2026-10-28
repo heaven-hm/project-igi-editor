@@ -413,10 +413,39 @@ bool Renderer_Objects::TextureIdResolves(const std::string& textureId) {
     return false;
 }
 
-GLuint Renderer_Objects::GetOrLoadTexture(const std::string& textureId) {
+GLuint Renderer_Objects::GetOrLoadTexture(const std::string& textureId, int ownerLevel) {
     if (textureId.empty()) return 0;
 
-    const std::string cacheKey = std::to_string(current_level_) + ":" + textureId;
+    // ── 0. Which level's archive supplies this texture ────────────────────────
+    //
+    // IGI-RE: a model file and its textures come from ONE level directory.
+    // Model_SetDir copies the level's directory into gModelDir before that level's
+    // models are loaded (src/game/game.c:411-418; HOOK(0x4CFBD0),
+    // src/lod/modelfile.c:153-157), and ModelFile_Load / ModelFile_Setup read the
+    // model's .mtp (src/model/model.c:233), its "models/<name>.res" (:267) and its
+    // "textures/<name>.res" (:261, HOOK 0x4CF080) out of that directory. So when the
+    // caller knows which archive the MESH came from, that level owns the textures;
+    // the DAT-derived owner of the texture id (the first level listing it) is only
+    // the fallback for a mesh read from the shared/common archive, and the level
+    // being previewed is never the answer for a foreign model.
+    EnsureGlobalTextureMapLoaded();
+    int textureOwnerLevel = 0;
+    {
+        auto ownerIt = texture_level_map_.find(textureId);
+        if (ownerIt == texture_level_map_.end()) {
+            const std::string strippedOwner = StripTextureFormatSuffix(textureId);
+            if (strippedOwner != textureId) ownerIt = texture_level_map_.find(strippedOwner);
+        }
+        if (ownerIt != texture_level_map_.end()) textureOwnerLevel = ownerIt->second;
+    }
+    const int searchLevel = TextureOwnerLevelForModel(ownerLevel, textureOwnerLevel);
+
+    // The cache key names the archive the texture was resolved from, not the level
+    // being previewed: one id is a different image in different levels' archives
+    // (measured: 001_02_1.tex is 128x128 in level7 and 128x32 in common), so two
+    // models owned by two levels must never share one cached texture.
+    const std::string cacheKey =
+        std::to_string(searchLevel > 0 ? searchLevel : current_level_) + ":" + textureId;
     auto it = texture_cache_.find(cacheKey);
     if (it != texture_cache_.end()) {
         return it->second;
@@ -441,20 +470,14 @@ GLuint Renderer_Objects::GetOrLoadTexture(const std::string& textureId) {
     //   001_04_1.tex  level7 = 32800 B             common = 4128 B
     //   018_03_1.tex  level7 = 65568 B             level4 = 4128 B
     {
-        EnsureGlobalTextureMapLoaded();
-        auto ownerIt = texture_level_map_.find(textureId);
-        if (ownerIt == texture_level_map_.end()) {
-            const std::string strippedOwner = StripTextureFormatSuffix(textureId);
-            if (strippedOwner != textureId) ownerIt = texture_level_map_.find(strippedOwner);
-        }
         std::string ownerRes;
-        if (ownerIt != texture_level_map_.end() && ownerIt->second > 0) {
-            if (ownerIt->second != current_level_) {
-                LoadResCache(ownerIt->second, Utils::GetIGIRootPath());
+        if (searchLevel > 0) {
+            if (searchLevel != current_level_) {
+                LoadResCache(searchLevel, Utils::GetIGIRootPath());
             }
             ownerRes = Utils::GetIGIRootPath() + "\\missions\\location0\\level" +
-                       std::to_string(ownerIt->second) + "\\textures\\level" +
-                       std::to_string(ownerIt->second) + ".res";
+                       std::to_string(searchLevel) + "\\textures\\level" +
+                       std::to_string(searchLevel) + ".res";
         }
 
         std::vector<ModelSourceArchiveIndex> archives;
@@ -694,7 +717,9 @@ GLuint Renderer_Objects::GetOrLoadGameTexture(const std::string& name) {
     return 0;
 }
 
-void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelId, const std::string& parentModelId) {
+void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelId,
+                                           const std::string& parentModelId,
+                                           int meshOwnerLevel) {
     bool modelFoundInDat = false;
     std::vector<std::string> textureIds = GetTextureIdsForModel(modelId, &modelFoundInDat);
     bool isDatMiss = textureIds.empty();
@@ -799,6 +824,18 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
         }
     }
 
+    // The level whose archive supplied this mesh's bytes (`meshOwnerLevel`, from the
+    // caller's own model resolution). It is passed to every lookup below, because the
+    // engine reads a model's textures out of the same level directory its own file
+    // came from — Model_SetDir sets gModelDir for the level being loaded
+    // (src/game/game.c:411-418, HOOK(0x4CFBD0) src/lod/modelfile.c:153-157) and
+    // ModelFile_Setup reads "textures/<name>.res" from it (src/model/model.c:261,
+    // HOOK 0x4CF080) — so the archive the model was actually read from decides which
+    // copy of an id is bound, not the first level whose DAT lists that id (the case
+    // that bound an unrelated archive's image before;
+    // docs/igi-re-parity/CHARACTER_TEXTURE_RESOLUTION.md).
+    const int textureOwnerLevel = meshOwnerLevel;
+
     // For AI character models (sunglasses-bearing), load the STRIPPED texture id
     // so "009_09_1_argb8888" → "009_09_1.tex" (opaque body texture → solid black
     // glasses). The _argb8888 variant is a tiny 32×32 semi-transparent overlay
@@ -823,7 +860,7 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
     for (const auto& textureId : textureIds) {
         const std::string loadId = ResolveAiModelTextureId(textureId, isAiModel,
             [this](const std::string& candidate) { return TextureIdResolves(candidate); });
-        textures.push_back(GetOrLoadTexture(loadId));
+        textures.push_back(GetOrLoadTexture(loadId, textureOwnerLevel));
     }
 
     if (!mesh.subMeshes.empty()) {
@@ -911,7 +948,9 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
                         if (git != global_texture_map_.end() &&
                             static_cast<size_t>(matSlot) < git->second.size()) {
                             const std::string& globalTexId = git->second[static_cast<size_t>(matSlot)];
-                            GLuint globalTex = GetOrLoadTexture(globalTexId);
+                            // The id comes from this model's own global-DAT entry, so
+                            // the archive that owns it is still the model's own.
+                            GLuint globalTex = GetOrLoadTexture(globalTexId, textureOwnerLevel);
                             if (globalTex) {
                                 texture = globalTex;
                                 resolvedTexId = globalTexId; // preserve for ARGB detection

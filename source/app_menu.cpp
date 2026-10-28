@@ -128,6 +128,9 @@ const FallbackRow kFallbackRows[] = {
     {"Log Level", MenuUiAction::CycleLogLevel},
     {"Music", MenuUiAction::ToggleMusic},
     {"Weather", MenuUiAction::CycleWeather},
+    // The editor's weather preview speed (igi::WeatherSpeed). Editor-only: the
+    // engine's fall speed is fixed (src/dxinit/rain.c:122-123,572).
+    {"Weather Speed", MenuUiAction::CycleWeatherSpeed},
     {"Lightmap", MenuUiAction::ToggleLightmaps},
     {"Calculate Lightmaps", MenuUiAction::CalculateLightmaps},
     {"Terrain Options", MenuUiAction::ToggleTerrainOptions},
@@ -136,7 +139,7 @@ const FallbackRow kFallbackRows[] = {
     {"Quit", MenuUiAction::Quit},
 };
 
-constexpr size_t kFallbackTerrainHeaderRow = 12;  // index of "Terrain Options"
+constexpr size_t kFallbackTerrainHeaderRow = 13;  // index of "Terrain Options"
 
 const FallbackRow kFallbackExpandedRows[] = {
     {"Texture", MenuUiAction::ToggleTerrainTexture},

@@ -43,6 +43,7 @@ struct PauseMenuRowState {
     int log_level = kLogLevelInfo;
     bool music_on = false;
     int weather_mode = 0;  // Config::weatherMode: 0 default, 1 rain, 2 snow, 3 off
+    int weather_speed = 1; // Config::weatherSpeed: igi::WeatherSpeed, 0/1/2
     std::string lightmap_mode = "Default";
     bool terrain_expanded = false;
     bool terrain_texture = false;

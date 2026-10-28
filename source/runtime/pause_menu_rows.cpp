@@ -10,6 +10,7 @@
 #include <cstdio>
 
 #include "runtime/log_policy.h"
+#include "runtime/weather_mode.h"
 
 namespace igi {
 namespace {
@@ -84,6 +85,14 @@ std::string PauseMenuRowLabel(MenuUiAction action, const PauseMenuRowState& stat
             std::snprintf(buffer, sizeof(buffer), "Weather: [%s]", mode);
             return buffer;
         }
+        // The editor's preview speed step. The row says "Preview" because the
+        // engine has no speed control at all: its fall speed is the fixed pair
+        // of constants at src/dxinit/rain.c:122-123, selected by `r->snow` at
+        // src/dxinit/rain.c:572 (Rain_Update, HOOK 0x499CF0).
+        case MenuUiAction::CycleWeatherSpeed:
+            std::snprintf(buffer, sizeof(buffer), "Weather Speed: [%s]",
+                          WeatherSpeedLabel(state.weather_speed));
+            return buffer;
         case MenuUiAction::ToggleLightmaps:
             std::snprintf(buffer, sizeof(buffer), "Lightmap: [%s]",
                           state.lightmap_mode.empty() ? "Default" : state.lightmap_mode.c_str());
