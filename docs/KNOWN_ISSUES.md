@@ -125,10 +125,28 @@ and the decomp project.
 
 ---
 
-## 📢 3. Reporting Other Bugs and Issues
+## 🏆 3. Credits and Contributors
+
+This editor would not be what it is without their work. Everything the editor now does
+"like the original game" was read out of the decompiled executable, and that is their
+doing:
+
+* **[slickdaddyy](https://github.com/slickdaddyy)** — **IGI Decomp of the full game.**
+  Huge help: the complete decompiled source of Project IGI 1 is the reason we can read
+  what the engine actually does (resource loading, model/MEF and MTP handling, the QVM/QSC
+  task system, lightmaps, splines) instead of guessing at it.
+* **[BlanknameES](https://github.com/BlanknameES)** — **the game's natives**, which made
+  that decompilation work possible in the first place. Without a correct map of the
+  engine's own functions there would be nothing to be faithful to.
+
+Thank you. Any remaining difference between this editor and the game is our bug, not theirs.
+
+---
+
+## 📢 4. Reporting Other Bugs and Issues
 
 If you encounter any other bugs, crashes, or rendering issues that are not documented here, please feel free to report them to the dev team!
 
 * **🎮 Discord**: Message us directly at `Jones_IGI#3954` or join the modding community on the [Project IGI Discord Server](https://discord.com/invite/QpbQrRFAER).
-* **📧 Email**: [DEFAULT_RECIPIENT_EMAIL](mailto:DEFAULT_RECIPIENT_EMAIL)
+* **📧 Email**: [igiproz.hm@gmail.com](mailto:igiproz.hm@gmail.com)
 * **🌟 GitHub**: Create a detailed issue on the [project-igi-editor GitHub Repository](https://github.com/Jones-HM/project-igi-editor/issues) with reproduction steps and logs.
