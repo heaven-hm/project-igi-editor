@@ -478,10 +478,16 @@ void BuildModelInto(EditorMenu& menu, const MenuUiBuildOptions& options) {
     // `App::ActivateFocusedPauseMenuRow` (source/app_pause_menu.cpp).  The loaded
     // definition's screens stay in the model as data -- the `Menu Text` edit and
     // `Save Menu` below operate on it -- but nothing draws them.
-    const std::vector<EditorAddedRow> editor_added_rows = {
-        {kMenuTextLabel, MenuUiAction::EditMenuText, "edit-menu-text"},
-        {kSaveMenuLabel, MenuUiAction::SaveMenu, "save-menu"},
-    };
+    // The user's requirement: "in the pause menu theres in the last two sections there
+    // are two options which you need to remove after the quit so the last option should
+    // be quit ... you need to remove them".  The `Menu Text` and `Save Menu` rows that
+    // used to follow `Quit` are therefore GONE, so `Quit` is the last row.  They were
+    // the editor's QVM write side (cycle the definition's title / save the definition
+    // back to ingamemenu.qvm); that capability is no longer reachable from the pause
+    // menu, which is the trade the requirement asks for.  Nothing else about the
+    // definition changed: it is still loaded, still on the model as data, and still
+    // unwritten by simply opening the menu.
+    const std::vector<EditorAddedRow> editor_added_rows = {};
     MenuUiModel editor_screen =
         BuildEditorFallbackMenu(menu.terrain_expanded, options, editor_added_rows);
     if (editor_screen.ok && !editor_screen.screens.empty()) {

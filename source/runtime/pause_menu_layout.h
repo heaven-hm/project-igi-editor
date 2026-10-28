@@ -93,7 +93,7 @@ constexpr int PauseMenuRowCount(bool terrainOptionsExpanded) noexcept {
 // why this is a separate constant and not part of `PauseMenuRowCount`.  It must stay
 // equal to `app_menu::kEditorAddedRowCount`, which is what the live menu passes
 // (`App::PauseMenuExtraRows`).
-constexpr int kPauseMenuEditorExtraRows = 2;
+constexpr int kPauseMenuEditorExtraRows = 0;
 
 constexpr PauseMenuLayout BuildPauseMenuLayout(
     int viewportWidth, int viewportHeight, bool terrainOptionsExpanded,

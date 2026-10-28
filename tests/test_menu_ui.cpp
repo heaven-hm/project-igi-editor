@@ -1244,10 +1244,17 @@ TEST(MenuUiRetail, EditorOptionsIsTheOnlyAddedEntry) {
         EXPECT_NE(row.editor_action, igi::MenuUiAction::None);
     }
     const size_t first_added = 21u;
-    EXPECT_EQ(options->entries[first_added + 0].label, igi::app_menu::kMenuTextLabel);
-    EXPECT_EQ(options->entries[first_added + 0].editor_action, igi::MenuUiAction::EditMenuText);
-    EXPECT_EQ(options->entries[first_added + 1].label, igi::app_menu::kSaveMenuLabel);
-    EXPECT_EQ(options->entries[first_added + 1].editor_action, igi::MenuUiAction::SaveMenu);
+    // The user's requirement: "the last option should be quit ... after that there are
+    // two options ... you need to remove them".  The `Menu Text` and `Save Menu` rows
+    // that used to follow `Quit` are gone, so `Quit` is the last row and nothing is
+    // appended after the editor's own list.
+    EXPECT_EQ(options->entries.size(), first_added);
+    EXPECT_EQ(options->entries.back().label, "Quit");
+    EXPECT_EQ(options->entries.back().editor_action, igi::MenuUiAction::Quit);
+    for (const MenuUiEntry& row : options->entries) {
+        EXPECT_NE(row.editor_action, igi::MenuUiAction::EditMenuText) << row.label;
+        EXPECT_NE(row.editor_action, igi::MenuUiAction::SaveMenu) << row.label;
+    }
     // The added rows sit below the editor's own rows, inside the (grown) panel, and
     // are hit-testable like every other row.
     for (size_t i = first_added; i < options->entries.size(); ++i) {
@@ -1426,13 +1433,15 @@ TEST(MenuUiLive, ThePauseMenuOpensOnTheEditorsOwnScreenAndCannotReachTheGameMenu
         EXPECT_NE(row.editor_action, igi::MenuUiAction::None) << row.label;
     }
 
-    // The write-side rows are on it, with the actions the live dispatch handles.
-    const MenuUiEntry* edit = EntryByLabel(menu.model, igi::app_menu::kMenuTextLabel);
-    ASSERT_NE(edit, nullptr);
-    EXPECT_EQ(edit->editor_action, igi::MenuUiAction::EditMenuText);
-    const MenuUiEntry* save = EntryByLabel(menu.model, igi::app_menu::kSaveMenuLabel);
-    ASSERT_NE(save, nullptr);
-    EXPECT_EQ(save->editor_action, igi::MenuUiAction::SaveMenu);
+    // The write-side rows are GONE.  The user asked for the two options after `Quit`
+    // to be removed, and those were the write side (`Menu Text` / `Save Menu`), so
+    // `Quit` is the last row and neither action is reachable from this screen.  The
+    // definition is still loaded and still on the model as data.
+    EXPECT_EQ(EntryByLabel(menu.model, igi::app_menu::kMenuTextLabel), nullptr);
+    EXPECT_EQ(EntryByLabel(menu.model, igi::app_menu::kSaveMenuLabel), nullptr);
+    ASSERT_FALSE(editor->entries.empty());
+    EXPECT_EQ(editor->entries.back().label, "Quit");
+    EXPECT_EQ(editor->entries.back().editor_action, igi::MenuUiAction::Quit);
 
     // ... and NO row opens the loaded retail screens.  That screen is the GAME's
     // menu ("Game Paused", "Resume Game", ...), and the user's requirement is that

@@ -438,7 +438,7 @@ inline constexpr char kSaveMenuLabel[] = "Save Menu";
 
 // How many rows those add to the editor's own screen (the panel grows by them,
 // `kPauseMenuEditorExtraRows`, source/runtime/pause_menu_layout.h).
-constexpr int kEditorAddedRowCount = 2;
+constexpr int kEditorAddedRowCount = 0;
 
 // The strings `EditEditorMenuText` cycles the retail main screen's title text
 // through, in order.  They are the EDITOR's own strings: the retail menu's text

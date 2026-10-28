@@ -221,13 +221,18 @@ TEST(PauseMenuRetailStyle, RowsStayInsideThePanelAtEveryViewport) {
 }
 
 TEST(PauseMenuRetailStyle, ExtraRowsGrowThePanelAndKeepTheRetailPitchWhenItFits) {
+    // This exercises the LAYOUT's growth behaviour, so it passes an explicit extra-row
+    // count rather than the live constant: the user asked for the two rows after `Quit`
+    // to be removed, so `kPauseMenuEditorExtraRows` is now 0 and the live menu no longer
+    // grows.  The layout must still support growth (the panel is what changes).
+    constexpr int kExtraRowsUnderTest = 2;
     const igi::PauseMenuLayout plain =
         igi::BuildPauseMenuLayout(1920, 1080, false, igi::kRetailFontLineHeight);
     const igi::PauseMenuLayout extended = igi::BuildPauseMenuLayout(
-        1920, 1080, false, igi::kRetailFontLineHeight, igi::kPauseMenuEditorExtraRows);
+        1920, 1080, false, igi::kRetailFontLineHeight, kExtraRowsUnderTest);
     EXPECT_EQ(plain.row_count, igi::PauseMenuRowCount(false));
     EXPECT_EQ(extended.row_count,
-              igi::PauseMenuRowCount(false) + igi::kPauseMenuEditorExtraRows);
+              igi::PauseMenuRowCount(false) + kExtraRowsUnderTest);
     // A viewport that fits the retail pitch keeps it, whatever the row count.
     EXPECT_EQ(plain.row_height, igi::kRetailRowPitch);
     EXPECT_EQ(extended.row_height, igi::kRetailRowPitch);
