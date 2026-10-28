@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "renderer/lightmap_ref_index.h"
+#include "renderer/mef_native.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -132,6 +133,30 @@ TEST(LightmapRefIndexTest, FirstLodNameHelperMatchesTheExplicitForm) {
     EXPECT_EQ(OlmFileNameForFirstLod("x", layout), "x_00001.olm");
     // ...and its last LOD is ref 3, a different file.
     EXPECT_EQ(OlmFileName("x", RefIndexForLod(layout, 2)), "x_00003.olm");
+}
+
+// --------------------------------------------------------------------------
+// Rule 5: the page INSIDE the file is the drawn group's own `LmGroup.lightmap`
+// (src/render/render.c:1033 `set->tex[g->lightmap]`), with 0xFFFF meaning "no
+// page" (render.c:1098, :1114). The editor stores it on SubMesh.lightmapPage as
+// -1 when there is none, so PageIndexForGroup must accept both spellings.
+// --------------------------------------------------------------------------
+
+TEST(LightmapRefIndexTest, GroupPageIndexIsTheRawGroupField) {
+    EXPECT_EQ(igi::lightmap::PageIndexForGroup(0), 0);
+    EXPECT_EQ(igi::lightmap::PageIndexForGroup(1), 1);
+    EXPECT_EQ(igi::lightmap::PageIndexForGroup(2), 2);
+    EXPECT_EQ(igi::lightmap::PageIndexForGroup(17), 17);
+}
+
+TEST(LightmapRefIndexTest, GroupPageIndexMapsBothNoPageSpellingsToMinusOne) {
+    // The engine's own sentinel (render.c:1098/:1114) and the editor's normalised
+    // form (SubMesh.lightmapPage, source/renderer/model.h).
+    EXPECT_EQ(igi::lightmap::kNoLightmapPage, 0xFFFF);
+    EXPECT_EQ(igi::lightmap::PageIndexForGroup(igi::lightmap::kNoLightmapPage), -1);
+    // A non-format-3 render block has no lightmap field at all; mef_native stores
+    // -1 for those (ParsedGeometry::RenderBlock::lightmapSlot).
+    EXPECT_EQ(igi::lightmap::PageIndexForGroup(-1), -1);
 }
 
 // --------------------------------------------------------------------------
@@ -286,6 +311,74 @@ TEST(LightmapRefIndexCorpusTest, RetailLevelsLayOutContiguouslyWithRealLodCounts
     EXPECT_GT(totalRefs, objects) << "some retail model must have more than one LOD";
     EXPECT_GT(multiLod, 0) << "the rule is only interesting when chains are longer than one";
     EXPECT_LE(maxLod, 5) << "VirModel_InitLods caps at VIRMODEL_LODS = 5 (src/model/model.h:11)";
+}
+
+// --------------------------------------------------------------------------
+// Rule 5 measured on the shipped meshes: every format-3 render group carries a
+// page index (there is no 0xFFFF in the retail corpus), and at least one names a
+// page other than 0 -- which is why a page-0-only reader is wrong, and why
+// `LmGroup.lightmap` has to reach SubMesh.lightmapPage.
+// --------------------------------------------------------------------------
+
+TEST(LightmapRefIndexCorpusTest, Format3GroupsNameTheirOwnOlmPage) {
+    const std::string root = InstallRoot();
+    if (root.empty()) {
+        GTEST_SKIP() << "set IGI_GAME_PATH (or IGI_LIGHTMAP_ROOT) to an IGI install to enable";
+    }
+
+    int mefs = 0, format3 = 0, blocks = 0, blocks_on_page_0 = 0, blocks_off_page_0 = 0;
+    int blocks_with_no_page = 0, max_page = -1;
+    std::set<std::string> models_off_page_0;
+
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".mef") continue;
+        mefs++;
+        ParsedGeometry geometry;
+        try {
+            geometry = ParseMefFile(entry.path().string());
+        } catch (...) {
+            continue;  // a model the parser rejects is not this test's subject
+        }
+        if (geometry.modelType != 3) continue;
+        format3++;
+        for (const auto& block : geometry.renderBlocks) {
+            blocks++;
+            const int page = igi::lightmap::PageIndexForGroup(block.lightmapSlot);
+            if (page < 0) {
+                blocks_with_no_page++;
+                continue;
+            }
+            if (page == 0) {
+                blocks_on_page_0++;
+            } else {
+                blocks_off_page_0++;
+                models_off_page_0.insert(entry.path().filename().string());
+            }
+            if (page > max_page) max_page = page;
+        }
+    }
+
+    if (mefs == 0) {
+        GTEST_SKIP() << "no .mef files found under " << root;
+    }
+
+    // Printed so the numbers are in the log rather than only asserted.
+    std::printf("[lightmap-pages] mefs=%d format3=%d blocks=%d page0=%d offPage0=%d "
+                "noPage=%d maxPage=%d modelsOffPage0=%zu\n",
+                mefs, format3, blocks, blocks_on_page_0, blocks_off_page_0,
+                blocks_with_no_page, max_page, models_off_page_0.size());
+
+    EXPECT_GT(format3, 0) << "the corpus must contain lightmapped models";
+    EXPECT_GT(blocks, 0);
+    // The engine reads `set->tex[g->lightmap]` without checking 0xFFFF for a group
+    // that has a texture (render.c:1033), so a sentinel there would be an
+    // out-of-range read; retail data never produces one.
+    EXPECT_EQ(blocks_with_no_page, 0);
+    // The page index is real data: at least one group in the corpus samples a page
+    // other than 0, so binding page 0 for every group draws the wrong atlas.
+    EXPECT_GT(blocks_off_page_0, 0)
+        << "if this ever reads 0, the multi-page .olm fix has no retail case";
+    EXPECT_GE(max_page, 1);
 }
 
 }  // namespace

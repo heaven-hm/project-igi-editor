@@ -142,13 +142,39 @@ That work is **not** done and is **not** claimed — the header and its tests ar
 verifiable half, and the page-selection rule above must be settled first or the wiring
 will encode a guess.
 
+## Resolved later: the page inside the `.olm` (rule 5)
+
+The question this file left open — which page of a LOD's `.olm` a drawn group
+samples — is settled by the **draw** path, not the builder, and is now
+implemented:
+
+```c
+IDirect3DDevice7_SetTexture(DEV, 1, set->tex[g->lightmap].texture.surface);
+    HOOK(0x49DF60, Direct3DRender_DrawRigidMesh)  src/render/render.c:1033
+```
+
+`LmGroup.lightmap` (`+0x12`, `src/render/render.c:40-54`) indexes the file's page
+array directly, with `0xFFFF` meaning "no page" (tested at `render.c:1098`,
+`:1114`), and the file is the drawn LOD's ref (`render.c:1019`); a LOD with no
+bake binds nothing (`render.c:1052-1054`). The editor now carries that index on
+`SubMesh.lightmapPage` (`source/renderer/model.h`, set from the already-parsed
+`ParsedGeometry::RenderBlock::lightmapSlot`) and binds the matching page
+(`source/renderer/renderer_objects.cpp`), with `LoadOlmPages` uploading every page
+of the file. Measured: 11,484 format-3 render blocks in 2,027 retail models, 7 of
+them naming page 1 (all in `428_02_1.mef`), none carrying the sentinel.
+
+`ObjectLightmapManager::GetLightmapTexture` (this file's "still unused" claim) is
+**still** unused — the live path is `App::ResolveAndApplyLightmap` →
+`LoadOlmPages` → `Renderer_Objects::SetLightmapForTask`. See
+`docs/igi-re-parity/LIGHTMAP_BAKE.md` §5b.
+
 ## Verification status
 
 | Claim | Status |
 |---|---|
 | The three rules match IGI-RE | verified — citations above, quoted from the decompilation |
-| The rule is exercised natively | verified — `9 passed 0 failed`, `exit 0` |
+| The rule is exercised natively | verified — `12 passed 0 failed`, `exit 0` |
 | The corpus numbers | verified — printed by the test, 14 level bundles read |
 | `GetLightmapTexture` is still unused | verified — zero callers in the repository |
-| Page selection within a `.olm` | **unverified** — deliberately not asserted |
+| Page selection within a `.olm` | **verified** — `render.c:1033`; 7 retail blocks name page 1 (`offPage0=7`), none names `0xFFFF` |
 | Any rendered lightmap is correct | **unverified** — no GL run is possible on this host |

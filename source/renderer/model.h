@@ -26,6 +26,15 @@ struct SubMesh {
     // Average LOCAL-space face normal of this submesh (model space, pre-transform).
     // Used to re-light a baked lightmap live when the object is rotated/moved.
     glm::vec3 avgNormal = glm::vec3(0.0f, 0.0f, 1.0f);
+    // WHICH PAGE of the drawn LOD's `.olm` this submesh samples. For a format-3
+    // (lightmapped) mesh this is the render group's own `LmGroup.lightmap`
+    // (src/render/render.c:40-54, read at +0x12), and the engine binds
+    // `set->tex[g->lightmap]` per group (HOOK 0x49DF60,
+    // src/render/render.c:1033) -- so a multi-page `.olm` gives each group its own
+    // atlas, not page 0 for all of them. -1 means "no page": the engine's 0xFFFF
+    // sentinel (render.c:1098,1114), or a mesh type that carries no lightmap at all
+    // (only `h->format == 3` enters the lightmapped draw path, render.c:1014).
+    int    lightmapPage = -1;
 };
 
 struct Mesh {

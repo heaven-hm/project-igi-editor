@@ -29,24 +29,28 @@ bool Renderer_Objects::IsSkippedModelId(const std::string& modelId) {
 // elapsed_time_secs_ accumulator. Defined here so the extern reference in the draw path links.
 float g_renderer_delta_secs = 0.0f;
 
-void Renderer_Objects::SetLightmapForTask(const std::string& taskId, std::vector<GLuint> textures,
+void Renderer_Objects::SetLightmapForTask(const std::string& taskId,
+                                          std::vector<std::vector<GLuint>> lod_pages,
                                           const glm::dvec3& bakedPos, const glm::dvec3& bakedRot) {
     ClearLightmapForTask(taskId);
-    lightmap_textures_by_task_[taskId] = std::move(textures);
+    lightmap_textures_by_task_[taskId] = std::move(lod_pages);
     lightmap_bake_pose_by_task_[taskId] = { bakedPos, bakedRot, sun_dir_ };
 }
 
 void Renderer_Objects::ClearLightmapForTask(const std::string& taskId) {
     auto it = lightmap_textures_by_task_.find(taskId);
     if (it == lightmap_textures_by_task_.end()) return;
-    for (GLuint tex : it->second) {
-        if (tex != 0) glDeleteTextures(1, &tex);
+    for (auto& pages : it->second) {
+        for (GLuint tex : pages) {
+            if (tex != 0) glDeleteTextures(1, &tex);
+        }
     }
     lightmap_textures_by_task_.erase(it);
     lightmap_bake_pose_by_task_.erase(taskId);
 }
 
-const std::vector<GLuint>* Renderer_Objects::GetLightmapForTask(const std::string& taskId) const {
+const std::vector<std::vector<GLuint>>* Renderer_Objects::GetLightmapForTask(
+    const std::string& taskId) const {
     auto it = lightmap_textures_by_task_.find(taskId);
     return it != lightmap_textures_by_task_.end() ? &it->second : nullptr;
 }
@@ -796,8 +800,10 @@ std::vector<uint8_t> Renderer_Objects::FindMeshDataFromLevel(
 // toggled OFF (so OFF reverts to the default bright look).
 void Renderer_Objects::ClearAllLightmaps() {
     for (auto& pair : lightmap_textures_by_task_) {
-        for (GLuint tex : pair.second) {
-            if (tex != 0) glDeleteTextures(1, &tex);
+        for (auto& pages : pair.second) {
+            for (GLuint tex : pages) {
+                if (tex != 0) glDeleteTextures(1, &tex);
+            }
         }
     }
     lightmap_textures_by_task_.clear();
@@ -1322,7 +1328,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 // submesh by u_lightmapScale (below), so lighting adjusts smoothly as you
                 // drag an object, with no "stale" fallback and no subprocess.
                 const std::string lmKey = LightmapTaskKey(obj);
-                const std::vector<GLuint>* lightmaps = GetLightmapForTask(lmKey);
+                const std::vector<std::vector<GLuint>>* lightmaps = GetLightmapForTask(lmKey);
                 bool hasWorkingLightmap = lightmaps && !lightmaps->empty();
                 glm::dvec3 bakedPos, bakedRot;
                 const bool haveBakePose = hasWorkingLightmap &&
@@ -1427,23 +1433,32 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                     }
 
                     // Lightmap: bind unit 1 if the DRAWN LOD has a baked lightmap and
-                    // mode is not Off.  The index follows the drawn LOD, not the LOD-0
+                    // mode is not Off.  The FILE follows the drawn LOD, not the LOD-0
                     // submesh: fill_refs (src/sector/sector.c:544-563) gives the object
                     // one LightmapRef per LOD and the draw binds
                     // o->lightmaps[lod].lightmaps (src/render/render.c:1019,1033).  A LOD
                     // with no bake is drawn with no atlas (render.c:1052-1054) -- the
-                    // engine never falls back to another LOD's.
+                    // engine never falls back to another LOD's.  The PAGE inside that
+                    // file is the submesh's own render group: the engine binds
+                    // set->tex[g->lightmap] per group (render.c:1033), so a multi-page
+                    // `.olm` gives each group its own atlas rather than page 0 for all.
                     const auto curMode = lightmapMode;
                     const int lmEntry = igi::lightmap::OwnerLightmapEntryForDrawnLod(drawnLod);
-                    if (curMode != igi::LightmapRenderMode::Off && hasWorkingLightmap &&
-                        lmEntry >= 0 && lmEntry < static_cast<int>(lightmaps->size()) &&
-                        (*lightmaps)[lmEntry] != 0) {
+                    const int lmPage = igi::lightmap::PageIndexForGroup(sub.lightmapPage);
+                    GLuint lmTex = 0;
+                    if (hasWorkingLightmap && lmEntry >= 0 &&
+                        lmEntry < static_cast<int>(lightmaps->size())) {
+                        const std::vector<GLuint>& pages = (*lightmaps)[lmEntry];
+                        if (lmPage >= 0 && lmPage < static_cast<int>(pages.size()))
+                            lmTex = pages[lmPage];
+                    }
+                    if (curMode != igi::LightmapRenderMode::Off && lmTex != 0) {
                         // Baked mode reproduces the original engine exactly: the bake is
                         // used verbatim, with no live sun re-light modulation.
                         const bool authentic = (curMode == igi::LightmapRenderMode::Baked);
                         glm::vec3 scale = authentic ? glm::vec3(1.0f) : blockScale(sub.avgNormal);
                         glActiveTexture(GL_TEXTURE1);
-                        glBindTexture(GL_TEXTURE_2D, (*lightmaps)[lmEntry]);
+                        glBindTexture(GL_TEXTURE_2D, lmTex);
                         glUniform1i(loc_lightmap, 1);
                         glUniform1i(loc_useLightmap, 1);
                         glUniform1i(loc_lm_authentic, authentic ? 1 : 0);

@@ -150,8 +150,14 @@ constexpr int kNoLightmapPage = 0xFFFF;
 // The page `set->tex[...]` a drawn render group samples (rule 5 above), or -1
 // when the group carries no lightmap page of its own. A group without a page
 // keeps the previous group's scales (render.c:1107-1114), which is the engine's
-// behaviour and not something a per-submesh texture lookup can express.
+// behaviour and not something a per-submesh texture lookup can express; the
+// TEXTURE binding for such a group is the out-of-range read at render.c:1033,
+// so the editor binds no atlas for it instead of reproducing undefined behaviour.
+//
+// Accepts both spellings a caller can hold: the engine's raw 0xFFFF sentinel and
+// the editor's already-normalised -1 (`SubMesh.lightmapPage`, source/renderer/model.h).
 inline int PageIndexForGroup(int group_lightmap) {
+    if (group_lightmap < 0) return -1;
     return group_lightmap == kNoLightmapPage ? -1 : group_lightmap;
 }
 

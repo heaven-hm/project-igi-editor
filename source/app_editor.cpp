@@ -361,21 +361,30 @@ size_t App::ResolveAndApplyLightmap(LevelObject& obj, const std::string& qscPath
 		return 0;
 	}
 
-	// Decode each .olm straight to a GL texture in-process (no per-file subprocess).
-	std::vector<GLuint> textures;
-	textures.reserve(olmPaths.size());
+	// Decode each .olm straight to GL textures in-process (no per-file subprocess).
+	// Entry k is the drawn LOD k's file (one `.olm` per ref, `fill_refs`
+	// src/sector/sector.c:544-563), and inside it page p is what render group p
+	// samples (`set->tex[g->lightmap]`, src/render/render.c:1033) — so every page
+	// is uploaded, not just page 0. 13 shipped `.olm` files carry more than one
+	// page; dropping pages 1..n is what made model 428_02_1's second lightmap page
+	// unreachable.
+	std::vector<std::vector<GLuint>> lod_pages;
+	lod_pages.reserve(olmPaths.size());
+	size_t uploaded = 0;
 	for (const auto& olmPath : olmPaths) {
 		std::string loadErr;
-		GLuint tex = LoadOlmAsTexture(olmPath, loadErr);
-		if (tex == 0) {
+		std::vector<GLuint> pages;
+		if (!LoadOlmPages(olmPath, &pages, &loadErr)) {
 			Logger::Get().Log(LogLevel::ERR, "[Lightmap] .olm load failed for " + olmPath + ": " + loadErr);
+			lod_pages.emplace_back();
+			continue;
 		}
-		textures.push_back(tex);
+		uploaded += std::count_if(pages.begin(), pages.end(), [](GLuint t) { return t != 0; });
+		lod_pages.push_back(std::move(pages));
 	}
 
-	size_t uploaded = std::count_if(textures.begin(), textures.end(), [](GLuint t) { return t != 0; });
-	Logger::Get().Log(LogLevel::INFO, "[Lightmap] Uploaded " + std::to_string(uploaded) + "/" +
-		std::to_string(textures.size()) + " lightmap texture(s) for " + key);
+	Logger::Get().Log(LogLevel::INFO, "[Lightmap] Uploaded " + std::to_string(uploaded) + " lightmap page(s) from " +
+		std::to_string(lod_pages.size()) + " .olm file(s) for " + key);
 	// Log first 16 OLM paths so we can verify submesh→OLM assignment order
 	if (key == "1117") {
 		for (size_t i = 0; i < std::min(olmPaths.size(), size_t(16)); ++i) {
@@ -392,7 +401,7 @@ size_t App::ResolveAndApplyLightmap(LevelObject& obj, const std::string& qscPath
 	const igi::LightmapBakeOrigin bake_origin{
 	    hasBake, prevBakedPos, prevBakedRot,
 	    obj.original_pos, obj.original_rot, obj.pos, glm::dvec3(obj.rot)};
-	renderer_.SetLightmapForTask(key, std::move(textures),
+	renderer_.SetLightmapForTask(key, std::move(lod_pages),
 	                             igi::RecordedBakePos(bake_origin, olm_from_recalc),
 	                             igi::RecordedBakeRot(bake_origin, olm_from_recalc));
 	return uploaded;

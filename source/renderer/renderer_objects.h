@@ -292,20 +292,31 @@ public:
     // modelId across every placement of a building, so storing these on
     // SubMesh would make two placements of the same model show whichever
     // lightmap was calculated last. The draw loop looks this up per-object.
-    // taskId -> {textures, pos/rot at calculation time}. The pos/rot are recorded
-    // so the draw loop can detect a moved/rotated object and drop its now-stale
-    // bake back to dynamic lighting instead of rendering the wrong-orientation bake.
-    void SetLightmapForTask(const std::string& taskId, std::vector<GLuint> textures,
+    // taskId -> {pages per LOD, pos/rot at calculation time}. The outer index is
+    // the LOD (one `.olm` per ref, `fill_refs` src/sector/sector.c:544-563) and the
+    // inner index is the page inside that file (`LmGroup.lightmap`,
+    // src/render/render.c:1033), because the engine binds one page per render
+    // group. The pos/rot are recorded so the draw loop can detect a moved/rotated
+    // object and drop its now-stale bake back to dynamic lighting instead of
+    // rendering the wrong-orientation bake.
+    void SetLightmapForTask(const std::string& taskId, std::vector<std::vector<GLuint>> lod_pages,
                             const glm::dvec3& bakedPos, const glm::dvec3& bakedRot);
     void ClearLightmapForTask(const std::string& taskId);
     // Free all baked lightmap textures + per-task bake/stale state (Escape-menu
     // Lightmaps OFF, and level switch). Leaves indoor-ambient metadata intact.
     void ClearAllLightmaps();
-    const std::vector<GLuint>* GetLightmapForTask(const std::string& taskId) const;
+    const std::vector<std::vector<GLuint>>* GetLightmapForTask(const std::string& taskId) const;
     // Returns false if taskId has no recorded bake pose (treated as not stale).
     bool IsLightmapStale(const std::string& taskId, const glm::dvec3& curPos, const glm::dvec3& curRot) const;
     bool HasLightmapForTask(const std::string& taskId) const {
-        auto* v = GetLightmapForTask(taskId); return v && !v->empty();
+        const auto* v = GetLightmapForTask(taskId);
+        if (!v) return false;
+        for (const auto& pages : *v) {
+            for (GLuint tex : pages) {
+                if (tex != 0) return true;
+            }
+        }
+        return false;
     }
     // Retrieve the pos/rot recorded at the time taskId's lightmap was baked
     // (needed as recalc's --rot-orig). Returns false if no bake is recorded.
@@ -453,7 +464,9 @@ private:
     std::unordered_map<std::string, std::vector<AttachInfo>> attachment_cache_;
     std::map<std::string, ParsedGeometry> skin_geometry_cache_;
     std::unordered_map<std::string, ParsedGeometry> parsed_geometry_cache_;
-    std::map<std::string, std::vector<GLuint>> lightmap_textures_by_task_;
+    // taskId -> one page vector per LOD (outer index = LOD, inner = the `.olm`'s
+    // pages, `LmGroup.lightmap` indexing it; src/render/render.c:1033).
+    std::map<std::string, std::vector<std::vector<GLuint>>> lightmap_textures_by_task_;
     // Per-pick-pass capture of pickable ATTA sub-models (see AttaPickEntry).
     std::vector<AttaPickEntry> atta_pick_entries_;
     // Keys (model@pos) of EditRigidObj tasks; an ATTA matching one is suppressed

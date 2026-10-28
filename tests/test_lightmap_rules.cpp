@@ -436,6 +436,76 @@ TEST(LightmapRulesLayoutTest, ShortAndCorruptBuffersAreRejected) {
 }
 
 // ---------------------------------------------------------------------------
+// The STREAMING reader's plan: header + records only, then one span per page.
+// This is the arithmetic `LoadOlmPages` (source/renderer/olm_texture.cpp) runs,
+// so it is the part of the .olm fix that a host test can execute without a GL
+// context. A shipped `.olm` carries 1..3 pages; the editor used to read page 0
+// only, with an "88-byte header + 16-byte descriptor" layout that coincides with
+// the engine's 0x3C/0x2C one exactly while count == 1.
+// ---------------------------------------------------------------------------
+
+TEST(LightmapRulesPageTableTest, RecordsParseWithoutThePixelBlock) {
+    const auto buffer = MakeOlm({{256, 256}, {256, 64}, {256, 16}});
+    const std::size_t prefix = OlmPixelOffset(3);
+    ASSERT_LT(prefix, buffer.size()) << "the fixture must have a pixel block";
+
+    std::vector<OlmPage> pages;
+    ASSERT_TRUE(ParseOlmPageRecords(buffer.data(), prefix, 3, &pages));
+    ASSERT_EQ(pages.size(), 3u);
+    EXPECT_EQ(pages[0].width, 256);
+    EXPECT_EQ(pages[0].height, 256);
+    EXPECT_EQ(pages[1].height, 64);
+    EXPECT_EQ(pages[2].height, 16);
+
+    // One byte short of the record array, and a count one larger than the file
+    // holds, are both rejected.
+    EXPECT_FALSE(ParseOlmPageRecords(buffer.data(), prefix - 1, 3, &pages));
+    EXPECT_FALSE(ParseOlmPageRecords(buffer.data(), prefix, 4, &pages));
+    // A zero-sized page is not a page this reader will multiply.
+    auto zero = MakeOlm({{0, 8}});
+    EXPECT_FALSE(ParseOlmPageRecords(zero.data(), OlmPixelOffset(1), 1, &pages));
+}
+
+TEST(LightmapRulesPageTableTest, PlanGivesEveryPageInPageOrder) {
+    const auto buffer = MakeOlm({{256, 256}, {256, 64}, {256, 16}});
+    const std::size_t prefix = OlmPixelOffset(3);
+
+    std::vector<OlmPageSpan> spans;
+    ASSERT_TRUE(PlanOlmPages(buffer.data(), prefix, buffer.size(), &spans));
+    ASSERT_EQ(spans.size(), 3u);
+
+    EXPECT_EQ(spans[0].offset, OlmPixelOffset(3));
+    EXPECT_EQ(spans[0].bytes, 256u * 256u * 4u);
+    EXPECT_EQ(spans[1].offset, spans[0].offset + spans[0].bytes);
+    EXPECT_EQ(spans[1].bytes, 256u * 64u * 4u);
+    EXPECT_EQ(spans[2].offset, spans[1].offset + spans[1].bytes);
+    EXPECT_EQ(spans[2].bytes, 256u * 16u * 4u);
+
+    // The last page ends exactly at the end of the file, which is what the engine's
+    // `px += n * 4` cursor does (lightmapbuild.c:76-78) and what the corpus asserts.
+    EXPECT_EQ(spans[2].offset + spans[2].bytes, buffer.size());
+    // Offsets ascend and every page is a distinct block, so page 1 is NOT page 0.
+    EXPECT_LT(spans[0].offset, spans[1].offset);
+    EXPECT_LT(spans[1].offset, spans[2].offset);
+
+    // A file one byte short of the last page's block is rejected (port guard).
+    EXPECT_FALSE(PlanOlmPages(buffer.data(), prefix, buffer.size() - 1, &spans));
+    // ...and so is a prefix that does not even hold the records.
+    EXPECT_FALSE(PlanOlmPages(buffer.data(), prefix - 1, buffer.size(), &spans));
+}
+
+TEST(LightmapRulesPageTableTest, PixelOffsetMatchesTheEngineCursor) {
+    const std::vector<OlmPage> pages{{256, 256}, {256, 64}, {256, 16}};
+    EXPECT_EQ(OlmPagePixelOffset(pages, 0), OlmPixelOffset(3));
+    EXPECT_EQ(OlmPagePixelOffset(pages, 1), OlmPixelOffset(3) + 256u * 256u * 4u);
+    EXPECT_EQ(OlmPagePixelOffset(pages, 2), OlmPixelOffset(3) + 256u * 256u * 4u + 256u * 64u * 4u);
+    // Out of range has no page to point at.
+    EXPECT_EQ(OlmPagePixelOffset(pages, -1), 0u);
+    EXPECT_EQ(OlmPagePixelOffset(pages, 3), 0u);
+    EXPECT_EQ(OlmPagePixelOffset({}, 0), 0u);
+}
+
+// ---------------------------------------------------------------------------
 // Rule 4 - the bake parameters (lightmapinfo.c:97-200)
 // ---------------------------------------------------------------------------
 
@@ -586,6 +656,12 @@ struct CorpusStats {
     int walk_errors = 0;
     int max_ref_index = -1;
     int max_object_number = -1;
+    // The streaming plan (PlanOlmPages) applied to the same bytes the reader sees:
+    // one span per page, the last ending exactly at the file's end.
+    int planned_files = 0;
+    int planned_pages = 0;
+    int plan_mismatches = 0;
+    int multi_page_distinct_pixels = 0;
     std::set<std::string> object_names;
     std::set<int> ref_indices;
     std::map<int, int> count_histogram;
@@ -675,6 +751,34 @@ bool WalkCorpus(CorpusStats* stats) {
                 const std::size_t texels_bytes = static_cast<std::size_t>(header.texels) * 4u;
                 if (texels_bytes < pixel_bytes) stats->texels_below_pixels++;
                 if (texels_bytes == pixel_bytes) stats->texels_equal_pixels++;
+
+                // The streaming plan the editor's loader uses: the header+records
+                // prefix and the REAL file size, so the spans are exactly what
+                // LoadOlmPages hands to the GL upload. Every shipped file must plan
+                // to its own end, and page 1 must not be a copy of page 0 -- that is
+                // the data the old page-0-only reader dropped.
+                std::vector<OlmPageSpan> spans;
+                if (!PlanOlmPages(data, OlmPixelOffset(header.count), size, &spans)) {
+                    ADD_FAILURE() << "PlanOlmPages failed on " << name;
+                    stats->plan_mismatches++;
+                } else {
+                    stats->planned_files++;
+                    stats->planned_pages += static_cast<int>(spans.size());
+                    if (spans.size() != pages.size()) {
+                        ADD_FAILURE() << "plan/read page count differ on " << name;
+                        stats->plan_mismatches++;
+                    }
+                    if (spans.back().offset + spans.back().bytes != size) {
+                        ADD_FAILURE() << "plan does not end at the file end on " << name;
+                        stats->plan_mismatches++;
+                    }
+                    if (spans.size() > 1) {
+                        const std::uint8_t* page0 = data + spans[0].offset;
+                        const std::uint8_t* page1 = data + spans[1].offset;
+                        if (std::memcmp(page0, page1, std::min(spans[0].bytes, spans[1].bytes)) != 0)
+                            stats->multi_page_distinct_pixels++;
+                    }
+                }
             },
             error);
         if (!walked) {
@@ -695,12 +799,14 @@ TEST(LightmapRulesCorpusTest, EveryShippedOlmMatchesTheEngineLayoutAndName) {
     std::printf(
         "[lightmap-rules] archives=%d files=%d pages=%d multiPage=%d objects=%zu refIndices=%zu "
         "maxObj=%d maxRef=%d count1=%d count2=%d count3=%d flags01=%d flags10=%d flags00=%d "
-        "texelsBelowPixels=%d texelsEqualPixels=%d\n",
+        "texelsBelowPixels=%d texelsEqualPixels=%d plannedFiles=%d plannedPages=%d "
+        "planMismatches=%d multiPageDistinctPixels=%d\n",
         stats.archives, stats.files, stats.pages, stats.multi_page, stats.object_names.size(),
         stats.ref_indices.size(), stats.max_object_number, stats.max_ref_index,
         stats.count_histogram[1], stats.count_histogram[2], stats.count_histogram[3],
         stats.flags_01, stats.flags_10, stats.flags_00, stats.texels_below_pixels,
-        stats.texels_equal_pixels);
+        stats.texels_equal_pixels, stats.planned_files, stats.planned_pages,
+        stats.plan_mismatches, stats.multi_page_distinct_pixels);
 
     EXPECT_EQ(stats.archives, 14);
     EXPECT_EQ(stats.walk_errors, 0);
@@ -722,6 +828,17 @@ TEST(LightmapRulesCorpusTest, EveryShippedOlmMatchesTheEngineLayoutAndName) {
     // The `%05d` index field never overflows in retail data.
     EXPECT_LT(stats.max_ref_index, 100000);
     EXPECT_GE(stats.max_ref_index, 0);
+    // The streaming plan the editor's loader runs: every shipped file plans to its
+    // own end, and every multi-page file's page 1 is different data from page 0.
+    EXPECT_EQ(stats.planned_files, stats.files);
+    EXPECT_EQ(stats.planned_pages, stats.pages);
+    EXPECT_EQ(stats.plan_mismatches, 0);
+    // 12 of the 13 multi-page files carry a later page that is NOT a copy of page 0
+    // (the exception is LEVEL7's `obj00019_00068.olm`, whose pages 0 and 1 are
+    // byte-identical 256x256 blocks; its third page, 256x16, is distinct). So the
+    // old page-0-only reader dropped real lightmap data, not padding.
+    EXPECT_GT(stats.multi_page_distinct_pixels, 0);
+    EXPECT_LE(stats.multi_page_distinct_pixels, stats.multi_page);
 }
 
 TEST(LightmapRulesCorpusTest, RefIndicesAreTheSetPositionsOfTheShippedBakes) {

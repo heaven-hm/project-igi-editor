@@ -1,4 +1,5 @@
 #include "model.h"
+#include "lightmap_ref_index.h"
 #include "mef_native.h"
 #include "../pch.h"
 #include "../logger.h"
@@ -238,22 +239,25 @@ Mesh BuildMeshFromGeometry(const ParsedGeometry& geometry, const std::string& fi
     };
 
     if (!geometry.renderBlocks.empty() && geometry.modelType == 3) {
-        // Lightmapped buildings: the resolved .olm files are numbered 1:1 with
-        // renderBlocks in original order (igi1conv's "renderBlocks[i] -> olm file i"
-        // rule), and each render block's UV2 addresses ITS OWN atlas image — they
-        // cannot be merged across blocks. Grouping by material slot (as done below
-        // for every other model type) would mix multiple blocks' UV2 coordinates
-        // into one submesh sampling a single arbitrary lightmap texture, landing on
-        // unrelated/black atlas regions. So buildings get one submesh PER render
-        // block, preserving index order — including a zero-vertex placeholder for
-        // empty blocks — so renderer_objects.cpp's `lightmaps[si]` lookup lines up
-        // exactly with `obj00000_000NN.olm`'s block number NN.
+        // Lightmapped buildings: each render block's UV2 addresses ITS OWN page of
+        // the drawn LOD's `.olm` — `LmGroup.lightmap` selects it and the engine
+        // binds `set->tex[g->lightmap]` per group (HOOK 0x49DF60,
+        // src/render/render.c:1033) — so the blocks cannot be merged and each one
+        // carries the page index it must sample. Buildings therefore get one
+        // submesh PER render block, preserving index order — including a
+        // zero-vertex placeholder for empty blocks — so the renderer's per-LOD page
+        // table lines up with the object's own `obj00000_000NN.olm`.
         for (size_t i = 0; i < geometry.renderBlocks.size(); ++i) {
             bool hasAlpha = false;
             std::vector<float> verts = buildBlockGroupVerts({i}, hasAlpha);
             SubMesh sub;
+            // The group's own page, with the engine's 0xFFFF sentinel mapped to -1
+            // (`PageIndexForGroup`); a non-format-3 block's -1 stays -1.
+            sub.lightmapPage = igi::lightmap::PageIndexForGroup(geometry.renderBlocks[i].lightmapSlot);
             if (auto built = uploadSubMesh(verts, geometry.renderBlocks[i].materialSlot, hasAlpha)) {
+                const int page_of_block = sub.lightmapPage;
                 sub = *built;
+                sub.lightmapPage = page_of_block;
                 mesh.vertexCount += sub.vertexCount;
             }
             // Push even when empty (VAO==0) so subMeshes.size() == renderBlocks.size().

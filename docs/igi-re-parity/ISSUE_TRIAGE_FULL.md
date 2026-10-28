@@ -65,7 +65,7 @@ frame was rendered. No claim below is a rendered or in-game result; every
 | 66 | Per-mission fog from FlatSky + volumes | **PARTIAL** `4d30ad3b` `19d226a4` | `GlobalLight_Open` `0x527C90` `src/nodereg/tasktypes.c:93`; `Fog_Compute` `0x4DA790` `src/glowmesh/terrainmesh.c:41`; `Fog_SetRange` `0x49B2D0` `src/dxinit/d3drender.c:136`; `FlatSky` fog fields `src/flatwater/flatsky.c:89-92` | per-level override store and `HazeLayer`-style local fog volumes; the FlatSky premise is half right (§A3) |
 | 69 | Hermite road/bridge segment placement | **PARTIAL** `273bb24f` | `SplineObjSegment_Setup` `0x4E4530` `src/sound/segsetup.c:366` (decl `src/tagitem/spline.c:37`); `SplineObj_Open` `0x502250` `src/editobj/spline.c:225` | wire `spline_rules.*`'s Hermite path into `renderer_splines.cpp` (which still uses chord-direction orientation) |
 | 70 | Editor sound system | **PARTIAL** `aa225a6e` `273bb24f` | `ConditionalSound_Init` `0x424E80` `src/vehicle/condsound.c:94`; `AmbientArea_Init` `0x44C130` `src/aiaction/ambientarea.c:81` | the shipped path is a 232-line `PlaySoundA` wrapper (`source/runtime/audio_system.cpp:90`), not the SoundBank/OpenAL port the issue asks for |
-| 72 | Calculate Lightmaps + HDR mode | **PARTIAL** `273bb24f` | `Lightmap_GetResPath` `0x5210E0` `src/litmap/lightmap.c:101`; `Lightmap_FreeBuffers` `0x521040` `src/litmap/lightmap.c:87` (also declared `src/dirlight/lightmapinfo.c:52`); `Lightmap_BuildLod` `0x523D40` `src/dirlight/lightmapbuild.c:445`; `LightmapInfo_MakeName` `0x5235A0` `src/litmap/lightmap.c:257` | the "Calculate Lightmaps" button **already exists** (`renderer_draw.cpp:1836`, `app_editor.cpp:430-488`) but recalculates `.olm` via `igi1conv`; the bake-from-lights engine and HDR mode remain |
+| 72 | Calculate Lightmaps + HDR mode | **PARTIAL** `273bb24f` + the `.olm` reader wiring | `Lightmap_GetResPath` `0x5210E0` `src/litmap/lightmap.c:101`; `Lightmap_FreeBuffers` `0x521040` `src/litmap/lightmap.c:87` (also declared `src/dirlight/lightmapinfo.c:52`); `Lightmap_BuildLod` `0x523D40` `src/dirlight/lightmapbuild.c:445`; `LightmapInfo_MakeName` `0x5235A0` `src/litmap/lightmap.c:257` | the "Calculate Lightmaps" button **already exists** (`renderer_draw.cpp:1836`, `app_editor.cpp:430-488`) but recalculates `.olm` via `igi1conv`; the reader now loads every page and each render group binds its own (`LIGHTMAP_BAKE.md` §5b); the bake-from-lights engine and HDR mode remain |
 | 73 | Animation playback + skinning | **PARTIAL** `273bb24f` | `GenericTBA_GetAnim` `0x4485D0` `src/glass/tba.c:284`; `AIAction_PlayAnimation` `0x44D6E0` `src/aiaction/aiaction.c:524`; `Anim_Play` `0x4D61D0` `src/soldier/soldier.c:59`; `Human_PlayAnim` `0x489EA0` `src/soldier/soldier.c:180`; `BoneMesh_Skin` `0x49B700` `src/dxinit/d3drender.c:313` | wire `anim_rules.*` into the viewport and the F10 panel; `MefSkinner` is an open-igi name, not an IGI-RE symbol |
 | 74 | QVM-driven in-game menu | **PARTIAL** `42a689bb` `41d4d33a` | `MenuManager_Init` `0x4170A0` `src/game/menumanager.c:98`; `MenuManager_Create` `0x417260` `src/game/menumanager.c:160`; `MenuManager_RequestScreen` `0x4174A0` `src/game/menumanager.c:224`; `MenuManager_GetString` `0x418EA0` `src/ui/ui.h:61` | edit + save-back to `ingamemenu.qvm` (read/draw/navigate are landed; no writer exists in `source/menu/`) |
 | 75 | Weapon/ammo pickup parity | **PARTIAL** `aa225a6e` `273bb24f` | `touches` `src/comprun/pickup.c:180` (`kMinTouch` 2867.2 `:159`, `kTouchHeight` 4096.0 `:160`); `GenericPickup_Touch` `0x46C630` `src/comprun/pickup.c:366`; `GunPickup_Touch` `0x46D230` `src/comprun/pickup.c:616`; `GunPickup_New` `0x46C980` `src/comprun/pickup.c:449` | only `igi::TruncatePickupCount` is called (`source/app.cpp:2768`); real weapon models, radius gizmos and the inspector remain |
@@ -427,11 +427,15 @@ and bake inputs into `source/runtime/lightmap_rules.*` (`LIGHTMAP_BAKE.md`).
 **What remains.** (1) The button recalculates existing `.olm` files through the
 `igi1conv` converter rather than baking new atlases from lights — `LIGHTMAP_BAKE.md`
 §5 records four places where the editor disagrees with the oracle's accept/staleness
-rules. (2) `lightmap_rules.h` has no caller. (3) The HDR/tonemap mode is not started
-and, per #52, has no retail counterpart.
+rules. (2) ~~`lightmap_rules.h` has no caller~~ — **since fixed**: the `.olm`
+reader now uses the module's layout/page rules and loads every page, and each
+drawn render group binds the page it names (`LIGHTMAP_BAKE.md` §5b; divergences
+5.1 and 5.2 closed, 5.3 and 5.4 still open). (3) The HDR/tonemap mode is not
+started and, per #52, has no retail counterpart.
 
-**Next action.** Decide whether the editor's bake is *the engine's* rebake (then wire
-`lightmap_rules` and fix the four divergences) or a *new* tool (then stop citing the
+**Next action.** Decide whether the editor's bake is *the engine's* rebake (then
+close the remaining divergences: the accept test needs `MeshHeader.version`/`time`
+and `LightmapMesh.texCount` parsed first) or a *new* tool (then stop citing the
 oracle for the output format and say so). Do not conflate the two.
 
 ---

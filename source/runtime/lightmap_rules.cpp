@@ -316,8 +316,29 @@ bool ReadOlmPages(const std::uint8_t* data, std::size_t size, OlmFileHeader* hea
     OlmFileHeader parsed;
     if (!ParseOlmHeader(data, size, &parsed)) return false;
     std::vector<OlmPage> read;
-    read.reserve(static_cast<std::size_t>(parsed.count));
-    for (int i = 0; i < parsed.count; ++i) {
+    if (!ParseOlmPageRecords(data, size, parsed.count, &read)) return false;
+    // DEVIATION (port guard): the exact-size check below is the real content of this
+    // function -- the shipping corpus satisfies it for all 25,337 files. The engine
+    // needs no such check because Resource_Load hands it a whole file.
+    if (OlmExpectedSize(read) != size) return false;
+    if (header != nullptr) *header = parsed;
+    *pages = std::move(read);
+    return true;
+}
+
+bool ParseOlmPageRecords(const std::uint8_t* data, std::size_t size, int count,
+                         std::vector<OlmPage>* pages) {
+    if (data == nullptr || pages == nullptr) return false;
+    // A negative count is not a legal file; the engine never produces one
+    // (`lm->count = mesh->texCount`, lightmapbuild.c:91).
+    if (count < 0) return false;
+    // DEVIATION (port guard): a `count` whose records do not fit the buffer would
+    // walk off the end in the engine too -- it trusts the loader. The check is the
+    // port's, not the oracle's.
+    if (OlmPixelOffset(count) > size) return false;
+    std::vector<OlmPage> read;
+    read.reserve(static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i) {
         // litmaptypes.h:14-15: `short width` at +0x28 and `short height` at +0x2A
         // of the 0x2C-byte LightmapTex record.
         const std::size_t record = kOlmHeaderSize + static_cast<std::size_t>(i) * kOlmTexRecordSize;
@@ -329,14 +350,52 @@ bool ReadOlmPages(const std::uint8_t* data, std::size_t size, OlmFileHeader* hea
     // DEVIATION (port guard): a non-positive page dimension is not rejected by the
     // engine -- `t->width = size[0]` (lightmapbuild.c:107) is taken as given and a
     // zero-size page simply allocates nothing (:109). A reader that multiplies must
-    // not accept it. The exact-size check below is the real content of this
-    // function: the shipping corpus satisfies it for all 25,337 files.
+    // not accept it.
     for (const OlmPage& page : read) {
         if (page.width <= 0 || page.height <= 0) return false;
     }
-    if (OlmExpectedSize(read) != size) return false;
-    if (header != nullptr) *header = parsed;
     *pages = std::move(read);
+    return true;
+}
+
+std::size_t OlmPagePixelOffset(const std::vector<OlmPage>& pages, int index) {
+    if (index < 0 || index >= static_cast<int>(pages.size())) return 0;
+    // lightmapbuild.c:72: `px = (char *)&file->tex[file->count]` -- the pixel block
+    // starts right after the record array; :76-78 then advances it by
+    // `t->width * t->height * 4` per page, in page order.
+    std::size_t offset = OlmPixelOffset(static_cast<int>(pages.size()));
+    for (int i = 0; i < index; ++i) {
+        offset += static_cast<std::size_t>(pages[i].width) *
+                  static_cast<std::size_t>(pages[i].height) * kOlmTexBytesPerTexel;
+    }
+    return offset;
+}
+
+bool PlanOlmPages(const std::uint8_t* prefix, std::size_t prefix_size,
+                  std::uint64_t file_size, std::vector<OlmPageSpan>* spans) {
+    if (prefix == nullptr || spans == nullptr) return false;
+    OlmFileHeader header;
+    if (!ParseOlmHeader(prefix, prefix_size, &header)) return false;
+    std::vector<OlmPage> pages;
+    if (!ParseOlmPageRecords(prefix, prefix_size, header.count, &pages)) return false;
+
+    std::vector<OlmPageSpan> plan;
+    plan.reserve(pages.size());
+    for (std::size_t i = 0; i < pages.size(); ++i) {
+        OlmPageSpan span;
+        span.width = pages[i].width;
+        span.height = pages[i].height;
+        span.offset = OlmPagePixelOffset(pages, static_cast<int>(i));
+        span.bytes = static_cast<std::size_t>(span.width) * static_cast<std::size_t>(span.height) *
+                     kOlmTexBytesPerTexel;
+        // DEVIATION (port guard): the engine's `px += n * 4` (lightmapbuild.c:78)
+        // never checks the file length because Resource_Load returned a whole file.
+        // A streaming reader must, or a truncated file reads past its end.
+        if (span.offset > file_size) return false;
+        if (span.bytes > file_size - span.offset) return false;
+        plan.push_back(span);
+    }
+    *spans = std::move(plan);
     return true;
 }
 

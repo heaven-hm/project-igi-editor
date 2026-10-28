@@ -1,83 +1,148 @@
 #include "olm_texture.h"
 #include "gl_helper.h"
 #include "../common.h"
+#include "../runtime/lightmap_rules.h"
 #include <fstream>
 #include <vector>
 #include <cstring>
 #include <algorithm>
 
-// IGI1 .olm binary layout (see project-igi-conv Lightmap_docs.md §2.3-2.6):
-//   [88]   main header
-//   [16]   layer descriptor (pixel_width at +12, pixel_height at +14, uint16 LE)
-//   [w*h*4] RGBA pixel data
-static constexpr size_t kMainHeaderSize = 88;
-static constexpr size_t kLayerDescSize  = 16;
-static constexpr size_t kPixelStart     = kMainHeaderSize + kLayerDescSize; // 104
-static constexpr size_t kPwOffset       = kMainHeaderSize + 12;             // 100
-static constexpr size_t kPhOffset       = kMainHeaderSize + 14;             // 102
+// IGI1 .olm layout, taken from the engine's own structs rather than from a
+// descriptor table:
+//
+//   src/litmap/litmaptypes.h:36-48   struct Lightmaps  { magic, version,
+//                                    time[7], fromResource, built, count, texels,
+//                                    texels2, info, LightmapTex tex[]; }
+//                                    _Static_assert(sizeof == 0x3C)
+//   src/litmap/litmaptypes.h:11-17   struct LightmapTex { Texture texture;
+//                                    void *pixels; short width; short height; }
+//                                    _Static_assert(sizeof == 0x2C), so the two
+//                                    page shorts are at +0x28 / +0x2A.
+//   src/dirlight/lightmapbuild.c:72-78  the load path: `px = &file->tex[count]`,
+//                                    then per page `t->pixels = px; px += n * 4`
+//                                    with `n = t->width * t->height`.
+//
+// The offsets are the shared constants in source/runtime/lightmap_rules.h; this
+// file only streams bytes and uploads them.
+namespace {
 
-GLuint LoadOlmAsTexture(const std::string& olmPath, std::string& err) {
-    // Stream the .olm instead of slurping the whole file into one contiguous
-    // vector. Lightmap archives contain many .olm files; the old code kept BOTH
-    // the full file bytes AND a second w*h*4 RGBA copy live at once, which
-    // fragments the 32-bit address space and crashes level loads once it
-    // fragments (level 3+ with lightmaps on). Reading the header, then the
-    // pixels in bounded chunks into a single RGBA buffer keeps peak memory to
-    // one texture plus a small scratch — the same per-entry strategy RES_ForEachEntry
-    // already uses for the large .res archives (res_writer.cpp).
-    std::ifstream f(olmPath, std::ios::binary | std::ios::ate);
-    if (!f) { err = "cannot open .olm: " + olmPath; return 0; }
-    const std::streamoff fileSize = f.tellg();
-    if (fileSize < (std::streamoff)kPixelStart) { err = "truncated .olm header: " + olmPath; return 0; }
+namespace lm = igi::lightmap_rules;
 
-    uint8_t header[kPixelStart];
-    f.seekg(0, std::ios::beg);
-    f.read(reinterpret_cast<char*>(header), sizeof(header));
-    if (static_cast<size_t>(f.gcount()) < sizeof(header)) {
-        err = "cannot read .olm header: " + olmPath; return 0;
-    }
-
-    uint16_t w = 0, h = 0;
-    std::memcpy(&w, &header[kPwOffset], 2);
-    std::memcpy(&h, &header[kPhOffset], 2);
-    if (w == 0 || h == 0) { err = "zero-sized .olm: " + olmPath; return 0; }
-
-    const size_t need = static_cast<size_t>(w) * h * 4;
-    if (static_cast<size_t>(fileSize) < kPixelStart + need) {
-        err = "truncated .olm pixels: " + olmPath; return 0;
-    }
-
-    std::vector<uint8_t> rgba;
+// Streams pixels into one RGBA buffer in bounded chunks, swapping R<->B in
+// flight. Keeping only one page's decoded copy live at a time is deliberate:
+// `.olm` files reach a few megabytes, the editor is a 32-bit process, and the
+// earlier "slurp the whole file plus a decoded copy" shape fragmented its address
+// space badly enough to crash level loads.
+GLuint UploadOnePage(std::ifstream& f, std::size_t pixel_offset, int w, int h,
+                     std::string& err) {
+    const std::size_t need = static_cast<std::size_t>(w) * static_cast<std::size_t>(h) *
+                             lm::kOlmTexBytesPerTexel;
+    std::vector<std::uint8_t> rgba;
     try {
         rgba.resize(need);
     } catch (const std::bad_alloc&) {
-        err = "out of memory for .olm pixels (" + std::to_string(need) + " bytes): " + olmPath;
+        err = "out of memory for .olm pixels (" + std::to_string(need) + " bytes)";
         return 0;
     }
 
-    // Copy pixels from the file in bounded chunks, swapping R<->B in flight. The
-    // .olm stores pixels in a BGRA-ish order; swapping yields RGBA for sampling.
-    constexpr size_t kChunk = 1u << 18; // 256 KiB
-    std::vector<uint8_t> chunk;
-    chunk.resize(std::min(kChunk, need));
+    constexpr std::size_t kChunk = 1u << 18;  // 256 KiB
+    std::vector<std::uint8_t> chunk(std::min(kChunk, need));
 
-    f.seekg(static_cast<std::streamoff>(kPixelStart), std::ios::beg);
-    size_t written = 0;
+    f.clear();
+    f.seekg(static_cast<std::streamoff>(pixel_offset), std::ios::beg);
+    std::size_t written = 0;
     while (written < need) {
-        const size_t n = std::min(chunk.size(), need - written);
+        const std::size_t n = std::min(chunk.size(), need - written);
         f.read(reinterpret_cast<char*>(chunk.data()), static_cast<std::streamsize>(n));
-        if (static_cast<size_t>(f.gcount()) < n) {
-            err = "short read on .olm pixels: " + olmPath; return 0;
+        if (static_cast<std::size_t>(f.gcount()) < n) {
+            err = "short read on .olm pixels";
+            return 0;
         }
-        for (size_t i = 0; i < n; i += 4) {
-            rgba[written + i + 0] = chunk[i + 2]; // R <- stored B
-            rgba[written + i + 1] = chunk[i + 1]; // G
-            rgba[written + i + 2] = chunk[i + 0]; // B <- stored R
-            rgba[written + i + 3] = chunk[i + 3]; // A
+        for (std::size_t i = 0; i < n; i += 4) {
+            rgba[written + i + 0] = chunk[i + 2];  // R <- stored B
+            rgba[written + i + 1] = chunk[i + 1];  // G
+            rgba[written + i + 2] = chunk[i + 0];  // B <- stored R
+            rgba[written + i + 3] = chunk[i + 3];  // A
         }
         written += n;
     }
 
-    pic_s pic{ static_cast<int>(w), static_cast<int>(h), rgba.data() };
+    pic_s pic{ w, h, rgba.data() };
     return GL_RegisterTexture(&pic, GL_CLAMP_TO_EDGE, GL_LINEAR, GL_LINEAR, false);
+}
+
+}  // namespace
+
+bool LoadOlmPages(const std::string& olmPath, std::vector<GLuint>* pages, std::string* err) {
+    if (pages == nullptr) return false;
+    pages->clear();
+    const auto fail = [&](const std::string& message) {
+        for (GLuint tex : *pages) {
+            if (tex != 0) glDeleteTextures(1, &tex);
+        }
+        pages->clear();
+        if (err) *err = message + ": " + olmPath;
+        return false;
+    };
+
+    std::ifstream f(olmPath, std::ios::binary | std::ios::ate);
+    if (!f) return fail("cannot open .olm");
+    const std::streamoff file_size = f.tellg();
+    if (file_size < static_cast<std::streamoff>(lm::kOlmHeaderSize))
+        return fail("truncated .olm header");
+
+    // The header first (0x3C bytes), then exactly `count` page records. `count`
+    // lives at 0x2C, so the record block cannot be sized before the header is in
+    // hand.
+    std::uint8_t header[lm::kOlmHeaderSize];
+    f.seekg(0, std::ios::beg);
+    f.read(reinterpret_cast<char*>(header), sizeof(header));
+    if (static_cast<std::size_t>(f.gcount()) < sizeof(header))
+        return fail("cannot read .olm header");
+
+    // `size` is the REAL file size while only the header is resident: ParseOlmHeader
+    // reads nothing past 0x34 and uses `size` only to reject a `count` whose page
+    // records cannot fit the file.
+    lm::OlmFileHeader hdr;
+    if (!lm::ParseOlmHeader(header, static_cast<std::size_t>(file_size), &hdr))
+        return fail("bad .olm header (page count does not fit the file)");
+    if (hdr.magic != lm::kOlmMagic) return fail("bad .olm magic");
+    // feq(mh->version, file->version) is the engine's version conjunct
+    // (lightmapbuild.c:63, dirlight.h:20-23); every shipped .olm and every shipped
+    // .mef MESH header carries 0.1f, so this rejects only a foreign file.
+    if (!lm::Feq(hdr.version, lm::kOlmVersion)) return fail("unexpected .olm version");
+    if (hdr.count <= 0) return fail("no pages in .olm");
+
+    const std::size_t record_bytes = static_cast<std::size_t>(hdr.count) * lm::kOlmTexRecordSize;
+    if (record_bytes > static_cast<std::size_t>(file_size) - lm::kOlmHeaderSize)
+        return fail("truncated .olm page records");
+    // The record array is prepended with the header so the planner sees the file's
+    // own prefix: its bounds check is the engine's `0x3C + count * 0x2C` layout.
+    std::vector<std::uint8_t> prefix(header, header + sizeof(header));
+    prefix.resize(prefix.size() + record_bytes);
+    f.seekg(static_cast<std::streamoff>(lm::kOlmHeaderSize), std::ios::beg);
+    f.read(reinterpret_cast<char*>(prefix.data() + lm::kOlmHeaderSize),
+           static_cast<std::streamsize>(record_bytes));
+    if (static_cast<std::size_t>(f.gcount()) < record_bytes)
+        return fail("cannot read .olm page records");
+
+    // The loader's own arithmetic, shared with the host-portable tests: one span per
+    // page, every one bounds-checked against the real file size.
+    std::vector<lm::OlmPageSpan> spans;
+    if (!lm::PlanOlmPages(prefix.data(), prefix.size(),
+                          static_cast<std::uint64_t>(file_size), &spans))
+        return fail("bad .olm page table (page pixels do not fit the file)");
+
+    pages->reserve(spans.size());
+    for (std::size_t i = 0; i < spans.size(); ++i) {
+        std::string page_err;
+        const GLuint tex = UploadOnePage(f, spans[i].offset, spans[i].width, spans[i].height,
+                                         page_err);
+        if (tex == 0) {
+            return fail(page_err.empty() ? ("page " + std::to_string(i) + " upload failed")
+                                         : page_err);
+        }
+        pages->push_back(tex);
+    }
+    return true;
 }

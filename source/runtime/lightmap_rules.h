@@ -398,6 +398,48 @@ std::size_t OlmExpectedSize(const std::vector<OlmPage>& pages);
 bool ReadOlmPages(const std::uint8_t* data, std::size_t size, OlmFileHeader* header,
                   std::vector<OlmPage>* pages);
 
+// Parse ONLY the `count` LightmapTex records, without requiring the pixel block to
+// be present. This is what a STREAMING reader needs, because a shipped `.olm` is
+// up to a few megabytes and holding the whole file plus a decoded copy at once is
+// what fragmented the editor's 32-bit address space: the reader takes the 0x3C
+// header (`count` is at 0x2C), then `count` records of 0x2C bytes, then each
+// page's pixels at OlmPagePixelOffset() -- the engine's own cursor arithmetic
+// (lightmapbuild.c:72-78) without the whole file in memory. `size` must cover the
+// header plus `count` records. False on a short buffer, a negative count, or a
+// non-positive page dimension (see ReadOlmPages' deviation note).
+bool ParseOlmPageRecords(const std::uint8_t* data, std::size_t size, int count,
+                         std::vector<OlmPage>* pages);
+
+// The byte offset of page `index`'s pixels inside the file: the end of the record
+// array plus the pixel bytes of every earlier page -- exactly the `px` cursor the
+// engine walks at lightmapbuild.c:72-78 (`px = (char *)&file->tex[file->count]`,
+// then `px += n * 4` per page). Returns 0 when `index` is out of range.
+std::size_t OlmPagePixelOffset(const std::vector<OlmPage>& pages, int index);
+
+// Where one page's pixels live in the file: `4 * width * height` bytes at `offset`
+// (lightmapbuild.c:76-78, :109).
+struct OlmPageSpan {
+    int width = 0;
+    int height = 0;
+    std::size_t offset = 0;
+    std::size_t bytes = 0;
+};
+
+// The plan a streaming reader needs, from the header+records PREFIX of a file of
+// `file_size` bytes: `prefix` must hold the 0x3C header followed by `count` 0x2C
+// records (i.e. `OlmPixelOffset(count)` bytes), and `file_size` is the real size of
+// the file on disk, which may be larger. Produces one OlmPageSpan per page, in page
+// order, and is the single place the loader's arithmetic lives, so it can be tested
+// without a GL context.
+//
+// False when the prefix is short, the header is not parseable, a page dimension is
+// non-positive, or any page's pixel block falls outside `file_size`. The engine
+// makes none of these checks (`Resource_Load` hands it a whole file and it trusts
+// `t->width`/`t->height`); they are the port's guards, named as deviations where
+// the underlying parser is.
+bool PlanOlmPages(const std::uint8_t* prefix, std::size_t prefix_size,
+                  std::uint64_t file_size, std::vector<OlmPageSpan>* spans);
+
 // ---------------------------------------------------------------------------
 // Rule 4 - the bake parameters (lightmapinfo.c:97-200)
 // ---------------------------------------------------------------------------

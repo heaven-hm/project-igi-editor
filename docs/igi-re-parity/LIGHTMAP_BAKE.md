@@ -15,10 +15,14 @@ ported as pure logic: the resource names are the literals `MISSION:lightmaps` an
 under that directory; an existing `.olm` is accepted only when its magic is
 `0x3DF5C28F`, its version `feq`-equals the mesh header version, its timestamp is
 **strictly later** than the mesh header's, and its page count equals the mesh's
-`texCount` — and even then a `full` request rebuilds it anyway. The editor
-disagrees with the oracle in four places, all recorded in §5 and **not** silently
-changed (this module is additive; `source/renderer/*` and
-`source/app_editor.cpp` are outside its write scope).
+`texCount` — and even then a `full` request rebuilds it anyway.
+
+**Update (this change).** The module now has callers: the editor's `.olm` reader
+follows the engine's layout and loads **every page**, and each drawn render group
+binds the page it names, which is what `set->tex[g->lightmap]` does. §5's
+findings 5.1 and 5.2 are therefore fixed; §5b records what changed, the measured
+retail evidence, and the two parts that remain open (the accept test on the live
+path, and the bake-versus-recalculate decision).
 
 ---
 
@@ -244,7 +248,9 @@ Resource_Unload(...)` (`:315-316`). Both are ported as predicates.
 These are **findings**, not fixes. `source/renderer/*` and `source/app_editor.cpp`
 are outside this module's write scope, and the Lead decides.
 
-### 5.1 `olm_texture.cpp` uses a layout from a non-oracle source, and it is only right for `count == 1`
+### 5.1 `olm_texture.cpp` uses a layout from a non-oracle source, and it is only right for `count == 1` — **FIXED**
+
+*(The finding is kept verbatim below; §5b records the fix.)*
 
 `source/renderer/olm_texture.cpp:9-17` documents the `.olm` layout as
 
@@ -282,6 +288,8 @@ conjuncts of §3 hold (`lightmapbuild.c:63-64`). Its R↔B swap
 part is unverified (§8).
 
 ### 5.2 `ObjectLightmapManager::LoadLevelLightmaps` accepts any plausible entry
+
+*(Still true of that class, which has no caller — see §5b.)*
 
 `source/renderer/object_lightmap.cpp:76-117` reads `count` at offset 44 (`:80`) and
 page dimensions at `60 + i * 44 + 40` (`:90`) — the oracle's offsets — but its
@@ -329,6 +337,81 @@ mesh. Recorded, not changed.
 Note also that the oracle's own scale parameter is inert (§4): a bake UI that
 copies the retail "Scale" `Real32` (range 0.5…10) would be a no-op, because
 `info->scale` is reset to 1.0f at `lightmapinfo.c:105` before it is used at `:150`.
+
+---
+
+## 5b. What was wired, and the retail evidence for it
+
+`source/runtime/lightmap_rules.h` now has callers, so the editor's lightmap
+binding path uses the engine's own layout and page rule instead of a descriptor
+guess.
+
+### The rules that were wired
+
+| Rule | Oracle | Where it now runs |
+|---|---|---|
+| the `.olm` layout is a 0x3C header + `count` × 0x2C page records + `count` pixel blocks in page order | `Lightmaps`/`LightmapTex` (`src/litmap/litmaptypes.h:11-48`); the loader's cursor `px = (char *)&file->tex[file->count]`, `px += n * 4` (`src/dirlight/lightmapbuild.c:72-78`) | `ParseOlmPageRecords`, `OlmPagePixelOffset`, `PlanOlmPages` (`source/runtime/lightmap_rules.{h,cpp}`) → `LoadOlmPages` (`source/renderer/olm_texture.cpp`) |
+| a lightmapped LOD has **one page per mesh page**: `lm->count = mesh->texCount` | `HOOK(0x523D40, Lightmap_BuildLod)` `src/dirlight/lightmapbuild.c:91` | `LoadOlmPages` returns every page, not page 0 |
+| the drawn page is the **render group's own** `LmGroup.lightmap`, i.e. `set->tex[g->lightmap]`; `0xFFFF` = none | `HOOK(0x49DF60, Direct3DRender_DrawRigidMesh)` `src/render/render.c:1014-1048`, the binding at `:1033`; the sentinel tested at `:1098`, `:1114`; `LmGroup.lightmap` at `+0x12` (`src/render/render.c:40-54`) | `ParsedGeometry::RenderBlock::lightmapSlot` (`source/renderer/mef_native.cpp:1058`, already parsed) → `SubMesh.lightmapPage` (`source/renderer/model.{h,cpp}`) → `igi::lightmap::PageIndexForGroup` (`source/renderer/lightmap_ref_index.h`) → the per-submesh bind in `source/renderer/renderer_objects.cpp` |
+| the file is the **drawn LOD's** ref (`o->lightmaps[lod].lightmaps`), and a LOD with no bake binds no atlas | `src/render/render.c:1019`, `:1052-1054` | unchanged (`OwnerLightmapEntryForDrawnLod`), now indexed into a page vector |
+| the file-side identity: `magic == 0x3DF5C28F`, `feq(version, 0.1f)` | `lightmapbuild.c:26`, `:63`, `:98`; `feq` `src/dirlight/dirlight.h:20-23` | validated in `LoadOlmPages` |
+
+The storage shape changed with it: the per-task lightmap store is now
+`taskId -> vector<LOD> of vector<page>` (`Renderer_Objects::SetLightmapForTask`),
+because one `.olm` per LOD and one page per render group are two different
+indices and the old single `vector<GLuint>` could only express the first.
+
+### Measured on the retail install
+
+```
+[lightmap-rules] archives=14 files=25337 pages=25351 multiPage=13 objects=121
+                 refIndices=543 count1=25324 count2=12 count3=1
+                 plannedFiles=25337 plannedPages=25351 planMismatches=0
+                 multiPageDistinctPixels=12
+[lightmap-pages] mefs=2667 format3=2027 blocks=11484 page0=11477 offPage0=7
+                 noPage=0 maxPage=1 modelsOffPage0=1
+[probe] mefs=2667 withMesh=2667 timeAllZero=0 timeNonZero=2667
+[probe] mesh version bits 0x3DCCCCCD -> 2667 files
+```
+
+* **13** shipped `.olm` files carry more than one page (12 with 2, one with 3).
+  In **12** of them a later page is *not* a copy of page 0 — the old reader
+  dropped real lightmap data. The exception is `level7/obj00019_00068.olm`, whose
+  pages 0 and 1 are byte-identical 256×256 blocks (its third page, 256×16, is
+  distinct).
+* **Every** shipped file plans to its own end (`planMismatches=0`), so the
+  streaming plan and the whole-buffer reader agree on all 25,337 files.
+* Across all **2,667** retail `.mef` files, **2,027** are format 3 and contribute
+  **11,484** render blocks. **11,477** name page 0, **7** name page 1 — all seven
+  in one model, `428_02_1.mef` — and **none** carries the `0xFFFF` sentinel, so
+  the page index is real data and the engine's unguarded `set->tex[g->lightmap]`
+  read is in range on retail data.
+* All **2,667** MESH headers carry version bits `0x3DCCCCCD` (0.1f), the same bits
+  every shipped `.olm` carries, so the loader's version check cannot reject retail
+  data (it is the engine's own `feq(mh->version, file->version)` conjunct with the
+  mesh side measured).
+
+### Still open
+
+* **The accept test on the live path.** The four conjuncts also need
+  `MeshHeader.version`, `MeshHeader.time[7]` and `LightmapMesh.texCount`, none of
+  which the editor parses today (`source/lod/mef_mesh_header.h` carries
+  format/center/sphere/complexity/radius; `mef_native.cpp` keeps only the LTMP
+  chunk's size). Wiring `OlmHeaderAccepted` therefore needs those three words
+  added to the MEF parser first. The editor's Calculate flow is a rebuild flow, so
+  this is a reuse-decision refinement, not a correctness hole in what is drawn.
+* **§5.4's staleness rule** is unchanged: the editor still decides reuse from a
+  recorded bake pose, not from the engine's timestamp/count test.
+* **`ObjectLightmapManager` (§5.2)** is still the non-oracle loader it was — and it
+  still has **zero callers** (`GetLightmapTexture` is dead), so it is left alone
+  rather than rewritten. The live path is `App::ResolveAndApplyLightmap` →
+  `LoadOlmPages` → `SetLightmapForTask`.
+* **The bake itself** is still `igi1conv lightmap recalc`, not a bake from placed
+  lights. That is the decision §5's "next action" leaves to the Lead, and it is
+  not made here.
+* **No rendered pixel.** See §7.
+
+---
 
 ## 6. Corpus evidence
 
@@ -378,7 +461,7 @@ failed 2 skipped`.
 
 ## 7. Verification
 
-All three commands were run from
+All commands were run from
 `/Users/haseeb-mir/Documents/Code/project-igi-editor-igi-re`.
 
 ```
@@ -402,14 +485,64 @@ $ IGI_GAME_PATH=/nonexistent-igi IGI_HOST_OUT_DIR=build-mingw/ht-lm-nocorpus \
 ==> run-host-tests.sh exit=0
 ```
 
+After the §5b wiring (the two suites that cover this change):
+
+```
+$ IGI_HOST_TESTS="tests/test_lightmap_rules.cpp tests/test_lightmap_ref_index.cpp" \
+    bash scripts/run-host-tests.sh
+   PASS  test_lightmap_ref_index              12 passed    0 failed  (12 tests, exit 0)
+   PASS  test_lightmap_rules                  38 passed    0 failed  (38 tests, exit 0)
+OK: 50 tests passed in 2 suites
+==> run-host-tests.sh exit=0
+```
+
+```
+$ bash scripts/run-host-tests.sh                       # whole lane
+OK: 1268 tests passed in 72 suites
+==> run-host-tests.sh exit=0
+```
+
+```
+$ bash scripts/build-windows.sh
+   x64  link gate      : exit 0
+   i686 compile gate   : exit 0
+   build integrity     : exit 0
+==> BUILD GATE OK (exit 0)
+```
+
+```
+$ rm -f bin/igi_tests.exe bin/Release/igi1ed.exe && \
+    cmake --build build-mingw --target igi_tests igi-editor --parallel
+$ file bin/igi_tests.exe
+bin/igi_tests.exe: PE32 executable (console) Intel 80386, for MS Windows
+$ WINEPATH='Z:\...\scratch\wine-smoke\run' IGI_GAME_PATH='Z:\Users\haseeb-mir\Downloads\IGI' \
+    wine bin/igi_tests.exe '--gtest_filter=-*VerifyLevel*' --gtest_color=no
+[==========] 1707 tests from 245 test suites ran. (153880 ms total)
+[  PASSED  ] 1695 tests.
+[  SKIPPED ] 12 tests
+==> exit 0
+```
+
+```
+$ IGI_E2E_STAGE=$PWD/scratch/e2e-lm-pages bash scripts/e2e-headless.sh --fast
+   PASS  tier smoke          # 14 levels; level 7 fails on exactly s332_02_1
+   PASS  tier tests          # 278/278 assertions
+==> E2E PASS (exit 0)
+```
+
 | Claim | Status |
 |---|---|
 | The three rules match IGI-RE | **verified** — citations throughout, quoted from the decompilation |
-| The rules are exercised natively | **verified** — `35 passed 0 failed`, `exit 0` |
+| The rules are exercised natively | **verified** — `35 passed 0 failed`, `exit 0` (see §5b for the run after the wiring: 38 + 12) |
 | The corpus numbers | **verified** — printed by the test, 14 bundles / 25,337 files read |
 | The corpus test self-skips without the install | **verified** — `33 passed 2 skipped`, `exit 0` |
 | `-Wall -Wextra -Wpedantic` clean on the module | **verified** — `exit 0`, no diagnostics |
-| The Windows `igi_tests` suite | **not run here** — the host lane does not build it; the Lead runs the gate |
+| The page plan matches the whole-buffer reader on every shipped file | **verified** — `plannedFiles=25337 plannedPages=25351 planMismatches=0` |
+| At least one retail render group names a page other than 0 | **verified** — `offPage0=7` of 11,484 format-3 blocks, all in `428_02_1.mef` |
+| The changed translation units cross-compile for i686 | **verified** — `tools/igi-re-parity/tu-check.py`, 6 units, 0 failed |
+| The Windows `igi_tests` suite | **verified** — 1707 ran / 1695 passed / 12 skipped / **0 failed**, exit 0 (i686 `bin/igi_tests.exe`, `file` = `PE32 ... Intel 80386`, run from the repo root with the retail install) |
+| The headless end-to-end lane | **verified** — `scripts/e2e-headless.sh --fast`: `E2E PASS`, smoke over 14 levels with the level-7 `s332_02_1` defect asserted and 0 missing textures |
+| The build gate | **verified** — `scripts/build-windows.sh`: x64 link 0, i686 compile 0, build integrity 0 |
 | Any rendered or in-game lightmap | **unverified** — the GUI needs GL 4.1, this host offers 2.1 |
 
 ## 8. Unverified
@@ -433,21 +566,38 @@ $ IGI_GAME_PATH=/nonexistent-igi IGI_HOST_OUT_DIR=build-mingw/ht-lm-nocorpus \
   not of these functions, and is not settled here.
 * **The pixel channel order.** Format id 3 with pitch `width * 4`
   (`lightmapinfo.c:241`) is consistent with the editor's R↔B swap
-  (`olm_texture.cpp:72-76`), but the oracle does not name the enum.
+  (`olm_texture.cpp`), but the oracle does not name the enum.
 * **`fromResource` / `built` semantics.** Both are written to disk (§6) and the
   oracle sets one of the two on each `Lightmap_BuildLod` path (`:70-71` vs
   `:93-94`), but neither is part of the accept test, and 45 shipped files carry
   both as zero.
-* **Any effect on the editor's runtime behaviour.** This module is pure logic and
-  has no callers outside its tests; nothing in `source/renderer/*` or
-  `source/app_editor.cpp` was changed, so §5's divergences are still live.
+* **The GL upload itself.** `LoadOlmPages` is the only part of the change that
+  cannot be executed on this host: `GL_RegisterTexture` needs a GL context. The
+  plan it feeds the upload from is tested (`PlanOlmPages` over all 25,337 shipped
+  files); the upload loop around it is not.
+* **The texture's `uScale`/`vScale`.** The engine scales a group's UV2 by the
+  page's `texture.uScale`/`vScale` (`Direct3DRender_UploadLightmapMesh`,
+  `src/render/render.c:1117-1118`), which the D3D driver sets to
+  `requested / power-of-two-padded` (`src/sysmisc/d3dtex.c:240-253`). Measured on
+  the corpus: `uScale == 1` in every page, `vScale < 1` in 14,778 of 25,337 files,
+  and in those files the page's `Texture.height` is the padded height while the
+  record's own `LightmapTex.height` (what the pixel block is sized by) is the
+  original. The editor uploads the *unpadded* page and does not scale UV2, which
+  samples the same texels as the engine's padded surface plus the `vScale`
+  multiply; that equivalence is arithmetic, not observed.
 
 ## 9. Files
 
 | Path | What |
 |---|---|
-| `source/runtime/lightmap_rules.h` | the rules, constants and predicates, heavily cited |
+| `source/runtime/lightmap_rules.h` | the rules, constants and predicates, heavily cited; also the streaming page plan |
 | `source/runtime/lightmap_rules.cpp` | the implementation; every branch carries its IGI-RE line |
-| `tests/test_lightmap_rules.cpp` | 33 unit + 2 corpus tests |
+| `source/renderer/olm_texture.{h,cpp}` | the reader: every page of a `.olm`, engine layout, magic/version checked |
+| `source/renderer/model.{h,cpp}` | `SubMesh.lightmapPage` — the render group's `LmGroup.lightmap` |
+| `source/renderer/lightmap_ref_index.h` | `PageIndexForGroup` (rule 5) |
+| `source/renderer/renderer_objects.{h,cpp}`, `renderer.h` | per-LOD page vectors and the per-submesh bind |
+| `source/app_editor.cpp` | `ResolveAndApplyLightmap` loads every page |
+| `tests/test_lightmap_rules.cpp` | 34 unit + 2 corpus tests (page-table plan, pixel offsets) |
+| `tests/test_lightmap_ref_index.cpp` | the page rule plus the format-3 page corpus differential |
 | `CMakeLists.txt` | purely additive: one test file and one runtime source |
 | `docs/igi-re-parity/LIGHTMAP_BAKE.md` | this record |
