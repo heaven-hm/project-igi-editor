@@ -134,7 +134,8 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
                                       const std::vector<LevelObject>& objects,
                                       int draw_parts,
                                       const glm::vec3& camera_pos,
-                                      int selected_object_index)
+                                      int selected_object_index,
+                                      const glm::vec3& camera_forward)
 {
     if (!pick_shader_prog_) return;
 
@@ -142,6 +143,40 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
     const int DRAW_OBJECTS   = 4;
     const int DRAW_BUILDINGS = 16;
     const int DRAW_PROPS     = 32;
+
+    // The SAME conservative view cull the visual pass applies before it draws an
+    // object (see Renderer_Objects::Draw).  Without it this pass re-submits every
+    // object in the level, including the ones the renderer just rejected for
+    // being behind the camera or outside its view cone: measured on level 1 it
+    // issued 523 objects / 2956 submesh draws where the visible scene issued
+    // 234 / 721, and the pick is draw-submission bound (scissoring the read pixel
+    // to the one pixel that is read changed nothing: 23 ms either way), so those
+    // extra draws were the whole cost of a pick.
+    //
+    // This cannot change the pixel this pass is read at, and the reason is
+    // parity, not a new judgement: after this the pick considers exactly the
+    // objects the visual pass considered, so anything it drops was not drawn and
+    // therefore is not on screen to be clicked or to occlude what is.  The test
+    // itself is conservative on top of that -- it rejects an object only when its
+    // whole bounding sphere is behind the eye plane, or outside a cone of
+    // half-angle atan(1/2) ~= 26.6 deg widened by the bounding radius (a >=120 deg
+    // cone, wider than this viewport's frustum).
+    glm::vec3 cameraFwd(0.0f);
+    const float cameraFwdLen = glm::length(camera_forward);
+    if (cameraFwdLen > 0.01f) cameraFwd = camera_forward / cameraFwdLen;
+
+    // IGI_PROFILE-only: the pick pass re-submits the whole scene.  Whether it
+    // submits MORE than the visual pass (which honours the engine's own
+    // ModelObj_GetLOD cull, `if (lod < 0) continue`) decides whether there is
+    // anything to save here at all, so count what it actually issues and time
+    // its CPU-side setup separately from the GL submission.
+    const bool profilePickPass = []() {
+        static const bool enabled = std::getenv("IGI_PROFILE") != nullptr;
+        return enabled;
+    }();
+    using PickPassClock = std::chrono::steady_clock;
+    const auto pp_t0 = profilePickPass ? PickPassClock::now() : PickPassClock::time_point{};
+    int pp_objects = 0, pp_draws = 0;
 
     // Reset the per-pass ATTA pick capture and rebuild EditRigidObj occupancy so
     // ATTAs already promoted to real tasks aren't offered for promotion again.
@@ -155,6 +190,7 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
             suppressed_atta_keys_.insert(o.name.substr(5));
         }
     }
+    const auto pp_t1 = profilePickPass ? PickPassClock::now() : PickPassClock::time_point{};
 
     // Set picking render state
     glBindFramebuffer(GL_FRAMEBUFFER, pick_fbo_);
@@ -210,6 +246,22 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
         // Allow collision-only meshes (fromRenderMesh==false) as fallback pick hitboxes
         // so vehicles, cargo, and any model without render vertices are still clickable.
 
+        // The visual pass's cull, mirrored (see the note at the top of this
+        // function).  `keepVisible` matches the visual pass: the selected object
+        // is never culled, so a selection can always be re-picked.  The hovered
+        // object needs no exemption -- it is under the cursor, and the test
+        // rejects only what cannot project into the viewport at all.
+        if (cameraFwdLen > 0.01f && i != selected_object_index) {
+            const glm::vec3 toObject = glm::vec3(obj.pos) - camera_pos;
+            const float boundRadius =
+                glm::length(mesh.halfExtents) * BASE_SCALE * std::max(obj.scale, 0.001f);
+            const float distSq = glm::dot(toObject, toObject);
+            const float facing = glm::dot(toObject, cameraFwd);
+            if (facing < -boundRadius) continue;
+            if (distSq > boundRadius * boundRadius &&
+                facing < std::sqrt(distSq) * 0.5f - boundRadius) continue;
+        }
+
         // Build model matrix (same convention as Draw(), and the same Euler order
         // as the game: Rz * Ry * Rx — see renderer/igi_transform.h).
         glm::mat4 model = glm::mat4(1.0f);
@@ -223,16 +275,19 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
         glUniform1i(loc_id, i + 1); // ID 0 = background
 
+        ++pp_objects;
         // Draw hull submeshes
         if (!mesh.subMeshes.empty()) {
             for (const auto& sub : mesh.subMeshes) {
                 if (sub.VAO == 0 || sub.vertexCount == 0) continue;
                 glBindVertexArray(sub.VAO);
                 glDrawArrays(GL_TRIANGLES, 0, sub.vertexCount);
+                ++pp_draws;
             }
         } else if (mesh.VAO) {
             glBindVertexArray(mesh.VAO);
             glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);
+            ++pp_draws;
         }
 
         // Render ATTA sub-models into the pick buffer, each with its OWN unique
@@ -265,6 +320,29 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
     // Restore state
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glDisable(GL_CULL_FACE);
+
+    if (profilePickPass) {
+        static int64_t acc_occ_us = 0, acc_total_us = 0, acc_objs = 0, acc_draws = 0;
+        static int calls = 0;
+        const auto us = [](PickPassClock::time_point a, PickPassClock::time_point b) {
+            return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
+        };
+        acc_occ_us += us(pp_t0, pp_t1);
+        acc_total_us += us(pp_t0, PickPassClock::now());
+        acc_objs += pp_objects;
+        acc_draws += pp_draws;
+        ++calls;
+        if (calls >= 8) {
+            Logger::Get().Log(LogLevel::INFO,
+                "[PickPass] 8 passes: occupancy=" +
+                std::to_string(acc_occ_us / calls / 1000) + "ms total=" +
+                std::to_string(acc_total_us / calls / 1000) + "ms objects=" +
+                std::to_string(acc_objs / calls) + " draws=" +
+                std::to_string(acc_draws / calls) + " submeshes/pass");
+            calls = 0;
+            acc_occ_us = acc_total_us = acc_objs = acc_draws = 0;
+        }
+    }
 }
 
 // ─── PickObjectAtScreen ───────────────────────────────────────────────────────
@@ -273,7 +351,8 @@ int Renderer_Objects::PickObjectAtScreen(int x, int y, int w, int h,
                                           const std::vector<LevelObject>& objects,
                                           int draw_parts,
                                           const glm::vec3& camera_pos,
-                                          int selected_object_index)
+                                          int selected_object_index,
+                                          const glm::vec3& camera_forward)
 {
     if (!pick_shader_prog_ || w <= 0 || h <= 0) return -1;
 
@@ -294,46 +373,19 @@ int Renderer_Objects::PickObjectAtScreen(int x, int y, int w, int h,
     using PickClock = std::chrono::steady_clock;
     const auto pick_t0 = profilePick ? PickClock::now() : PickClock::time_point{};
 
-    // Only ONE pixel of this FBO is ever consumed here (the glReadPixels below),
-    // so scissor the pass to it: the clear and every fragment outside the cursor
-    // are discarded instead of being shaded at full viewport size.  The
-    // projection, the geometry, the depth function and the clear colour are
-    // untouched, so the value written to the pixel that IS read is bit-identical
-    // to the unscissored pass — the other pixels were computed and thrown away.
-    // Measured at 1280x720 on the i686 build under Wine this is the difference
-    // between a full second scene render and a single pixel of it; see
-    // [PickProfile] under IGI_PROFILE.
-    // glClear is itself scissor-tested, so the scissored clear still clears the
-    // read pixel to the same background id.
-    const int read_x = x;
-    const int read_y = h - y - 1;
-    const bool canScissor = false && read_x >= 0 && read_x < pick_fbo_w_ &&
-                            read_y >= 0 && read_y < pick_fbo_h_;
-    GLboolean prev_scissor = GL_FALSE;
-    GLint prev_scissor_box[4] = {0, 0, 0, 0};
-    if (canScissor) {
-        prev_scissor = glIsEnabled(GL_SCISSOR_TEST);
-        glGetIntegerv(GL_SCISSOR_BOX, prev_scissor_box);
-        glScissor(read_x, read_y, 1, 1);
-        glEnable(GL_SCISSOR_TEST);
-    }
-
-    DrawForPicking(ubo_mats, objects, draw_parts, camera_pos, selected_object_index);
+    DrawForPicking(ubo_mats, objects, draw_parts, camera_pos, selected_object_index,
+                   camera_forward);
     const auto pick_t1 = profilePick ? PickClock::now() : PickClock::time_point{};
 
     // Read back the single pixel under the cursor.
     // OpenGL origin is bottom-left; screen coords are top-left → flip Y.
+    const int read_x = x;
+    const int read_y = h - y - 1;
     uint8_t pixel[3] = {0, 0, 0};
     glBindFramebuffer(GL_FRAMEBUFFER, pick_fbo_);
     glReadPixels(read_x, read_y, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, pixel);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     const auto pick_t2 = profilePick ? PickClock::now() : PickClock::time_point{};
-
-    if (canScissor) {
-        glScissor(prev_scissor_box[0], prev_scissor_box[1],
-                  prev_scissor_box[2], prev_scissor_box[3]);
-        if (!prev_scissor) glDisable(GL_SCISSOR_TEST);
-    }
 
     if (profilePick) {
         static int64_t acc_draw_us = 0, acc_read_us = 0;

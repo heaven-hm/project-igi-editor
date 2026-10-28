@@ -894,6 +894,33 @@ static void LogFrameBreakPausedSplit(int64_t head_us, int64_t view_us,
 	}
 }
 
+// IGI_PROFILE_PICKBENCH-only: the hover pick is driven by real pointer motion,
+// so a Wine smoke run issues a variable number of them -- frequently zero, and
+// never the same positions twice.  That makes the pick's per-call cost
+// unmeasurable by frame attribution alone (a run can sit at "calls=0/30" for a
+// whole minute), and an unmeasurable change cannot be shown to be a win.  With
+// IGI_PROFILE_PICKBENCH set, App::Frame issues a fixed set of picks at fixed
+// screen positions every frame, so two builds are compared on identical work
+// whatever the mouse did.  It is a separate flag from IGI_PROFILE on purpose:
+// it adds a known constant to every frame, so it must not be on while the
+// [FrameProfile]/[FrameBreak] attribution is being read.
+static constexpr int kPickBenchPicks = 4;
+
+static void LogPickBench(int64_t bench_us, const std::string& ids) {
+	static int64_t acc_us = 0;
+	static int frames = 0;
+	acc_us += bench_us;
+	if (++frames >= 30) {
+		Logger::Get().Log(LogLevel::INFO,
+			"[PickBench] 30 frames: " + std::to_string(kPickBenchPicks) +
+			" picks/frame avg=" + std::to_string(acc_us / 30000) + "ms/frame (" +
+			std::to_string(acc_us / (30 * kPickBenchPicks) / 1000) + "ms/pick) ids=" +
+			ids);
+		frames = 0;
+		acc_us = 0;
+	}
+}
+
 // IGI_PROFILE-only: the scene hover pick is a FULL scene colour pass into the
 // pick FBO plus a synchronous glReadPixels, so its call RATE matters as much as
 // its per-call cost: a pick issued once per frame costs a whole extra scene
@@ -978,6 +1005,31 @@ void App::Frame(float delta_seconds) {
 	const auto frame_us = [](FrameBreakClock::time_point a, FrameBreakClock::time_point b) {
 		return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
 	};
+	// IGI_PROFILE_PICKBENCH-only: see LogPickBench.  Runs once per frame, before
+	// either branch, so the same fixed pick work is done whether the editor is
+	// paused or not.
+	if ([]() {
+			static const bool enabled = getenv("IGI_PROFILE_PICKBENCH") != nullptr;
+			return enabled;
+		}()) {
+		const int bench_w = window_state_.viewport_width_;
+		const int bench_h = window_state_.viewport_height_;
+		const auto bench_t0 = FrameBreakClock::now();
+		std::string bench_ids;
+		for (int k = 0; k < kPickBenchPicks; ++k) {
+			const int px = bench_w * (k + 1) / (kPickBenchPicks + 1);
+			const int hit = renderer_.PickObjectAtScreen(
+				px, bench_h / 2, bench_w, bench_h, view_define_,
+				level_.GetLevelObjects().GetObjects(),
+				Renderer::DRAW_OBJECTS | Renderer::DRAW_BUILDINGS | Renderer::DRAW_PROPS,
+				selected_object_index_);
+			// The returned id is the whole contract of this pass: logging it makes
+			// the benchmark a differential test of any change to the pick, not
+			// just a timing.
+			bench_ids += (k ? "," : "") + std::to_string(hit);
+		}
+		LogPickBench(frame_us(bench_t0, FrameBreakClock::now()), bench_ids);
+	}
 	const igi::RuntimeRenderSnapshot& render_snapshot =
 		gameplay_host_.GetRenderSnapshot();
 	if (developer_mode_ && (!rendering_editor_window_ || IsEditorInputActive())) {

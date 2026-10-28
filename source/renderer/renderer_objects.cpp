@@ -921,6 +921,10 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     auto profMark = profileObjects ? ObjProfileClock::now() : ObjProfileClock::time_point{};
     int64_t profResolveUs = 0, profDrawUs = 0, profAttaUs = 0;
     int profObjects = 0, profSubmeshDraws = 0;
+    // IGI_PROFILE-only: how much of the level the VISUAL pass declines to draw.
+    // The pick pass re-submits the scene without these filters, so this is the
+    // size of the gap between what is on screen and what picking walks.
+    int profCulledLod = 0, profSkipped = 0;
     const auto profDeltaUs = [](ObjProfileClock::time_point a, ObjProfileClock::time_point b) {
         return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
     };
@@ -1080,6 +1084,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 obj.modelMissingInRes,
                 objIndex == selected_object_index,
                 objIndex == hover_object_index)) {
+            if (profileObjects) ++profSkipped;
             continue;
         }
 
@@ -1114,7 +1119,10 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                     obj.modelId, obj.isBuilding, tan_half_fovx,
                     static_cast<float>(igi::lod::RigidViewDepth(q)),
                     static_cast<float>(igi::lod::MaxScale(q.objScale) * lod0h.sphere), 1.0f);
-                if (lod < 0) continue;  // render.c:955-956
+                if (lod < 0) {  // render.c:955-956
+                    if (profileObjects) ++profCulledLod;
+                    continue;
+                }
                 drawnLod = lod;
                 const std::string lodName = GetLodMeshName(obj.modelId, obj.isBuilding, lod);
                 if (!lodName.empty() && lodName != obj.modelId) {
@@ -1585,11 +1593,14 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         static int pframes = 0;
         static int64_t pResolve = 0, pDraw = 0, pAtta = 0;
         static int64_t pObjects = 0, pDraws = 0;
+        static int64_t pCulledLod = 0, pSkipped = 0;
         pResolve += profResolveUs;
         pDraw += profDrawUs;
         pAtta += profAttaUs;
         pObjects += profObjects;
         pDraws += profSubmeshDraws;
+        pCulledLod += profCulledLod;
+        pSkipped += profSkipped;
         if (++pframes == kProfileFrames) {
             const auto perFrame = [](int64_t total) {
                 return std::to_string(total / kProfileFrames / 1000) + "ms";
@@ -1598,9 +1609,12 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 "[ObjectProfile] " + std::to_string(kProfileFrames) + " frames: resolve=" +
                 perFrame(pResolve) + " draw=" + perFrame(pDraw) + " atta=" + perFrame(pAtta) +
                 " objects=" + std::to_string(pObjects / kProfileFrames) + "/frame" +
-                " submeshDraws=" + std::to_string(pDraws / kProfileFrames) + "/frame");
+                " submeshDraws=" + std::to_string(pDraws / kProfileFrames) + "/frame" +
+                " culledLod=" + std::to_string(pCulledLod / kProfileFrames) + "/frame" +
+                " skipped=" + std::to_string(pSkipped / kProfileFrames) + "/frame");
             pframes = 0;
             pResolve = pDraw = pAtta = pObjects = pDraws = 0;
+            pCulledLod = pSkipped = 0;
         }
     }
 

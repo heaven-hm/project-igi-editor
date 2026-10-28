@@ -742,7 +742,7 @@ public:
 											   int draw_parts,
 											   int selected_object_index) {
 		SetupUBOMats(vd);
-		return objects_.PickObjectAtScreen(x, y, w, h, ubo_mats_, objects, draw_parts, vd.pos_, selected_object_index);
+		return objects_.PickObjectAtScreen(x, y, w, h, ubo_mats_, objects, draw_parts, vd.pos_, selected_object_index, vd.forward_);
 	}
 	int				CountObjectVisiblePixels(const view_define_s& vd,
 											 const std::vector<LevelObject>& objects,

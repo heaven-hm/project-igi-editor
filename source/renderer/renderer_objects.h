@@ -134,7 +134,8 @@ public:
                            const std::vector<LevelObject>& objects,
                            int draw_parts,
                            const glm::vec3& camera_pos,
-                           int selected_object_index);
+                           int selected_object_index,
+                           const glm::vec3& camera_forward = glm::vec3(0.0f));
     int CountObjectVisiblePixels(GLuint ubo_mats,
                                  const std::vector<LevelObject>& objects,
                                  int draw_parts,
@@ -639,5 +640,6 @@ private:
                         const std::vector<LevelObject>& objects,
                         int draw_parts,
                         const glm::vec3& camera_pos,
-                        int selected_object_index);
+                        int selected_object_index,
+                        const glm::vec3& camera_forward = glm::vec3(0.0f));
 };
