@@ -1326,7 +1326,11 @@ namespace igi {
 
 namespace {
 bool g_ladder_gizmos_enabled = true;
-bool g_rail_path_gizmos_enabled = true;
+// OFF by default.  The overlay draws EVERY joint of EVERY rail the level references, as
+// immediate-mode lines, every frame -- 221 joints for the shipped LEVEL1 rail alone, and it
+// landed in the same build the user reported as "very laggy".  It is a useful authoring aid,
+// so it is kept and toggled with `L`; it just does not cost every frame until asked for.
+bool g_rail_path_gizmos_enabled = false;
 }  // namespace
 
 void SetLadderGizmosEnabled(bool enabled) { g_ladder_gizmos_enabled = enabled; }
