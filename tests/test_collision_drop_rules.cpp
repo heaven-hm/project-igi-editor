@@ -69,3 +69,43 @@ TEST(CollisionDropRules, ADegenerateTriangleIsNeverHit) {
     const igi::DropTriangle degenerate = Tri(0, 0, -500, 50, 50, -500, 100, 100, -500);
     EXPECT_FALSE(igi::DropToGround({degenerate}, 10.0, 10.0).found);
 }
+
+// The gatherer: one model's collision faces become world-space drop triangles.
+TEST(CollisionDropRules, GathersTransformedTriangles) {
+    // A unit square at local z = -500, two faces, wound as triangles.
+    const float positions[] = {
+        0.0f, 0.0f, -500.0f,
+        1.0f, 0.0f, -500.0f,
+        1.0f, 1.0f, -500.0f,
+        0.0f, 1.0f, -500.0f,
+    };
+    const unsigned short faces[] = {0, 1, 2, 0, 2, 3};
+    // Identity with a +1000 translation on X, column-major (glm order).
+    const float xform[16] = {1, 0, 0, 0,
+                             0, 1, 0, 0,
+                             0, 0, 1, 0,
+                             1000, 0, 0, 1};
+    std::vector<igi::DropTriangle> tris;
+    igi::AppendTransformedTriangles(positions, 4, faces, 6, xform, tris);
+    ASSERT_EQ(tris.size(), 2u);
+
+    // The point must be inside the TRANSLATED footprint, not the local one.
+    EXPECT_FALSE(igi::DropToGround(tris, 0.5, 0.5).found);
+    const igi::DropHit hit = igi::DropToGround(tris, 1000.5, 0.5);
+    ASSERT_TRUE(hit.found);
+    EXPECT_DOUBLE_EQ(hit.z, -500.0);
+}
+
+TEST(CollisionDropRules, GathererRefusesOutOfRangeIndicesAndNulls) {
+    const float positions[] = {0.0f, 0.0f, 0.0f};
+    const unsigned short faces[] = {0, 1, 2};  // index 1 and 2 are out of range
+    const float xform[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    std::vector<igi::DropTriangle> tris;
+    igi::AppendTransformedTriangles(positions, 1, faces, 3, xform, tris);
+    EXPECT_TRUE(tris.empty());
+
+    igi::AppendTransformedTriangles(nullptr, 4, faces, 6, xform, tris);
+    igi::AppendTransformedTriangles(positions, 4, nullptr, 6, xform, tris);
+    igi::AppendTransformedTriangles(positions, 4, faces, 6, nullptr, tris);
+    EXPECT_TRUE(tris.empty());
+}

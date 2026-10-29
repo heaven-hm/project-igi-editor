@@ -38,6 +38,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstddef>
 #include <vector>
 
 namespace igi {
@@ -104,6 +105,45 @@ inline DropHit DropToGround(const std::vector<DropTriangle>& tris, double x, dou
     DropHit hit = DropOntoTriangles(tris, x, y, -kDropProbeDistance);
     if (hit.found) return hit;
     return DropOntoTriangles(tris, x, y, kDropProbeDistance);
+}
+
+
+// ---------------------------------------------------------------------------
+// Gathering triangles from parsed collision geometry.
+//
+// The editor parses XTVC vertices and ECFC faces per model
+// (source/renderer/mef_native.h:40-63, populated at :153-162) -- the same chunks
+// Direct3DRender_LoadModel HOOK 0x49FB10 fills as collision data
+// (src/bonemesh/d3drender.c:204-261).  This turns one model's face list into
+// world-space DropTriangles for the drop query.
+//
+// It takes raw arrays rather than the renderer's types on purpose: the rule stays
+// host-testable and free of the renderer, and the caller decides where the bytes
+// come from.  `xform` is the object's 4x4 world matrix in COLUMN-MAJOR order, the
+// same convention glm uses, and vertices are 3 floats each (the XTVC record's
+// leading position; its remaining bytes are not needed by a vertical drop).
+// ---------------------------------------------------------------------------
+inline void AppendTransformedTriangles(const float* positions, std::size_t positionCount,
+                                       const unsigned short* faces, std::size_t faceCount,
+                                       const float* xform,
+                                       std::vector<DropTriangle>& out) {
+    if (positions == nullptr || faces == nullptr || xform == nullptr) return;
+    for (std::size_t f = 0; f + 2 < faceCount; f += 3) {
+        DropTriangle tri{};
+        bool ok = true;
+        for (int c = 0; c < 3; ++c) {
+            const unsigned short idx = faces[f + c];
+            if (static_cast<std::size_t>(idx) >= positionCount) { ok = false; break; }
+            const float px = positions[idx * 3 + 0];
+            const float py = positions[idx * 3 + 1];
+            const float pz = positions[idx * 3 + 2];
+            // Column-major 4x4: world = M * (p, 1).
+            tri.v[c][0] = xform[0] * px + xform[4] * py + xform[8]  * pz + xform[12];
+            tri.v[c][1] = xform[1] * px + xform[5] * py + xform[9]  * pz + xform[13];
+            tri.v[c][2] = xform[2] * px + xform[6] * py + xform[10] * pz + xform[14];
+        }
+        if (ok) out.push_back(tri);
+    }
 }
 
 }  // namespace igi
