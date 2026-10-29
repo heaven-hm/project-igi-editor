@@ -1,4 +1,12 @@
 #pragma once
+// A classic guard as well as `#pragma once`, and it is load-bearing: tests include
+// headers as "../source/..." while the library includes them as "source/...",
+// and `#pragma once` dedupes by FILE IDENTITY -- so the same header reached by two
+// spellings is two files to it, which produced hard `redefinition of 'class
+// Renderer_Objects'` errors (tests/../source/renderer/renderer_objects.h vs
+// source/renderer/renderer_objects.h).
+#ifndef IGI_RENDERER_OBJECTS_H
+#define IGI_RENDERER_OBJECTS_H
 #include "../pch.h"
 #include "model.h"
 #include "mef_native.h"
@@ -8,6 +16,9 @@
 // The placed-helicopter flight preview's state (GitHub issue #60). Portable and
 // GL-free, so it can be built and stepped from the host test lane.
 #include "../runtime/heli_preview.h"
+// The engine's blob shadow quad (GitHub issue #63). Portable and GL-free, so the
+// host lane pins its fade, clamp, colour and geometry (tests/test_human_shadow.cpp).
+#include "../runtime/human_shadow.h"
 #include "dat_writer.h"
 #include "res_writer.h"
 #include "model_texture_resolution.h"
@@ -317,6 +328,14 @@ public:
     // AI's hand). Binds the shared Matrices UBO (ubo_mats) so the shader gets the
     // scene's Proj*View*GlobalScale; worldMat is the model matrix in raw world units.
     void DrawAttachedMesh(const std::string& modelId, bool isBuilding, const glm::mat4& worldMat, GLuint ubo_mats);
+    // The engine's blob shadow (GitHub issue #63): one flat, texture-alpha-blended
+    // quad per placement, exactly the Shadow task's geometry (see
+    // runtime/human_shadow.h for the oracle). The placements are built by the caller
+    // because the ground query belongs to the App
+    // (draw_params_s::terrain_z_at_world_xy_); nothing here is guessed. A missing
+    // shadow1.tex is the engine's own null-texture branch: nothing is drawn.
+    void DrawHumanShadowQuads(GLuint ubo_mats,
+                              const std::vector<igi::HumanShadowPlacement>& shadows);
     GLuint GetShaderProgram() const { return shader_program_; }
     void DrawAttachmentsForSpline(const std::string& modelId, bool isBuilding,
                                   const glm::mat4& unscaledWorldMat, GLuint ubo_mats,
@@ -738,3 +757,5 @@ private:
                         int selected_object_index,
                         const glm::vec3& camera_forward = glm::vec3(0.0f));
 };
+
+#endif  // IGI_RENDERER_OBJECTS_H
