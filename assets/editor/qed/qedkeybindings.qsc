@@ -8,8 +8,8 @@
 
 // Camera
 SetEventBinding("CameraEnable",                             "<Alt>");
-SetEventBinding("CameraMoveForward",                        "<Alt><Shift>");
-SetEventBinding("CameraMoveBackward",                       "<Alt><Ctrl>");
+SetEventBinding("CameraMoveForward",                        "<W>");
+SetEventBinding("CameraMoveBackward",                       "<S>");
 // task-11 item 1: CameraAdjustRadius (<Alt><Space>) was removed — the editor has
 // no radius adjuster; the only radius is the object-orbit distance, which
 // BeginObjectOrbit derives and CameraResetRadius resets.
@@ -23,8 +23,8 @@ SetEventBinding("CameraCopyPosition",                       "<Ctrl><P>");
 SetEventBinding("CameraCopyOrientation",                    "<Ctrl><Shift><O>");
 SetEventBinding("CameraSnapToObject",                       "<F11>");
 SetEventBinding("CameraSnapToGround",                       "<Alt><F11>");
-SetEventBinding("CameraStrafeLeft",                         "<Alt><Left>");
-SetEventBinding("CameraStrafeRight",                        "<Alt><Right>");
+SetEventBinding("CameraStrafeLeft",                         "<A>");
+SetEventBinding("CameraStrafeRight",                        "<D>");
 // #48: CameraCopyPosition/CameraCopyOrientation are implemented — QED.doc,
 // "General keystrokes": "Ctrl P  Copy camera position to clipboard". The editor
 // copies viewer_.pos_ / viewer_.yaw_,pitch_,roll_ through the clipboard it
