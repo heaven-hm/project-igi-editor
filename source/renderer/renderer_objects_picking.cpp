@@ -270,6 +270,21 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
         // No pickup-specific turn: the engine draws a rigid object with the object's
         // own matrix and scale only (Direct3DRender_DrawRigidMesh HOOK 0x49DF60,
         // src/render/render.c:965-966).  See renderer_objects.cpp for the full note.
+
+        // A placed helicopter is drawn at its FLIGHT PREVIEW pose, not at the
+        // authored placement (GitHub issue #60, renderer_objects.cpp's `"Heli"`
+        // block). The pick pass must draw the same pose or the user would be
+        // clicking where the helicopter used to be. `GetHeliPreviewPose` is pure
+        // and reads the frame's tick, so it returns exactly what the visual pass
+        // drew.
+        {
+            HeliPreviewCacheEntry pose;
+            GetHeliPreviewPose(i, obj.type, obj.argTokens, &pose);
+            if (pose.pose_valid) {
+                model = glm::translate(glm::mat4(1.0f), pose.pose_pos);
+                model = model * pose.pose_rot;
+            }
+        }
         model = glm::scale(model, glm::vec3(BASE_SCALE * obj.scale));
 
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));

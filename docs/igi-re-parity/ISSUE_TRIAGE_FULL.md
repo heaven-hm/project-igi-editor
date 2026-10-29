@@ -60,7 +60,7 @@ frame was rendered. No claim below is a rendered or in-game result; every
 | 43 | Create/edit lights and smoke FX | **PARTIAL** `aa225a6e` | `Smoke_Init` `0x437510` `src/fxobj/smoke.c:194`; `Smoke_Create` `0x437B90` `src/fxobj/smoke.c:248`; `Smoke_Move` `0x437AD0` `src/fxobj/smoke.c:210`; `AlarmLight_Init` `0x4397C0` `src/fxobj/alarm.c:124` | call `smoke.h`/`alarm_light.h` from a draw path and add the authoring/inspector half; no retail *point-light* authoring type exists |
 | 57 | Snow particle weather | **PARTIAL** `aa225a6e` + `273bb24f` | `Rain_New` `0x498960` `src/dxinit/rain.c:167` (snow is `r->snow = rain == 0`, `src/dxinit/rain.c:144-153`); `RainEffect_Init` `0x436780` `src/fxobj/rain.c:84` | wire the `R7` block of `source/runtime/rain_rules.*` into `renderer_rain.cpp`; bind `snow.tex` (absent today) |
 | 58 | Rain renderer parity audit | **PARTIAL** `aa225a6e` + `273bb24f` | `Rain_New` `0x498960` `src/dxinit/rain.c:167`; `Rain_Init` `0x498AB0` `src/dxinit/rain.c:190` | same wiring as #57 — audit is written (`RAIN.md`), rules module has no caller |
-| 60 | Helicopter rotor + flight preview | **PARTIAL** `273bb24f` | `Heli_Control` `0x431B70` `src/heli/heli.c:406`; `Heli_Move` `0x431E30` `src/heli/heli.c:520`; `Rotor_Init` `0x42D2B0` `src/rotor/rotor.c:211` | the rotor spin half **is** wired, via `igi::IgiRotorSpinMatrix` (`source/renderer/renderer_objects_atta.cpp:1263-1276`, citing `src/rotor/rotor.c:139-152,180-181`); `heli_rules.*` (the Heli task's control and motion) still has no caller |
+| 60 | Helicopter rotor + flight preview | **LANDED** `273bb24f` + the `heli_preview` wiring | `Heli_Control` `0x431B70` `src/heli/heli.c:406`; `Heli_Move` `0x431E30` `src/heli/heli.c:520`; `Rotor_Init` `0x42D2B0` `src/rotor/rotor.c:211`; `AnimTask_Seek` `0x4F3EF0` `src/vehbase/animtask.c:403`; `PhysicsObj_Collide` `0x4FC0E0` `src/graphtask/physobj.c:422-426` | `heli_rules.*` now has a caller: `source/runtime/heli_preview.{h,cpp}` runs the engine's tick sequence (tick-0 reset, sentinel, ramp, three-axis turn, nose pitch, position step) and `source/renderer/renderer_objects.cpp`'s `"Heli"` block draws its `v.pos`/`v.matrix`; tests in `tests/test_heli_preview.cpp`; the rotor spin stays on `igi::IgiRotorSpinMatrix`. Unverified: no frame was rendered (host offers GL 2.1, the editor needs 4.1); the per-model physics-def mapping is still first-found (BELL) for every helicopter |
 | 62 | LOD virtual-model chains | **PARTIAL** `c7bd9e2a` `013b06bb` `aa225a6e` | `VirModel_InitLods` `0x4CED50` `src/model/model.c:145-163`; `ModelLod_Find` `0x4CEE30` `src/model/model.c:165-178`; `lod_select` `src/lod/mesh3d.c:161-208`; `ModelObj_GetLOD` `0x4CFCB0` `src/lod/mesh3d.c:209-227` | the per-frame LOD switch: `GetLodMeshName` exists but the drawn mesh is still the object's own name |
 | 66 | Per-mission fog from FlatSky + volumes | **PARTIAL** `4d30ad3b` `19d226a4` | `GlobalLight_Open` `0x527C90` `src/nodereg/tasktypes.c:93`; `Fog_Compute` `0x4DA790` `src/glowmesh/terrainmesh.c:41`; `Fog_SetRange` `0x49B2D0` `src/dxinit/d3drender.c:136`; `FlatSky` fog fields `src/flatwater/flatsky.c:89-92` | per-level override store and `HazeLayer`-style local fog volumes; the FlatSky premise is half right (§A3) |
 | 69 | Hermite road/bridge segment placement | **PARTIAL** `273bb24f` | `SplineObjSegment_Setup` `0x4E4530` `src/sound/segsetup.c:366` (decl `src/tagitem/spline.c:37`); `SplineObj_Open` `0x502250` `src/editobj/spline.c:225` | wire `spline_rules.*`'s Hermite path into `renderer_splines.cpp` (which still uses chord-direction orientation) |
@@ -466,7 +466,7 @@ add the sound-test panel and the ambient loop behind a default-off toggle.
 
 ---
 
-### A11. #60 — helicopter rotor + flight preview *(partial)*
+### A11. #60 — helicopter rotor + flight preview *(landed)*
 
 **What the issue asks.** Match retail helicopter motion in the preview: rotor
 spin rates/directions, authored collective/thrust semantics, and the tick-0 reset.
@@ -474,22 +474,36 @@ spin rates/directions, authored collective/thrust semantics, and the tick-0 rese
 **Oracle, verified.** `Heli_Control` `0x431B70` (`src/heli/heli.c:406`, body
 `:358-405`) — the tick-0 reset and the `0xBF800000` throttle sentinel are in
 `HELICOPTER.md` §3; `Heli_Move` `0x431E30` (`src/heli/heli.c:520`); the rotor magic
-object is `Rotor_Init` `0x42D2B0` (`src/rotor/rotor.c:211`).
+object is `Rotor_Init` `0x42D2B0` (`src/rotor/rotor.c:211`). The tick the control
+message carries comes from `AnimTask_Seek` `0x4F3EF0` (`src/vehbase/animtask.c:403-421`)
+and the one position step from `PhysicsObj_Collide` `0x4FC0E0`
+(`src/graphtask/physobj.c:422-426`).
 
-**State.** Partially landed, and the rotor half **is** wired — but not through the
-ported module. `source/renderer/renderer_objects_atta.cpp:1263-1276` classifies
-`TASKTYPE_ROTOR` attachments and post-multiplies `igi::IgiRotorSpinMatrix`
+**State.** Landed. The rotor half was already wired:
+`source/renderer/renderer_objects_atta.cpp:1279-1293` classifies `TASKTYPE_ROTOR`
+attachments and post-multiplies `igi::IgiRotorSpinMatrix`
 (`source/renderer/atta_children.h`, which cites `src/rotor/rotor.c:139-152,180-181`)
 about the rotor's local X axis, with an editor-chosen preview rate of 15 rad/s.
-Separately, `273bb24f` ported the Heli task's control contract and motion into
+`273bb24f` ported the Heli task's control contract and motion into
 `source/runtime/heli_rules.{h,cpp}` with `tests/test_heli_rules.cpp`
-(`docs/igi-re-parity/HELICOPTER.md`) — and that module has **no caller**.
+(`docs/igi-re-parity/HELICOPTER.md`) — and that module had **no caller**. It now
+has one: `source/runtime/heli_preview.{h,cpp}` runs the engine's tick sequence
+(tick-0 reset, the raw-bits throttle sentinel, the speed ramp, the smoothed
+three-axis turn, the nose-pitch post-multiply, the `body.speed > kSlop` position
+step) on the authored parameters, and `source/renderer/renderer_objects.cpp`'s
+`"Heli"` block draws the resulting `v.pos`/`v.matrix` instead of the static
+placement. `tests/test_heli_preview.cpp` pins each of those steps, and the corpus
+half links the shipped `LEVEL2/OBJECTS.QVM` helicopter and both `HELI.QVM` physics
+definitions. `HELICOPTER.md` §11 records the tick rule and the out-of-scope list.
 
-**Next action.** Feed the preview from `heli_rules` (the control sentinel, tick-0
-reset, speed ramp, three-axis turn forces, nose-pitch post-multiply) and read the
-authored "Original Thrust"/"Speed" values — note `HELICOPTER.md`'s load-bearing
-finding that they are start-speed and start-velocity respectively, not thrust and
-speed. The rotor spin already matches the oracle and needs no change.
+**Not verified.** No frame was rendered (the host offers GL 2.1, the editor needs
+4.1), so the wiring is proved by build + host lane + the headless e2e lane, not by
+looking at the viewport. The editor does not record which physics definition a
+placement resolves to, so every helicopter previews with the first `TASKTYPE_HELI`
+definition found (BELL); the MIL config differs and is not selected. The landing
+wheels, the aero parts and the collision half of `PhysicsObj_Collide` still need
+the retail world and are not previewed. The rotor spin's 15 rad/s preview rate
+remains an editor constant (`HELICOPTER.md` §12).
 
 ---
 

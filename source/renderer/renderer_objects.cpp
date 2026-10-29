@@ -1088,9 +1088,16 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         {
             extern float g_renderer_delta_secs;
             elapsed_time_secs_ += g_renderer_delta_secs;
+            // The placed-helicopter flight preview's own clock (GitHub issue #60),
+            // advanced ONCE per frame from the same delta: this loop runs two draw
+            // passes, so consuming the delta per pass would run the preview at
+            // double speed. The rate is the game's own `kFps`
+            // (src/math/mathvars.h:8); the rule that consumes a tick is
+            // `igi::HeliPreviewTick` (runtime/heli_preview.h, IGI-RE Heli_Control
+            // 0x431B70 src/heli/heli.c:358-405).
+            AdvanceHeliPreviewClock(g_renderer_delta_secs);
             g_renderer_delta_secs = 0.0f;  // consume once per frame
         }
-
         for (const auto& obj : objects) {
             if (obj.deleted) continue;
             if (profileObjects) profMark = ObjProfileClock::now();
@@ -1206,6 +1213,28 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         // Z->X->Y default plus the `IsZyxEulerModel` whitelist was the
         // mis-orientation reported in issue #37.
         model = model * igi::IgiEulerRotationMatrix(obj.rot);
+
+        // ── Helicopter flight preview (GitHub issue #60) ─────────────────────
+        // A placed "Heli" runs the ENGINE's own per-tick control and motion rule
+        // on its authored parameters: `Heli_Control` 0x431B70
+        // (src/heli/heli.c:358-405) and `Heli_Move` 0x431E30 (:412-520). The
+        // rule itself is `igi::HeliPreviewTick` (runtime/heli_preview.h); this
+        // block only asks for the pose the preview produced for this frame.
+        //
+        // The pose the engine ends a tick with is `v.pos` and `v.matrix`, so the
+        // placed object's authored translation and Euler rotation are REPLACED,
+        // not composed with, once the preview has run: at tick 0 the engine's own
+        // reset puts the helicopter back at exactly the authored pose
+        // (heli.c:370-376), and from then on `v.pos`/`v.matrix` are the flight.
+        // Until the first tick the authored pose is what the editor shows.
+        {
+            HeliPreviewCacheEntry pose;
+            GetHeliPreviewPose(objIndex, obj.type, obj.argTokens, &pose);
+            if (pose.pose_valid) {
+                model = glm::translate(glm::mat4(1.0f), pose.pose_pos);
+                model = model * pose.pose_rot;
+            }
+        }
 
         // RotatingObject preview: radar dishes etc. spin continuously in-game via
         // runtime; we preview the same motion in-editor by adding a live yaw spin
@@ -1585,11 +1614,29 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
                 // Build the root object's unscaled world matrix (translate + rotate).
                 // Rotation order is the game's Rz * Ry * Rx (see renderer/igi_transform.h).
-                const glm::mat4 parentRot = igi::IgiEulerRotationMatrix(obj.rot);
-
+                //
+                // A placed helicopter's ATTAs (its rotors) must hang off the FLIGHT
+                // PREVIEW pose, not the authored placement, or the rotor would be
+                // left behind where the fuselage used to be: the engine broadcasts
+                // the move event with `&h->v.pos` and `&h->v.matrix` every tick
+                // (heli.c:502-507), which is exactly what re-parents its parts. The
+                // preview has already run by this point in the loop, so reuse the
+                // pose it produced.
                 glm::mat4 rootWorldMat(1.0f);
-                rootWorldMat = glm::translate(rootWorldMat, glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z));
-                rootWorldMat = rootWorldMat * parentRot;
+                bool rootFromPreview = false;
+                if (obj.type == "Heli") {
+                    HeliPreviewCacheEntry pose;
+                    GetHeliPreviewPose(objIndex, obj.type, obj.argTokens, &pose);
+                    if (pose.pose_valid) {
+                        rootWorldMat = glm::translate(glm::mat4(1.0f), pose.pose_pos);
+                        rootWorldMat = rootWorldMat * pose.pose_rot;
+                        rootFromPreview = true;
+                    }
+                }
+                if (!rootFromPreview) {
+                    rootWorldMat = glm::translate(rootWorldMat, glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z));
+                    rootWorldMat = rootWorldMat * igi::IgiEulerRotationMatrix(obj.rot);
+                }
 
                 std::unordered_set<std::string> drawn;
                 DrawAttachmentsRecursive(obj.modelId, obj.modelId, obj.isBuilding, rootWorldMat, isTransparentPass,
@@ -1683,6 +1730,91 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     // Train shows its rail without anything else being enabled. See
     // DrawRailPathGizmos for why this is presentation and not engine behaviour.
     DrawRailPathGizmos(objects, selected_object_index, ubo_mats, ubo_binding_point_);
+}
+
+// ─── Helicopter flight preview: the vehicle config (GitHub issue #60) ─────────
+// `Heli_Move` reads `phys->data`, the `VehicleConfig` parsed from the
+// helicopter's own `DefinePhysicsObjType` entry (IGI-RE `Heli_ParseArgs`
+// 0x432F60 -> `Heli_ParseConfig` 0x433030, src/plane/heli.c:34-88). The retail
+// tree ships two: `<IGI>/physicsobj/HELIS/BELL/HELI.QVM` (model 709_01_1) and
+// `<IGI>/physicsobj/HELIS/MIL/HELI.QVM` (model 700_01_1). This resolves them
+// once per level, from the first one that yields a `TASKTYPE_HELI` definition.
+//
+// The editor does not record which physics definition a placement resolves to,
+// so the first helicopter definition found is used. That is an editor
+// limitation, recorded here rather than hidden: `docs/igi-re-parity/
+// HELICOPTER.md` lists the per-model values and the corpus test pins both.
+const igi::HeliVehicleConfig& Renderer_Objects::HeliPreviewConfig() {
+    if (heli_preview_config_loaded_) return heli_preview_config_;
+    heli_preview_config_loaded_ = true;  // resolve once, even on failure
+
+    const char* kHeliPhysicsQvms[] = {
+        "physicsobj\\HELIS\\BELL\\HELI.QVM",
+        "physicsobj\\HELIS\\MIL\\HELI.QVM",
+    };
+    for (const char* relative : kHeliPhysicsQvms) {
+        const std::string path = Utils::GetIGIRootPath() + "\\" + relative;
+        if (!std::filesystem::is_regular_file(path)) continue;
+        const QVMFile qvm = QVM_Parse(path);
+        if (!qvm.valid) continue;
+        if (igi::ResolveHeliVehicleConfig(QVM_DecompileToString(qvm), "", &heli_preview_config_)) {
+            Logger::Get().Log(LogLevel::INFO,
+                std::string("[Renderer_Objects] Heli preview config from ") + relative);
+            return heli_preview_config_;
+        }
+    }
+    Logger::Get().Log(LogLevel::WARNING,
+        "[Renderer_Objects] Heli preview: no HELI.QVM physics config resolved; "
+        "the flight preview will run on the engine's arithmetic with zero rates");
+    return heli_preview_config_;
+}
+
+// ─── Helicopter flight preview: the clock and the pose (GitHub issue #60) ─────
+void Renderer_Objects::AdvanceHeliPreviewClock(float delta_seconds) {
+    if (heli_preview_ticks_ >= heli_preview_ticks_max_) return;
+    if (delta_seconds > 0.0f) heli_preview_secs_ += delta_seconds;
+    heli_preview_ticks_ = igi::HeliPreviewTickFromSeconds(heli_preview_secs_);
+    if (heli_preview_ticks_ > heli_preview_ticks_max_) heli_preview_ticks_ = heli_preview_ticks_max_;
+    heli_preview_frame_tick_ = heli_preview_ticks_;
+}
+
+void Renderer_Objects::GetHeliPreviewPose(int object_index, const std::string& type,
+                                          const std::vector<std::string>& tokens,
+                                          HeliPreviewCacheEntry* out_pose) {
+    if (out_pose == nullptr) return;
+    out_pose->pose_valid = false;
+    if (type != "Heli") return;
+
+    // One state per object index, keyed by the authored tokens so an inspector
+    // edit of any parameter restarts the flight from tick 0. The flight is only
+    // ever stepped FORWARD, so a long preview costs one `Heli_Move` per tick, not
+    // one per tick per frame -- and asking for the same tick twice (the visual
+    // pass and the picking pass) is free.
+    HeliPreviewCacheEntry& entry = heli_preview_cache_[object_index];
+    if (entry.tokens != tokens) {
+        entry.tokens = tokens;
+        entry.state = igi::BuildHeliPreviewState(tokens, HeliPreviewConfig());
+        entry.tick = -1;
+    }
+    if (!entry.state.valid) return;
+
+    // The preview's throttle is the engine's own "no request" sentinel, the value
+    // `Heli_ReadKeys` parks in axes[3] when the throttle keys are idle
+    // (heli.c:696): the helicopter flies at the authored "Original Thrust" with
+    // no turn input.
+    igi::HeliPreviewInput input;   // defaults: no steer, kHeliThrustNone
+    igi::HeliPreviewRunToTick(&entry.state, heli_preview_frame_tick_, input);
+    entry.tick = entry.state.tick;
+
+    entry.pose_pos = glm::vec3(static_cast<float>(entry.state.pos[0]),
+                               static_cast<float>(entry.state.pos[1]),
+                               static_cast<float>(entry.state.pos[2]));
+    entry.pose_rot = igi::IgiEngineMatrixToGlm4(entry.state.move.matrix);
+    entry.pose_valid = true;
+
+    // Hand the caller a copy: the cache entry must not be aliased into a caller
+    // that then triggers a rehash by touching another object's entry.
+    *out_pose = entry;
 }
 
 bool Renderer_Objects::IsVehicleType(const std::string& type) {

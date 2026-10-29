@@ -473,6 +473,14 @@ struct PhysicsDefHeader {
 
 bool ParsePhysicsDefHeader(const std::vector<std::string>& args, PhysicsDefHeader* out);
 
+// Every `DefinePhysicsObjType(...)` argument list in decompiled physics-QVM
+// text, in file order (`QVM_DecompileToString` renders one call per definition).
+// The nested calls a definition contains are kept inside their parent's argument
+// string, so the lists are the same shape `ParsePhysicsDefHeader` and
+// `ParseHeliConfig` expect. Returns an empty vector when the text contains no
+// such call.
+std::vector<std::vector<std::string>> ParseDefinePhysicsObjTypeCalls(const std::string& text);
+
 // Vehicle_ParseConfig (editobj/vehconfig.c:16-39) over the tail of a vehicle
 // physics definition.
 bool ParseHeliVehicleConfig(const std::vector<std::string>& args, int first_arg,

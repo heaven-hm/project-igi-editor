@@ -59,6 +59,39 @@ inline glm::mat3 IgiAttaLocalRotation(const float m[9]) {
                      m[6], m[7], m[8]);
 }
 
+// ─── Engine Matrix -> GLM world rotation ────────────────────────────────────
+// The engine rotates a vector with the matrix's ROWS:
+//
+//     v_j = sum_i v_i * m[3i + j]
+//
+// — `Heli_Control`'s start velocity (`src/heli/heli.c:390-392`), `Body_Integrate`'s
+// force-to-velocity step (`src/animtrig/body.c:218-220`) and `PhysicsObj_Collide`'s
+// position step (`src/graphtask/physobj.c:423-425`) are all written that way. The
+// engine's render path agrees: `Direct3D_MakeMatrix` (`src/d3d/direct3d.c:1211-1237`)
+// "transposes a 3x3 rotation" by setting `_11 = rot[0]`, `_12 = rot[3]`,
+// `_13 = rot[6]`, which is exactly that product in D3D's row-vector convention.
+//
+// GLM fills COLUMNS, so passing the file's `m[0..8]` in order stores the array as
+// the columns of the GLM matrix, and `glm::mat3 * v` then reproduces
+// `v_j = sum_i v_i * m[3i+j]` exactly. The conversion is the identity on the
+// array, and a POST-multiply `R * local` rotates about the object's own axis —
+// which is what `IgiRotorSpinMatrix` and `Heli_Move`'s nose pitch both do.
+inline glm::mat3 IgiEngineMatrixToGlm(const float m[9]) {
+    return glm::mat3(m[0], m[1], m[2],
+                     m[3], m[4], m[5],
+                     m[6], m[7], m[8]);
+}
+
+// The same basis as a translation-free world transform, for the draw path.
+inline glm::mat4 IgiEngineMatrixToGlm4(const float m[9]) {
+    const glm::mat3 rot = IgiEngineMatrixToGlm(m);
+    glm::mat4 out(1.0f);
+    out[0] = glm::vec4(rot[0], 0.0f);
+    out[1] = glm::vec4(rot[1], 0.0f);
+    out[2] = glm::vec4(rot[2], 0.0f);
+    return out;
+}
+
 // ─── child_world = parent_world * child_local ───────────────────────────────
 // IGI-RE `src/magicobj/rigidcoll.c:399-409`:
 //     rx = M[0]*pos[0] + M[1]*pos[1] + M[2]*pos[2];   (rows 1 and 2 likewise)

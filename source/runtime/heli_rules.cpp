@@ -795,8 +795,94 @@ bool ParseHeliConfig(const std::vector<std::string>& args, int first_arg, HeliCo
     return true;
 }
 
-float RotorRunValue(float value, const RotorDef& def, float car_speed) {
-    // rotor.c:260: `o->value = dir * speed * car->v.speed + o->value`, the
+// ---------------------------------------------------------------------------
+// The decompiled physics-QVM text -> DefinePhysicsObjType argument lists
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The comma-separated arguments of the call whose '(' is at `open`, plus the
+// index just past its ')'. The decompiler renders a definition's nested calls
+// inside its parent's argument list, so the scan balances parentheses and skips
+// over quoted strings (an expression argument may contain both).
+std::vector<std::string> PhysicsCallArguments(const std::string& text, std::size_t open,
+                                              std::size_t* end) {
+    std::vector<std::string> args;
+    std::size_t close = std::string::npos;
+    int depth = 0;
+    bool in_string = false;
+
+    for (std::size_t i = open; i < text.size(); ++i) {
+        const char c = text[i];
+        if (in_string) {
+            if (c == '\\') { ++i; continue; }
+            if (c == '"') in_string = false;
+            continue;
+        }
+        if (c == '"') { in_string = true; continue; }
+        if (c == '(') { ++depth; continue; }
+        if (c == ')') {
+            --depth;
+            if (depth == 0) { close = i; break; }
+        }
+    }
+    if (close == std::string::npos) {
+        if (end != nullptr) *end = text.size();
+        return args;
+    }
+
+    const std::size_t cursor_start = open + 1;
+    std::size_t cursor = cursor_start;
+    depth = 0;
+    in_string = false;
+    for (std::size_t i = cursor; i <= close; ++i) {
+        const char c = i < close ? text[i] : ',';
+        if (in_string) {
+            if (c == '\\') { ++i; continue; }
+            if (c == '"') in_string = false;
+            continue;
+        }
+        if (c == '"') { in_string = true; continue; }
+        if (c == '(') { ++depth; continue; }
+        if (c == ')') { --depth; continue; }
+        if (c == ',' && depth == 0) {
+            std::string arg = text.substr(cursor, i - cursor);
+            const std::size_t first = arg.find_first_not_of(" \t\r\n");
+            const std::size_t last = arg.find_last_not_of(" \t\r\n");
+            arg = (first == std::string::npos) ? std::string() : arg.substr(first, last - first + 1);
+            if (arg.size() >= 2 && arg.front() == '"' && arg.back() == '"') {
+                arg = arg.substr(1, arg.size() - 2);
+            }
+            args.push_back(arg);
+            cursor = i + 1;
+        }
+    }
+    if (end != nullptr) *end = close + 1;
+    return args;
+}
+
+}  // namespace
+
+std::vector<std::vector<std::string>> ParseDefinePhysicsObjTypeCalls(const std::string& text) {
+    // DefinePhysicsObjType 0x4EDD20 (physobjtype.c:64-122) is the engine's
+    // physics-definition entry point; the decompiler renders one call per
+    // definition, in file order. This is the text half of that call so a caller
+    // with a HELI.QVM in hand can hand `ParseHeliConfig` the right argument list
+    // without re-implementing the paren scan.
+    std::vector<std::vector<std::string>> out;
+    const std::string needle = "DefinePhysicsObjType(";
+    std::size_t pos = 0;
+    while ((pos = text.find(needle, pos)) != std::string::npos) {
+        std::size_t end = 0;
+        std::vector<std::string> args =
+            PhysicsCallArguments(text, pos + needle.size() - 1, &end);
+        if (!args.empty()) out.push_back(std::move(args));
+        pos = end > pos ? end : pos + needle.size();
+    }
+    return out;
+}
+
+float RotorRunValue(float value, const RotorDef& def, float car_speed) {    // rotor.c:260: `o->value = dir * speed * car->v.speed + o->value`, the
     // whole product chain kept wide and rounded once.
     return static_cast<float>(static_cast<long double>(def.dir) * def.speed * car_speed + value);
 }

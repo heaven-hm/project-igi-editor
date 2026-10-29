@@ -5,6 +5,9 @@
 #include "../level/level_objects.h"
 #include "../lod/lod_chain.h"
 #include "../runtime/lightmap_rules.h"
+// The placed-helicopter flight preview's state (GitHub issue #60). Portable and
+// GL-free, so it can be built and stepped from the host test lane.
+#include "../runtime/heli_preview.h"
 #include "dat_writer.h"
 #include "res_writer.h"
 #include "model_texture_resolution.h"
@@ -78,7 +81,20 @@ public:
     bool Init();
     void Shutdown();
 
-    void SetLevel(int level) { current_level_ = level; }
+    // Changing level invalidates the flight preview: the object indices the
+    // cache is keyed by belong to the level being replaced, and the physics
+    // config is resolved from that level's game tree. See runtime/heli_preview.h
+    // (GitHub issue #60).
+    void SetLevel(int level) {
+        if (level != current_level_) {
+            heli_preview_cache_.clear();
+            heli_preview_secs_ = 0.0f;
+            heli_preview_ticks_ = 0;
+            heli_preview_config_loaded_ = false;
+            heli_preview_config_ = igi::HeliVehicleConfig{};
+        }
+        current_level_ = level;
+    }
     void ClearCaches();
 
     // Build an in-memory index for the level's .res archives so textures and
@@ -476,6 +492,57 @@ private:
     float fog_far_ = 1e9f; // huge default = no fog until SetupFog() is called from level.cpp
 	bool fog_enabled_ = true;
 	float elapsed_time_secs_ = 0.0f;      // rotor animation accumulator (Heli main/tail)
+	// The placed-helicopter flight preview's own clock (GitHub issue #60), in
+	// seconds, plus the tick count derived from it. Separate from
+	// `elapsed_time_secs_` on purpose: the preview is a finite flight that parks
+	// on its last pose, not an endless spin. `heli_preview_ticks_` is what the
+	// draw path hands to `igi::HeliPreviewTick` (runtime/heli_preview.h).
+	float heli_preview_secs_ = 0.0f;
+	int heli_preview_ticks_ = 0;
+	int heli_preview_ticks_max_ = 1800;   // 60 s at 30 Hz; the editor's choice, not the engine's
+	// One placed helicopter's flight preview, cached by object index and stepped
+	// forward only (see the draw path in renderer_objects.cpp). The authored
+	// tokens are the cache key, so an inspector edit restarts the flight.
+	struct HeliPreviewCacheEntry {
+		std::vector<std::string> tokens;
+		igi::HeliPreviewState state;
+		int tick = -1;
+		// The pose the preview produced for the frame currently being drawn. The
+		// visual pass and the picking pass read this SAME pose, so what the user
+		// clicks is what the user sees; the flight itself is stepped exactly once
+		// per frame by `AdvanceHeliPreviewClock`.
+		bool pose_valid = false;
+		glm::vec3 pose_pos = glm::vec3(0.0f);
+		glm::mat4 pose_rot = glm::mat4(1.0f);
+	};
+	std::unordered_map<int, HeliPreviewCacheEntry> heli_preview_cache_;
+	// The tick the frame currently being drawn uses. Written once per frame by
+	// `AdvanceHeliPreviewClock`, read by both draw passes.
+	int heli_preview_frame_tick_ = 0;
+	// The vehicle config a "Heli" physics definition parses to, resolved once per
+	// level from <IGI>/physicsobj/HELIS/*/HELI.QVM (`ParseHeliVehicleConfig`).
+	// Empty until resolved; the draw path then previews with the engine's own
+	// arithmetic on zero rates rather than inventing rates.
+	igi::HeliVehicleConfig heli_preview_config_;
+	bool heli_preview_config_loaded_ = false;
+	// Returns `heli_preview_config_`, loading the first HELI.QVM the level's
+	// helicopters reference when it has not been resolved yet. The value the
+	// engine reads is `phys->data`, i.e. the config of the helicopter's OWN
+	// physics definition; the editor does not track which definition each
+	// placement uses, so the first one found is used and that is recorded here.
+	const igi::HeliVehicleConfig& HeliPreviewConfig();
+	// Advances the flight preview to this frame's tick, exactly once per frame.
+	// Called at the top of Draw(), before the two draw passes, so the preview is
+	// not stepped twice for one rendered frame.
+	void AdvanceHeliPreviewClock(float delta_seconds);
+	// The preview pose for one placed helicopter, computed from the authored
+	// tokens and the CURRENT frame's tick. Pure: it never advances the flight, so
+	// the picking pass can ask for the same pose the visual pass drew.
+	// `out_pose` is left with `pose_valid == false` when the placement is not a
+	// helicopter whose parameters parse, and the caller then uses the authored
+	// pose.
+	void GetHeliPreviewPose(int object_index, const std::string& type,
+	                        const std::vector<std::string>& tokens, HeliPreviewCacheEntry* out_pose);
 	std::map<std::string, glm::vec3> indoor_ambient_by_task_; // taskId -> LightmapInfo "Indoors ambient light"
     struct BakePose {
         glm::dvec3 pos;

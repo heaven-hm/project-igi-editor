@@ -1,12 +1,15 @@
 # Helicopter rotor + flight preview (#60)
 
 Status: implemented in `source/runtime/heli_rules.{h,cpp}` and tested in
-`tests/test_heli_rules.cpp`. Every constant, offset, argument index and line
-number below is cited to IGI-RE (`/Users/haseeb-mir/Documents/Code/IGI-RE`), the
-faithful C decompilation of retail `IGI.exe`. No web source and no other port is
-used as authority. Nothing here is a rendered result: the editor's GUI cannot run
-on the development host (it needs OpenGL 4.1; the host offers 2.1), so the
-evidence is the host-lane unit and corpus tests quoted in §12.
+`tests/test_heli_rules.cpp`. The **flight preview that consumes it** is
+`source/runtime/heli_preview.{h,cpp}` (section 11), tested in
+`tests/test_heli_preview.cpp` and drawn by the `"Heli"` block in
+`source/renderer/renderer_objects.cpp`. Every constant, offset, argument index and
+line number below is cited to IGI-RE (`/Users/haseeb-mir/Documents/Code/IGI-RE`),
+the faithful C decompilation of retail `IGI.exe`. No web source and no other port
+is used as authority. Nothing here is a rendered result: the editor's GUI cannot
+run on the development host (it needs OpenGL 4.1; the host offers 2.1), so the
+evidence is the host-lane unit and corpus tests quoted in §13.
 
 **Verdict, in one line.** Both halves are recoverable as pure logic and are
 ported: the **`Heli`** task's 13 authored parameters, its per-tick control
@@ -688,8 +691,92 @@ legitimately carries extra trailing arguments.
 
 ---
 
-## 11. A known divergence: the editor's rotor preview rate
+## 11. The flight preview, and how `heli_rules` got its first caller
 
+Sections 1–10 describe the port. This section describes the wiring, which is what
+closed #60's remaining gap: `heli_rules.*` was correct and had **no caller**
+(`grep -rn heli_rules source/` matched only its own translation unit), the same
+defect class commit `0e0c3d9f` closed for `cutscene_rules`.
+
+### 11.1 The tick rule
+
+`source/runtime/heli_preview.{h,cpp}` is the missing link: authored parameters →
+per-tick state, then the engine's own sequence. The rule it follows, established
+from IGI-RE and nothing else:
+
+| Step | Oracle | What happens |
+|---|---|---|
+| the message | `AnimTask_Seek` `0x4F3EF0` `animtask.c:403-421`; `AnimTask_Run` `0x4F3B40` `:292-298`; `AnimTask_SendControl` `0x4F4060` `:461-475` | an `AnimTask` zeroes its channels and sends tick 0, then advances one tick per frame; the player path is `Heli_ReadKeys` `0x432C10` `heli.c:687-719` |
+| tick 0 | `Heli_Control` `0x431B70` `heli.c:365-400` | teleport to the authored position, restore the authored matrix and both speed fields from "Original Thrust", zero turn/steer, rewrite the caller's axes to `(0,0,0,-1,-2)`, recompute `body.vel = matrix * "Speed"` |
+| tick > 0 | `Heli_Control` `:360-364` then `Heli_Move` `0x431E30` `:412-520` | the axes assignment (throttle only when `axes[3]` is not `0xBF800000`), the speed ramp, the smoothed three-axis turn, the nose pitch, the physics gate, the rotor sound |
+| the position | `PhysicsObj_Collide` `0x4FC0E0` `physobj.c:422-426` | `if (body.speed > kSlop) pos += body.vel`, once per tick. `Heli_Move` calls it with `damp = 1.0` (`heli.c:500`), so a helicopter's velocity is not damped |
+
+`HeliPreviewTick` applies exactly one of those steps per tick, and
+`HeliPreviewRunToTick` repeats it. The control message is `HeliPreviewInput`
+(`heli_preview.h`): the three turn axes, the throttle and the pilot animation,
+i.e. the engine's `ControlArg.axes` (`heli.h:64-67`) minus the tick. Its default
+throttle is `kHeliThrustNone` (−1.0f), the value `Heli_ReadKeys` parks when the
+throttle keys are idle (`heli.c:696`), so the hands-off preview flies at the
+authored "Original Thrust" with no turn input.
+
+### 11.2 What the editor does with it
+
+`source/renderer/renderer_objects.cpp` (the `obj.type == "Heli"` block in the
+object draw loop) keeps one `igi::HeliPreviewState` per object index, keyed by
+`argTokens` so an inspector edit restarts the flight from tick 0, and steps it to
+the preview clock's tick. `v.pos` and `v.matrix` then REPLACE the placed
+translation and Euler rotation — at tick 0 the engine's own reset puts the
+helicopter back at exactly the authored pose (`heli.c:370-376`), so nothing is
+lost. The clock is the game's 30 Hz (`kFps`, `src/math/mathvars.h:8`), accumulated
+from the same per-frame delta as the rotor spin, and it stops after 1800 ticks
+(60 s) so the preview parks on a pose instead of growing without bound.
+
+The vehicle config comes from `igi::ResolveHeliVehicleConfig`
+(`heli_preview.h`) over the decompiled `<IGI>/physicsobj/HELIS/*/HELI.QVM`, which
+is where `Heli_Move`'s `phys->data` comes from. **Known editor limitation:** the
+editor does not record which physics definition a placement resolves to, so the
+first `TASKTYPE_HELI` definition found (BELL) is used for every helicopter. The
+two shipped configs differ, so a MIL helicopter previews with BELL's rates until
+that mapping exists.
+
+The **picking pass draws the same pose**: `renderer_objects_picking.cpp` asks
+`GetHeliPreviewPose` for the frame's helicopter pose instead of using the authored
+placement, so the object the user clicks is the object the user sees. Both passes
+read one per-frame tick (`AdvanceHeliPreviewClock`, called once at the top of
+`Draw`), and the flight is only ever stepped forward, so a 60-second preview costs
+one `Heli_Move` per tick rather than one per tick per frame.
+
+The **ATTA pass re-parents too**: the rotors hang off the preview pose, not the
+authored placement, because that is what the engine does — `Heli_Move` broadcasts
+the move event with `&h->v.pos` and `&h->v.matrix` every tick (`heli.c:502-507`),
+and `Rotor_Move` places the rotor from the owner's matrix (`rotor.c:265-290`).
+
+The engine Matrix → GLM conversion is `igi::IgiEngineMatrixToGlm`
+(`source/renderer/atta_children.h`). The engine rotates a vector with the
+matrix's **rows** — `v_j = Σ_i v_i · m[3i + j]`, which is how `Heli_Control`
+turns the authored "Speed" (`heli.c:390-392`), how `Body_Integrate` turns a force
+into a velocity (`body.c:218-220`), and what `Direct3D_MakeMatrix` reproduces when
+it "transposes a 3x3 rotation" for D3D's row-vector convention
+(`src/d3d/direct3d.c:1211-1237`). GLM fills columns, so passing `m[0..8]` in order
+stores that same array as the columns and `glm::mat3 * v` reproduces the engine's
+product exactly; a post-multiply is then a rotation about the object's own axis,
+which is what the nose pitch (`heli.c:477-484`) and the rotor spin
+(`rotor.c:139-152`) both are. `tests/test_heli_preview.cpp` pins both the
+velocity convention and the conversion.
+
+### 11.3 What is NOT previewed
+
+`Heli_UpdateWheels` `0x432550`, `Body_AddAeroForces` `body.c:47`, and the
+collision half of `PhysicsObj_Collide` all need the retail world (`Coll_Lines`,
+`DynCube_Move`). The preview therefore shows the engine's *control and motion*
+rule and the velocity integration, not the landing gear, the aero parts or the
+terrain contact. It also does not model an `AnimTask`'s key channels — the editor
+does not parse a helicopter's AnimTask — so the throttle is a caller parameter
+and the preview flies the hands-off case.
+
+---
+
+## 12. A known divergence: the editor's rotor preview rate
 `source/renderer/renderer_objects_atta.cpp:1263-1277` spins `TASKTYPE_ROTOR`
 attachments for the *drawing* copy using a hardcoded
 
@@ -716,7 +803,7 @@ the schema is **correct** for `Heli` — no divergence.
 
 ---
 
-## 12. Verified, and not
+## 13. Verified, and not
 
 The commands, run in this worktree on 2026-10-26:
 
@@ -801,12 +888,16 @@ than skipping (0 skips).
 
 ---
 
-## 13. Files
+## 14. Files
 
 | Path | What |
 |---|---|
 | `source/runtime/heli_rules.h`, `heli_rules.cpp` | the `Heli` + `Rotor` port |
+| `source/runtime/heli_preview.h`, `heli_preview.cpp` | the authored → per-tick flight preview (section 11), and `heli_rules`' first caller |
 | `tests/test_heli_rules.cpp` | 52 unit + 6 corpus tests |
-| `CMakeLists.txt` | purely additive: one test file and one runtime source |
+| `tests/test_heli_preview.cpp` | the preview's tick sequence, plus the corpus link |
+| `source/renderer/renderer_objects.cpp`, `renderer_objects.h` | the `"Heli"` draw-path block and the per-object preview cache |
+| `source/renderer/atta_children.h` | `IgiEngineMatrixToGlm`, the engine-matrix → GLM basis |
+| `CMakeLists.txt` | purely additive: test files and runtime sources |
 | `docs/igi-re-parity/ATTA_CHILDREN_ROTORS.md` | the renderer-side rotor record this one complements |
 | `docs/igi-re-parity/TRIAGE_REMAINING_ISSUES.md` | the #60 row this closes |

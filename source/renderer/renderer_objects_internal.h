@@ -29,6 +29,11 @@
 #include "res_compiler.h"
 #include "../level/mtp_writer.h"
 #include "../runtime/editor_hover_policy.h"
+// The placed-helicopter flight preview (GitHub issue #60): the engine's own
+// per-tick control and motion rule, and the vehicle config it reads. Included
+// here as well as in renderer_objects.h so every renderer_objects_*.cpp module
+// sees the same dependency.
+#include "../runtime/heli_preview.h"
 #include <sstream>
 #include <cstdio>
 
