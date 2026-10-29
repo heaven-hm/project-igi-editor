@@ -332,6 +332,13 @@ private:
 	float					tan_half_fovx_;
 	float					tan_half_fovy_;
 
+	// This frame's terrain LOD cell-size threshold -- the engine's
+	// gQCubeMinSize, re-derived every frame from the quality preset and the
+	// field of view (QCube_Begin HOOK 0x4D2540, src/lod/qcube.c:338-342).
+	// In units of (cell half size / 32); see source/level/terrain_lod_settings.h
+	// and docs/igi-re-parity/TERRAIN_LOD.md.
+	int						min_size_ = 0;
+
 	// cube data pools
 	fixed_size_item_pool_s	cube_data_1600_bytes_item_pool_;
 	fixed_size_item_pool_s	cube_data_3200_bytes_item_pool_;

@@ -38,9 +38,16 @@ const double	ONE_OVER_3 = 1.0 / 3.0;
 const float		ONE_OVER_256 = 1.0f / 256.0f;
 
 // cube lod control
+//
+// CUBE_ACTIVE_COMPARE is the engine's terrain LOD cell-size threshold in units
+// of (cell half size / 32) -- the value the editor used to hardcode. It is only
+// the fov <= 1 case of the engine's rule: QCube_Begin re-derives the threshold
+// every frame from the quality preset and the field of view
+// (src/lod/qcube.c:338-342), and the per-frame value lives in
+// `Terrain::min_size_` (source/level/terrain_lod.cpp). The constant is kept
+// because the morphing ratios below are ratios OF it; it is no longer used as
+// the subdivision threshold. See source/level/terrain_lod_settings.h.
 constexpr	float	CUBE_ACTIVE_COMPARE = 163.0f;
-constexpr	int		CUBE_ACTIVE_COMPARE_INT = (int)CUBE_ACTIVE_COMPARE;
 constexpr	float	CUBE_START_MERGE_DELTA = 64.0;
 constexpr	float	CUBE_ACTIVE_COMPARE_ADD_CUBE_START_MERGE_DELTA = CUBE_ACTIVE_COMPARE + CUBE_START_MERGE_DELTA;
-constexpr	float	CUBE_ACTIVE_COMPARE_SUB_CUBE_START_MERGE_DELTA = CUBE_ACTIVE_COMPARE - CUBE_START_MERGE_DELTA;
-constexpr	float	CUBE_MORPHING_FACTOR_COMPARE = CUBE_ACTIVE_COMPARE_ADD_CUBE_START_MERGE_DELTA / CUBE_ACTIVE_COMPARE_SUB_CUBE_START_MERGE_DELTA;
+constexpr	float	CUBE_MORPHING_FACTOR_COMPARE = CUBE_ACTIVE_COMPARE_ADD_CUBE_START_MERGE_DELTA / (CUBE_ACTIVE_COMPARE - CUBE_START_MERGE_DELTA);
