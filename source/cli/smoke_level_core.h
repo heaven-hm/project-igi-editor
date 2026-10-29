@@ -208,3 +208,49 @@ struct SmokeRunTotals {
 };
 
 SmokeRunTotals SummarizeSmokeRun(const std::vector<SmokeTotals>& perLevel);
+
+// ---------------------------------------------------------------------------
+// Snap arithmetic (ADDITIVE; used by the headless lane to diagnose the reported
+// "AI render below the ground" defect without a GUI).
+//
+// WHY THIS EXISTS
+//   App::SnapObjectsToTerrain runs ONLY from App::LoadLevel, which needs the
+//   GL 4.1 GUI and cannot run on a 2.1 host -- so the one defect that needs its
+//   numbers has never been measurable headlessly, and every attempt to fix it
+//   has been reasoning instead of measurement.
+//
+//   A soldier's drawn Z is  terrainZ + mainZOffset * 40.96 * scale,  where
+//   mainZOffset is the mesh's own -min_p.z (model.cpp:311, the pivot->feet lift)
+//   and terrainZ comes from Level::GetTerrainZ.  A soldier that renders
+//   half-buried is therefore one of: a query MISS, a wrong terrainZ, or a wrong
+//   lift -- and printing the terms separates them instead of guessing.
+//
+// ENGINE BASIS
+//   * The drop: Game_DropToGround HOOK 0x4149B0 (src/game/misc.c:75-97) probes
+//     DOWN then UP and writes hit.pos.z only when a surface is hit;
+//     Coll_DropPointsMat HOOK 0x4CB9F0 -> Coll_Drop -> Coll_VerticalHit
+//     HOOK 0x4CB050 sets results[i].found only on a real hit
+//     (src/coll/coll.c:813-818, 518-616, 626-774).
+//   * Why the authored Z is not the drawn Z: Human_ParamChangedHandler
+//     HOOK 0x45F890 (src/humanbase/human.c:448-461) feeds `placePos` to
+//     DynCube_Move -- the COLLISION cube -- and sets only the matrix's ROTATION
+//     (Matrix_SetRotZ).  The drawn translation comes from the ground/collision
+//     system, so `placePos` is never the drawn Z.
+struct SmokeSnapSample {
+    std::string modelId;
+    std::string type;
+    double authoredZ = 0.0;   // LevelObject::original_pos.z, the QSC value
+    double terrainZ = 0.0;
+    double zDelta = 0.0;      // authoredZ - terrainZ
+    bool terrainFound = false;
+};
+
+// One sample per HUMAN placement (HumanSoldier / HumanSoldierFemale) -- the only
+// type App::SnapObjectsToTerrain is allowed to move.  `terrainZAt` is the
+// caller's Level::GetTerrainZ(..., ignore_discard = false), the same query the
+// snap uses, so the numbers are the snap's own terms.
+std::vector<SmokeSnapSample> CollectHumanSnapSamples(
+    const std::vector<LevelObject>& objects,
+    const std::function<bool(double x, double y, double& z)>& terrainZAt);
+
+std::string FormatSnapSample(const SmokeSnapSample& s);

@@ -291,3 +291,41 @@ SmokeRunTotals SummarizeSmokeRun(const std::vector<SmokeTotals>& perLevel) {
     run.missingTextureIds = ToSortedList(missingTextures);
     return run;
 }
+
+std::vector<SmokeSnapSample> CollectHumanSnapSamples(
+    const std::vector<LevelObject>& objects,
+    const std::function<bool(double x, double y, double& z)>& terrainZAt) {
+    std::vector<SmokeSnapSample> out;
+    for (const LevelObject& obj : objects) {
+        // The same two types App::SnapObjectsToTerrain treats as human
+        // (source/app_view.cpp: isHuman).
+        if (obj.type != "HumanSoldier" && obj.type != "HumanSoldierFemale") continue;
+        if (obj.modelId.empty()) continue;
+        SmokeSnapSample s;
+        s.modelId = obj.modelId;
+        s.type = obj.type;
+        s.authoredZ = obj.original_pos.z;
+        double z = 0.0;
+        if (terrainZAt != nullptr && terrainZAt(obj.pos.x, obj.pos.y, z)) {
+            s.terrainFound = true;
+            s.terrainZ = z;
+            s.zDelta = s.authoredZ - z;
+        }
+        out.push_back(std::move(s));
+    }
+    return out;
+}
+
+std::string FormatSnapSample(const SmokeSnapSample& s) {
+    std::ostringstream os;
+    os << s.modelId << " (" << s.type << ") authoredZ=" << std::fixed
+       << std::setprecision(1) << s.authoredZ;
+    if (s.terrainFound) {
+        os << " terrainZ=" << s.terrainZ << " zDelta=" << s.zDelta;
+    } else {
+        os << " terrainZ=NONE (query missed -> the rule keeps the authored Z;"
+              " the engine would drop onto COLLISION, which the editor cannot"
+              " query -- see terrain_snap_rules.h)";
+    }
+    return os.str();
+}
