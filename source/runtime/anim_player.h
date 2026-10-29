@@ -190,6 +190,38 @@ public:
     // and `HumanPlayer_AnimDone` 0x489F50 reads it off the root bone.
     void StepClock();
 
+    // ONE ENGINE FRAME OF THE CLOCK ON DEMAND, for the editor's frame-step
+    // (#73). This is the same `BoneObj_GetEvents` 0x4D3210 -> `BoneObj_AnimEventsCB`
+    // 0x4D4B60 step `StepClock()` performs - one `inst->time = inst->speed +
+    // inst->time` with the engine's end test, its single-subtraction wrap and its
+    // root fixup (src/boneobj/boneobj.c:873-941) - with two deliberate
+    // differences, both named here:
+    //
+    //   * it is NOT gated on `playing_`. Retail's clock has no pause: it advances
+    //     once per frame for every live instance (`inst->time = inst->speed +
+    //     inst->time`, boneobj.c:884-885). A PAUSED preview that steps one frame
+    //     is therefore doing exactly what the engine's next frame would do, which
+    //     is the whole point of a manual step.
+    //   * `direction < 0` steps the playhead BACKWARDS the way the engine itself
+    //     plays a clip backwards: `Anim_SetSpeed` 0x4D6580 with a negative
+    //     multiplier (`inst->speed = gTicksPerFrame * speed`) plus
+    //     `BoneObj_UpdateAnimDirection` 0x4D6550, which sets ANIM_REVERSE iff the
+    //     result is negative (src/boneobj/anim.c:163-179). The addition is then
+    //     `time + speed` with a negative speed and the end test takes the
+    //     ANIM_REVERSE branch (boneobj.c:892-893), so the reverse clamp at 0 and
+    //     the reverse wrap (`length + time`) are the engine's, not this port's.
+    //     The forward speed is restored afterwards with the same multiplier, so
+    //     the instance is bit-identical to before the step.
+    //
+    // The bones keep the pose they had: this is the clock half only. A caller
+    // that wants to draw the stepped frame follows it with `StepPose()`, which is
+    // the engine's own order for a clock that moved before the draw
+    // (`Human_Wake` 0x45F240, src/humanbase/human.c:289-297).
+    //
+    // Returns false when the player has no instance to step (a clip the engine
+    // refused) or when `direction` is 0.
+    bool StepClockFrame(int direction);
+
     // The pose half of `Step()`, on its own: `BoneObj_Update` 0x4D38C0 over the
     // CURRENT clock, without advancing it. This is the engine's draw-time pose -
     // `Human_WakeIfVisible` 0x45F140 (src/humanbase/human.c:262-287) calls
@@ -343,6 +375,12 @@ private:
     int anim_id_ = -1;
     bool playing_ = false;
     float ticks_per_frame_ = kDefaultTicksPerFrame;
+    // The multiplier the LAST `SetSpeed` was given, kept so `StepClockFrame` can
+    // negate and restore the instance speed with the same computation
+    // (`inst->speed = gTicksPerFrame * multiplier`, Anim_SetSpeed 0x4D6580)
+    // instead of dividing a tick value back out. `Play` resets the instance to
+    // `+gTicksPerFrame` (BoneObj_InitAnimInst, boneobj.c:1013), i.e. 1.0x.
+    float speed_multiplier_ = 1.0f;
 
     // The single animation instance, on bone 0 (`Anim_Play(o, 0, ...)` is what
     // every shipped caller does: src/pistol/soldier.c:124, src/rpg/rpg.c:166,
@@ -370,7 +408,6 @@ public:
         if (this != &other) AssignFrom(other);
         return *this;
     }
-
 private:
     // Deep-copies the state and re-links the engine records at this object's
     // own buffers. Not a move: the clip data is small (a few thousand floats)

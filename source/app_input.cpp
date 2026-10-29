@@ -490,62 +490,33 @@ void App::DispatchEventBindings() {
 	// Issue #48: implemented. Retail QED.doc, "General keystrokes" — "Ctrl R
 	// Reset timer", "Ctrl T  Timer Start / Stop", "F12 / Shift F12  Increment /
 	// Decrement AnimTask speed". The editor's ONE playback clock is the selected
-	// object's igi::AnimPlayback (source/animation.h:163-184, "the editor's ONE
-	// playback path"): `currentTimeMs` is the timer, `playing` is start/stop,
-	// `Reset()` rewinds and stops, and `speed` is the multiplier the engine is
-	// given by AnimPlayback::SyncEngineFlags (source/runtime/anim_playback.cpp:
-	// 147-151, Anim_SetSpeed 0x4D6580: `inst->speed = gTicksPerFrame * speed`).
-	// These four keys therefore drive the existing clock rather than adding a
-	// second timer. The playbacks are created by the level load
-	// (source/app_level.cpp:664-676 auto-plays one per eligible AI NPC) and by
-	// the property editor's animation list (App::ToggleAnimationForObject,
-	// source/app.cpp:4539). Editor-only: IGI-RE contains no QED code, so no
-	// game-side counterpart is claimed.
-	auto selected_playback = [&]() -> AnimPlayback* {
-		if (selected_object_index_ < 0) return nullptr;
-		auto it = animPlaybacks_.find(selected_object_index_);
-		if (it == animPlaybacks_.end() || it->second.clip == nullptr) return nullptr;
-		return &it->second;
-	};
+	// object's igi::AnimPlayback (source/animation.h, "the editor's ONE playback
+	// path"): `currentTimeMs` is the timer, `playing` is start/stop, `Reset()`
+	// rewinds and stops, and `speed` is the multiplier the engine is given by
+	// AnimPlayback::SyncEngineFlags (source/runtime/anim_playback.cpp:147-151,
+	// Anim_SetSpeed 0x4D6580: `inst->speed = gTicksPerFrame * speed`). The
+	// playbacks are created by the level load (source/app_level.cpp:664-676
+	// auto-plays one per eligible AI NPC) and by the property editor's animation
+	// list (App::ToggleAnimationForObject).
+	//
+	// Issue #73: the four handlers below are now the SAME App methods the F10
+	// panel's buttons call (`App::ToggleSelectedAnimPlayback`, `ResetSelectedAnim`,
+	// `AdjustSelectedAnimSpeed` in source/app.cpp), so the keys and the panel
+	// cannot drift apart. The key names are still what the status bar reports.
+	// Editor-only: IGI-RE contains no QED code, so no game-side counterpart is
+	// claimed for the keys themselves; the engine call the speed reaches
+	// (Anim_SetSpeed 0x4D6580) is cited above.
 	if (Check("TimerStartStop")) {
-		AnimPlayback* pb = selected_playback();
-		if (!pb) {
-			status_message_ = "TimerStartStop: select an object with an animation first";
-			return;
-		}
-		if (pb->playing) pb->Pause(); else pb->Resume();
-		status_message_ = std::string("Timer ") + (pb->playing ? "running" : "stopped") +
-		                  ": '" + pb->clip->name + "'";
+		ToggleSelectedAnimPlayback();
 		return;
 	}
 	if (Check("TimerReset")) {
-		AnimPlayback* pb = selected_playback();
-		if (!pb) {
-			status_message_ = "TimerReset: select an object with an animation first";
-			return;
-		}
-		// Rewinds to the clip's first frame and stops the clock
-		// (source/runtime/anim_playback.cpp:154-161).
-		pb->Reset();
-		status_message_ = "Timer reset to frame 0: '" + pb->clip->name + "'";
+		ResetSelectedAnim();
 		return;
 	}
 	if (Check("TimerIncreaseSpeed") || Check("TimerDecreaseSpeed")) {
 		const bool faster = Check("TimerIncreaseSpeed");
-		AnimPlayback* pb = selected_playback();
-		if (!pb) {
-			status_message_ = std::string(faster ? "TimerIncreaseSpeed" : "TimerDecreaseSpeed") +
-			                  ": select an object with an animation first";
-			return;
-		}
-		const int current = igi::AnimTimerSpeedIndex(pb->speed);
-		const int next = igi::AnimTimerSpeedStepIndex(current, faster ? 1 : -1);
-		// "at the limit" means the step did not move: the ladder clamps at both
-		// ends, and saying so is what stops the key from looking like a no-op.
-		const bool at_limit = (next == current);
-		pb->speed = igi::AnimTimerSpeedAt(next);
-		status_message_ = "Timer speed: " + igi::AnimTimerSpeedLabel(pb->speed) +
-		                  (at_limit ? " (limit)" : "") + " for '" + pb->clip->name + "'";
+		AdjustSelectedAnimSpeed(faster ? 1 : -1);
 		return;
 	}
 

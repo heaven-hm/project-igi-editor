@@ -26,6 +26,8 @@
 
 #include "animation.h"
 #include "runtime/anim_player.h"
+// The pure frame-step arithmetic (#73) this file pins against the real clock.
+#include "runtime/anim_panel.h"
 // The engine's "pose only what is drawn" rule, mapped onto the editor's
 // viewport (Human_WakeIfVisible 0x45F140) - see the header.
 #include "runtime/anim_pose_set.h"
@@ -811,4 +813,221 @@ TEST(AnimPoseSetTest, ClockOnlyIsWhatAnUndrawnAiGetsAndItStillAdvances) {
     hidden.Update(kSimulationTickMs);
     visible.Update(kSimulationTickMs);
     EXPECT_EQ(MaxAbsPoseDiff(hidden.WorldTransforms(), visible.WorldTransforms()), 0.0f);
+}
+
+// ===========================================================================
+// Issue #73: the manual frame step - the F10 panel's Step -1 / Step +1 and the
+// ',' / '.' keys
+// ===========================================================================
+//
+// `AnimPlayback::StepFrames` runs ONE engine frame of the clock through the
+// engine's own `BoneObj_GetEvents` 0x4D3210 -> `BoneObj_AnimEventsCB` 0x4D4B60
+// (`inst->time = inst->speed + inst->time`, src/boneobj/boneobj.c:884-885) and
+// then poses the frame it landed on, the way retail poses at draw time
+// (`Human_Wake` 0x45F240, src/humanbase/human.c:289-297).  The arithmetic those
+// steps follow is `igi::AnimStepTargetTick` (source/runtime/anim_panel.h), and
+// `PureStepMatchesTheEngineClock` below pins the two against each other: the
+// pure function is the panel's model of a step, and this is where it is required
+// to agree with the ported engine rather than merely look right.
+
+TEST(AnimPlaybackStepTest, OneStepIsExactlyOneEngineFrameEvenWhilePaused) {
+    const AnimationClip clip = MakeEngineClip(4800.0f, false);
+    AnimPlayback playback;
+    playback.Start(&clip);
+    ASSERT_TRUE(playback.EngineReady());
+    playback.Pause();
+    EXPECT_FALSE(playback.playing);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 0.0f);
+
+    const int poses_before = playback.EnginePoseSteps();
+    EXPECT_EQ(playback.StepFrames(1), 1);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, kTicksPerFrame)
+        << "one frame is gTicksPerFrame at the 30 fps the game installs";
+    EXPECT_FALSE(playback.playing) << "a manual step must not start the clock";
+    EXPECT_EQ(playback.EnginePoseSteps(), poses_before + 1)
+        << "the step must pose the frame it landed on, not only move the clock";
+
+    EXPECT_EQ(playback.StepFrames(1), 1);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 2.0f * kTicksPerFrame);
+    // A frame step is a clock move, not a timer: the editor's own sub-frame
+    // accumulator (`AnimPlayer::advance_seconds_`) is not involved at all, so a
+    // step is exact however long the frames around it were.
+    EXPECT_EQ(playback.StepFrames(0), 0) << "direction 0 is not a step";
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 2.0f * kTicksPerFrame);
+}
+
+TEST(AnimPlaybackStepTest, AStepScalesWithTheSpeedLadder) {
+    const AnimationClip clip = MakeEngineClip(4800.0f, false);
+    AnimPlayback playback;
+    playback.Start(&clip);
+    ASSERT_TRUE(playback.EngineReady());
+    playback.Pause();
+
+    // `inst->speed = gTicksPerFrame * speed` (Anim_SetSpeed 0x4D6580,
+    // src/boneobj/anim.c:172-179): the frame is the ENGINE's frame, so the step
+    // grows with the multiplier the F12 / Shift+F12 keys set.
+    playback.speed = 2.0f;
+    EXPECT_EQ(playback.StepFrames(1), 1);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 2.0f * kTicksPerFrame);
+
+    playback.speed = 0.5f;
+    EXPECT_EQ(playback.StepFrames(1), 1);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 2.0f * kTicksPerFrame + 0.5f * kTicksPerFrame);
+}
+
+TEST(AnimPlaybackStepTest, SteppingBackWalksTheClockDownAndClampsAtZero) {
+    const AnimationClip clip = MakeEngineClip(4800.0f, false);
+    AnimPlayback playback;
+    playback.Start(&clip);
+    ASSERT_TRUE(playback.EngineReady());
+    playback.Pause();
+
+    for (int i = 0; i < 3; ++i) EXPECT_EQ(playback.StepFrames(1), 1);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 3.0f * kTicksPerFrame);
+
+    EXPECT_EQ(playback.StepFrames(-1), 1);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 2.0f * kTicksPerFrame);
+    EXPECT_EQ(playback.StepFrames(-1), 1);
+    EXPECT_EQ(playback.StepFrames(-1), 1);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 0.0f);
+
+    // At 0 a one-shot has nowhere to go: the engine's reverse test
+    // `!(inst->time > 0.0f)` clamps it there (src/boneobj/boneobj.c:892-893), so
+    // the step reports "nothing to step" instead of running a frame that cannot
+    // move the playhead.
+    EXPECT_EQ(playback.StepFrames(-1), 0);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 0.0f);
+}
+
+TEST(AnimPlaybackStepTest, AStepOntoTheEndOfAOneShotStopsThePlayback) {
+    const AnimationClip clip = MakeEngineClip(3.0f * kTicksPerFrame, false);   // 3 frames
+    AnimPlayback playback;
+    playback.Start(&clip);
+    ASSERT_TRUE(playback.EngineReady());
+    EXPECT_TRUE(playback.playing);
+
+    EXPECT_EQ(playback.StepFrames(1), 1);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, kTicksPerFrame);
+    EXPECT_TRUE(playback.playing);
+    EXPECT_EQ(playback.StepFrames(1), 1);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 2.0f * kTicksPerFrame);
+    EXPECT_EQ(playback.StepFrames(1), 1);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 3.0f * kTicksPerFrame);
+    // The engine's end test: `!(inst->time < d->length)` raises BONE_EVENTS_DONE
+    // on the frame that lands ON the length (boneobj.c:892-895), which is what
+    // `HumanPlayer_AnimDone` 0x489F50 reads (src/loadscreen/human.c:196-204).
+    EXPECT_FALSE(playback.playing) << "stepping onto the end stops a one-shot";
+    EXPECT_EQ(playback.StepFrames(1), 0) << "clamped at the length: nothing to step";
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 3.0f * kTicksPerFrame);
+    // Backwards from the end still moves, and the playback stays stopped.
+    EXPECT_EQ(playback.StepFrames(-1), 1);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 2.0f * kTicksPerFrame);
+    EXPECT_FALSE(playback.playing);
+}
+
+TEST(AnimPlaybackStepTest, AStepWrapsALoopingClipByOneDuration) {
+    const AnimationClip clip = MakeEngineClip(3.0f * kTicksPerFrame, true);   // loops
+    AnimPlayback playback;
+    playback.Start(&clip);
+    ASSERT_TRUE(playback.EngineReady());
+    playback.Pause();
+
+    EXPECT_EQ(playback.StepFrames(1), 1);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, kTicksPerFrame);
+    EXPECT_EQ(playback.StepFrames(1), 1);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 2.0f * kTicksPerFrame);
+    // The third step lands exactly on the length, so the loop branch subtracts
+    // one duration (boneobj.c:900-905) and the playhead is back at frame 0.
+    EXPECT_EQ(playback.StepFrames(1), 1);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 0.0f);
+    EXPECT_FALSE(playback.playing) << "a paused playback stays paused across a wrap";
+    // Backwards from 0 wraps up to the last frame (`length + time`).
+    EXPECT_EQ(playback.StepFrames(-1), 1);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 2.0f * kTicksPerFrame);
+}
+
+TEST(AnimPlaybackStepTest, PureStepMatchesTheEngineClock) {
+    // The oracle-agreement test.  For every rung of the shared speed ladder and
+    // both loop modes, drive the REAL playback one engine frame at a time in
+    // both directions and require the ported engine's clock to land exactly
+    // where `igi::AnimStepTargetTick` says it will - including the two clamp
+    // cases, where both must agree that nothing moves.
+    struct Scenario {
+        float length_ticks;
+        bool looping;
+    };
+    const Scenario scenarios[] = {
+        {3.0f * kTicksPerFrame, false},
+        {3.0f * kTicksPerFrame, true},
+        {30.0f * kTicksPerFrame, false},
+        {30.0f * kTicksPerFrame, true},
+        {kTicksPerFrame, true},      // a one-frame loop: the wrap lands on the same tick
+    };
+    const int directions[] = {1, -1};
+
+    for (const Scenario& scenario : scenarios) {
+        for (int rung = 0; rung < igi::kAnimTimerSpeedCount; ++rung) {
+            const float speed = igi::AnimTimerSpeedAt(rung);
+            const AnimationClip clip = MakeEngineClip(scenario.length_ticks, scenario.looping);
+            AnimPlayback playback;
+            playback.Start(&clip);
+            ASSERT_TRUE(playback.EngineReady());
+            playback.Pause();
+            playback.speed = speed;
+            ASSERT_FLOAT_EQ(playback.EngineLength(), scenario.length_ticks);
+
+            for (const int direction : directions) {
+                float predicted = playback.currentTimeMs;
+                for (int step = 0; step < 12; ++step) {
+                    const float step_ticks =
+                        igi::AnimFrameStepTicks(speed, playback.TicksPerFrame());
+                    const float target = igi::AnimStepTargetTick(
+                        predicted, step_ticks, playback.EngineLength(), scenario.looping,
+                        direction > 0);
+                    const bool should_move = (target != predicted);
+                    const int moved = playback.StepFrames(direction);
+                    EXPECT_EQ(moved, should_move ? 1 : 0)
+                        << "length " << scenario.length_ticks << " loop "
+                        << scenario.looping << " speed " << speed << " dir " << direction
+                        << " step " << step << ": engine moved=" << moved
+                        << " but the pure rule says " << (should_move ? "move" : "stay");
+                    predicted = target;
+                    EXPECT_FLOAT_EQ(playback.currentTimeMs, predicted)
+                        << "length " << scenario.length_ticks << " loop "
+                        << scenario.looping << " speed " << speed << " dir " << direction
+                        << " step " << step;
+                }
+            }
+        }
+    }
+}
+
+TEST(AnimPlaybackStepTest, TheStepShowsTheFrameItSteppedTo) {
+    // The pose must follow the clock: a step that only moved the playhead would
+    // leave the viewport showing the old frame (retail poses at draw time,
+    // `Human_Wake` 0x45F240, src/humanbase/human.c:289-297).
+    const AnimationClip clip = MakeEngineClip(4800.0f, false);
+    AnimPlayback playback;
+    playback.Start(&clip);
+    ASSERT_TRUE(playback.EngineReady());
+    playback.Pause();
+
+    const std::vector<glm::mat4> before = playback.WorldTransforms();
+    EXPECT_EQ(playback.StepFrames(1), 1);
+    const std::vector<glm::mat4>& after = playback.WorldTransforms();
+    EXPECT_EQ(before.size(), after.size());
+    EXPECT_GT(MaxAbsPoseDiff(before, after), 0.0f)
+        << "the clip's child bone rotates over its length, so the stepped frame "
+           "must be a different pose from frame 0";
+    EXPECT_TRUE(playback.PoseCurrent());
+}
+
+TEST(AnimPlaybackStepTest, SteppingAClipTheEngineRefusedDoesNothing) {
+    const AnimationClip boneless = MakeBonelessClip();
+    AnimPlayback playback;
+    playback.Start(&boneless);
+    ASSERT_FALSE(playback.EngineReady());
+    EXPECT_EQ(playback.StepFrames(1), 0);
+    EXPECT_EQ(playback.StepFrames(-1), 0);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, 0.0f);
 }

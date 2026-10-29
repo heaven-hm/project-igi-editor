@@ -696,6 +696,10 @@ the port reads the same bytes the engine reads.
 | The QVM and QSC readers agree on LEVEL2's GenericTBA calls | `AnimRulesCorpus.QvmGenericTbaCallsAgreeWithTheDecompiledQsc` |
 | Every level's authored `Activate Anim` resolves on skeleton 0 | `AnimRulesCorpus.EveryLevelsGenericTbaAuthorsAResolvableAnimation` |
 | The shipped FORM sizes are short, and the child chains still tile to EOF | `AnimRulesCorpus.AnimFilesDecodeWithTheExpectedSkeletonShape` |
+| One engine frame is `gTicksPerFrame * speed` ticks, and the step's end test, single-subtraction wrap, reverse clamp and reverse wrap are the engine's | `AnimFrameStep73.*` (pure), `AnimPlaybackStepTest.OneStepIsExactlyOneEngineFrameEvenWhilePaused`, `.AStepScalesWithTheSpeedLadder`, `.AStepOntoTheEndOfAOneShotStopsThePlayback`, `.AStepWrapsALoopingClipByOneDuration`, `.SteppingBackWalksTheClockDownAndClampsAtZero` |
+| The pure step arithmetic agrees with the ported engine clock on every rung of the speed ladder, in both loop modes and both directions | `AnimPlaybackStepTest.PureStepMatchesTheEngineClock` |
+| A frame step poses the frame it stepped to, and works while the playback is paused | `AnimPlaybackStepTest.TheStepShowsTheFrameItSteppedTo`, `.OneStepIsExactlyOneEngineFrameEvenWhilePaused` |
+| The F10 panel's buttons, hit-test and text come from one pure layout, and its speed label is the same formatter the `F12` keys report | `AnimFrameStep73.EveryButtonIsInsideThePanelAndNoneOverlap`, `.HitTestRoundTripsEveryButtonCentre`, `.ThePanelFitsTheSmallestViewportAndItsBandsDoNotOverlap`, `.RowTextUsesTheSameSpeedLabelAsTheKeys`, `.TitleReportsTheTransportStateAndTheEngineFrameSize` |
 
 **Not verified, and why:**
 
@@ -818,3 +822,65 @@ Read but not modified, deliberately: `source/animation.cpp`,
 `SkinSkinnedVertices`), and `source/renderer/mef_native.{h,cpp}` (which already
 carries `baseVertexCount` / `extraInfluenceCount`, the same base-vs-extra split as
 §10).
+
+---
+
+## 16. The editor's transport: play/pause, speed, and a frame step (#73)
+
+The engine has no transport UI and no pause: a live instance advances exactly
+once per frame (§5). The editor's preview therefore owns three editor decisions
+and nothing else, and they all act on one `igi::AnimPlayback` per object:
+
+| Control | Where | What it does | Engine side |
+|---|---|---|---|
+| play / pause | F10 panel button, `Ctrl T` | `AnimPlayback::playing`, the editor's gate over the instance | none — retail has no pause; the clock rule it gates is `inst->time = inst->speed + inst->time` (`BoneObj_AnimEventsCB` 0x4D4B60, `src/boneobj/boneobj.c:884-885`) |
+| speed ladder `{0.125 … 8}` | F10 panel buttons, `F12` / `Shift F12` | `AnimPlayback::speed` | `Anim_SetSpeed` 0x4D6580: `inst->speed = gTicksPerFrame * speed` (`src/boneobj/anim.c:172-179`), so the multiplier is the ENGINE's frame size |
+| frame step `-1` / `+1` | F10 panel buttons, `,` / `.` | `AnimPlayback::StepFrames` | one engine frame of the clock, through `BoneObj_GetEvents` 0x4D3210 → `BoneObj_AnimEventsCB` 0x4D4B60, then the draw-time pose (`Human_Wake` 0x45F240, `src/humanbase/human.c:289-297`) |
+
+**The step size is the engine's frame, not a constant.** At 1× a step is
+`gTicksPerFrame` = 160 ticks (30 fps, `BoneObj_SetFrameRate` 0x4D2D30,
+`src/lod/boneobj.c:86-90`, installed at `src/game/game.c:449`); at 2× it is 320.
+That is the only "one frame" the engine knows, and it is what makes the step and
+the speed control the same clock rather than two.
+
+**Stepping backwards is the engine's own reverse path.** `direction < 0` sets a
+negative instance speed (`Anim_SetSpeed` + `BoneObj_UpdateAnimDirection` 0x4D6550,
+which sets `ANIM_REVERSE` iff `inst->speed < 0`, `src/boneobj/anim.c:163-179`) and
+runs the same clock callback, so the reverse clamp at 0 and the reverse wrap
+`length + time` are `BoneObj_AnimEventsCB`'s (boneobj.c:892-937), not a
+re-implementation. The forward speed is restored afterwards with the same
+multiplier.
+
+**Stepping while paused is deliberate.** Retail's clock is not gated on anything
+the editor can pause, so a paused preview that steps one frame performs exactly
+the addition the next retail frame would; the editor's `playing` gate only stops
+the *automatic* advance.
+
+**The pure arithmetic is pinned against the engine, not trusted.**
+`igi::AnimStepTargetTick` (`source/runtime/anim_panel.h`) is the panel's model of
+a step — a transcription of the end test, the single-subtraction wrap and the
+reverse branch above, including the quirk that the wrap is one subtraction and not
+a `while` loop. `tests/test_anim_playback.cpp`
+(`AnimPlaybackStepTest.PureStepMatchesTheEngineClock`) drives a real
+`AnimPlayback` one engine frame at a time for every rung of the ladder, in both
+loop modes and both directions, and requires the ported engine's clock to land
+exactly where the pure rule says — including the clamp cases, where both must
+agree that nothing moves. `AnimFrameStep73.*`
+(`tests/test_editor_quick_actions.cpp`) pins the arithmetic's boundaries, the
+panel's layout (buttons inside the panel, no overlap, hit-test round-trip,
+baselines inside their bands) and the row text.
+
+**The panel and the keys are one state.** `App::ToggleSelectedAnimPlayback`,
+`ResetSelectedAnim`, `AdjustSelectedAnimSpeed` and `StepSelectedAnim`
+(`source/app.cpp`) are called by both the F10 panel's buttons
+(`App::AnimPanelClick`, hit-tested with the very layout the renderer draws) and
+the key handlers in `source/app_input.cpp` / `source/app_input_keyboard.cpp`. The
+speed label in the panel is `igi::AnimTimerSpeedLabel`, the same formatter the
+`F12` status message uses.
+
+**Not verified.** No frame was rendered: the GUI needs OpenGL 4.1 and this host
+offers 2.1, so the panel's appearance, its button positions on screen and the
+mouse routing are asserted as geometry, text and compiled code — never as a
+picture. The step's *timing* against a running retail client was not traced
+either; what is proven is the tick arithmetic and that it matches the ported
+engine's own clock.

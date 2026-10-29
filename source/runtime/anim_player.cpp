@@ -272,6 +272,7 @@ void AnimPlayer::AssignFrom(const AnimPlayer& other) {
     anim_id_ = other.anim_id_;
     playing_ = other.playing_;
     ticks_per_frame_ = other.ticks_per_frame_;
+    speed_multiplier_ = other.speed_multiplier_;
     source_index_ = other.source_index_;
     node_index_ = other.node_index_;
     pose_ = other.pose_;
@@ -342,6 +343,11 @@ bool AnimPlayer::Play(uint32_t flags) {
     playing_ = true;
     pose_dirty_ = true;
     events_.clear();
+    // `BoneObj_InitAnimInst` 0x4D4F60 starts the instance at `speed =
+    // +gTicksPerFrame` (src/boneobj/boneobj.c:1013), i.e. 1.0x; a caller that
+    // wants another multiplier calls `SetSpeed` after the play, which is what
+    // `AnimPlayback::BuildEnginePlayer` does.
+    speed_multiplier_ = 1.0f;
     // The engine poses once immediately after playing (src/humanplayer/humanplayer.c:1214-1215
     // plays and then calls BoneObj_Update), so the first frame is never a rest
     // pose.
@@ -386,6 +392,42 @@ void AnimPlayer::StepClock() {
     // the root bone, so `Done()` stays correct.
     events_.clear();
     BoneObjGetEvents(events_, data_.state, data_.clip, kAnimSmoothAnimsDefault);
+}
+
+bool AnimPlayer::StepClockFrame(int direction) {
+    if (!data_.valid() || direction == 0) return false;
+    if (source_index_ < 0 ||
+        static_cast<std::size_t>(source_index_) >= data_.state.sources.size()) {
+        return false;
+    }
+    AnimInst& inst = data_.state.sources[static_cast<std::size_t>(source_index_)].inst;
+
+    // The engine's own clock step, once: `BoneObj_GetEvents` 0x4D3210 runs
+    // `BoneObj_AnimEventsCB` 0x4D4B60, i.e. `now = inst->speed + inst->time`
+    // plus the `>= length` / `<= 0` end test, the single subtraction/addition
+    // wrap and the root-motion fixup (src/boneobj/boneobj.c:873-941). NOT gated
+    // on `playing_` on purpose - see the header.
+    if (direction < 0) {
+        // Backwards is what the engine does for a negative instance speed:
+        // Anim_SetSpeed 0x4D6580 (`inst->speed = gTicksPerFrame * speed`) with a
+        // negative multiplier, which `BoneObj_UpdateAnimDirection` 0x4D6550
+        // turns into ANIM_REVERSE (src/boneobj/anim.c:163-179). The end test then
+        // takes the reverse branch (boneobj.c:892-893), so the reverse clamp at
+        // 0 and the reverse wrap `length + time` are the engine's own.
+        AnimSetSpeed(inst, -speed_multiplier_, ticks_per_frame_);
+    }
+    events_.clear();
+    BoneObjGetEvents(events_, data_.state, data_.clip, kAnimSmoothAnimsDefault);
+    if (direction < 0) {
+        // Restore the forward clock with the same multiplier, so the instance
+        // speed is the same `gTicksPerFrame * multiplier` product it was.
+        AnimSetSpeed(inst, speed_multiplier_, ticks_per_frame_);
+    }
+    // The bones are now a frame behind the clock, exactly as they are after the
+    // clock-only half of a normal frame (`AnimPlayback::AdvanceClock` records the
+    // same fact in `pose_current_`); `StepPose()` is the caller's next move.
+    pose_dirty_ = true;
+    return true;
 }
 
 int AnimPlayer::AdvanceSeconds(float seconds) {
@@ -443,6 +485,7 @@ int AnimPlayer::AdvanceSecondsClockOnly(float seconds) {
 void AnimPlayer::SetSpeed(float multiplier) {
     // Anim_SetSpeed 0x4D6580 (src/boneobj/anim.c:172-179) with
     // BoneObj_UpdateAnimDirection (anim.c:163-169).
+    speed_multiplier_ = multiplier;
     if (source_index_ < 0 || static_cast<std::size_t>(source_index_) >= data_.state.sources.size()) return;
     AnimSetSpeed(data_.state.sources[static_cast<std::size_t>(source_index_)].inst, multiplier,
                  ticks_per_frame_);

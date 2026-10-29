@@ -7,6 +7,10 @@ Scope of change: `source/app_input.cpp`, `source/app_view.cpp`, `source/config.c
 `assets/editor/qed/qedkeybindings.qsc`, `tests/test_keybindings.cpp`,
 `tests/test_editor_quick_actions.cpp`, `CMakeLists.txt`, this document.
 
+Issue #73 adds the editor's frame-step keys (`source/app_input_keyboard.cpp`) and
+routes all four `Timer*` handlers plus the F10 panel's buttons through one set of
+`App` methods; see "Issue #73: the same transport on the F10 panel" below.
+
 ## TL;DR
 
 `source/app_input.cpp` contained 25 lines of the form
@@ -248,6 +252,52 @@ controls; only the speed pair has an owner here.
 QED code and no game-side claim is made. The engine call the speed ultimately
 reaches (`Anim_SetSpeed` 0x4D6580) is game-side and is already cited where it is
 used, `source/runtime/anim_playback.cpp:148`.
+
+## Issue #73: the same transport on the F10 panel, plus a frame step
+
+`source/runtime/editor_quick_actions.h` and the four `Timer*` handlers above are
+now the shared implementation of the animation transport: the F10 animation
+panel's five buttons (`App::AnimPanelClick`, `source/app.cpp`) call the same
+`App::ToggleSelectedAnimPlayback` / `ResetSelectedAnim` /
+`AdjustSelectedAnimSpeed` / `StepSelectedAnim` methods the keys call, so the panel
+and the keybindings cannot become two sources of truth for one clock. The panel's
+layout, its text and the frame-step arithmetic are pure and live in
+`source/runtime/anim_panel.h` (pinned by `tests/test_editor_quick_actions.cpp`);
+the engine-backed stepping is `AnimPlayback::StepFrames`
+(`source/runtime/anim_playback.cpp`, pinned by `tests/test_anim_playback.cpp`).
+
+| Binding | Combo | Handler | Oracle |
+|---|---|---|---|
+| `TimerStartStop` | `<Ctrl><T>` | panel **Play/Pause** button; `App::ToggleSelectedAnimPlayback` | `QED.doc`: "Ctrl T  Timer Start / Stop" |
+| `TimerReset` | `<Ctrl><R>` | `App::ResetSelectedAnim` | `QED.doc`: "Ctrl R  Reset timer" |
+| `TimerIncreaseSpeed` / `TimerDecreaseSpeed` | `<F12>` / `<Shift><F12>` | panel **Speed -/+** buttons; `App::AdjustSelectedAnimSpeed` | `QED.doc`: "F12 / Shift F12  Increment / Decrement AnimTask speed" |
+| frame step back / forward | `,` / `.` | panel **Step -1 / Step +1** buttons; `App::StepSelectedAnim` | **editor-only key, engine-side step.** `QED.doc`, "General keystrokes", documents no frame step; the *step size* is the engine's own frame — `inst->time = inst->speed + inst->time` with `inst->speed = gTicksPerFrame * speed` (`BoneObj_AnimEventsCB` 0x4D4B60, `src/boneobj/boneobj.c:884-885`; `Anim_SetSpeed` 0x4D6580, `src/boneobj/anim.c:172-179`), i.e. 160 ticks at the default 1× |
+
+The `,` / `.` keys only act while the F10 panel is up (`show_anim_debug_`), which
+is the panel those keys are documented in; the panel's footer line names them,
+along with `Ctrl+T` and `F12`/`Shift+F12`. A step works while the playback is
+PAUSED — that is the point of it — and it is one engine frame, so at 2× it
+advances 320 ticks, exactly the frame the running clock would have taken.
+Stepping a one-shot onto its last frame stops the playback, because that is the
+engine's own end test (`HumanPlayer_AnimDone` 0x489F50,
+`src/loadscreen/human.c:196-204`).
+
+**What is verified here:** the pure arithmetic and layout (`AnimFrameStep73.*`),
+and that a real `AnimPlayback` lands exactly where the pure rule says for every
+rung of the speed ladder, in both loop modes and both directions
+(`AnimPlaybackStepTest.PureStepMatchesTheEngineClock`). **What is not:** the
+panel's appearance — the GUI cannot run on this host (OpenGL 4.1 required, 2.1
+available), so the button row is asserted as geometry and text, never as a
+picture.
+
+**Panel precedence, stated because it is not visible headlessly.** The F10 panel
+occupies the top-left strip that the property editor also uses
+(`PropPanel::kLeft .. +kWidth`), and the property editor is drawn after it and
+consumes clicks in that strip first (`source/app_input_mouse.cpp`). So while the
+property editor is open it keeps those clicks — its own "Animation Control"
+section is the transport there — and the F10 panel's buttons act when it is not
+covering them. The keys (`Ctrl T`, `F12` / `Shift F12`, `,` / `.`) are unaffected
+in either state, which is why the panel's footer names them.
 
 ## Removed
 

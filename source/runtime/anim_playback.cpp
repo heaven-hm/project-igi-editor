@@ -47,6 +47,7 @@
 
 #include <utility>
 
+#include "runtime/anim_panel.h"
 #include "runtime/anim_player.h"
 
 namespace {
@@ -226,6 +227,59 @@ void AnimPlayback::PoseNow() {
     // clock without moving it.
     engine_->StepPose();
     pose_current_ = true;
+}
+
+int AnimPlayback::StepFrames(int direction) {
+    if (clip == nullptr || !engine_) return 0;
+    if (direction == 0) return 0;
+    SyncEngineFlags();
+
+    const bool forward = direction > 0;
+    const bool looping = Looping();
+    const float step = igi::AnimFrameStepTicks(speed, engine_->TicksPerFrame());
+    const float target =
+        igi::AnimStepTargetTick(currentTimeMs, step, engine_->Length(), looping, forward);
+    if (target == currentTimeMs) {
+        // The engine's own end test already holds this playhead where it is: a
+        // one-shot clamped on the end it is stepping towards does not move
+        // (`!(inst->time < d->length)` forward, `!(inst->time > 0)` in reverse,
+        // src/boneobj/boneobj.c:892-897). Reported as "nothing to step" rather
+        // than run a frame the engine would spend clamping.
+        return 0;
+    }
+
+    // The engine performs the step, not this function: `BoneObj_GetEvents`
+    // 0x4D3210 -> `BoneObj_AnimEventsCB` 0x4D4B60 is the one addition plus the
+    // end test, the single-subtraction wrap and the root fixup
+    // (src/boneobj/boneobj.c:873-941). The check above only decides whether
+    // there is anywhere to go.
+    if (!engine_->StepClockFrame(direction)) return 0;
+
+    // The pose of the frame the step landed on: retail poses at draw time from
+    // the clock the per-frame update has already moved (`Human_Wake` 0x45F240,
+    // src/humanbase/human.c:289-297). `Update`'s pose-then-advance order is the
+    // other half of the same rule - there a frame was drawn before the advance.
+    engine_->StepPose();
+    pose_current_ = true;
+
+    FinishAdvance();
+    return 1;
+}
+
+float AnimPlayback::EngineLength() const {
+    // Anim_GetLength 0x4D64E0 (src/boneobj/anim.c:143-147) when the engine has
+    // the clip; otherwise the BEF's stored engine length (`AnimInit`'s third
+    // field is the engine length + 1, so `length_ms - 1`, the same conversion
+    // `IsFinished` uses).
+    if (engine_) return engine_->Length();
+    return (clip != nullptr) ? static_cast<float>(clip->duration_ms() - 1) : 0.0f;
+}
+
+float AnimPlayback::TicksPerFrame() const {
+    // BoneObj_SetFrameRate 0x4D2D30 (src/lod/boneobj.c:86-90) computes the
+    // global; the player mirrors it per clip and starts at the 30 fps value the
+    // game installs (src/game/game.c:449).
+    return engine_ ? engine_->TicksPerFrame() : igi::kAnimDefaultTicksPerFrame;
 }
 
 void AnimPlayback::FinishAdvance() {

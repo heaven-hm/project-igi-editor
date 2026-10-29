@@ -240,6 +240,43 @@ struct AnimPlayback {
     // the engine's own "wake a frozen object at draw time" step; a caller only
     // needs it directly if it wants the bones current before asking for them.
     void PoseNow();
+
+    // ── the manual frame step (issue #73, the F10 panel's Step -1 / Step +1) ──
+    // ONE engine frame of the clock on demand, then the draw-time pose of the
+    // frame it landed on. A frame is the engine's own: `inst->time = inst->speed
+    // + inst->time` with `inst->speed = gTicksPerFrame * speed`
+    // (BoneObj_AnimEventsCB 0x4D4B60, src/boneobj/boneobj.c:884-885;
+    // Anim_SetSpeed 0x4D6580, src/boneobj/anim.c:172-179), so at 1x a step is 160
+    // ticks and at 2x it is 320 - the same clock `speed` drives.
+    //
+    // Works while PAUSED: retail's clock has no pause, so a step performs exactly
+    // the addition the engine's next frame would (see `AnimPlayer::StepClockFrame`).
+    // `direction < 0` steps backwards through the engine's own reverse path
+    // (negative `inst.speed` + ANIM_REVERSE, anim.c:163-179), which is what makes
+    // the reverse clamp at 0 and the reverse wrap the engine's, not the editor's.
+    //
+    // The pose is taken AFTER the clock moves, unlike `Update`'s pose-then-advance:
+    // a manual step has no frame to draw first, and retail itself poses at draw
+    // time from whatever the clock holds (`Human_Wake` 0x45F240). The end test is
+    // the shared one (`FinishAdvance`), so stepping a one-shot onto its last frame
+    // stops the playback exactly as playing onto it would.
+    //
+    // Returns 0 when there is nothing to do - no clip, an engine that refused the
+    // clip, or a one-shot playhead already clamped at the end it is stepping
+    // towards (the engine's own `>= length` / `<= 0` rule) - and 1 otherwise.
+    int StepFrames(int direction);
+
+    // `Anim_GetLength` 0x4D64E0 (src/boneobj/anim.c:143-147) in ticks, from the
+    // engine when it has the clip and from the BEF's stored `length - 1` when it
+    // does not (the same engine length `IsFinished` uses).
+    float EngineLength() const;
+    // `gTicksPerFrame` (src/lod/boneobj.c:86-90): 160 at the 30 fps the game
+    // installs (src/game/game.c:449). The engine's own value once a player exists.
+    float TicksPerFrame() const;
+    // The loop the engine's instance actually carries: the clip's own tp_flag or
+    // the editor's `forceLoop` override, which is what `BuildEnginePlayer` bakes
+    // into Anim_Play's kAnimLoop flag (source/runtime/anim_playback.cpp:58-60).
+    bool Looping() const { return forceLoop || (clip != nullptr && clip->loop()); }
     // True when the bones were posed at the tick the next drawn frame should
     // show. `Update` leaves it true (its pose IS the drawn frame's tick);
     // `AdvanceClock` clears it, so the next `WorldTransforms()` poses first -

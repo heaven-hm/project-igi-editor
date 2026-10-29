@@ -561,6 +561,19 @@ public:
 		std::string anim_status_;           // summary text of animations playing
 		bool        anim_playing_ = false;  // true if any animation is active
 		bool        anim_debug_visible_ = false; // F10: show status panel + skeleton overlay
+		// The selected object's playback state, for the F10 panel's Play/Pause
+		// button label and title (`App::SelectedAnimPlaying`, the same `playing`
+		// the Ctrl T key and the panel's own button flip). The rows themselves
+		// arrive pre-formatted in `anim_status_`, built by the pure
+		// `igi::FormatAnimPanelRow` so the host lane pins their text.
+		bool        anim_panel_playing_ = false;
+		// `igi::FormatAnimPanelTitle(...)` - the speed label and the engine frame
+		// size at that speed, from the same ladder the F12 keys use.
+		std::string anim_panel_title_;
+		// True when there is a selected, animatable playback for the panel's
+		// buttons to act on; the renderer only dims the labels with it (the
+		// actions themselves live in `App::AnimPanelClick`).
+		bool        anim_panel_has_target_ = false;
 
 		// Property panel "Animation Control" section (selected object only).
 		int              prop_anim_bone_hierarchy_ = -1; // -1 = section hidden

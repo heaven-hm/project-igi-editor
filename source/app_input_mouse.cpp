@@ -380,6 +380,27 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 				return; // Block all other interactions while paused
 			}
 
+			// The F10 animation panel (top-left, #73) is an overlay too: its
+			// transport buttons run the same actions as the Ctrl T / F12 keys and
+			// the ',' / '.' frame-step keys, and ANY click inside the panel is
+			// consumed so a button press cannot also pick the object behind it.
+			// The hit-test is `igi::AnimPanel::HitTest` - the very layout the
+			// renderer draws (source/runtime/anim_panel.h).
+			//
+			// PRECEDENCE, deliberately: this runs AFTER the property panel's
+			// handler above, which consumes every click in its left strip
+			// (`PropPanel::kLeft .. +kWidth`, source/renderer/renderer.h) and is
+			// drawn over the F10 panel (source/renderer/renderer_draw.cpp draws
+			// the panel first, the property panel later). So while the property
+			// editor is open it keeps the clicks in that strip - including its own
+			// "Animation Control" section, which is the transport there - and the
+			// F10 panel's buttons act when it is not covering them. The keys
+			// (Ctrl T, F12 / Shift F12, ',' / '.') are unaffected either way.
+			if (AnimPanelClick(x, y)) {
+				mouse_state_.left_button_down_ = false;
+				return;
+			}
+
 			// Priority: on-screen terrain brush palette (bottom-right). Consume click so
 			// it does not also sculpt terrain / pick an object this frame.
 			if (TerrainPaletteClick(x, y)) {

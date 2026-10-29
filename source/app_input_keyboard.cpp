@@ -1594,8 +1594,25 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
         return;
     }
 
+	// Frame step (#73): ',' steps the selected object's playback back one ENGINE
+	// frame and '.' steps it forward one. The step itself is
+	// `App::StepSelectedAnim` -> `AnimPlayback::StepFrames`, the SAME action the
+	// F10 panel's Step -1 / Step +1 buttons run, so the panel's readout and these
+	// keys can never disagree.
+	//
+	// There is no retail QED binding for a frame step: QED.doc, "General
+	// keystrokes", documents F12 / Shift F12 for AnimTask speed and Ctrl T /
+	// Ctrl R for the timer, and nothing for stepping. The keys are therefore the
+	// editor's own, and they are gated on the F10 panel being up - the panel is
+	// the animation transport, and its footer names these two keys.
+	if (show_anim_debug_ && (key == ',' || key == '.')) {
+		StepSelectedAnim(key == '.' ? 1 : -1);
+		return;
+	}
+
 	if (key == 't' || key == 'T') {
 		level_.TeleportToHMP(viewer_.pos_);
+
 		viewer_.pitch_ = -30.0f; // Look down at the terrain
 		UpdateViewerVectors();
 		printf("Teleported to Height Map Zone\n");

@@ -374,6 +374,49 @@ private:
 	// citations: source/runtime/anim_pose_set.h.
 	std::unordered_set<int> GetEditorDrawnAnimationIndices();
 	std::string BuildAnimStatusString();
+
+	// ── the animation transport (issue #73) ────────────────────────────────────
+	// ONE implementation, two front ends: the F10 panel's buttons
+	// (`App::AnimPanelClick`) and the QED timer keys in `source/app_input.cpp`
+	// (Ctrl T play/pause, Ctrl R reset, F12 / Shift F12 speed) plus the editor's
+	// frame-step keys (',' and '.') all call these. That is what keeps the panel
+	// and the keybindings from becoming two sources of truth for the same clock.
+	// Every one of them acts on the SELECTED object's playback - the object the
+	// property editor's animation list starts (`ToggleAnimationForObject`) - and
+	// reports "select an object with an animation first" when there is none,
+	// exactly as the keys always have.
+	//
+	// Engine citations for the actions: play/pause is the editor's own gate over
+	// the engine instance (`AnimPlayback::playing`; the engine has no Pause),
+	// reset is `Anim_Play` 0x4D61D0 at tick 0, speed is `Anim_SetSpeed` 0x4D6580
+	// (`inst->speed = gTicksPerFrame * speed`), and a frame step is one
+	// `inst->time = inst->speed + inst->time` (`BoneObj_AnimEventsCB` 0x4D4B60,
+	// src/boneobj/boneobj.c:884-885) - see `AnimPlayback::StepFrames`.
+	AnimPlayback* SelectedAnimPlayback();
+	// The transport state the panel's title and its Play/Pause button label are
+	// drawn from - the same `playing` the keys flip. False when nothing
+	// animatable is selected.
+	bool SelectedAnimPlaying() const;
+	// The panel's title text (`igi::FormatAnimPanelTitle`): the selected
+	// playback's transport state, its speed on the shared ladder, and the engine
+	// frame size that speed implies. Defaults (paused, 1x, 160 ticks) when
+	// nothing is selected.
+	std::string AnimPanelTitleText();
+	void ToggleSelectedAnimPlayback();
+	void ResetSelectedAnim();
+	// One rung up (+1) or down (-1) the shared ladder
+	// (`igi::AnimTimerSpeedStepIndex`, source/runtime/editor_quick_actions.h).
+	void AdjustSelectedAnimSpeed(int direction);
+	// One engine frame forward (+1) or back (-1), through
+	// `AnimPlayback::StepFrames`.
+	void StepSelectedAnim(int direction);
+	// The F10 panel's own click handler: hit-tests `igi::AnimPanel` (the layout
+	// the renderer draws, source/runtime/anim_panel.h) and runs the same actions
+	// above. Returns true when the click was inside the panel and was consumed -
+	// including a click on the panel's background or on a button that cannot act
+	// (the panel is an overlay; a click must not fall through to object picking).
+	bool AnimPanelClick(int x, int y);
+
 	int FindHumanAiTaskId(int objIndex) const;
 	const std::vector<int>& GetOrComputeAnimationIds(int objIndex);
 	// Pure computation (no cache reads/writes) of GetOrComputeAnimationIds' result —

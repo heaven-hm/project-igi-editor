@@ -13,6 +13,9 @@
 #include "../runtime/pause_menu_rows.h"
 #include "../runtime/log_policy.h"
 #include "../runtime/rain_rules.h"
+// The F10 animation panel's layout and text (#73): the same pure header
+// `App::AnimPanelClick` hit-tests, so a button is drawn where it is clicked.
+#include "../runtime/anim_panel.h"
 #include "../utils.h"
 #include <vector>
 #include <unordered_map>
@@ -1455,44 +1458,98 @@ void Renderer::Draw(const draw_params_s &params,
       draw_text(wm_x, params.view_define_->viewport_height_ - 20, s_ver_watermark.c_str(), 0.7f, 0.7f, 0.7f);
     }
 
-    // Animation status panel (bottom-left)
+    // Animation panel (F10, top-left) - issue #73.
+    //
+    // The transport row (play/pause, frame step both ways, speed down/up) and
+    // every rect come from `igi::AnimPanel` (source/runtime/anim_panel.h), which
+    // is ALSO what `App::AnimPanelClick` hit-tests, so a button is drawn exactly
+    // where it is clicked. The panel's top-left anchor is `AnimPanel::kTop` in
+    // TOP-DOWN screen pixels - the GLUT mouse convention - and is converted to
+    // GL's bottom-up space here with `vph - y`, the same conversion
+    // `TerrainPalette`/`GraphNodePanel` use (source/renderer/renderer.h:28-147).
     if (task_tree_view.anim_debug_visible_ && !task_tree_view.anim_status_.empty()) {
-      const int aX = 10;
-      const int aY = 80;
-      const int aW = 360;
-      const int aRowH = 16;
-      int lines = 1;
-      for (char c : task_tree_view.anim_status_) if (c == '\n') lines++;
-      const int aH = 28 + lines * aRowH + 6;
+      namespace AP = igi::AnimPanel;
       const int vph = params.view_define_->viewport_height_;
+      const int px = AP::kLeft;
+      const int py_top = AP::kTop;
+      const int pw = AP::kWidth;
+      const int ph = AP::PanelHeight();
+      auto gl_y = [vph](int screen_y) { return (float)(vph - screen_y); };
 
-      // Background
+      // Background + border
       glEnable(GL_BLEND);
       glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
       glColor4f(0.04f, 0.04f, 0.05f, 0.78f);
       glBegin(GL_QUADS);
-      glVertex2f((float)aX, (float)(vph - aY));
-      glVertex2f((float)(aX + aW), (float)(vph - aY));
-      glVertex2f((float)(aX + aW), (float)(vph - (aY + aH)));
-      glVertex2f((float)aX, (float)(vph - (aY + aH)));
+      glVertex2f((float)px, gl_y(py_top));
+      glVertex2f((float)(px + pw), gl_y(py_top));
+      glVertex2f((float)(px + pw), gl_y(py_top + ph));
+      glVertex2f((float)px, gl_y(py_top + ph));
       glEnd();
-
-      // Border
       glColor4f(0.3f, 0.8f, 0.3f, 0.9f);
       glLineWidth(1.0f);
       glBegin(GL_LINE_LOOP);
-      glVertex2f((float)aX, (float)(vph - aY));
-      glVertex2f((float)(aX + aW), (float)(vph - aY));
-      glVertex2f((float)(aX + aW), (float)(vph - (aY + aH)));
-      glVertex2f((float)aX, (float)(vph - (aY + aH)));
+      glVertex2f((float)px, gl_y(py_top));
+      glVertex2f((float)(px + pw), gl_y(py_top));
+      glVertex2f((float)(px + pw), gl_y(py_top + ph));
+      glVertex2f((float)px, gl_y(py_top + ph));
       glEnd();
 
-      // Title
-      const char* title = task_tree_view.anim_playing_ ? "Animations Playing" : "Animations Loaded";
-      draw_text_sm(aX + 6, aY - 4, title, 0.3f, 0.8f, 0.3f);
+      // Title: the transport's state, formatted by `igi::FormatAnimPanelTitle`
+      // from the same three values the buttons and the keys read.
+      draw_text_sm(px + 6, AP::TitleBaseline(), task_tree_view.anim_panel_title_.c_str(),
+                   0.3f, 0.8f, 0.3f);
 
-      // Status text
-      draw_text_sm(aX + 6, aY - 22, task_tree_view.anim_status_.c_str(), 0.7f, 0.9f, 0.7f);
+      // The control row. A button whose action cannot act (nothing animatable is
+      // selected) is drawn dimmed rather than hidden: the layout is fixed, so a
+      // disabled control must still look like the control it is.
+      for (int i = 0; i < AP::kCount; ++i) {
+        int bx = 0, by = 0, bw = 0, bh = 0;
+        AP::GetButtonRect(i, bx, by, bw, bh);
+        const float x0 = (float)bx, x1 = (float)(bx + bw);
+        const float y0 = gl_y(by + bh), y1 = gl_y(by);
+        glColor4f(0.12f, 0.12f, 0.14f, 0.85f);
+        glBegin(GL_QUADS);
+        glVertex2f(x0, y0);
+        glVertex2f(x1, y0);
+        glVertex2f(x1, y1);
+        glVertex2f(x0, y1);
+        glEnd();
+        glColor4f(0.45f, 0.7f, 0.45f, 0.9f);
+        glBegin(GL_LINE_LOOP);
+        glVertex2f(x0, y0);
+        glVertex2f(x1, y0);
+        glVertex2f(x1, y1);
+        glVertex2f(x0, y1);
+        glEnd();
+
+        const char* label = AP::ButtonLabel(i, task_tree_view.anim_panel_playing_);
+        const int lblW = glutBitmapLength(GLUT_BITMAP_HELVETICA_10, (const unsigned char*)label);
+        int lblX = bx + (bw - lblW) / 2;
+        if (lblX < bx + 2) lblX = bx + 2;
+        draw_text_sm(lblX, AP::ButtonLabelBaseline(), label,
+                     task_tree_view.anim_panel_has_target_ ? 0.85f : 0.45f,
+                     task_tree_view.anim_panel_has_target_ ? 0.95f : 0.5f,
+                     task_tree_view.anim_panel_has_target_ ? 0.85f : 0.5f);
+      }
+
+      // Status rows: one line each, at the layout's own row baselines. The
+      // font's line height is NOT the row pitch (`AP::kRowH` is), so the rows
+      // are drawn individually instead of as one multi-line string.
+      {
+        std::stringstream ss(task_tree_view.anim_status_);
+        std::string line;
+        int row = 0;
+        while (row < AP::kMaxRows && std::getline(ss, line)) {
+          draw_text_sm(px + 6, AP::RowBaseline(row), line.c_str(), 0.7f, 0.9f, 0.7f);
+          ++row;
+        }
+      }
+
+      // Footer: the keys that do the same thing as the buttons. There is no QED
+      // binding for a frame step (retail QED.doc, "General keystrokes"), so the
+      // panel is where the editor's own keys are stated.
+      draw_text_sm(px + 6, AP::FooterBaseline(), AP::kKeyHints, 0.55f, 0.6f, 0.55f);
       glDisable(GL_BLEND);
     }
 

@@ -342,6 +342,9 @@ bool HasHandlerOrVisibleMessage(const std::string& dispatchers, const std::strin
 struct RepoFiles {
     std::string app_input_path;
     std::string app_view_path;
+    // Issue #73: the shared animation-transport implementation lives here, and
+    // the timer keys in app_input.cpp are thin dispatches into it.
+    std::string app_cpp_path;
     std::string config_cpp_path;
     std::string config_h_path;
     std::string app_h_path;
@@ -349,6 +352,7 @@ struct RepoFiles {
     std::string doc_path;
     std::string app_input;
     std::string app_view;
+    std::string app_cpp;
     std::string config_cpp;
     std::string config_h;
     std::string app_h;
@@ -358,6 +362,7 @@ struct RepoFiles {
     // the removals by naming the identifiers that were deleted.
     std::string app_input_code;
     std::string app_view_code;
+    std::string app_cpp_code;
     std::string config_cpp_code;
     std::string config_h_code;
     std::string app_h_code;
@@ -371,18 +376,21 @@ struct RepoFiles {
         std::string tried;
         app_input_path = FindRepoFile("source/app_input.cpp", &tried);
         app_view_path = FindRepoFile("source/app_view.cpp", &tried);
+        app_cpp_path = FindRepoFile("source/app.cpp", &tried);
         config_cpp_path = FindRepoFile("source/config.cpp", &tried);
         config_h_path = FindRepoFile("source/config.h", &tried);
         app_h_path = FindRepoFile("source/app.h", &tried);
         bindings_path = FindRepoFile("assets/editor/qed/qedkeybindings.qsc", &tried);
         doc_path = FindRepoFile("docs/igi-re-parity/KEYBINDINGS.md", &tried);
-        if (app_input_path.empty() || app_view_path.empty() || config_cpp_path.empty() ||
+        if (app_input_path.empty() || app_view_path.empty() || app_cpp_path.empty() ||
+            config_cpp_path.empty() ||
             config_h_path.empty() || app_h_path.empty() || bindings_path.empty() ||
             doc_path.empty()) {
             return false;
         }
         if (!ReadFile(app_input_path, &app_input)) return false;
         if (!ReadFile(app_view_path, &app_view)) return false;
+        if (!ReadFile(app_cpp_path, &app_cpp)) return false;
         if (!ReadFile(config_cpp_path, &config_cpp)) return false;
         if (!ReadFile(config_h_path, &config_h)) return false;
         if (!ReadFile(app_h_path, &app_h)) return false;
@@ -390,6 +398,7 @@ struct RepoFiles {
         if (!ReadFile(doc_path, &doc)) return false;
         app_input_code = StripComments(app_input);
         app_view_code = StripComments(app_view);
+        app_cpp_code = StripComments(app_cpp);
         config_cpp_code = StripComments(config_cpp);
         config_h_code = StripComments(config_h);
         app_h_code = StripComments(app_h);
@@ -403,6 +412,7 @@ struct RepoFiles {
     if (!files.Load()) {                                                         \
         GTEST_SKIP() << "repository files not reachable from this working "      \
                         "directory (source/app_input.cpp, source/app_view.cpp, " \
+                        "source/app.cpp, "                                        \
                         "source/config.cpp, source/config.h, source/app.h, "     \
                         "assets/editor/qed/qedkeybindings.qsc, "                 \
                         "docs/igi-re-parity/KEYBINDINGS.md)";                    \
@@ -722,6 +732,13 @@ TEST(Keybindings48, ImplementedBindingsKeepTheirDocumentedCombos) {
 // The implemented handlers must go through the pure, host-tested helpers in
 // source/runtime/editor_quick_actions.h rather than re-deriving the decision
 // inline: that is what makes the behaviour testable off-Windows.
+//
+// Issue #73 moved the timer half of that one step further: the four keys are now
+// thin dispatches into the SAME App methods the F10 panel's buttons call, and
+// those methods live in source/app.cpp. The assertions below therefore check
+// both halves - the key names still reach the shared methods, and the shared
+// methods still use the tested ladder and the playback's own Reset/Pause/Resume -
+// which is strictly more than the original single-file check.
 TEST(Keybindings48, ImplementedQuickActionsUseTheHostTestedHelpers) {
     REQUIRE_REPO_FILES();
     EXPECT_NE(files.app_input.find("Utils::SetClipboardText"), std::string::npos)
@@ -729,12 +746,33 @@ TEST(Keybindings48, ImplementedQuickActionsUseTheHostTestedHelpers) {
            "existing clipboard (source/utils.cpp:445)";
     EXPECT_NE(files.app_input.find("FormatCameraTripleForClipboard"), std::string::npos)
         << "the camera copy handlers do not use the tested formatter";
-    EXPECT_NE(files.app_input.find("AnimTimerSpeedIndex"), std::string::npos)
-        << "TimerIncreaseSpeed/TimerDecreaseSpeed do not use the tested speed ladder";
-    EXPECT_NE(files.app_input.find("pb->Reset()"), std::string::npos)
+
+    // (1) The keys dispatch into the one transport implementation.
+    EXPECT_NE(files.app_input.find("ToggleSelectedAnimPlayback()"), std::string::npos)
+        << "TimerStartStop no longer dispatches to App::ToggleSelectedAnimPlayback";
+    EXPECT_NE(files.app_input.find("ResetSelectedAnim()"), std::string::npos)
+        << "TimerReset no longer dispatches to App::ResetSelectedAnim";
+    EXPECT_NE(files.app_input.find("AdjustSelectedAnimSpeed("), std::string::npos)
+        << "TimerIncreaseSpeed/TimerDecreaseSpeed no longer dispatch to "
+           "App::AdjustSelectedAnimSpeed";
+
+    // (2) That implementation uses the host-tested ladder and the playback's own
+    //     clock calls, and the F10 panel's buttons call the same methods.
+    EXPECT_NE(files.app_cpp_code.find("AnimTimerSpeedIndex"), std::string::npos)
+        << "the timer transport does not use the tested speed ladder";
+    EXPECT_NE(files.app_cpp_code.find("AnimTimerSpeedStepIndex"), std::string::npos)
+        << "the timer transport does not step the tested speed ladder";
+    EXPECT_NE(files.app_cpp_code.find("pb->Reset()"), std::string::npos)
         << "TimerReset does not rewind the playback clock (AnimPlayback::Reset)";
-    EXPECT_NE(files.app_input.find("pb->Pause()"), std::string::npos)
+    EXPECT_NE(files.app_cpp_code.find("pb->Pause()"), std::string::npos)
         << "TimerStartStop does not stop the playback clock (AnimPlayback::Pause)";
+    EXPECT_NE(files.app_cpp_code.find("pb->Resume()"), std::string::npos)
+        << "TimerStartStop does not restart the playback clock (AnimPlayback::Resume)";
+    EXPECT_NE(files.app_cpp_code.find("pb->StepFrames(direction)"), std::string::npos)
+        << "the frame step does not go through AnimPlayback::StepFrames";
+    EXPECT_NE(files.app_cpp_code.find("App::AnimPanelClick"), std::string::npos)
+        << "the F10 panel has no click handler, so its buttons cannot drive the "
+           "same transport as the keys";
 }
 
 TEST(Keybindings48, Task11DocumentRecordsTheFiveAdjacentDecisions) {

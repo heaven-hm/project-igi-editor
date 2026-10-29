@@ -15,6 +15,10 @@
 // The engine's "pose what is drawn" rule for the editor's viewport
 // (`Human_WakeIfVisible` 0x45F140) - see the header for the citations.
 #include "runtime/anim_pose_set.h"
+// The F10 panel's layout, frame-step arithmetic and row text (#73), and the one
+// speed ladder the F12 keys and the panel both use.
+#include "runtime/anim_panel.h"
+#include "runtime/editor_quick_actions.h"
 #include "runtime/progress_overlay_policy.h"
 #include "runtime/window_style_policy.h"
 #include "runtime/viewport_size_policy.h"
@@ -1239,6 +1243,9 @@ void App::Frame(float delta_seconds) {
 			.anim_status_  = draw_params_.fast_scene_preview_ ? std::string() : BuildAnimStatusString(),
 			.anim_playing_ = !animPlaybacks_.empty(),
 			.anim_debug_visible_ = show_anim_debug_,
+			.anim_panel_playing_ = SelectedAnimPlaying(),
+			.anim_panel_title_ = AnimPanelTitleText(),
+			.anim_panel_has_target_ = SelectedAnimPlayback() != nullptr,
 			.prop_anim_bone_hierarchy_ = propAnimBoneHierarchy,
 			.prop_anim_ids_ = propAnimIds,
 			.prop_anim_active_id_ = propAnimActiveId,
@@ -1703,6 +1710,9 @@ void App::Frame(float delta_seconds) {
 		.anim_status_  = draw_params_.fast_scene_preview_ ? std::string() : BuildAnimStatusString(),
 		.anim_playing_ = !animPlaybacks_.empty(),
 		.anim_debug_visible_ = show_anim_debug_,
+		.anim_panel_playing_ = SelectedAnimPlaying(),
+		.anim_panel_title_ = AnimPanelTitleText(),
+		.anim_panel_has_target_ = SelectedAnimPlayback() != nullptr,
 		.prop_anim_bone_hierarchy_ = propAnimBoneHierarchy,
 		.prop_anim_ids_ = propAnimIds,
 		.prop_anim_active_id_ = propAnimActiveId,
@@ -4407,6 +4417,123 @@ void App::AdvanceGameplayAnimationClocks(const std::unordered_set<int>& posed_ob
 	}
 }
 
+// ── The animation transport (#73) ────────────────────────────────────────────
+// One implementation for the F10 panel's buttons and the QED timer keys; see
+// app.h for the engine citations and `source/runtime/anim_panel.h` for the
+// layout and the frame arithmetic.
+
+AnimPlayback* App::SelectedAnimPlayback() {
+    if (selected_object_index_ < 0) return nullptr;
+    auto it = animPlaybacks_.find(selected_object_index_);
+    if (it == animPlaybacks_.end() || it->second.clip == nullptr) return nullptr;
+    return &it->second;
+}
+
+bool App::SelectedAnimPlaying() const {
+    auto it = animPlaybacks_.find(selected_object_index_);
+    return it != animPlaybacks_.end() && it->second.clip != nullptr && it->second.playing;
+}
+
+std::string App::AnimPanelTitleText() {
+    AnimPlayback* pb = SelectedAnimPlayback();
+    if (!pb) {
+        return igi::FormatAnimPanelTitle(
+            false, 1.0f, igi::AnimFrameStepTicks(1.0f, igi::kAnimDefaultTicksPerFrame));
+    }
+    // The step size is the ENGINE's frame at this speed: `inst->speed =
+    // gTicksPerFrame * speed` (Anim_SetSpeed 0x4D6580, src/boneobj/anim.c:172-179),
+    // which is the same value `AnimPlayback::StepFrames` steps by.
+    return igi::FormatAnimPanelTitle(pb->playing, pb->speed,
+                                     igi::AnimFrameStepTicks(pb->speed, pb->TicksPerFrame()));
+}
+
+void App::ToggleSelectedAnimPlayback() {
+    AnimPlayback* pb = SelectedAnimPlayback();
+    if (!pb) {
+        status_message_ = "TimerStartStop: select an object with an animation first";
+        return;
+    }
+    if (pb->playing) pb->Pause(); else pb->Resume();
+    status_message_ = std::string("Timer ") + (pb->playing ? "running" : "stopped") +
+                      ": '" + pb->clip->name + "'";
+}
+
+void App::ResetSelectedAnim() {
+    AnimPlayback* pb = SelectedAnimPlayback();
+    if (!pb) {
+        status_message_ = "TimerReset: select an object with an animation first";
+        return;
+    }
+    // Rewinds to the clip's first frame and stops the clock
+    // (source/runtime/anim_playback.cpp:154-161).
+    pb->Reset();
+    status_message_ = "Timer reset to frame 0: '" + pb->clip->name + "'";
+}
+
+void App::AdjustSelectedAnimSpeed(int direction) {
+    const char* action = direction > 0 ? "TimerIncreaseSpeed" : "TimerDecreaseSpeed";
+    AnimPlayback* pb = SelectedAnimPlayback();
+    if (!pb) {
+        status_message_ = std::string(action) + ": select an object with an animation first";
+        return;
+    }
+    const int current = igi::AnimTimerSpeedIndex(pb->speed);
+    const int next = igi::AnimTimerSpeedStepIndex(current, direction);
+    // "at the limit" means the step did not move: the ladder clamps at both
+    // ends, and saying so is what stops the control from looking like a no-op.
+    const bool at_limit = (next == current);
+    pb->speed = igi::AnimTimerSpeedAt(next);
+    status_message_ = "Timer speed: " + igi::AnimTimerSpeedLabel(pb->speed) +
+                      (at_limit ? " (limit)" : "") + " for '" + pb->clip->name + "'";
+}
+
+void App::StepSelectedAnim(int direction) {
+    AnimPlayback* pb = SelectedAnimPlayback();
+    if (!pb) {
+        status_message_ = "Frame step: select an object with an animation first";
+        return;
+    }
+    if (!pb->EngineReady()) {
+        status_message_ = "Frame step: the engine cannot play '" + pb->clip->name + "'";
+        return;
+    }
+    if (pb->StepFrames(direction) == 0) {
+        // Nothing moved, and the reason is the engine's own clamp rule: a
+        // one-shot at the end it is stepping towards, or - for a loop - a wrap
+        // that landed back on the frame it started from (`AnimStepTargetTick`,
+        // mirroring `BoneObj_AnimEventsCB` 0x4D4B60, src/boneobj/boneobj.c:892-905).
+        status_message_ = std::string("Frame step: '") + pb->clip->name +
+                          (pb->Looping() ? "' wrapped onto the same frame"
+                                         : (direction > 0 ? "' is at the end"
+                                                          : "' is at the start"));
+        return;
+    }
+    const int frame = igi::AnimFrameIndexForTick(pb->currentTimeMs, pb->TicksPerFrame());
+    status_message_ = "Frame " + std::to_string(frame) + " (" +
+                      igi::AnimTimerSpeedLabel(pb->speed) + "): '" + pb->clip->name + "'" +
+                      (pb->playing ? "" : " (paused)");
+    glutPostRedisplay();
+}
+
+bool App::AnimPanelClick(int x, int y) {
+    // Same visibility gate as the draw (source/renderer/renderer_draw.cpp): the
+    // panel exists while F10 is on and there is something to show.
+    if (!show_anim_debug_) return false;
+    if (!igi::AnimPanel::InPanel(x, y)) return false;
+    if (BuildAnimStatusString().empty()) return false;
+
+    switch (igi::AnimPanel::HitTest(x, y)) {
+    case igi::AnimPanel::kPlayPause:   ToggleSelectedAnimPlayback(); break;
+    case igi::AnimPanel::kStepBack:    StepSelectedAnim(-1);         break;
+    case igi::AnimPanel::kStepForward: StepSelectedAnim(1);          break;
+    case igi::AnimPanel::kSpeedDown:   AdjustSelectedAnimSpeed(-1);  break;
+    case igi::AnimPanel::kSpeedUp:     AdjustSelectedAnimSpeed(1);   break;
+    default: break;   // the panel's background: consumed, nothing to do
+    }
+    glutPostRedisplay();
+    return true;
+}
+
 std::string App::BuildAnimStatusString() {
     if (animPlaybacks_.empty()) return {};
 
@@ -4415,20 +4542,33 @@ std::string App::BuildAnimStatusString() {
     auto& objects = level_.GetLevelObjects().GetObjects();
     for (const auto& [idx, pb] : animPlaybacks_) {
         if (!pb.clip) continue;
-        if (count >= 5) { // cap at 5 lines
+        // The cap is the layout's: the panel draws at most `kMaxRows` lines, and
+        // the last of those is this "... and N more" row.
+        if (count >= igi::AnimPanel::kMaxRows - 1) {
             s += "... and " + std::to_string((int)animPlaybacks_.size() - count) + " more\n";
             break;
         }
         std::string name = (idx >= 0 && idx < (int)objects.size()) ? objects[idx].name : ("#" + std::to_string(idx));
         if (name.empty()) name = objects[idx].modelId;
-        s += name + ": " + pb.clip->name;
-        if (pb.playing) {
-            int ms = (int)pb.currentTimeMs;
-            int d = pb.clip->duration_ms();
-            s += " [" + std::to_string(ms) + "/" + std::to_string(d) + "ms]";
-        } else {
-            s += " [paused]";
-        }
+
+        // One row, formatted by the same pure function the host lane pins
+        // (source/runtime/anim_panel.h): the frame the engine clock is on, the
+        // clip's frame count, the speed label the F12 keys also report, and the
+        // transport state. Every value is engine state - `currentTimeMs` is the
+        // mirror of `Anim_GetTime` 0x4D6500 and `EngineLength()` is
+        // `Anim_GetLength` 0x4D64E0 - except the frame index, which is display.
+        igi::AnimPanelRow row;
+        row.name = name;
+        row.clip = pb.clip->name;
+        row.selected = (idx == selected_object_index_);
+        row.playing = pb.playing;
+        row.engine_ready = pb.EngineReady();
+        row.looping = pb.Looping();
+        row.tick = pb.currentTimeMs;
+        row.length = pb.EngineLength();
+        row.speed = pb.speed;
+        row.ticks_per_frame = pb.TicksPerFrame();
+        s += igi::FormatAnimPanelRow(row);
         s += "\n";
         count++;
     }
