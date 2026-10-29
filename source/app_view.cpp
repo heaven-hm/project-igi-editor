@@ -5,6 +5,7 @@
  *****************************************************************************/
 #include "app_internal.h"
 #include "renderer/igi_transform.h"
+#include "level/collision_drop_rules.h"
 #include "runtime/editor_camera_start.h"
 #include "level/terrain_snap_rules.h"
 #include <unordered_set>
@@ -592,9 +593,56 @@ void App::SnapObjectsToTerrain() {
             continue;
         }
 
-        float terrainZ = 0.0f;
-        const bool terrainFound = level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ, false);
         const bool isHuman = (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale");
+
+        // For a HUMAN the surface is whatever the engine's drop finds, and that is
+        // COLLISION geometry -- building floors, ramps, the colbox volumes -- not
+        // terrain alone.  Game_DropToGround (HOOK 0x4149B0, src/game/misc.c:75-97)
+        // probes down and then up through Coll_DropPointsMat (HOOK 0x4CB9F0,
+        // src/coll/coll.c:813-818 -> Coll_Drop :518-616 -> Coll_VerticalHit
+        // HOOK 0x4CB050, :626-774), and a human's authored `placePos` is the
+        // COLLISION cube's position, not the drawn one (Human_ParamChangedHandler
+        // HOOK 0x45F890, src/humanbase/human.c:448-461 -- it sets only the
+        // matrix's rotation).  The editor's terrain-only query misses under a
+        // building (a designed DiscardTerrain hole, src/terredit/discard.c:10-12),
+        // which is why soldiers rendered half above and half below the ground.
+        //
+        // The geometry is already parsed per model (XTVC/ECFC,
+        // source/renderer/mef_native.h:40-63, populated at :153-162), so this needs
+        // no new data.  Non-humans keep the terrain query: props, trees, buildings
+        // and fences have authoritative QSC Z values and are never dropped.
+        float terrainZ = 0.0f;
+        bool terrainFound = false;
+        if (isHuman) {
+            std::vector<igi::DropTriangle> collision;
+            for (const auto& other : objects) {
+                if (other.modelId.empty()) continue;
+                const glm::dvec3 half =
+                    glm::dvec3(renderer_.GetMeshExtents(other.modelId, other.isBuilding)) *
+                    (40.96 * (double)std::max(other.scale, 0.001f));
+                if (std::abs(other.pos.x - obj.pos.x) > half.x) continue;
+                if (std::abs(other.pos.y - obj.pos.y) > half.y) continue;
+                const ParsedGeometry* geo =
+                    renderer_.GetParsedGeometryForCollision(other.modelId, other.isBuilding);
+                if (geo == nullptr || geo->xtvcVerts.empty() || geo->ecfcFaces.empty()) continue;
+                const glm::mat4 m = igi::IgiObjectMatrix(other.pos, other.rot, other.scale);
+                igi::AppendTransformedTriangles(
+                    reinterpret_cast<const float*>(geo->xtvcVerts.data()),
+                    geo->xtvcVerts.size(),
+                    reinterpret_cast<const unsigned short*>(&geo->ecfcFaces[0].a),
+                    geo->ecfcFaces.size() * 3,
+                    &m[0][0], collision);  // column-major, glm's own layout
+            }
+            // Game_DropToGround's own two probes, in its own order.
+            const igi::DropHit hit = igi::DropToGround(collision, obj.pos.x, obj.pos.y);
+            if (hit.found) {
+                terrainFound = true;
+                terrainZ = (float)hit.z;
+            }
+        }
+        if (!terrainFound) {
+            terrainFound = level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ, false);
+        }
         const double zDelta = obj.original_pos.z - (double)terrainZ;
 
         // The rule itself is igi::DecideTerrainSnap (level/terrain_snap_rules.h), shared
