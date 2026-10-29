@@ -187,6 +187,28 @@ enum class GraphNodeKind { Default, Door, View, Stair };
 // e.g. "NODECRITERIA_DOOR" -> Door). Empty/unknown criteria -> Default.
 GraphNodeKind GRAPH_NodeKind(const GraphNode& node);
 
+// Add `flag` to a node's criteria expression, or remove it when already
+// present, leaving every other flag alone. `flag` is the full constant name,
+// e.g. "NODECRITERIA_DOOR". Flags are joined with '|'.
+//
+// The criteria field is an EXPRESSION, not an opaque label: Graph_AddNode
+// stores Script_EvalExpr(criteria) into GraphNode.flags
+// (0x4F9510, src/graphnode/graph.c:286) and Expr_EvalInt implements bitwise
+// OR (OP_OR, src/script/expr.c:230), so the engine combines the three
+// registered constants -- NODECRITERIA_DOOR/VIEW/STAIR, registered by
+// AIGraph_Init 0x508FA0 (src/sysmisc/aigraph.c:127-129) -- into one bitmask.
+// Consumers test single bits: AIGraph_FindNearest skips
+// `flags & AIGraph_GetViewCriteria()` (0x5096F0, src/sysmisc/aigraph.c:311)
+// and GraphNode_HasCriteria tests `flags & mask`
+// (0x509890, src/sysmisc/aigraph.c:360).
+//
+// Only the three constants above are registered, so callers must not pass an
+// invented name: Script_EvalExpr -> Expr_EvalInt -> Expr_UnknownIdentifier
+// reports "Unknown identifier ... in expression" and yields 0
+// (src/script/expr.c:203-204, 57-60), i.e. the engine would read a plain node.
+std::string GRAPH_ToggleCriteriaFlag(const std::string& criteria,
+                                     const std::string& flag);
+
 // Find a node by id. Returns nullptr if absent.
 GraphNode*       GRAPH_FindNode(GraphFile& graph, int id);
 const GraphNode* GRAPH_FindNode(const GraphFile& graph, int id);

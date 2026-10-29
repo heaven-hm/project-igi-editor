@@ -171,6 +171,38 @@ Stored as a string in the file. Multiple flags may be combined in the string.
 
 Classification precedence (when multiple match): **Door > Stair > View > Default**.
 
+### Criteria is an expression, not a label
+
+The criteria text is evaluated by the engine's script expression evaluator and the
+result is kept as a **bitmask** on the node:
+
+* `Graph_AddNode` `0x4F9510` (`src/graphnode/graph.c:286`) does
+  `n->flags = Script_EvalExpr(n->criteria)`.
+* `Expr_EvalInt` implements bitwise OR (`OP_OR`, `src/script/expr.c:230`), so
+  flags combine with `|`, e.g. `NODECRITERIA_DOOR|NODECRITERIA_STAIR`.
+* Exactly three constants are registered, by `AIGraph_Init` `0x508FA0`
+  (`src/sysmisc/aigraph.c:127-129`). Consumers test single bits:
+  `AIGraph_FindNearest` `0x5096F0` skips `flags & AIGraph_GetViewCriteria()`
+  (`src/sysmisc/aigraph.c:311`) and `GraphNode_HasCriteria` `0x509890` tests
+  `flags & mask` (`src/sysmisc/aigraph.c:360`).
+
+The criteria DOOR/VIEW/STAIR toggles in the properties panel **compose** into that
+expression (`GRAPH_ToggleCriteriaFlag`, `source/renderer/graph_writer.h`), so one
+node can carry several flags. Retail data only ever uses one at a time — across
+all 11 shipped `graph*.dat` files the census is 64 `NODECRITERIA_DOOR`,
+102 `NODECRITERIA_STAIR`, 2 `NODECRITERIA_VIEW`, and no combined string.
+
+> **There is no node "type" field.** `GraphNode`
+> (`src/graphnode/graphnodetypes.h:60-74`) carries `id`, `pos`, `gamma`,
+> `radius`, `diameter`, `flags`, `criteria`, `material` and its links — nothing
+> that selects a behaviour. Behaviour is authored in the **AI script**: patrols
+> come from `AIPatrol_Start` `0x48E8C0` / `AIPatrol_Update` `0x48E920` /
+> `AIPatrol_End` `0x48EB30` (`src/aitask/aitask.c:812-897`) driving
+> `PatrolRoute`/`PatrolPathCommand`, not from graph nodes. A PATROL/GUARD/ALERT/
+> COVER node type has **no engine oracle**, and an unregistered
+> `NODECRITERIA_*` name evaluates to 0 with an "Unknown identifier" script error
+> (`src/script/expr.c:203-204, 57-60`) — the engine would read a plain node.
+
 ---
 
 ## 4. Edge Records
@@ -208,8 +240,8 @@ The editor uses `RENDERER_MODEL_SCALE_DOWN = 0.001f` to convert IGI world units 
 ### Activation
 
 1. Select an `AIGraph` task in the task tree (left-click).
-2. Press **F3** (`ShowGraphNodes` binding) to load and display the graph overlay.
-3. Press **F3** again to hide it.
+2. Press **F7** (`ShowGraphNodes` binding) to load and display the graph overlay.
+3. Press **F7** again to hide it.
 
 The overlay loads `graph<taskId>.dat` from the game's `graphs/` folder using the selected task's ID.
 
@@ -316,11 +348,15 @@ Opens automatically when a node is selected (left-click). Located on the left si
 | Gamma     | G−/G+       | Adjust orientation angle ±0.1                     |
 | Radius    | R−/R+       | Adjust radius ±0.25 (also scales visual box size) |
 | Material  | M−/M+       | Cycle surface material index (0–23)               |
-| Criteria  | DOOR toggle | Toggle `NODECRITERIA_DOOR` flag                   |
-| Criteria  | VIEW toggle | Toggle `NODECRITERIA_VIEW` flag                   |
-| Criteria  | STAIR toggle| Toggle `NODECRITERIA_STAIR` flag                  |
+| Criteria  | DOOR toggle | Add/remove `NODECRITERIA_DOOR` in the criteria expression |
+| Criteria  | VIEW toggle | Add/remove `NODECRITERIA_VIEW` in the criteria expression |
+| Criteria  | STAIR toggle| Add/remove `NODECRITERIA_STAIR` in the criteria expression |
 | —         | Delete Node | Remove this node from the graph                   |
 | —         | Save Graph  | Write all changes to disk immediately             |
+
+The three criteria toggles are independent: each one adds or removes only its own
+flag and leaves the others in place, so a node can carry more than one (see
+[Criteria is an expression](#criteria-is-an-expression-not-a-label)).
 
 ---
 
@@ -393,7 +429,11 @@ The "Save Graph" button in the node properties panel also writes to disk immedia
 | `GRAPH_Save()` | Patch positions only — reads original bytes, overwrites X/Y/Z of matched node IDs, writes result. File size never changes. Fastest for position-only edits. |
 | `GRAPH_Write()`| Full serializer — preserves original header + adjacency table, regenerates all node and edge tagged records from scratch. Supports add/remove/edit of nodes, criteria, radius, material, gamma, links. |
 
-The editor currently uses `GRAPH_Save()` (position-patch) for the overlay save. `GRAPH_Write()` is available for full structural edits.
+The editor uses `GRAPH_Write()` (full serializer) for the overlay save — see
+`Renderer::SaveGraphOverlay()` in `source/renderer/renderer_draw.cpp` — so node
+moves, creates, deletes, radius/material/gamma edits and link changes all
+persist. `GRAPH_Save()` remains available as the cheaper position-patch path and
+is covered by the parser tests, but no editor code calls it.
 
 ---
 
@@ -427,17 +467,17 @@ The in-memory overlay is also cleared on any level switch via `Renderer::BeginLo
 
 | File                                   | Responsibility                                            |
 |----------------------------------------|-----------------------------------------------------------|
-| `source/renderer/graph_writer.h/.cpp`   | Binary `.dat` parse (read: `igi1conv graph export`), `GRAPH_Save`, `GRAPH_Write` (full CRUD serializer) |
+| `source/renderer/graph_writer.h/.cpp`   | Binary `.dat` parse/write, `GRAPH_Save`, `GRAPH_Write` (full CRUD serializer), `GRAPH_NodeKind`, `GRAPH_ToggleCriteriaFlag` |
 | `source/renderer/graph_overlay.h`      | `GraphWorldToScreen`, `GRAPH_PickNode` (pure math, unit-tested) |
 | `source/renderer/graph_project.cpp`    | Implementation of `GraphWorldToScreen` and `GRAPH_PickNode` |
 | `source/renderer/renderer.h`           | Graph overlay state members, public API declarations      |
 | `source/renderer/renderer_draw.cpp`    | `DrawGraphNodes3D`, `DrawGraphOverlayInternal`, `DrawGraphNodePanel`, `PickGraphNodeAtScreen` |
 | `source/renderer/renderer.cpp`         | `BeginLoadLevel` (clears overlay on level switch/reset)   |
-| `source/app_input.cpp`                 | `ShowGraphNodes` F3 handler, `ScaleGraphNode*` handlers, Ctrl+S save |
+| `source/app_input.cpp`                 | `ShowGraphNodes` F7 handler, `ScaleGraphNode*` handlers, Ctrl+S save |
 | `source/app_input_mouse.cpp`           | Left-click node pick, task tree toggle, node panel button dispatch |
-| `source/app_level.cpp`                 | Backup creation + graphs/ sync, `ResetLevel` restore      |
+| `source/app_level.cpp`                 | Backup creation + graphs/ sync, `ResetLevel` restore, AIGraph `Graphdata` count sync on save |
 | `source/config.h`                      | `ConfigData::graphNodeSize` field                         |
 | `source/config.cpp`                    | Parse `QGraphNodeSize`, write in `Config::Save()`         |
 | `assets/editor/qed/qedconfig.qsc`      | `QGraphNodeSize(14)` default value                        |
 | `tests/test_graph_overlay.cpp`         | Unit tests for `GraphWorldToScreen` and `GRAPH_PickNode`  |
-| `tests/test_graph_parser.cpp`          | Round-trip parse + write tests for `.dat` format          |
+| `tests/test_graph_parser.cpp`          | Round-trip parse + write tests for `.dat` format, `GRAPH_NodeKind`, `GRAPH_ToggleCriteriaFlag` |

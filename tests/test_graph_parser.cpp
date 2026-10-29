@@ -149,6 +149,39 @@ TEST_F(GraphParserTest, WriteSupportsAddingAndRemovingNodes) {
     std::filesystem::remove(out);
 }
 
+// A node's criteria is an EXPRESSION the engine evaluates into a bitmask
+// (Graph_AddNode: n->flags = Script_EvalExpr(n->criteria), HOOK 0x4F9510,
+// src/graphnode/graph.c:286; Expr_EvalInt implements OP_OR, src/script/expr.c:230),
+// so the properties panel's toggles can compose more than one of the three
+// registered constants on a single node. The serializer must carry that composed
+// string through the engine's own record format unchanged -- the criteria is a
+// pascal string read into GraphNode.criteria[0x100] by Graph_ReadNodeCriteria
+// (HOOK 0x4FB030, src/graphtask/graph.c:262-270).
+TEST_F(GraphParserTest, WriteRoundTripsComposedCriteriaFlags) {
+    GraphFile g = GRAPH_Parse(GraphPathMulti());
+    ASSERT_TRUE(g.valid);
+    ASSERT_FALSE(g.nodes.empty());
+
+    const std::string composed = GRAPH_ToggleCriteriaFlag(
+        GRAPH_ToggleCriteriaFlag("", "NODECRITERIA_DOOR"), "NODECRITERIA_STAIR");
+    ASSERT_EQ(composed, "NODECRITERIA_DOOR|NODECRITERIA_STAIR");
+    const int id = g.nodes.front().id;
+    g.nodes.front().criteria = composed;
+
+    const std::string out = TempOut("igi_graph_criteria.dat");
+    ASSERT_TRUE(GRAPH_Write(GraphPathMulti(), out, g));
+
+    GraphFile r = GRAPH_Parse(out);
+    ASSERT_TRUE(r.valid);
+    const GraphNode* n = GRAPH_FindNode(r, id);
+    ASSERT_NE(n, nullptr);
+    EXPECT_EQ(n->criteria, composed);
+    // The composed string still classifies for the overlay's colour: Door keeps
+    // precedence over Stair (docs/graph_editor.md 3).
+    EXPECT_EQ(GRAPH_NodeKind(*n), GraphNodeKind::Door);
+    std::filesystem::remove(out);
+}
+
 TEST_F(GraphParserTest, WritePreservesTheRouteTableVerbatim) {
     GraphFile g = GRAPH_Parse(GraphPathMulti());  // graph7: nodes + edges
     ASSERT_TRUE(g.valid);

@@ -3879,8 +3879,12 @@ void Renderer::AdjustSelectedGraphMaterial(int d) {
 void Renderer::ToggleSelectedGraphCriteria(const std::string& key) {
   GraphNode* n = GRAPH_FindNode(graph_overlay_, graph_overlay_selected_);
   if (!n) return;
-  if (n->criteria.find(key) != std::string::npos) n->criteria.clear();
-  else n->criteria = "NODECRITERIA_" + key;
+  // Compose the flag into the criteria expression instead of replacing the
+  // string: the engine evaluates the text and keeps the result as a bitmask
+  // (Graph_AddNode: n->flags = Script_EvalExpr(n->criteria),
+  // 0x4F9510, src/graphnode/graph.c:286), so several of the three registered
+  // constants can be set on one node at once. See GRAPH_ToggleCriteriaFlag.
+  n->criteria = GRAPH_ToggleCriteriaFlag(n->criteria, "NODECRITERIA_" + key);
   graph_overlay_dirty_ = true;
 }
 bool Renderer::GetSelectedGraphNode(GraphNode& out) const {

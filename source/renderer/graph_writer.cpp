@@ -694,6 +694,44 @@ GraphNodeKind GRAPH_NodeKind(const GraphNode& node) {
     return GraphNodeKind::Default;
 }
 
+std::string GRAPH_ToggleCriteriaFlag(const std::string& criteria,
+                                     const std::string& flag) {
+    if (flag.empty()) return criteria;
+
+    // Split the expression on '|' -- the engine's OR operator
+    // (Expr_EvalInt OP_OR, src/script/expr.c:230) -- trimming blanks and
+    // dropping empty fields so a hand-edited file survives a round-trip.
+    std::vector<std::string> flags;
+    for (size_t start = 0; start <= criteria.size(); ) {
+        const size_t bar = criteria.find('|', start);
+        const std::string field = criteria.substr(
+            start, bar == std::string::npos ? std::string::npos : bar - start);
+        const size_t first = field.find_first_not_of(" \t");
+        if (first != std::string::npos) {
+            const size_t last = field.find_last_not_of(" \t");
+            flags.push_back(field.substr(first, last - first + 1));
+        }
+        if (bar == std::string::npos) break;
+        start = bar + 1;
+    }
+
+    // Toggle: drop every occurrence of `flag`, otherwise append it.
+    std::vector<std::string> kept;
+    bool removed = false;
+    for (const std::string& f : flags) {
+        if (f == flag) { removed = true; continue; }
+        kept.push_back(f);
+    }
+    if (!removed) kept.push_back(flag);
+
+    std::string joined;
+    for (size_t i = 0; i < kept.size(); ++i) {
+        if (i) joined += '|';
+        joined += kept[i];
+    }
+    return joined;
+}
+
 GraphNode* GRAPH_FindNode(GraphFile& graph, int id) {
     for (GraphNode& n : graph.nodes)
         if (n.id == id) return &n;

@@ -75,3 +75,64 @@ TEST(GraphPickNodeTest, IgnoresNodesBehindCamera) {
     int id = GRAPH_PickNode(g, m, 400.0f, 300.0f, 800.0f, 600.0f, 50.0f);
     EXPECT_EQ(id, -1);
 }
+
+// ============================================================
+//  GRAPH_ToggleCriteriaFlag — the properties panel's criteria toggles
+//
+//  The criteria field is an EXPRESSION the engine evaluates into a bitmask
+//  (Graph_AddNode: n->flags = Script_EvalExpr(n->criteria), 0x4F9510,
+//  src/graphnode/graph.c:286) and Expr_EvalInt implements bitwise OR
+//  (OP_OR, src/script/expr.c:230), so the three registered constants
+//  (AIGraph_Init 0x508FA0, src/sysmisc/aigraph.c:127-129) compose. Toggling
+//  must add/remove ONE flag and leave the others in place.
+//
+//  Lives in this suite (not test_graph_parser.cpp) because this file is
+//  host-portable, so the same tests run in both the native host lane and the
+//  Windows igi_tests binary.
+// ============================================================
+
+TEST(GraphCriteriaFlagTest, AddsFlagToEmptyCriteria) {
+    EXPECT_EQ(GRAPH_ToggleCriteriaFlag("", "NODECRITERIA_DOOR"),
+              "NODECRITERIA_DOOR");
+}
+TEST(GraphCriteriaFlagTest, RemovesFlagWhenAlreadyPresent) {
+    EXPECT_EQ(GRAPH_ToggleCriteriaFlag("NODECRITERIA_DOOR", "NODECRITERIA_DOOR"),
+              "");
+}
+TEST(GraphCriteriaFlagTest, ComposesTwoFlagsInsteadOfReplacing) {
+    // The regression this guards: the old panel toggle overwrote the string,
+    // so a node could never carry two criteria even though the engine ORs them.
+    EXPECT_EQ(GRAPH_ToggleCriteriaFlag("NODECRITERIA_DOOR", "NODECRITERIA_VIEW"),
+              "NODECRITERIA_DOOR|NODECRITERIA_VIEW");
+}
+TEST(GraphCriteriaFlagTest, RemovesOneFlagAndKeepsTheOther) {
+    EXPECT_EQ(GRAPH_ToggleCriteriaFlag("NODECRITERIA_DOOR|NODECRITERIA_VIEW",
+                                       "NODECRITERIA_DOOR"),
+              "NODECRITERIA_VIEW");
+}
+TEST(GraphCriteriaFlagTest, ComposesAllThreeRegisteredFlags) {
+    std::string c = GRAPH_ToggleCriteriaFlag("", "NODECRITERIA_DOOR");
+    c = GRAPH_ToggleCriteriaFlag(c, "NODECRITERIA_VIEW");
+    c = GRAPH_ToggleCriteriaFlag(c, "NODECRITERIA_STAIR");
+    EXPECT_EQ(c, "NODECRITERIA_DOOR|NODECRITERIA_VIEW|NODECRITERIA_STAIR");
+    // Toggling one back off leaves the other two intact.
+    c = GRAPH_ToggleCriteriaFlag(c, "NODECRITERIA_VIEW");
+    EXPECT_EQ(c, "NODECRITERIA_DOOR|NODECRITERIA_STAIR");
+}
+TEST(GraphCriteriaFlagTest, TrimsBlanksAndDropsEmptyFields) {
+    EXPECT_EQ(GRAPH_ToggleCriteriaFlag("  NODECRITERIA_DOOR | ", "NODECRITERIA_VIEW"),
+              "NODECRITERIA_DOOR|NODECRITERIA_VIEW");
+}
+TEST(GraphCriteriaFlagTest, EmptyFlagNameIsANoOp) {
+    EXPECT_EQ(GRAPH_ToggleCriteriaFlag("NODECRITERIA_DOOR", ""),
+              "NODECRITERIA_DOOR");
+}
+TEST(GraphCriteriaFlagTest, ComposedCriteriaStillClassifies) {
+    // GRAPH_NodeKind matches substrings, so a composed string must still be
+    // classified -- Door keeps precedence over Stair (docs/graph_editor.md 3).
+    const std::string c = GRAPH_ToggleCriteriaFlag("NODECRITERIA_STAIR",
+                                                   "NODECRITERIA_DOOR");
+    EXPECT_EQ(c, "NODECRITERIA_STAIR|NODECRITERIA_DOOR");
+    GraphNode n; n.id = 1; n.criteria = c;
+    EXPECT_EQ(GRAPH_NodeKind(n), GraphNodeKind::Door);
+}
