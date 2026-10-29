@@ -3,8 +3,9 @@
 Status: **complete** for the 25 bindings listed by issue #48, and for the five
 adjacent silent no-ops decided under **task-11** (second table below).
 Scope of change: `source/app_input.cpp`, `source/app_view.cpp`, `source/config.cpp`,
-`source/config.h`, `source/app.h`, `assets/editor/qed/qedkeybindings.qsc`,
-`tests/test_keybindings.cpp`, this document.
+`source/config.h`, `source/app.h`, `source/runtime/editor_quick_actions.h`,
+`assets/editor/qed/qedkeybindings.qsc`, `tests/test_keybindings.cpp`,
+`tests/test_editor_quick_actions.cpp`, `CMakeLists.txt`, this document.
 
 ## TL;DR
 
@@ -14,13 +15,33 @@ Scope of change: `source/app_input.cpp`, `source/app_view.cpp`, `source/config.c
 if (Check("<Name>")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] <Name> not implemented"); }
 ```
 
-Every one of the 25 is now decided: **2 implemented**, **23 removed** from the
+Every one of the 25 is now decided: **8 implemented**, **17 removed** from the
 shipped default bindings. No `[Keybind] ... not implemented` line survives
 (`grep -c` = 0), and every removed binding is answered by a status-bar message
 instead of silently doing nothing, because an already-deployed copy of
 `qedkeybindings.qsc` in a user's QED folder can still bind it.
 
-The 23 removals are not "we did not get to it": each one names a feature this
+The first pass over #48 implemented 2 and removed 23. The second pass (this
+document's current state) moved six of those removals to **implemented**: the
+retail editor's own manual, `editor/qed/QED.doc` in an installed IGI tree
+("General keystrokes"), defines them exactly, and the editor already had every
+facility they need —
+
+* `Ctrl P` — "Copy camera position to clipboard" → `Utils::SetClipboardText`
+  already exists (`source/utils.cpp:445`);
+* `Ctrl R` — "Reset timer", `Ctrl T` — "Timer Start / Stop", `F12 / Shift F12`
+  — "Increment / Decrement AnimTask speed" → the editor's one playback clock
+  `igi::AnimPlayback` already has `playing`, `Reset()` and a `speed` the engine
+  applies (`source/animation.h:184`, `source/runtime/anim_playback.cpp:147-151`).
+
+The first pass removed those six on the stated grounds that "no editor behaviour"
+and "no playback timer" existed. That was not checked against the code: the
+clipboard and the playback clock were both already there, so the correct action
+was to wire the keys to them. `CameraSnapToObjectWithRadius` stays removed, but
+for the accurate reason — the behaviour exists and is reachable, it is the
+*event name* that was redundant (see below).
+
+The 17 removals are not "we did not get to it": each one names a feature this
 editor does not have, and the oracle cannot supply the behaviour either. **IGI-RE
 is a decompilation of `IGI.exe` only** (`README.md`: "A decompilation of Project
 I.G.I. … the whole game rewritten as readable C"; 5,376/5,376 functions of the
@@ -30,6 +51,13 @@ IGI-RE can only describe the *game-side* objects an editor feature would drive,
 never the editor command itself. Where that game-side evidence exists it is cited
 below; where a binding's meaning could only be guessed, it was removed rather
 than invented.
+
+**Oracle note.** For a QED *editor command*, the authoritative source is the
+retail editor's own manual shipped with the game, `editor/qed/QED.doc`
+(Word 97, "updated 23.09.99", author Stein Pedersen — the QED author). It is a
+retail artifact read from the installed tree, not a web source, and it is cited
+by its "General keystrokes" table below. IGI-RE remains the authority for *game*
+behaviour, and nothing here claims any.
 
 ## The dispatcher
 
@@ -44,7 +72,7 @@ Removed bindings go through one helper so the reason reaches the user:
 auto Removed = [&](const char* name) -> bool {
     if (!Check(name)) return false;
     status_message_ = std::string(name) +
-        " was removed (#48): no editor behaviour and no IGI-RE counterpart — "
+        " was removed (#48): no editor handler and no IGI-RE counterpart — "
         "see docs/igi-re-parity/KEYBINDINGS.md";
     return true;
 };
@@ -66,35 +94,36 @@ list — the editor stops advertising the binding.
 | # | Binding | Decision | Editor handler (now) | Game-side (IGI-RE) evidence |
 |---|---|---|---|---|
 | 1 | `CameraResetRadius` | **implemented** | `source/app_input.cpp:123-146` | none — editor-only, see below |
-| 2 | `CameraCopyPosition` | **removed** | `source/app_input.cpp:157` (status-bar guard) | none — no oracle for the QED command |
-| 3 | `CameraCopyOrientation` | **removed** | `source/app_input.cpp:158` | none — same |
-| 4 | `CameraSnapToObjectWithRadius` | **removed** | `source/app_input.cpp:170` | none — the orbit radius is derived, not a parameter |
-| 5 | `CameraStrafe` | **removed** | `source/app_input.cpp:189` | none — strafing already exists as `CameraStrafeLeft/Right` |
-| 6 | `AnimTaskIncreaseKeyframeInterpolation` | **removed** | `source/app_input.cpp:433` | no QED anim-task editor; no binding semantics in IGI-RE |
-| 7 | `AnimTaskDecreaseKeyframeInterpolation` | **removed** | `source/app_input.cpp:434` | same |
-| 8 | `AnimTaskToggleCameraRelative` | **removed** | `source/app_input.cpp:435` | same |
-| 9 | `AnimTaskGoToCursor` | **removed** | `source/app_input.cpp:436` | same |
-| 10 | `AnimTaskToggleWindowHidden` | **removed** | `source/app_input.cpp:437` | same |
-| 11 | `AnimTaskStartRecording` | **removed** | `source/app_input.cpp:438` | same |
-| 12 | `AnimTaskGoToTop` | **removed** | `source/app_input.cpp:439` | same |
-| 13 | `AnimTaskToggleSyncPlayback` | **removed** | `source/app_input.cpp:440` | same |
-| 14 | `TimerIncreaseSpeed` | **removed** | `source/app_input.cpp:443` | no playback timer exists in this editor |
-| 15 | `TimerDecreaseSpeed` | **removed** | `source/app_input.cpp:444` | same |
-| 16 | `TimerReset` | **removed** | `source/app_input.cpp:445` | same |
-| 17 | `TimerStartStop` | **removed** | `source/app_input.cpp:446` | same |
-| 18 | `Manipulate` | **removed** | `source/app_input.cpp:449` | none — the gesture is not event-driven, see below |
-| 19 | `ManipulatePositionXY` | **removed** | `source/app_input.cpp:450` | none — already implemented via Shift+LMB |
-| 20 | `ManipulatePositionXZ` | **removed** | `source/app_input.cpp:451` | none — already implemented via Ctrl+LMB |
-| 21 | `ManipulateOrientationAlpha` | **removed** | `source/app_input.cpp:481` | none — already implemented via `keyRotateAlpha` |
-| 22 | `ManipulateOrientationBeta` | **removed** | `source/app_input.cpp:482` | none — already implemented via `keyRotateBeta` |
-| 23 | `ManipulateOrientationGamma` | **removed** | `source/app_input.cpp:483` | none — already implemented via `keyRotateGamma` |
-| 24 | `ManipulateOrientationReset` | **removed** | `source/app_input.cpp:484` | none — already implemented via `keyResetOri` (Space) |
+| 2 | `CameraCopyPosition` | **implemented** | `source/app_input.cpp:158` (`Utils::SetClipboardText`) | `editor/qed/QED.doc`: "Ctrl P  Copy camera position to clipboard" |
+| 3 | `CameraCopyOrientation` | **implemented** | `source/app_input.cpp:174` | same command on the camera's angles; combo `<Ctrl><Shift><O>` from the shipped default |
+| 4 | `CameraSnapToObjectWithRadius` | **removed** (redundant, not missing) | `source/app_input.cpp` (status-bar guard) | none — the wider framing is already the F11 handler's own Shift path |
+| 5 | `CameraStrafe` | **removed** | `source/app_input.cpp` (status-bar guard) | none — strafing already exists as `CameraStrafeLeft/Right` |
+| 6 | `AnimTaskIncreaseKeyframeInterpolation` | **removed** | `source/app_input.cpp` (status-bar guard) | no QED anim-task timeline/keyframe editor; no binding semantics in IGI-RE |
+| 7 | `AnimTaskDecreaseKeyframeInterpolation` | **removed** | `source/app_input.cpp` (status-bar guard) | same |
+| 8 | `AnimTaskToggleCameraRelative` | **removed** | `source/app_input.cpp` (status-bar guard) | `QED.doc`: "Ctrl L  Toggle target relative/chase camera" — this editor has no chase camera |
+| 9 | `AnimTaskGoToCursor` | **removed** | `source/app_input.cpp` (status-bar guard) | no QED anim-task timeline to go to a cursor in |
+| 10 | `AnimTaskToggleWindowHidden` | **removed** | `source/app_input.cpp` (status-bar guard) | no QED anim-task window to hide |
+| 11 | `AnimTaskStartRecording` | **removed** | `source/app_input.cpp` (status-bar guard) | no keyframe recorder exists |
+| 12 | `AnimTaskGoToTop` | **removed** | `source/app_input.cpp` (status-bar guard) | no QED anim-task timeline |
+| 13 | `AnimTaskToggleSyncPlayback` | **removed** | `source/app_input.cpp` (status-bar guard) | no sync-playback mode |
+| 14 | `TimerIncreaseSpeed` | **implemented** | `source/app_input.cpp` (`AnimTimerSpeedStepIndex` + `AnimPlayback::speed`) | `QED.doc`: "F12 / Shift F12  Increment / Decrement AnimTask speed" |
+| 15 | `TimerDecreaseSpeed` | **implemented** | same | same |
+| 16 | `TimerReset` | **implemented** | `source/app_input.cpp` (`AnimPlayback::Reset`) | `QED.doc`: "Ctrl R  Reset timer" |
+| 17 | `TimerStartStop` | **implemented** | `source/app_input.cpp` (`AnimPlayback::Pause`/`Resume`) | `QED.doc`: "Ctrl T  Timer Start / Stop" |
+| 18 | `Manipulate` | **removed** | `source/app_input.cpp` (status-bar guard) | none — the gesture is not event-driven, see below |
+| 19 | `ManipulatePositionXY` | **removed** | `source/app_input.cpp` (status-bar guard) | none — already implemented via Shift+LMB |
+| 20 | `ManipulatePositionXZ` | **removed** | `source/app_input.cpp` (status-bar guard) | none — already implemented via Ctrl+LMB |
+| 21 | `ManipulateOrientationAlpha` | **removed** | `source/app_input.cpp` (status-bar guard) | none — already implemented via `keyRotateAlpha` |
+| 22 | `ManipulateOrientationBeta` | **removed** | `source/app_input.cpp` (status-bar guard) | none — already implemented via `keyRotateBeta` |
+| 23 | `ManipulateOrientationGamma` | **removed** | `source/app_input.cpp` (status-bar guard) | none — already implemented via `keyRotateGamma` |
+| 24 | `ManipulateOrientationReset` | **removed** | `source/app_input.cpp` (status-bar guard) | none — already implemented via `keyResetOri` (Space) |
 | 25 | `ToggleObjects` | **implemented** | `source/app_input.cpp:693-710` | none — editor viewport option, see below |
 
 "Editor handler (now)" for a removed binding is the `Removed("…")` guard that
 reports the removal in the status bar; the binding itself is gone from
 `assets/editor/qed/qedkeybindings.qsc` (see the comment blocks in that file for
-the removed key combos).
+the removed key combos). Line numbers in the "implemented" rows are indicative —
+the guard and the handler both live in `App::DispatchEventBindings`.
 
 ## Implemented
 
@@ -153,15 +182,80 @@ the debug command manager (`source/debug_command_manager.cpp:104`).
 **IGI-RE: not applicable.** A viewport draw toggle is an editor option with no
 game-side counterpart; no IGI-RE claim is made.
 
+### 3. `CameraCopyPosition` — `<Ctrl><P>`, and `CameraCopyOrientation` — `<Ctrl><Shift><O>`
+
+`QED.doc`, "General keystrokes": **"Ctrl P  Copy camera position to clipboard"**.
+That settles the meaning the first pass called ambiguous — it is the clipboard,
+not the selected task. The editor already owns a clipboard
+(`Utils::SetClipboardText`, `source/utils.cpp:445`; the same call the text editor
+uses at `source/app_editor.cpp:136`), and its live camera is `viewer_.pos_`
+(`source/app.h:613`), so the handler copies that and nothing else. The
+orientation sibling copies `viewer_.yaw_/pitch_/roll_` (`source/app.h:618-620`,
+degrees), which is the editor's own camera orientation — the same three values it
+persists as `QEDSetCameraOrientation` (`source/config.cpp:505-508`).
+
+The text is three numbers at three decimals (`"%.3f, %.3f, %.3f"`), produced by
+`igi::FormatCameraTripleForClipboard` in
+`source/runtime/editor_quick_actions.h` and pinned by
+`tests/test_editor_quick_actions.cpp`. The formatting is the only part of this
+that is host-testable; that `SetClipboardText` reaches the Windows clipboard is
+**unverified on this host** (it is a `windows.h` path, and the GUI cannot run
+here — see the verified/unverified section).
+
+**IGI-RE: not applicable.** A QED editor clipboard command has no game-side
+counterpart; no IGI-RE claim is made.
+
+### 4. `TimerStartStop` — `<Ctrl><T>`, `TimerReset` — `<Ctrl><R>`, `TimerIncreaseSpeed` — `<F12>`, `TimerDecreaseSpeed` — `<Shift><F12>`
+
+`QED.doc`, "General keystrokes": **"Ctrl R  Reset timer"**, **"Ctrl T  Timer
+Start / Stop"**, **"F12 / Shift F12  Increment / Decrement AnimTask speed"** — so
+in the retail editor the "timer" and the "AnimTask speed" are the same control:
+the animation playback clock. The first pass removed these four because "no
+animation playback timer exists in this editor"; that was wrong. The editor's one
+playback clock is `igi::AnimPlayback` (`source/animation.h:163-184`: "This is the
+editor's ONE playback path"), and it has exactly the three things the four keys
+need:
+
+| Key | `AnimPlayback` member | Engine effect |
+|---|---|---|
+| `TimerStartStop` | `playing` via `Pause()`/`Resume()` (`source/animation.h:204-205`) | the clock stops/starts advancing |
+| `TimerReset` | `Reset()` (`source/animation.h:202`, impl `source/runtime/anim_playback.cpp:154-161`) | rewinds to the clip's first frame and stops |
+| `TimerIncreaseSpeed` / `TimerDecreaseSpeed` | `speed` (`source/animation.h:189`) | applied by `SyncEngineFlags` → `SetSpeed` (`source/runtime/anim_playback.cpp:147-151`, `Anim_SetSpeed` 0x4D6580: `inst->speed = gTicksPerFrame * speed`) |
+
+Scope: the **selected object's** playback. That is the editor's own animation
+preview model — the property editor shows the selected object's clip and play
+state (`App::ComputePropAnimUiState`, `source/app.cpp:4610-4630`) and starts it
+from the animation list (`App::ToggleAnimationForObject`, `source/app.cpp:4539`,
+called at `source/app_input_mouse.cpp:250`). Playbacks also exist without any user
+action: the level load auto-plays one per eligible AI NPC
+(`source/app_level.cpp:664-676`). If nothing animatable is selected the key says
+so in the status bar rather than doing nothing.
+
+The speed ladder is `{0.125, 0.25, 0.5, 1, 2, 4, 8}` (1× is the engine's normal
+speed and `AnimPlayback`'s own default), doubling/halving so presses are exactly
+reversible, and it clamps at both ends with a `(limit)` note. The ladder and the
+label live in `igi::AnimTimerSpeedIndex/StepIndex/At/Label`
+(`source/runtime/editor_quick_actions.h`) and are pinned by
+`tests/test_editor_quick_actions.cpp`; the handler keeps only the live-state part.
+
+**Not implemented here:** the AnimTask *keyframe interpolation* pair (`F8` /
+`Shift F8`, `AnimTaskIncrease/DecreaseKeyframeInterpolation`) — that needs a
+keyframe editor, which this editor does not have, so those two stay removed. The
+retail manual documents the interpolation pair and the speed pair as separate
+controls; only the speed pair has an owner here.
+
+**IGI-RE: not applicable.** These are QED transport controls; IGI-RE contains no
+QED code and no game-side claim is made. The engine call the speed ultimately
+reaches (`Anim_SetSpeed` 0x4D6580) is game-side and is already cited where it is
+used, `source/runtime/anim_playback.cpp:148`.
+
 ## Removed
 
-### Camera (4)
+### Camera (2)
 
 | Binding | Was bound to | Why removed |
 |---|---|---|
-| `CameraCopyPosition` | `<Ctrl><P>`, `<Ctrl><Shift><P>` | "Copy position" has at least three plausible meanings here (copy the camera position into the selected task, copy the task's position into the camera, copy to the clipboard). Nothing in the editor or in IGI-RE selects one, so implementing it would be inventing behaviour. `CameraSnapToObject` (`<F11>`) already covers "put the camera on the object". |
-| `CameraCopyOrientation` | `<Ctrl><Shift><O>` | Same ambiguity for orientation. |
-| `CameraSnapToObjectWithRadius` | `<Shift><F11>` | The plain `CameraSnapToObject` (`<F11>`) stays and works. The "radius" half has no editor meaning: the orbit radius is *derived* from the camera→target distance by `BeginObjectOrbit` (`source/runtime/editor_camera_start.h:64-84`), it is not a parameter of the snap. |
+| `CameraSnapToObjectWithRadius` | `<Shift><F11>` | **Redundant, not missing.** The wider-radius framing already happens: the F11 special-key handler reads the Shift modifier itself and passes it to `MakeF11ObjectCameraPose(..., shiftHeld)` (`source/app_input_keyboard.cpp:466-471`), and that path returns before `DispatchEventBindings` ever runs — so the event name could not add anything, and `Shift+F11` keeps working after the binding is gone. The first pass's stated reason ("no editor behaviour") was wrong; the behaviour is there and is reachable. |
 | `CameraStrafe` | `<Alt><Shift><Space>` | Strafing is already implemented as continuous held bindings `CameraStrafeLeft`/`CameraStrafeRight` (`source/app_view.cpp:225-236`), which are untouched. A bare "strafe" modifier has no implementation path. |
 
 ### AnimTask (8) and Timer (4)
@@ -171,24 +265,35 @@ Removed: `AnimTaskIncreaseKeyframeInterpolation` `<F8>`,
 `AnimTaskToggleCameraRelative` `<F6>`, `AnimTaskGoToCursor` `<Ctrl><G>`,
 `AnimTaskToggleWindowHidden` `<Ctrl><Shift><H>`,
 `AnimTaskStartRecording` `<Ctrl><Q>`, `AnimTaskGoToTop` `<Ctrl><R>`,
-`AnimTaskToggleSyncPlayback` `<Ctrl><Shift><S>`, `TimerIncreaseSpeed` `<F12>`,
-`TimerDecreaseSpeed` `<Shift><F12>`, `TimerReset` `<Ctrl><R>`,
-`TimerStartStop` `<Ctrl><T>`.
+`AnimTaskToggleSyncPlayback` `<Ctrl><Shift><S>`.
 
 These name a QED animation-task editor window: a keyframe list, an interpolation
-setting, a recorder, a playback sync toggle, a hidden-window toggle, a
-camera-relative toggle, and a transport timer. **This editor has none of that.**
-There is no animation-task window, no timeline, no recorder and no playback
-timer anywhere in `source/`: the only `keyframe` hits are renderer/level data
+setting, a recorder, a playback sync toggle, a hidden-window toggle and a
+camera-relative toggle. **This editor has none of that.** There is no
+animation-task window, no timeline, no recorder and no keyframe interpolation
+editor anywhere in `source/`: the only `keyframe` hits are renderer/level data
 paths (`source/renderer/renderer_objects.h`, `source/level/level_objects_serialize.cpp`,
-`source/level/level.cpp`, `source/mcp/mcp_tools_cutscene.cpp`) and the only
-`Timer*` hits are the level-script argument name in
-`source/mission_state_loader.cpp:21`.
+`source/level/level.cpp`, `source/mcp/mcp_tools_cutscene.cpp`).
+
+`AnimTaskToggleCameraRelative` is separately checkable because `QED.doc` defines
+it — "Ctrl L  Toggle target relative/chase camera" — and this editor has no
+target-relative/chase camera mode: `TaskNewCameraRelative` (`<Shift><Insert>`)
+only chooses where a *new task* is created (`source/app_input.cpp:283`), and
+`grep -rniE 'chase|camera_relative' source/` finds only AI movement speeds.
+
+The **timer half of this group is not removed — it is implemented** under the
+`Timer*` names above, because `QED.doc` documents `F12`/`Shift F12` as the
+AnimTask *speed* control and this editor does have a playback clock
+(`igi::AnimPlayback`). Only the *keyframe interpolation* pair (`F8`/`Shift F8`)
+stays removed: that needs a keyframe editor, and the editor has none. The first
+pass's claim that no playback timer exists anywhere in `source/` was wrong — see
+the implemented section above.
 
 Two of them were also unreachable in practice because their combos collided with
 live bindings, which the removals also fixes:
 
-* `AnimTaskGoToTop` `<Ctrl><R>` and `TimerReset` `<Ctrl><R>` were the same combo.
+* `AnimTaskGoToTop` `<Ctrl><R>` and `TimerReset` `<Ctrl><R>` were the same combo
+  (the timer keeps it — `QED.doc` documents `Ctrl R` as "Reset timer").
 * `AnimTaskToggleCameraRelative` `<F6>` collided with `ToggleTaskNoteDisplay` `<F6>`.
 
 The three config fields that were already wired for this group
@@ -301,9 +406,66 @@ Verified (task-11):
   any code line, which is why the tests strip comments before asserting their
   absence.
 
+Verified (issue #48, second pass — the six newly implemented bindings):
+
+* **Oracle read first.** `textutil -convert txt -stdout editor/qed/QED.doc` from the
+  installed retail tree, "General keystrokes" table: `Ctrl P` "Copy camera position
+  to clipboard", `Ctrl R` "Reset timer", `Ctrl T` "Timer Start / Stop",
+  `F12 / Shift F12` "Increment / Decrement AnimTask speed". The retail
+  `editor/qed/qedkeybindings.qsc` binds those combos to `CameraCopyPosition`,
+  `TimerReset`, `TimerStartStop`, `TimerIncreaseSpeed`, `TimerDecreaseSpeed`, which
+  is what identified the six removals of the first pass that should have been
+  implementations.
+* `python3 tools/igi-re-parity/tu-check.py source/app_input.cpp` → `OK
+  (source/app_input.cpp)`, `checked 1 translation unit(s), 0 failed` — the changed
+  dispatcher compiles under the cross (MinGW) compiler, including the new
+  `#include "runtime/editor_quick_actions.h"`.
+* `cmake --build build-mingw --target igi_tests igi-editor --parallel` → exit 0.
+* `bash scripts/check-build-integrity.sh` → **PASS** — "all 382 objects are
+  consistent with their dependencies, their PCH, and the ninja dependency log".
+* `IGI_E2E_STAGE=$PWD/scratch/e2e-48 bash scripts/e2e-headless.sh --fast` → exit 0,
+  `smoke, tests` tiers, `2 assertions run, 0 failed`, levels 1–14.
+* `IGI_HOST_NO_CACHE=1 bash scripts/run-host-tests.sh` (full lane) → 1405/1409
+  passed. The two suites for this change are green: **`test_keybindings` 17 passed
+  0 failed**, **`test_editor_quick_actions` 9 passed 0 failed**. The only 3 failures
+  in the lane are `SmokeParticles` (another agent's in-progress `#43` work in
+  `source/runtime/smoke_sim.cpp`), untouched by this change.
+* The shipped default after this pass: **81 active bindings, 81 distinct names, 0
+  duplicate combos, 0 malformed lines** (75 + the 6 re-added), checked with the same
+  comment-aware parser the editor's readers use.
+* `grep -c 'Removed("' source/app_input.cpp` → `20` distinct names (17 removed of
+  #48 + the 3 task-11 adjacent); `grep -c '\[Keybind\]\|not implemented'` → 2, both
+  inside explanatory `//` comments (`source/app_input.cpp:119`, `:154`), which the
+  suite strips before asserting.
+* **What the tests actually pin.** `tests/test_editor_quick_actions.cpp` proves the
+  pure decisions: the ladder is strictly increasing with `1x` at its default index,
+  every rung is found exactly, off-ladder speeds snap to the nearest rung with ties
+  going faster, stepping is reversible in the middle and clamps at both ends, every
+  rung has a distinct status-bar label, and the clipboard text is three
+  fixed-decimal numbers that round (not truncate) and keep their sign.
+  `tests/test_keybindings.cpp` proves the wiring: the six events are advertised in
+  the shipped default with their documented combos, each has a live handler and no
+  `Removed()` guard, the handlers go through those helpers and through
+  `AnimPlayback::Pause`/`Reset`, every advertised binding still has a handler or a
+  visible message, and no combo is bound twice.
+
 Unverified (and why):
 
-* **No runtime/GUI test of the three implemented bindings.** `CameraResetRadius`,
+* **No runtime/GUI test of the implemented bindings.** `CameraResetRadius`,
+  `ToggleObjects`, `TaskFind`, the two camera copies and the four timer keys were
+  not exercised in a running editor: they need the GL window and a loaded level,
+  and this host offers OpenGL 2.1 where the editor needs 4.1. Their code paths are
+  compile-verified and read-verified only.
+* **The clipboard is not proven to receive the text.** `Utils::SetClipboardText`
+  is a `windows.h` path (`source/utils.cpp:445-460`) that cannot run on this host;
+  what is proven is the text handed to it (unit-tested) and that the handler calls
+  it (asserted textually in `test_keybindings`). The e2e lane exercises level
+  loading and the test tiers, not key presses.
+* **The timer's effect on the engine is not re-proven here.** `AnimPlayback::speed`
+  reaching the engine through `SyncEngineFlags` → `SetSpeed` is pre-existing
+  behaviour covered by `tests/test_anim_playback.cpp`; this change only sets the
+  field and reports it.
+* **No runtime/GUI test of the three task-8/task-11 bindings.** `CameraResetRadius`,
   `ToggleObjects` and `TaskFind` were not exercised in a running editor: they need
   the GL window and a loaded level, and this host is running the cross-build gate.
   Their code paths are compile-verified and read-verified only.
@@ -339,7 +501,7 @@ game behaviour changes**. No IGI-RE justification is manufactured for any of the
 
 | # | Item | Decision | Handler (now) | Evidence (editor's own code) | Editor-only? | What the user sees now |
 |---|---|---|---|---|---|---|
-| 1 | `CameraAdjustRadius` (`<Alt><Space>`) | **removed** — binding, config field and routing branch | `source/app_input.cpp:112-122` `Removed("CameraAdjustRadius")` | the editor has no radius adjuster: `Config::keyAdjustCameraRadius` had **0 readers**, and the only radius, `igi::ObjectOrbitCamera::distance`, is *derived* by `BeginObjectOrbit` (`source/runtime/editor_camera_start.h:64-84`) and only reset by `CameraResetRadius`. Any rate/direction/preset ladder would have been invented | yes — no game-side claim | pressing the old combo prints `CameraAdjustRadius was removed (#48): no editor behaviour and no IGI-RE counterpart — see docs/igi-re-parity/KEYBINDINGS.md`; `H` no longer lists it |
+| 1 | `CameraAdjustRadius` (`<Alt><Space>`) | **removed** — binding, config field and routing branch | `source/app_input.cpp:112-122` `Removed("CameraAdjustRadius")` | the editor has no radius adjuster: `Config::keyAdjustCameraRadius` had **0 readers**, and the only radius, `igi::ObjectOrbitCamera::distance`, is *derived* by `BeginObjectOrbit` (`source/runtime/editor_camera_start.h:64-84`) and only reset by `CameraResetRadius`. Any rate/direction/preset ladder would have been invented | yes — no game-side claim | pressing the old combo prints `CameraAdjustRadius was removed (#48): no editor handler and no IGI-RE counterpart — see docs/igi-re-parity/KEYBINDINGS.md`; `H` no longer lists it |
 | 2 | `CameraLookDown` (`<Ctrl><Home>`) | **removed** — binding, config field and routing branch | `source/app_input.cpp:147-156` `Removed("CameraLookDown")` | `Config::keyLookDown` had **0 readers**; camera pitch is owned by the mouse (`source/app_view.cpp:43`, clamped to ±89 at `:256`) and there is no keyboard look control to wire it to. A step size would have been invented | yes — no game-side claim | pressing the old combo prints the same "was removed (#48)" message naming `CameraLookDown`; `H` no longer lists it |
 | 3 | `CameraStrafeFree` (`<Alt><Space>`) | **removed** — binding, `camera_strafe_free_` flag and the message | `source/app_input.cpp:189-196` `Removed("CameraStrafeFree")` | the flag had no reader anywhere (`source/app.h` was its only other mention), so `"Strafe lock: ON/OFF"` reported a state change that never happened — a lying status message. Strafing itself is unconditional (`source/app_view.cpp:225-236`), so there was no lock to release | yes — no game-side claim | the message is gone; the combo is unbound, and a stale user file gets "CameraStrafeFree was removed (#48)…" in the status bar. `CameraStrafeLeft/Right` (`<Alt><Left>`/`<Alt><Right>`) still strafe |
 | 4 | Duplicate combos: `<Alt><Space>` and `<Ctrl><Shift><A>` | **fixed** — collision 1 disappears with items 1+3; collision 2 rebinds the loser | `assets/editor/qed/qedkeybindings.qsc` | one combo can only fire one handler, so whichever loses is a silent no-op. `ToggleAutoSave` keeps `<Ctrl><Shift><A>` ("A" is its mnemonic and it is the older binding); `AddModelToRes` moves to `<Ctrl><Shift>M` ("M" for model). Verified: 0 duplicate combos remain (77 active bindings, 77 distinct combos) | yes — no game-side claim | `Ctrl+Shift+A` toggles auto-save; `Ctrl+Shift+M` adds the missing model to the level `.res`. Both are reachable and `H` lists both |

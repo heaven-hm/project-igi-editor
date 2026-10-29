@@ -19,7 +19,8 @@
  *       answered with a status-bar message (a `Removed("Name")` guard) rather
  *       than silently doing nothing;
  *   (c) every one of the 25 bindings has a row in the decision document, and the
- *       two implemented ones really are wired up.
+ *       eight implemented ones really are wired up (bound, dispatched, and going
+ *       through the host-tested helpers of runtime/editor_quick_actions.h).
  *
  * task-11 adds the adjacent defects of the same class:
  *   (d) no combo is bound to two different events in the shipped default;
@@ -189,9 +190,13 @@ struct Decision {
 
 const Decision kDecisions[] = {
     {"CameraResetRadius", true},
+    {"CameraCopyPosition", true},
+    {"CameraCopyOrientation", true},
+    {"TimerStartStop", true},
+    {"TimerReset", true},
+    {"TimerIncreaseSpeed", true},
+    {"TimerDecreaseSpeed", true},
     {"ToggleObjects", true},
-    {"CameraCopyPosition", false},
-    {"CameraCopyOrientation", false},
     {"CameraSnapToObjectWithRadius", false},
     {"CameraStrafe", false},
     {"AnimTaskIncreaseKeyframeInterpolation", false},
@@ -202,10 +207,6 @@ const Decision kDecisions[] = {
     {"AnimTaskStartRecording", false},
     {"AnimTaskGoToTop", false},
     {"AnimTaskToggleSyncPlayback", false},
-    {"TimerIncreaseSpeed", false},
-    {"TimerDecreaseSpeed", false},
-    {"TimerReset", false},
-    {"TimerStartStop", false},
     {"Manipulate", false},
     {"ManipulatePositionXY", false},
     {"ManipulatePositionXZ", false},
@@ -213,6 +214,32 @@ const Decision kDecisions[] = {
     {"ManipulateOrientationBeta", false},
     {"ManipulateOrientationGamma", false},
     {"ManipulateOrientationReset", false},
+};
+
+// The retail editor's own manual, `editor/qed/QED.doc` in an installed IGI tree
+// ("General keystrokes"), documents these commands and their keys:
+//
+//   Ctrl P            Copy camera position to clipboard
+//   Ctrl R            Reset timer
+//   Ctrl T            Timer Start / Stop
+//   F12 / Shift F12   Increment / Decrement AnimTask speed
+//
+// The shipped default binds exactly those combos to these events, so the combos
+// are pinned here: a rebind is a decision, and losing one would silently move a
+// key the manual documents.
+struct ImplementedCombo {
+    const char* name;
+    const char* combo;
+};
+const ImplementedCombo kIssue48ImplementedCombos[] = {
+    {"CameraCopyPosition", "<Ctrl><P>"},
+    {"CameraCopyOrientation", "<Ctrl><Shift><O>"},
+    {"TimerStartStop", "<Ctrl><T>"},
+    {"TimerReset", "<Ctrl><R>"},
+    {"TimerIncreaseSpeed", "<F12>"},
+    {"TimerDecreaseSpeed", "<Shift><F12>"},
+    {"CameraResetRadius", "<Shift><Home>"},
+    {"ToggleObjects", "<Ctrl><Shift><Z>"},
 };
 
 std::set<std::string> ExpectedRemoved() {
@@ -661,11 +688,53 @@ TEST(Keybindings48, DecisionTableIsTheTwentyFiveBindingsOfTheIssue) {
     size_t implemented = 0;
     for (const Decision& d : kDecisions)
         if (d.implemented) ++implemented;
-    EXPECT_EQ(implemented, 2u);
-    EXPECT_EQ(ExpectedRemoved().size(), 23u);
+    EXPECT_EQ(implemented, 8u)
+        << "issue #48's first pass left two implemented; the camera-clipboard and "
+           "animation-timer groups were implementable against facilities the editor "
+           "already had (Utils::SetClipboardText, igi::AnimPlayback) and are now "
+           "implemented too. If this number changes again, the decision document "
+           "and the shipped default must change with it.";
+    EXPECT_EQ(ExpectedRemoved().size(), 17u);
     EXPECT_EQ(sizeof(kAdjacentRemovals) / sizeof(kAdjacentRemovals[0]), 3u)
         << "task-11 removed exactly three adjacent bindings; if that changed, the "
            "list and docs/igi-re-parity/KEYBINDINGS.md must change together";
+}
+
+// The eight implemented bindings must keep the combos the retail manual and the
+// shipped default document — an implemented feature whose key silently moved is
+// the same defect as a removed key that is still advertised.
+TEST(Keybindings48, ImplementedBindingsKeepTheirDocumentedCombos) {
+    REQUIRE_REPO_FILES();
+    for (const ImplementedCombo& c : kIssue48ImplementedCombos) {
+        bool found = false;
+        for (const BindingLine& b : files.lines) {
+            if (b.event != c.name) continue;
+            found = true;
+            EXPECT_EQ(b.combo, std::string(c.combo))
+                << c.name << " is bound to " << b.combo << " (line " << b.line
+                << ") but issue #48 decided " << c.combo;
+        }
+        EXPECT_TRUE(found) << c.name << " is implemented but not bound in "
+                           << files.bindings_path;
+    }
+}
+
+// The implemented handlers must go through the pure, host-tested helpers in
+// source/runtime/editor_quick_actions.h rather than re-deriving the decision
+// inline: that is what makes the behaviour testable off-Windows.
+TEST(Keybindings48, ImplementedQuickActionsUseTheHostTestedHelpers) {
+    REQUIRE_REPO_FILES();
+    EXPECT_NE(files.app_input.find("Utils::SetClipboardText"), std::string::npos)
+        << "CameraCopyPosition/CameraCopyOrientation do not use the editor's "
+           "existing clipboard (source/utils.cpp:445)";
+    EXPECT_NE(files.app_input.find("FormatCameraTripleForClipboard"), std::string::npos)
+        << "the camera copy handlers do not use the tested formatter";
+    EXPECT_NE(files.app_input.find("AnimTimerSpeedIndex"), std::string::npos)
+        << "TimerIncreaseSpeed/TimerDecreaseSpeed do not use the tested speed ladder";
+    EXPECT_NE(files.app_input.find("pb->Reset()"), std::string::npos)
+        << "TimerReset does not rewind the playback clock (AnimPlayback::Reset)";
+    EXPECT_NE(files.app_input.find("pb->Pause()"), std::string::npos)
+        << "TimerStartStop does not stop the playback clock (AnimPlayback::Pause)";
 }
 
 TEST(Keybindings48, Task11DocumentRecordsTheFiveAdjacentDecisions) {

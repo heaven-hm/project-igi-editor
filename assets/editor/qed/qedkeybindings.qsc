@@ -19,14 +19,24 @@ SetEventBinding("CameraMoveBackward",                       "<Alt><Ctrl>");
 // nothing read and printed "Strafe lock: ON/OFF", a state change that never
 // happened. Strafing is unconditional (source/app_view.cpp:225-236).
 SetEventBinding("CameraResetRadius",                        "<Shift><Home>");
+SetEventBinding("CameraCopyPosition",                       "<Ctrl><P>");
+SetEventBinding("CameraCopyOrientation",                    "<Ctrl><Shift><O>");
 SetEventBinding("CameraSnapToObject",                       "<F11>");
 SetEventBinding("CameraSnapToGround",                       "<Alt><F11>");
 SetEventBinding("CameraStrafeLeft",                         "<Alt><Left>");
 SetEventBinding("CameraStrafeRight",                        "<Alt><Right>");
-// Removed in #48 (no editor behaviour, no IGI-RE counterpart):
-//   CameraCopyPosition (<Ctrl><P>, <Ctrl><Shift><P>), CameraCopyOrientation
-//   (<Ctrl><Shift><O>), CameraSnapToObjectWithRadius (<Shift><F11>),
-//   CameraStrafe (<Alt><Shift><Space>). See docs/igi-re-parity/KEYBINDINGS.md.
+// #48: CameraCopyPosition/CameraCopyOrientation are implemented — QED.doc,
+// "General keystrokes": "Ctrl P  Copy camera position to clipboard". The editor
+// copies viewer_.pos_ / viewer_.yaw_,pitch_,roll_ through the clipboard it
+// already owns (source/app_input.cpp CameraCopyPosition/CameraCopyOrientation).
+// Removed in #48 (no handler answers these event names):
+//   CameraSnapToObjectWithRadius (<Shift><F11>) — redundant, NOT missing: the
+//     wider-radius framing is already done by the F11 handler itself, which
+//     reads the Shift modifier and returns before event dispatch
+//     (source/app_input_keyboard.cpp:466-471).
+//   CameraStrafe (<Alt><Shift><Space>) — strafing is the two continuous held
+//     bindings CameraStrafeLeft/Right above; a bare "strafe" has no path.
+// See docs/igi-re-parity/KEYBINDINGS.md.
                                                             
 // Tasks                                                    
 SetEventBinding("TaskMoveUp",                               "<Shift><PageUp>");
@@ -59,12 +69,27 @@ SetEventBinding("TaskSortChildren",                         "<Shift><F5>");
 //   <Shift><F8>, AnimTaskToggleCameraRelative <F6>, AnimTaskGoToCursor <Ctrl><G>,
 //   AnimTaskToggleWindowHidden <Ctrl><Shift><H>, AnimTaskStartRecording <Ctrl><Q>,
 //   AnimTaskGoToTop <Ctrl><R>, AnimTaskToggleSyncPlayback <Ctrl><Shift><S>.
-// (F6 also collided with ToggleTaskNoteDisplay and <Ctrl><R> with TimerReset.)
-// See docs/igi-re-parity/KEYBINDINGS.md.
+// (F6 also collided with ToggleTaskNoteDisplay, and AnimTaskGoToTop's <Ctrl><R>
+// was the same combo as TimerReset.) The AnimTask *playback speed* half of the
+// retail table is implemented under the Timer names below — QED.doc documents
+// F12 / Shift F12 as "Increment / Decrement AnimTask speed"; the keyframe
+// *interpolation* half (F8 / Shift F8) has no keyframe editor here and stays
+// removed. See docs/igi-re-parity/KEYBINDINGS.md.
 
-// Timer — removed in #48, same reason as Animtask (no animation playback timer
-// exists in this editor): TimerIncreaseSpeed <F12>, TimerDecreaseSpeed <Shift><F12>,
-// TimerReset <Ctrl><R>, TimerStartStop <Ctrl><T>.
+// Timer — implemented in #48 against the editor's one playback clock. QED.doc,
+// "General keystrokes": "Ctrl R  Reset timer", "Ctrl T  Timer Start / Stop",
+// "F12 / Shift F12  Increment / Decrement AnimTask speed" — so the retail timer
+// and the AnimTask speed are the same control. That clock is the selected
+// object's igi::AnimPlayback (source/animation.h:184): `playing` is start/stop,
+// `Reset()` rewinds, and `speed` is applied to the engine by
+// AnimPlayback::SyncEngineFlags (source/runtime/anim_playback.cpp:147-151).
+// The editor has no AnimTask timeline editor, so the timer drives the animation
+// preview that the property editor's animation list already starts
+// (App::ToggleAnimationForObject, source/app.cpp:4539).
+SetEventBinding("TimerStartStop",                           "<Ctrl><T>");
+SetEventBinding("TimerReset",                               "<Ctrl><R>");
+SetEventBinding("TimerIncreaseSpeed",                       "<F12>");
+SetEventBinding("TimerDecreaseSpeed",                       "<Shift><F12>");
 
 // Manipulate object — the seven "Manipulate*" event names below were removed in
 // #48 because object manipulation is not driven by the event table at all: the

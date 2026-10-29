@@ -428,6 +428,10 @@ add_executable(igi_tests
     tests/test_ladder_runtime.cpp
     tests/test_declared_position_fallback.cpp
     tests/test_keybindings.cpp
+    # Issue #48: the pure half of the implemented quick actions (animation-timer
+    # speed ladder, camera clipboard text) — header-only, so it needs no engine
+    # source in the host lane's pool.
+    tests/test_editor_quick_actions.cpp
     tests/test_menu_qvm.cpp
     tests/test_menu_text_res.cpp
     tests/test_menu_labels.cpp
@@ -442,7 +446,13 @@ add_executable(igi_tests
     tests/test_anim_rules.cpp
     tests/test_lightmap_rules.cpp
     tests/test_smoke_rules.cpp
+    # The same emitter RUNNING: the per-tick spawn, lifetime, velocity and cone
+    # rules of Smoke_Run 0x437DB0 + Particle2D_Run 0x4FD660 (#43).
+    tests/test_smoke_particles.cpp
     tests/test_heli_rules.cpp
+    # The flight preview that consumes heli_rules (#60): the engine's tick
+    # sequence pinned tick by tick, plus the retail corpus link.
+    tests/test_heli_preview.cpp
     tests/test_cutscene_rules.cpp
     tests/test_cutscene_camera.cpp
     # The same link over the SHIPPED level data. A separate file on purpose: it
@@ -606,7 +616,16 @@ target_sources(igi_tests PRIVATE
     source/runtime/anim_playback.cpp
     source/runtime/lightmap_rules.cpp
     source/runtime/smoke.cpp
+    # The live half of the Smoke emitter (#43): the per-tick state machine of
+    # Smoke_Run 0x437DB0 plus the Particle2D pool it drives. Pure logic, so the
+    # host lane needs it to link tests/test_smoke_particles.cpp; igi-editor
+    # picks it up through the source/runtime/*.* glob.
+    source/runtime/smoke_sim.cpp
     source/runtime/heli_rules.cpp
+    # The Heli task's first caller (#60): the authored -> per-tick flight preview.
+    # Pure logic, so the host lane needs it to link tests/test_heli_preview.cpp;
+    # igi-editor picks it up through the source/runtime/*.* glob.
+    source/runtime/heli_preview.cpp
     source/runtime/cutscene_rules.cpp
     # The authored CutScene -> engine timeline link (#80). It is what gives
     # cutscene_rules.cpp its first caller, so the host lane needs it to link

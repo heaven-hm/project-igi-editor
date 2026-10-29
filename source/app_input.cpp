@@ -5,6 +5,7 @@
  *****************************************************************************/
 #include "app_internal.h"
 #include "runtime/editor_camera_start.h"
+#include "runtime/editor_quick_actions.h"
 #include "runtime/loading_bar_style.h"
 #include <cstdio>
 #include <fstream>
@@ -92,8 +93,12 @@ void App::DispatchEventBindings() {
 	// docs/igi-re-parity/KEYBINDINGS.md.
 	auto Removed = [&](const char* name) -> bool {
 		if (!Check(name)) return false;
+		// "no editor handler": accurate for every name below, including
+		// CameraSnapToObjectWithRadius — that one's behaviour does exist, but it
+		// belongs to the F11 special-key handler's Shift path
+		// (source/app_input_keyboard.cpp:466-471), not to this event name.
 		status_message_ = std::string(name) +
-			" was removed (#48): no editor behaviour and no IGI-RE counterpart — "
+			" was removed (#48): no editor handler and no IGI-RE counterpart — "
 			"see docs/igi-re-parity/KEYBINDINGS.md";
 		return true;
 	};
@@ -155,8 +160,33 @@ void App::DispatchEventBindings() {
 		// QED editor code, so there is no game behaviour to match.
 		if (Removed("CameraLookDown")) return;
 	}
-	if (Removed("CameraCopyPosition")) return;
-	if (Removed("CameraCopyOrientation")) return;
+	if (Check("CameraCopyPosition")) {
+		// Issue #48: implemented. Retail QED.doc, "General keystrokes" —
+		// "Ctrl P  Copy camera position to clipboard". The editor already owns a
+		// clipboard (Utils::SetClipboardText, source/utils.cpp:445 — the same call
+		// source/app_editor.cpp:136 uses for text edits) and its live camera is
+		// viewer_.pos_, so this copies that value and nothing else: no new state
+		// and no second clipboard path. Editor-only: IGI-RE decompiles IGI.exe and
+		// contains no QED code, so there is no game-side behaviour to match.
+		const std::string text = igi::FormatCameraTripleForClipboard(
+			viewer_.pos_.x, viewer_.pos_.y, viewer_.pos_.z);
+		Utils::SetClipboardText(text);
+		status_message_ = "Camera position copied to clipboard: " + text;
+		return;
+	}
+	if (Check("CameraCopyOrientation")) {
+		// Issue #48: implemented — the same command on the camera's angles.
+		// viewer_.yaw_/pitch_/roll_ are in degrees (source/app.h:618-620) and are
+		// the editor's own camera orientation (persisted as
+		// QEDSetCameraOrientation, source/config.cpp:505-508). QED.doc's table
+		// documents the Ctrl P position copy; this is its <Ctrl><Shift>O sibling
+		// from the shipped default bindings.
+		const std::string text = igi::FormatCameraTripleForClipboard(
+			viewer_.yaw_, viewer_.pitch_, viewer_.roll_);
+		Utils::SetClipboardText(text);
+		status_message_ = "Camera orientation copied to clipboard: " + text;
+		return;
+	}
 	if (Check("CameraSnapToObject")) {
 		if (selected_object_index_ >= 0) {
 			auto& objects = level_.GetLevelObjects().GetObjects();
@@ -456,11 +486,68 @@ void App::DispatchEventBindings() {
 	if (Removed("AnimTaskGoToTop")) return;
 	if (Removed("AnimTaskToggleSyncPlayback")) return;
 
-	// ---- Timer ----
-	if (Removed("TimerIncreaseSpeed")) return;
-	if (Removed("TimerDecreaseSpeed")) return;
-	if (Removed("TimerReset")) return;
-	if (Removed("TimerStartStop")) return;
+	// ---- Timer (the animation playback clock) ----
+	// Issue #48: implemented. Retail QED.doc, "General keystrokes" — "Ctrl R
+	// Reset timer", "Ctrl T  Timer Start / Stop", "F12 / Shift F12  Increment /
+	// Decrement AnimTask speed". The editor's ONE playback clock is the selected
+	// object's igi::AnimPlayback (source/animation.h:163-184, "the editor's ONE
+	// playback path"): `currentTimeMs` is the timer, `playing` is start/stop,
+	// `Reset()` rewinds and stops, and `speed` is the multiplier the engine is
+	// given by AnimPlayback::SyncEngineFlags (source/runtime/anim_playback.cpp:
+	// 147-151, Anim_SetSpeed 0x4D6580: `inst->speed = gTicksPerFrame * speed`).
+	// These four keys therefore drive the existing clock rather than adding a
+	// second timer. The playbacks are created by the level load
+	// (source/app_level.cpp:664-676 auto-plays one per eligible AI NPC) and by
+	// the property editor's animation list (App::ToggleAnimationForObject,
+	// source/app.cpp:4539). Editor-only: IGI-RE contains no QED code, so no
+	// game-side counterpart is claimed.
+	auto selected_playback = [&]() -> AnimPlayback* {
+		if (selected_object_index_ < 0) return nullptr;
+		auto it = animPlaybacks_.find(selected_object_index_);
+		if (it == animPlaybacks_.end() || it->second.clip == nullptr) return nullptr;
+		return &it->second;
+	};
+	if (Check("TimerStartStop")) {
+		AnimPlayback* pb = selected_playback();
+		if (!pb) {
+			status_message_ = "TimerStartStop: select an object with an animation first";
+			return;
+		}
+		if (pb->playing) pb->Pause(); else pb->Resume();
+		status_message_ = std::string("Timer ") + (pb->playing ? "running" : "stopped") +
+		                  ": '" + pb->clip->name + "'";
+		return;
+	}
+	if (Check("TimerReset")) {
+		AnimPlayback* pb = selected_playback();
+		if (!pb) {
+			status_message_ = "TimerReset: select an object with an animation first";
+			return;
+		}
+		// Rewinds to the clip's first frame and stops the clock
+		// (source/runtime/anim_playback.cpp:154-161).
+		pb->Reset();
+		status_message_ = "Timer reset to frame 0: '" + pb->clip->name + "'";
+		return;
+	}
+	if (Check("TimerIncreaseSpeed") || Check("TimerDecreaseSpeed")) {
+		const bool faster = Check("TimerIncreaseSpeed");
+		AnimPlayback* pb = selected_playback();
+		if (!pb) {
+			status_message_ = std::string(faster ? "TimerIncreaseSpeed" : "TimerDecreaseSpeed") +
+			                  ": select an object with an animation first";
+			return;
+		}
+		const int current = igi::AnimTimerSpeedIndex(pb->speed);
+		const int next = igi::AnimTimerSpeedStepIndex(current, faster ? 1 : -1);
+		// "at the limit" means the step did not move: the ladder clamps at both
+		// ends, and saying so is what stops the key from looking like a no-op.
+		const bool at_limit = (next == current);
+		pb->speed = igi::AnimTimerSpeedAt(next);
+		status_message_ = "Timer speed: " + igi::AnimTimerSpeedLabel(pb->speed) +
+		                  (at_limit ? " (limit)" : "") + " for '" + pb->clip->name + "'";
+		return;
+	}
 
 	// ---- Manipulate ----
 	if (Removed("Manipulate")) return;
