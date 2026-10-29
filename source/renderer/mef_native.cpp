@@ -1208,6 +1208,17 @@ std::vector<glm::vec3> ComputeBoneWorldPositionsPublic(const std::vector<BoneInf
     return ComputeBoneWorldPositions(bones);
 }
 
+glm::vec3 RigRootOriginRaw(const std::vector<BoneInfo>& bones)
+{
+    // The rig's root is the first bone with no parent (PLST[i] == -1); a rig with
+    // no root has no origin to add, so the caller's placement stands unchanged.
+    const std::vector<glm::vec3> world = ComputeBoneWorldPositions(bones);
+    for (size_t i = 0; i < bones.size(); ++i) {
+        if (bones[i].parent < 0) return world[i];
+    }
+    return glm::vec3(0.0f);
+}
+
 void SkinSkinnedVertices(const ParsedGeometry& geometry,
     const std::vector<glm::mat4>* boneWorldTransforms,
     std::vector<glm::vec3>& outPos,

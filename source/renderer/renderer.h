@@ -705,6 +705,14 @@ public:
     // (src/bonemesh/d3drender.c:124-127,164), i.e. the weighted base+influence
     // path. The model's own .mef bone list is assumed to share the clip's bone
     // indexing (true for the shared character rigs — see GetIgi1HardcodedBones).
+    //
+    // `objWorldMat` MUST come from `igi::PosedObjectMatrix`
+    // (renderer/posed_draw_transform.h), not from a bare
+    // `T(pos) * R * S(40.96*scale)`: the skinned vertices are in the skeleton's
+    // frame (root at the object's origin) while every other consumer of `obj.pos`
+    // — the static bind-pose bake, the snap, the picking ray — is calibrated to a
+    // rig whose root pivot is 0.974 m above the feet. Without that origin the
+    // posed model draws 0.974 m below the static one, i.e. under the terrain.
     void                    DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
                                             const std::vector<igi::BoneTransform>& engineBoneTransforms,
                                             const glm::mat4& objWorldMat);

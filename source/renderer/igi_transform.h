@@ -86,11 +86,27 @@ inline glm::dvec3 IgiMatrixToEuler(const glm::mat3& m) {
 // The game's object placement is Scale, then Rotate, then Translate (SRT):
 // `Matrix_SetScale` (HOOK 0x4B3C20) writes the scale into a rotation matrix that
 // is then composed with the object's Euler matrix and translation.
-inline glm::mat4 IgiObjectMatrix(const glm::dvec3& pos, const glm::dvec3& rot, float scale) {
+//
+// `total_scale` is the whole scale factor, exactly as in `IgiObjectMatrix` below
+// (callers that mean "the editor's model scale" pass `40.96f * obj.scale`).
+//
+// `model_origin_metres` is a translation in the MODEL's own space -- the same
+// space and the same units the mesh vertices are in -- applied inside the scale,
+// so it contributes `R * total_scale * model_origin_metres` to the world
+// position. A caller with no such offset passes the zero vector (the
+// three-argument form below).
+inline glm::mat4 IgiObjectMatrixAtModelOrigin(const glm::dvec3& pos, const glm::dvec3& rot,
+                                              float total_scale,
+                                              const glm::vec3& model_origin_metres) {
     glm::mat4 m = glm::translate(glm::mat4(1.0f), glm::vec3(pos));
     m = m * IgiEulerRotationMatrix(rot);
-    m = glm::scale(m, glm::vec3(scale));
+    m = glm::scale(m, glm::vec3(total_scale));
+    m = glm::translate(m, model_origin_metres);
     return m;
+}
+
+inline glm::mat4 IgiObjectMatrix(const glm::dvec3& pos, const glm::dvec3& rot, float scale) {
+    return IgiObjectMatrixAtModelOrigin(pos, rot, scale, glm::vec3(0.0f));
 }
 
 }  // namespace igi

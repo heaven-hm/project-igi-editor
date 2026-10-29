@@ -217,6 +217,33 @@ ParsedGeometry ParseMefFileFromMemory(const std::vector<uint8_t>& bytes,
 // giving each bone's absolute rest-pose position (raw, unscaled units).
 std::vector<glm::vec3> ComputeBoneWorldPositionsPublic(const std::vector<BoneInfo>& bones);
 
+// The model-space point the rig's ROOT bone sits at, in RAW units: the constant
+// by which the editor's STATIC bind-pose bake is lifted relative to a pose that
+// comes out of the engine's skeleton.
+//
+// WHY THE TWO SPACES DIFFER, with the engine as the authority:
+//
+//   * `ParseMefGeometry` replaces every base vertex's position with
+//     `SkinSkinnedVertices(geometry, nullptr, ...)` (mef_native.cpp:1122-1129),
+//     which is `(rawPos + ComputeBoneWorldPositions(rig)[bone]) * kMefNativeScale`
+//     -- the bind pose of the EDITOR's rig, with the rig's root pivot summed into
+//     every vertex.
+//   * The engine's own skinned vertices live in the SKELETON's frame instead:
+//     `BoneMesh_Skin` HOOK 0x49B700 (src/dxinit/d3drender.c:259-264) computes
+//     `Bone::matrix * v + Bone::pos`, and the bone chain starts from the
+//     skeleton's root offset, which `BoneObj_Load` 0x4D67A0
+//     (src/boneobj/boneobj.c:1570-1576) copies straight out of the BOBJ's TLST.
+//   * For every shipped human rig the editor's table and that TLST agree on
+//     EVERY bone except the root: the editor's root pivot is (0, 0, 3990.4) and
+//     the TLST's is (0, 0, 0) (measured against COMMON/ANIMS/{000,001,006}.IFF;
+//     tests/test_skinned_static_parity.cpp asserts it). 3990.4 raw units is
+//     0.974 m at the engine's 4096 units/m (kUnitsToMeters, src/humanbase/human.c:165).
+//
+// So a pose built from the retail skeleton lands exactly this far below the
+// static mesh, and a caller that has to place one against the other adds this
+// back (see `igi::IgiObjectMatrixAtModelOrigin`).
+glm::vec3 RigRootOriginRaw(const std::vector<BoneInfo>& bones);
+
 // The mesh as the engine's own skinner wants it. `BoneMesh_Skin` (HOOK 0x49B700,
 // src/dxinit/d3drender.c:226-313) reads ONE array of SkinVertex records laid out
 // as `base_count` base vertices followed by `extra_count` extra weighted
