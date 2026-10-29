@@ -2,8 +2,11 @@
 
 #include "../renderer/res_writer.h"
 
+#include "igi_sound_bank.h"
+
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <fstream>
 #include <functional>
 #include <string>
@@ -119,7 +122,11 @@ std::string BuildArchiveCacheDirectoryName(
             archive_write_time.time_since_epoch().count()));
     const std::string archive_identity = std::to_string(
         std::hash<std::string>{}(archive_path.string()));
-    return "archive_" + std::to_string(archive_index) + "_" +
+    // "v2" marks the cache layout that stores a transcoded RIFF/WAVE rather
+    // than the pack's raw ILSF bytes. Without the bump, a cache directory
+    // written by an older build would be reused and every packed sound would
+    // still resolve to an unplayable file.
+    return "archive_v2_" + std::to_string(archive_index) + "_" +
         archive_identity + "_" + write_time;
 }
 
@@ -287,11 +294,35 @@ std::filesystem::path AudioAssetResolver::ExtractPackedSound(
         const ResEntryInfo resource_location{
             matching_entry->second.data_offset,
             matching_entry->second.data_size};
-        const std::vector<uint8_t> resource_data = RES_ReadEntry(
+        std::vector<uint8_t> resource_data = RES_ReadEntry(
             archive_path.string(),
             resource_location);
         if (resource_data.empty()) {
             continue;
+        }
+
+        // A packed retail sound is an "ILSF" sample, not a RIFF/WAVE file: the
+        // 15 MB COMMON/SOUNDS/SOUNDS.RES holds 333 of them (see
+        // docs/igi-re-parity/SOUND.md and source/runtime/igi_sound_bank.h). A
+        // RIFF header is what PlaySoundA and MCI's waveaudio device need, so the
+        // sample is converted here. The conversion is the engine's own format
+        // work - the header fields and the IMA ADPCM decoder come from IGI-RE -
+        // and a file that is already RIFF is passed through untouched.
+        if (resource_data.size() >= 4 &&
+            std::memcmp(resource_data.data(), "ILSF", 4) == 0) {
+            std::vector<uint8_t> wav;
+            std::size_t pcm_size = 0;
+            std::string transcode_reason;
+            if (!soundbank::TranscodeToRiffWav(
+                    resource_data.data(), resource_data.size(), wav, pcm_size,
+                    transcode_reason)) {
+                // Nothing is cached for a sample that cannot be converted: the
+                // old code cached the raw ILSF bytes under a .wav name, which
+                // produced a file no device can play. Reporting the miss lets
+                // the caller fall back instead.
+                continue;
+            }
+            resource_data = std::move(wav);
         }
 
         // Cache under the archive entry's canonical file name so differently

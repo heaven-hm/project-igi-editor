@@ -395,6 +395,7 @@ add_executable(igi_tests
     tests/test_runtime_subsystems.cpp
     tests/test_ai_patrol_port.cpp
     tests/test_audio_asset_resolver.cpp
+    tests/test_igi_sound_bank.cpp
     tests/test_vanilla_fixture_parity.cpp
     tests/test_mission_objectives.cpp
     tests/test_mission_text_resource.cpp
@@ -473,6 +474,18 @@ add_executable(igi_tests
     tests/test_pickup_rules.cpp
     tests/test_sound_rules.cpp
     tests/test_terrain_snap_rules.cpp
+    # The engine's ONLY shadow: the blob quad Human_CreateHandler creates
+    # (HOOK 0x45EB30, src/soldier/human.c:357-358) and Shadow_MagicObjEnterHandler
+    # lays out (HOOK 0x4E09D0, src/shadow/shadow.c:84-146). GitHub issue #63's
+    # fixture half has no oracle and is refused; this is the half that does.
+    tests/test_human_shadow.cpp
+    # The engine's terrain (QCube) LOD detail scaling: the three performance
+    # presets, the per-frame fov-scaled cell-size threshold, and the terrain fog
+    # table that is derived from the same threshold. Oracle: QCube_Begin
+    # HOOK 0x4D2540 (src/lod/qcube.c:338-342), Profile_ApplyPerformance
+    # HOOK 0x406390 (src/profile/profile.c:412), TerrainMesh_SetupLighting
+    # HOOK 0x50FAE0 (src/glowmesh/terrainmesh.c:277-292).
+    tests/test_terrain_lod_settings.cpp
     tests/test_collision_drop_rules.cpp
 )
 
@@ -640,9 +653,22 @@ target_sources(igi_tests PRIVATE
     # igi-editor picks it up through the source/runtime/*.* glob.
     source/runtime/cutscene_camera.cpp
     source/runtime/alarm_light.cpp
+    # The engine's blob shadow (#63): the fade, the clamp chain, the colour and the
+    # quad geometry of Shadow_MagicObjEnterHandler (HOOK 0x4E09D0, src/shadow/shadow.c)
+    # plus the placement rule of Human_CreateHandler (HOOK 0x45EB30,
+    # src/soldier/human.c:357-358). Pure logic, so the host lane needs it to link
+    # tests/test_human_shadow.cpp; igi-editor picks it up through the
+    # source/runtime/*.* glob.
+    source/runtime/human_shadow.cpp
     source/runtime/pickup_rules.cpp
     source/runtime/rain_rules.cpp
     source/runtime/sound_emitter.cpp
+    # The retail sound container and sample format (#70): the ILFF/IRES pack
+    # walker, the 20-byte ILSF header and the engine's IMA ADPCM decoder.
+    # Pure logic, so the host lane needs it to link
+    # tests/test_igi_sound_bank.cpp; igi-editor picks it up through the
+    # source/runtime/*.* glob.
+    source/runtime/igi_sound_bank.cpp
     source/runtime/weather_mode.cpp
     source/menu/qvm_image.cpp
     source/menu/menu_qvm_writer.cpp
@@ -655,6 +681,7 @@ target_sources(igi_tests PRIVATE
 set_source_files_properties(
     source/runtime/audio_system.cpp
     source/runtime/audio_asset_resolver.cpp
+    source/runtime/igi_sound_bank.cpp
     source/runtime/config_qvm.cpp
     source/runtime/human_player_config.cpp
     PROPERTIES SKIP_PRECOMPILE_HEADERS ON

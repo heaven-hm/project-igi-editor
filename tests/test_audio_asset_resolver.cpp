@@ -3,10 +3,12 @@
 #include "../source/renderer/res_writer.h"
 #include "../source/renderer/res_compiler.h"
 #include "../source/runtime/audio_asset_resolver.h"
+#include "../source/runtime/igi_sound_bank.h"
 #include "../source/runtime/audio_system.h"
 #include "../source/weapon_system.h"
 
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -52,6 +54,42 @@ protected:
             std::istreambuf_iterator<char>());
     }
 
+    // A real packed sound: the 20-byte ILSF header (d3d/sound.c:548 checks the
+    // magic) followed by raw PCM (format 1, d3d/sound.c:576).
+    static std::vector<uint8_t> MakeIlsfPcm(std::int16_t channels,
+                                            std::int32_t rate,
+                                            std::int32_t samples) {
+        std::vector<uint8_t> out = {'I', 'L', 'S', 'F'};
+        const auto push_u16 = [&out](std::uint16_t value) {
+            out.push_back(static_cast<uint8_t>(value & 0xFF));
+            out.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
+        };
+        const auto push_u32 = [&out](std::uint32_t value) {
+            out.push_back(static_cast<uint8_t>(value & 0xFF));
+            out.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
+            out.push_back(static_cast<uint8_t>((value >> 16) & 0xFF));
+            out.push_back(static_cast<uint8_t>((value >> 24) & 0xFF));
+        };
+        push_u16(1);                      // format: raw PCM
+        push_u16(16);                     // bits
+        push_u16(static_cast<uint16_t>(channels));
+        push_u16(0);                      // unk1A
+        push_u32(static_cast<uint32_t>(rate));
+        push_u32(static_cast<uint32_t>(samples));
+        const std::size_t payload =
+            static_cast<std::size_t>(samples) * static_cast<std::size_t>(channels) * 2;
+        for (std::size_t index = 0; index < payload; ++index) {
+            out.push_back(static_cast<uint8_t>(index & 0xFF));
+        }
+        return out;
+    }
+
+    static bool StartsWithRiff(const std::vector<uint8_t>& bytes) {
+        return bytes.size() >= 12 && bytes[0] == 'R' && bytes[1] == 'I' &&
+               bytes[2] == 'F' && bytes[3] == 'F' && bytes[8] == 'W' &&
+               bytes[9] == 'A' && bytes[10] == 'V' && bytes[11] == 'E';
+    }
+
     std::filesystem::path test_root_directory_;
 };
 
@@ -80,7 +118,9 @@ TEST_F(AudioAssetResolverTest, PrefersLooseLevelSoundBeforePackedCommonSound) {
 }
 
 TEST_F(AudioAssetResolverTest, ExtractsCaseInsensitiveAuthoredSoundFromPackedArchive) {
-    const std::vector<uint8_t> expected_sound_bytes = {0x52, 0x49, 0x46, 0x46, 0x11};
+    // A packed member that is already a RIFF/WAVE is passed through untouched.
+    const std::vector<uint8_t> expected_sound_bytes = {
+        'R', 'I', 'F', 'F', 0x11, 0, 0, 0, 'W', 'A', 'V', 'E'};
     WriteArchive(
         test_root_directory_ / "COMMON/SOUNDS/SOUNDS.RES",
         "LOCAL:common/sounds/m16_loop.wav",
@@ -97,6 +137,93 @@ TEST_F(AudioAssetResolverTest, ExtractsCaseInsensitiveAuthoredSoundFromPackedArc
     EXPECT_NE(resolved_sound_path, test_root_directory_ / "COMMON/SOUNDS/SOUNDS.RES");
     EXPECT_EQ(ReadFile(resolved_sound_path), expected_sound_bytes);
     EXPECT_EQ(resolver.ResolveWavPath("m16_loop"), resolved_sound_path);
+}
+
+TEST_F(AudioAssetResolverTest, ConvertsAPackedIlsfSampleIntoAPlayableRiffWav) {
+    // The shipped packs store ILSF samples, not RIFF files. Returning those
+    // bytes under a .wav name produced a path that PlaySoundA and MCI cannot
+    // play; the resolver must hand back a real RIFF/WAVE.
+    const std::vector<uint8_t> packed_sample = MakeIlsfPcm(1, 22050, 64);
+    ASSERT_EQ(std::memcmp(packed_sample.data(), "ILSF", 4), 0);
+    WriteArchive(
+        test_root_directory_ / "COMMON/SOUNDS/SOUNDS.RES",
+        "LOCAL:common/sounds/m16_loop.wav",
+        packed_sample);
+
+    igi::AudioAssetResolver resolver(
+        test_root_directory_,
+        test_root_directory_ / "cache");
+
+    const std::filesystem::path resolved_sound_path =
+        resolver.ResolveWavPath("m16_loop");
+
+    ASSERT_FALSE(resolved_sound_path.empty());
+    const std::vector<uint8_t> extracted = ReadFile(resolved_sound_path);
+    EXPECT_TRUE(StartsWithRiff(extracted)) << "the cached file is not a RIFF/WAVE";
+    EXPECT_NE(std::memcmp(extracted.data(), "ILSF", 4), 0);
+    // 44-byte RIFF header plus 64 frames * 1 channel * 2 bytes.
+    EXPECT_EQ(extracted.size(), 44u + 64u * 2u);
+    EXPECT_EQ(extracted[22], 1);  // channels
+    EXPECT_EQ(extracted[34], 16); // bits
+    EXPECT_EQ(extracted[36], 'd');  // data chunk
+    EXPECT_EQ(extracted[40], static_cast<uint8_t>(64u * 2u));
+}
+
+TEST_F(AudioAssetResolverTest, ConvertsAPackedAdpcmSampleInsteadOfCachingRawBytes) {
+    // Format 2 is 4-bit IMA ADPCM (voice.c:440-441). Two frames come out of one
+    // byte; 0x44 0x44 decodes to 7, 17, 29, 43 (see tests/test_igi_sound_bank.cpp).
+    std::vector<uint8_t> sample = MakeIlsfPcm(1, 22050, 0);
+    sample.resize(0x14);
+    sample[4] = 2;  // format: streamed ADPCM
+    sample[5] = 0;
+    sample[16] = 4;  // samples = 4
+    sample[17] = 0;
+    sample[18] = 0;
+    sample[19] = 0;
+    sample.push_back(0x44);
+    sample.push_back(0x44);
+    WriteArchive(
+        test_root_directory_ / "COMMON/SOUNDS/SOUNDS.RES",
+        "LOCAL:common/sounds/m16_loop.wav",
+        sample);
+
+    igi::AudioAssetResolver resolver(
+        test_root_directory_,
+        test_root_directory_ / "cache");
+
+    const std::filesystem::path resolved_sound_path =
+        resolver.ResolveWavPath("m16_loop");
+    ASSERT_FALSE(resolved_sound_path.empty());
+    const std::vector<uint8_t> extracted = ReadFile(resolved_sound_path);
+    ASSERT_TRUE(StartsWithRiff(extracted));
+    ASSERT_EQ(extracted.size(), 44u + 4u * 2u);
+    const auto sample_at = [&extracted](std::size_t index) {
+        return static_cast<std::int16_t>(
+            static_cast<std::uint16_t>(extracted[44 + index * 2]) |
+            (static_cast<std::uint16_t>(extracted[44 + index * 2 + 1]) << 8));
+    };
+    EXPECT_EQ(sample_at(0), 7);
+    EXPECT_EQ(sample_at(1), 17);
+    EXPECT_EQ(sample_at(2), 29);
+    EXPECT_EQ(sample_at(3), 43);
+}
+
+TEST_F(AudioAssetResolverTest, ReportsNoPathForAPackedSampleItCannotConvert) {
+    // Format 3's payload layout is not established (see igi_sound_bank.h), so
+    // the resolver must not cache something it cannot vouch for.
+    std::vector<uint8_t> sample = MakeIlsfPcm(1, 22050, 0);
+    sample.resize(0x14);
+    sample[4] = 3;  // format: ADPCM decoded at load
+    sample[5] = 0;
+    WriteArchive(
+        test_root_directory_ / "COMMON/SOUNDS/SOUNDS.RES",
+        "LOCAL:common/sounds/m16_loop.wav",
+        sample);
+
+    igi::AudioAssetResolver resolver(
+        test_root_directory_,
+        test_root_directory_ / "cache");
+    EXPECT_TRUE(resolver.ResolveWavPath("m16_loop").empty());
 }
 
 TEST_F(AudioAssetResolverTest, PrefersActiveLevelPackedSoundBeforeCommonPackedSound) {

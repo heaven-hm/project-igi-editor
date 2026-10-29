@@ -706,3 +706,253 @@ Design notes:
 
 Nothing outside those files was changed. No renderer, level, or common code was
 touched, and no audio dependency was added.
+
+---
+
+# Part B — the retail container and sample format
+
+Part A models the *authored* emitters. This part is the other half the issue asks
+for: the bytes the emitters ultimately name, and the format they are stored in.
+It was added after the section above was written, and it changes one claim in it:
+there IS an audio pipeline in the editor now — not a device, but the engine's own
+container and sample decoding, and a conversion to a file a plain host API can
+play. `source/runtime/igi_sound_bank.{h,cpp}` and `tests/test_igi_sound_bank.cpp`.
+
+## B1. There is no SoundBank and no OpenAL
+
+The issue's title says "retail bank playback (open-igi SoundSystem/OpenAL port)".
+Read against the engine, two of those three nouns do not exist:
+
+* **No OpenAL.** `Sound_Init` (HOOK 0x495280, `src/d3d/sound.c:89-93`) is
+  `CD_Open(); Mixer_Init(); Sound_InitDirectSound(); Stream_Init();` — DirectSound
+  plus the winmm mixer plus MCI for CD audio. The decompiled tree has no OpenAL
+  symbol.
+* **No SoundBank.** The word does not appear. Definitions are a *script*:
+  `SoundSys_LoadDefs` (HOOK 0x4E6550, `src/sound/soundsys.c:306-319`) runs
+  `<dir>sounds.qsc`, whose `DefineSound` calls become the task tree Part A §6.1
+  parses. Samples are separate files.
+* **No ILSF file type either.** `ILSF` is a *member header*: the first word of the
+  bytes inside a pack (see B2). It never appears as a file extension, and a grep
+  for `ILSF` across IGI-RE finds nothing because the engine compares the numeric
+  word `0x46534C49` (`src/d3d/sound.c:548`) rather than the text.
+
+## B2. The pack: `ILFF` form `IRES`
+
+`Sound_LoadResource` (HOOK 0x4E6750, `soundsys.c:418-429`) loads a `.res`, walks
+its members with `Resource_ForEach`, and hands each member's bytes to
+`Sound_Load`. `Resource_Add` (HOOK 0x4B5F80, `src/res/resource.c:281-318`) is the
+reader, and it recognises two spellings:
+
+* an IFF-like form whose id is `ILFF` and whose form type is `IRES`
+  (`resource.c:287`), read by `Resource_AddChunks` (HOOK 0x4B60F0,
+  `resource.c:328-375`) as `NAME`/`BODY` pairs;
+* a `"RESOURCE"` record list (`resource.c:293-313`), count at `+8`, records from
+  `+0x20`.
+
+The chunk layer is `src/res/chunk.c`: `Chunk_Next` is `c + c->next` (HOOK
+0x4B7470, `:9-15`), `Chunk_FirstChild` is `(align + 0x13) & ~(align - 1)` (HOOK
+0x4B7490, `:17-31`) and `Chunk_Data` is
+`parent + ((align + (c - parent) + 0xF) & ~(align - 1))` (HOOK 0x4B74D0,
+`:34-49`). All three are reproduced in `igi_sound_bank.cpp` and cross-checked
+against the shipped bytes.
+
+Both shipped sound packs are the `ILFF`/`IRES` spelling:
+
+| Archive | Size | Members | `BODY` | `PATH` |
+|---|---|---|---|---|
+| `COMMON/SOUNDS/SOUNDS.RES` | 15,081,765 | 334 | 333 | 1 |
+| `menusystem/SOUND/SOUNDS.RES` | 1,766,902 | 14 | 13 | 1 |
+
+The `PATH` member is `resource.c:359-361` — a `;`-separated name list that
+`Resource_ForEach` (HOOK 0x4B5D80, `resource.c:185-217`) walks. It is named after
+the directory (`LOCAL:common/sounds`) and is **not a sample**: `Sound_Load` is
+never called with it. It is what points the loader at the 333 `BODY` members, and
+`SplitPathList` reproduces it.
+
+## B3. The member: a 20-byte header, then the payload
+
+`Sound_Load` (HOOK 0x495F70, `d3d/sound.c:535-621`) is the whole format
+definition. Field offsets come from `Sound` (`transctxtypes.h:46-60`) and the
+`memcpy(&s->magic, res, 0x14)` at `:563`:
+
+| Offset | Type | Field | Cited |
+|---|---|---|---|
+| 0x00 | int | magic `ILSF` | `d3d/sound.c:548` rejects any other first word |
+| 0x04 | short | `format` | `transctxtypes.h:51` |
+| 0x06 | short | `bits` | `transctxtypes.h:52` |
+| 0x08 | short | `channels` | `transctxtypes.h:53` |
+| 0x0A | short | **`unk1A` — purpose NOT established** | `transctxtypes.h:54` |
+| 0x0C | int | `rate` (Hz) | `transctxtypes.h:55` |
+| 0x10 | int | `samples` — **frames**, not interleaved values | `d3d/sound.c:579`, `:602` |
+| 0x14 | | payload | `voice.c:372` and `:453` both `File_Seek(v->file, 0x14, 0)` |
+
+`samples` counts frames because `d3d/sound.c:579` allocates
+`channels * bits * samples / 8` for the decoded buffer and `:602` sizes the
+DirectSound buffer `samples * blockAlign`; a 44.1 kHz stereo file with
+`samples = 587776` is 587,776 frames, i.e. 13.3 s.
+
+**`unk1A` is left uninterpreted.** The engine copies it and never reads it: every
+read of the struct is `format`, `bits`, `channels`, `rate` or `samples`. It is 0
+in every loose file and `0x1002` in every pack member — which looks like a
+per-container property rather than a per-sample one, but that is an observation
+about the data, not a rule read out of the engine, so the field is reported raw.
+
+## B4. The four formats, and which payload sizes are established
+
+`d3d/sound.c:564-588` switches on `format`:
+
+| Code | Meaning | Where decoded | Payload size |
+|---|---|---|---|
+| 0 | raw PCM, **streamed** | `voice.c:443` `Voice_ReadPcm` | `samples*channels*bits/8` |
+| 1 | raw PCM, whole buffer | `d3d/sound.c:576` | `samples*channels*bits/8` |
+| 2 | 4-bit IMA ADPCM, streamed | `voice.c:440-441` `Voice_ReadAdpcm` | `ceil(samples*channels/2)` |
+| 3 | ADPCM, decoded at load | `d3d/sound.c:578-587` | **not established** |
+
+Two of these are worth stating carefully.
+
+**Format 0 is not 4-bit.** `Voice_Create` treats 0 and 2 identically when it sets
+up the stream buffer (`voice.c:349-387`) and `Voice_IsPlaying` does too
+(`voice.c:279`), but `Voice_Fill` branches on the format and sends 0 down
+`Voice_ReadPcm` (`voice.c:440-443`). Its payload is therefore raw PCM, exactly
+like format 1. The header comment in `transctxtypes.h:51` — "0 / 2 streamed
+(2 = ADPCM)" — is right and the `igi_sound_bank.h` enum names it
+`StreamedPcm`. All 6 shipped format-0 files have
+`payload == samples * channels * bits / 8`, which confirms it: a 4-bit reading
+would predict a quarter of the bytes actually present.
+
+**Format 2 is `ceil(samples * channels / 2)`.** `voice.c:480` computes
+`bytes = ch * frames / 2` and `voice.c:482-487` adds one more byte when the frame
+count or the read position lands mid-byte, i.e. ceiling division. Verified
+against all 669 shipped format-2 files: 333 are mono with an odd frame count
+(`ceil` = `(samples+1)/2`), 281 are mono with an even count (`samples/2`), and 55
+are stereo (`samples`). No file has padding beyond that.
+
+**Format 3's payload length is NOT established, and is not guessed.** The loader
+never derives a byte count from the header for it: `d3d/sound.c:586` hands
+`res + 5` straight to `Adpcm_Decode`. The 8 shipped format-3 members are
+consistent with `ceil(samples*channels/2)` plus up to 3 bytes of pad, but that is
+a measurement of one archive, not a rule read out of the engine.
+`PayloadSizeEstablished` returns false, `TranscodeToRiffWav` refuses with a named
+reason, and the resolver returns no path rather than caching something it cannot
+vouch for. This is the one place the module deliberately does less than it could.
+
+## B5. The decoder is IMA, but not the textbook predictor
+
+`Adpcm_Decode` (HOOK 0x496280, `voice.c:98-148`) is ported verbatim, including
+`Adpcm_Init` (HOOK 0x496420, `:150-158`). The tables at 0x543920 and 0x543930
+(`voice.c:739-740`) are the canonical IMA index table
+`{-1,-1,-1,-1,2,4,6,8,...}` and the 89 canonical step values 7..32767.
+
+Three properties are load-bearing and each is pinned by a test:
+
+1. **The high nibble comes first** (`voice.c:118`).
+2. **`odd` is toggled on every sample, not every byte** (`voice.c:120`), and a
+   frame ending mid-byte leaves the low nibble for the next frame
+   (`voice.c:110-116`, `:492-495`). One channel consumes two samples per byte;
+   two channels consume one byte per frame, one nibble each.
+3. **`step[ch]` is refreshed at the END of each sample** (`voice.c:139`), so a
+   sample's difference uses the step the *previous* sample's index produced.
+   Index update and step refresh are one sample apart.
+
+The difference formula is the engine's and is **not** the standard IMA one
+(`voice.c:126-133`):
+
+```c
+s = step[ch];
+diff = s >> 3;
+if (nib & 4) diff += s;        /* the FULL step, where IMA uses s >> 2 */
+if (nib & 2) diff += s >> 1;
+if (nib & 1) diff += s >> 2;
+```
+
+At the initial step 7 the sixteen nibbles therefore give magnitudes
+`0,1,3,4,7,8,10,11,0,1,3,4,7,8,10,11`. A nibble of 4 moves by `1.125 * step`
+where textbook IMA moves by `0.25 * step`. `SoundBankAdpcmTest` pins the whole
+table so the port cannot be "corrected" to the standard formula — the retail
+samples decode through the engine's arithmetic, not the textbook one.
+
+## B6. What the editor does with it now
+
+`source/runtime/igi_sound_bank.h` / `.cpp`, in `namespace igi::soundbank`:
+
+| Area | API |
+|---|---|
+| Header | `SampleHeader`, `ParseSampleHeader`, `kHeaderSize`, `SampleFormat` |
+| Sizes | `PayloadSizeForHeader`, `PayloadSizeEstablished`, `DecodedPcmSize` |
+| Codec | `DecodeImaAdpcm` |
+| Pack | `ResourceKind`, `PackEntry`, `PackScanResult`, `ScanPack`, `ScanPackFile`, `SplitPathList`, `ReadEntryPayload` |
+| Output | `TranscodeToRiffWav` |
+
+`AudioAssetResolver` (`source/runtime/audio_asset_resolver.cpp`) now converts a
+packed `ILSF` member to RIFF/WAVE before caching it. Before this change it wrote
+the pack's raw bytes to `<cache>/audio/<archive>/<name>.wav`, so **every packed
+sound resolved to a file neither `PlaySoundA` nor MCI's `waveaudio` device can
+play** — the member's first four bytes were `ILSF`, not `RIFF`. That is a real
+defect the new corpus test would have caught, and the fix is what makes the
+issue's "bank playback" reachable at all. The cache directory name carries a `v2`
+marker so a cache written by the old layout is never reused.
+
+The conversion is format work and is oracle-backed. **The output device is not.**
+Nothing here proves a sound is audible: this host has no DirectSound and cannot
+run the GUI (it needs GL 4.1; the host offers 2.1).
+
+## B7. Tests and the corpus
+
+`tests/test_igi_sound_bank.cpp`, 30 tests in 6 suites, all host-portable:
+
+* `SoundBankHeaderTest` (4) — the magic, a short buffer, impossible field
+  combinations, and every field at the offset the engine uses.
+* `SoundBankPayloadTest` (3) — the format-1 size, the format-0/2 ceiling rule
+  (even/odd mono and stereo), and format 3 reported as unestablished.
+* `SoundBankAdpcmTest` (7) — high-nibble-first, the sixteen-nibble difference
+  table, the step-table walk, the index clamp, one byte per stereo frame, frames
+  versus samples, and a truncated stream decoding to silence.
+* `SoundBankPackTest` (4) — the `NAME`/`BODY` walk, a rejected non-archive, a
+  truncated archive, and the `"RESOURCE"` spelling.
+* `SoundBankTranscodeTest` (4) — the RIFF header fields against the PCM shape the
+  engine asks DirectSound for, ADPCM decoded before writing, and the two refusal
+  paths.
+* `SoundBankCorpusTest` (8) — the shipped archives. It pins 334 members /
+  333 `BODY` / 1 `PATH`; that all 333 samples are format 1, 16-bit, 331 mono and
+  2 stereo; that **every** payload equals `samples*channels*bits/8` with no
+  padding; that all 333 transcode to a well-formed RIFF/WAVE totalling
+  **15,039,330** bytes of PCM; that the `PATH` list equals the `BODY` names in
+  order; the first member's exact shape (`wire_drag_1.wav`, 26,016 frames,
+  22,050 Hz, 52,052-byte `BODY`); and that the menu pack is 5 PCM + 8 format-3
+  with the latter's layout reported unestablished.
+
+`tests/test_audio_asset_resolver.cpp` gained three tests: a packed `ILSF` member
+becomes RIFF/WAVE, a packed format-2 member is ADPCM-decoded on the way out, and
+a format-3 member yields no path. Its existing "extracts from packed archive"
+test now passes a real RIFF member through unchanged rather than four arbitrary
+bytes.
+
+## B8. Verified vs unverified (Part B)
+
+**Verified (compiled and run on the host against the shipped data):**
+
+* The pack walk, against all 347 members of the two shipped archives, including
+  the `PATH` member.
+* The header layout, against every field of all 333 + 13 samples.
+* The payload arithmetic for formats 0, 1 and 2, against all 675 loose `ILSF`
+  files and all 346 pack members.
+* The ADPCM decoder, against hand-computed vectors and a literal transcription of
+  `voice.c:98-148`.
+* That the resolver now hands back a RIFF/WAVE for a packed member, and no path
+  when it cannot.
+
+**Unverified:**
+
+* **No audio is produced or heard.** The transcoded file is a well-formed
+  RIFF/WAVE with the engine's PCM shape; that a device plays it is not tested,
+  and this host cannot test it.
+* Format 3's payload layout, `unk1A`'s purpose, and the `CSTR` member spelling —
+  all reported as unestablished rather than guessed.
+* The `"RESOURCE"` pack spelling is implemented and unit-tested against a
+  synthetic archive; **no shipped sound archive uses it**, so it is unexercised
+  against retail data.
+* Nothing here touches the authored-emitter logic of Part A, and no caller yet
+  drives `TickAmbientArea` or `TickConditionalSound` into `AudioSystem`: the
+  emitter decision layer and the sample layer are both present and tested, but
+  the wire between them is not run by any GUI code path on this host.
+
