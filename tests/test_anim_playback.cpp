@@ -431,6 +431,148 @@ TEST(AnimPlaybackEngineTest, ClockOnlyPlaybackStillStopsAtANonLoopingEnd) {
     EXPECT_TRUE(playback.IsFinished());
 }
 
+// ── The pose budget: ONE pose per rendered frame, whatever the frame cost ───
+//
+// The engine spends two different per-frame budgets and only one of them is per
+// drawn object:
+//
+//   * the CLOCK advances exactly once per frame for every active AI -
+//     `Soldier_Update` 0x45D080 -> `Human_FireAnimTrigger` 0x4613D0 ->
+//     `BoneObj_GetEvents` 0x4D3210, `inst->time = inst->speed + inst->time`
+//     (src/boneobj/boneobj.c:884-885) - and retail's loop calls `Game_Update()`
+//     once per iteration with no elapsed time at all (src/win/appmain.c:224-227);
+//   * the POSE is built once per frame for each object that is DRAWN, at draw
+//     time (`Human_WakeIfVisible` 0x45F140 -> `Human_Wake` 0x45F240 ->
+//     `BoneObj_Update` 0x4D38C0, src/humanbase/human.c:262-297).
+//
+// An editor frame can cover several engine frames (this host's Wine run measures
+// 0.25-1.3 s frames), and the editor keeps the preview clock in real time, so the
+// clock must step all of them - but posing every one of them was N-1 full
+// recursive poses per drawn object whose result was overwritten before anything
+// read it, and because that waste lengthens the frame (and so the next frame's N)
+// it is a feedback loop.  `EnginePoseSteps()` counts the engine's own pose builds
+// (`BoneObj_Update`), so these tests can pin the budget without a clock.
+
+// `frames` engine frames plus 10 ms of slack: the slack is banked (one engine
+// frame is 33.33 ms, so 10 ms cannot cross another one) and keeps the expected
+// frame count exact instead of resting on float equality at a frame boundary.
+float DtForEngineFrames(int frames) {
+    return kFrameMs * static_cast<float>(frames) + 10.0f;
+}
+
+TEST(AnimPlaybackEngineTest, ALongDrawnFramePosesOnceNotOncePerEngineFrame) {
+    const AnimationClip clip = MakeEngineClip(48000.0f, true);
+    AnimPlayback playback;
+    playback.Start(&clip);
+    ASSERT_TRUE(playback.EngineReady());
+    // `Start` -> `Anim_Play` poses once immediately
+    // (src/humanplayer/humanplayer.c:1214-1215), so the counter starts at 1.
+    const int poses_at_start = playback.EnginePoseSteps();
+    ASSERT_EQ(poses_at_start, 1);
+
+    const int kFrames = 15;   // ~500 ms at 30 fps: the frame this host really sees
+    const int steps = playback.Update(DtForEngineFrames(kFrames));
+
+    // The CLOCK follows the wall clock: every engine frame the frame covered.
+    EXPECT_EQ(steps, kFrames);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, static_cast<float>(kFrames) * kTicksPerFrame);
+    // The POSE does not: one per drawn frame, like the engine.
+    EXPECT_EQ(playback.EnginePoseSteps() - poses_at_start, 1)
+        << "a " << kFrames << "-engine-frame draw must build ONE pose, not " << kFrames;
+    EXPECT_TRUE(playback.PoseCurrent());
+}
+
+TEST(AnimPlaybackEngineTest, SinglePoseLeavesTheSameClockAndPoseAsPosingEveryEngineFrame) {
+    // THE FIDELITY BAR for the pose budget.  For every frame length, the state the
+    // editor ends the frame in must be BIT-identical to the old loop that called
+    // `Step()` (pose + advance) once per engine frame: the same clock and the same
+    // drawn pose.  The reference below IS that old loop, written with the engine's
+    // own primitive, so this is a differential and not a restatement of the
+    // implementation.
+    const AnimationClip clip = MakeEngineClip(48000.0f, true);
+
+    for (int frames : {1, 2, 3, 7, 15, 40}) {
+        AnimPlayback playback;
+        playback.Start(&clip);
+        ASSERT_TRUE(playback.EngineReady());
+
+        igi::AnimPlayer reference;
+        ASSERT_TRUE(reference.Build(clip, clip.animId));
+        ASSERT_TRUE(reference.Play(igi::kAnimLoop));
+
+        ASSERT_EQ(playback.Update(DtForEngineFrames(frames)), frames) << "frames=" << frames;
+        for (int i = 0; i < frames; ++i) reference.Step();
+
+        EXPECT_FLOAT_EQ(playback.currentTimeMs, reference.Time()) << "frames=" << frames;
+        const std::vector<glm::mat4>& got = playback.WorldTransforms();
+        const std::vector<glm::mat4>& want = reference.PoseFromLastStep();
+        ASSERT_EQ(got.size(), want.size()) << "frames=" << frames;
+        EXPECT_EQ(MaxAbsPoseDiff(got, want), 0.0f)
+            << "the drawn pose moved, frames=" << frames;
+
+        // ... and the COST differs by exactly the discarded poses: the reference
+        // pays one pose per engine frame (its `Play` posed once, then each `Step`
+        // did), the editor pays the play-time pose plus the one drawn frame.
+        EXPECT_EQ(reference.PoseSteps(), frames + 1) << "frames=" << frames;
+        EXPECT_EQ(playback.EnginePoseSteps(), 2) << "frames=" << frames;
+    }
+}
+
+TEST(AnimPlaybackEngineTest, ThePoseBudgetTracksFramesNotEngineFrames) {
+    // The shape of the feedback loop: a slow frame covers many engine frames and
+    // used to pay a pose for each, which made the next frame slower still.  The
+    // budget must track the number of RENDERED frames instead - at most one pose
+    // per frame, and none at all for a frame shorter than one engine frame (the
+    // bones hold the pose the last stepping frame produced).
+    const AnimationClip clip = MakeEngineClip(48000.0f, true);
+    AnimPlayback playback;
+    playback.Start(&clip);
+    ASSERT_TRUE(playback.EngineReady());
+
+    const int poses_at_start = playback.EnginePoseSteps();
+    int poses = 0;
+    int steps = 0;
+    int stepping_frames = 0;
+    // Deliberately ugly frame times, including two shorter than one engine frame.
+    for (float dt_ms : {500.0f, 16.0f, 700.0f, 33.0f, 1200.0f, 10.0f, 60.0f}) {
+        const int poses_before = playback.EnginePoseSteps();
+        const int stepped = playback.Update(dt_ms);
+        const int frame_poses = playback.EnginePoseSteps() - poses_before;
+        EXPECT_LE(frame_poses, 1) << "dt=" << dt_ms;
+        EXPECT_EQ(frame_poses, stepped > 0 ? 1 : 0) << "dt=" << dt_ms;
+        poses += frame_poses;
+        steps += stepped;
+        if (stepped > 0) ++stepping_frames;
+    }
+
+    EXPECT_GT(steps, 60);                       // the clock really did the work
+    EXPECT_EQ(poses, stepping_frames);          // one pose per stepping frame
+    EXPECT_LT(poses, steps);                    // and NOT one per engine frame
+    EXPECT_EQ(playback.EnginePoseSteps() - poses_at_start, poses);
+}
+
+TEST(AnimPlaybackEngineTest, AdvanceClockPosesNothingOverManyEngineFrames) {
+    // The other half of the budget: a playback the viewport does not draw pays no
+    // pose at all, however many engine frames its clock covers - the engine's
+    // `Human_FireAnimTrigger` 0x4613D0 path.  The one pose it does pay is the
+    // draw-time wake (`Human_Wake` 0x45F240), on the first getter call.
+    const AnimationClip clip = MakeEngineClip(48000.0f, true);
+    AnimPlayback playback;
+    playback.Start(&clip);
+    ASSERT_TRUE(playback.EngineReady());
+    const int poses_at_start = playback.EnginePoseSteps();
+
+    const int kFrames = 15;
+    EXPECT_EQ(playback.AdvanceClock(DtForEngineFrames(kFrames)), kFrames);
+    EXPECT_FLOAT_EQ(playback.currentTimeMs, static_cast<float>(kFrames) * kTicksPerFrame);
+    EXPECT_EQ(playback.EnginePoseSteps(), poses_at_start);
+    EXPECT_FALSE(playback.PoseCurrent());
+
+    playback.WorldTransforms();
+    EXPECT_EQ(playback.EnginePoseSteps(), poses_at_start + 1);
+    EXPECT_TRUE(playback.PoseCurrent());
+}
+
 // ── The GAMEPLAY path's clock (fixed simulation ticks, not wall time) ────────
 //
 // `App::AdvanceGameplayAnimationClocks` drives the gameplay playbacks from the

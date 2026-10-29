@@ -3963,6 +3963,18 @@ void App::UpdateAnimations(float dtSec, const std::unordered_set<int>& posed_obj
     // engine frames (gTicksPerFrame, src/lod/boneobj.c:86-90). The editor no
     // longer accumulates ticks itself.
     //
+    // The clock follows the wall clock - a long frame steps the engine frames it
+    // covered - but only the frame this draw shows is POSED.  That is the
+    // engine's own budget: one pose per DRAWN object per frame
+    // (`Human_WakeIfVisible` 0x45F140 -> `Human_Wake` 0x45F240 ->
+    // `BoneObj_Update` 0x4D38C0, src/humanbase/human.c:262-297) against one clock
+    // advance per frame (`inst->time = inst->speed + inst->time`,
+    // src/boneobj/boneobj.c:884-885).  Posing every engine frame a slow frame
+    // covered was N-1 discarded full poses per drawn object, and because it made
+    // the frame longer it fed itself: the `[AnimProfile]` `steps=`/`poses=` pair
+    // reports both halves (`poses` must stay at the drawn count while `steps`
+    // follows the frame time).  See `AnimPlayer::AdvanceSeconds`.
+    //
     // ONLY THE PLAYBACKS WHOSE POSE IS DRAWN GET THE POSE.  The engine splits
     // these two things itself, and the split is the reason this loop is not
     // simply "step all 30 playbacks":
@@ -4015,16 +4027,25 @@ void App::UpdateAnimations(float dtSec, const std::unordered_set<int>& posed_obj
     // 0 ms at 30 playbacks).  Microseconds per frame per half can.
     int64_t posed_us = 0;
     int64_t clock_us = 0;
+    // Deterministic counters for the same loop, so the cost claim does not rest
+    // on wall-clock numbers: `steps` is the engine frames the elapsed time
+    // covered (the clock's work) and `poses` is the engine's full bone pose
+    // builds (the expensive half). `poses` must stay at the drawn count however
+    // long the frame was; before the fix it tracked `steps`.
+    int64_t steps_total = 0;
+    int64_t poses_total = 0;
     for (auto& [idx, pb] : animPlaybacks_) {
         const auto one_start = profile_anim ? std::chrono::steady_clock::now()
                                             : std::chrono::steady_clock::time_point{};
         const bool posed = posed_object_indices.count(idx) != 0;
+        const int poses_before = pb.EnginePoseSteps();
         if (posed) {
             ++posed_count;
-            pb.Update(dtSec * 1000.f);
+            steps_total += pb.Update(dtSec * 1000.f);
         } else {
-            pb.AdvanceClock(dtSec * 1000.f);
+            steps_total += pb.AdvanceClock(dtSec * 1000.f);
         }
+        poses_total += pb.EnginePoseSteps() - poses_before;
         if (profile_anim) {
             const int64_t one_us = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - one_start).count();
@@ -4043,6 +4064,8 @@ void App::UpdateAnimations(float dtSec, const std::unordered_set<int>& posed_obj
         static int64_t acc_posed = 0;
         static int64_t acc_posed_us = 0;
         static int64_t acc_clock_us = 0;
+        static int64_t acc_steps = 0;
+        static int64_t acc_poses = 0;
         static int frames = 0;
         const auto now = std::chrono::steady_clock::now();
         acc_us += std::chrono::duration_cast<std::chrono::microseconds>(now - anim_start).count();
@@ -4051,11 +4074,15 @@ void App::UpdateAnimations(float dtSec, const std::unordered_set<int>& posed_obj
         acc_posed += posed_count;
         acc_posed_us += posed_us;
         acc_clock_us += clock_us;
+        acc_steps += steps_total;
+        acc_poses += poses_total;
         if (++frames >= 30) {
             Logger::Get().Log(LogLevel::INFO,
                 "[AnimProfile] 30 frames: playbacks=" +
                 std::to_string(acc_count / 30) + " posed=" +
-                std::to_string(acc_posed / 30) + " loop=" +
+                std::to_string(acc_posed / 30) + " steps=" +
+                std::to_string(acc_steps / 30) + " poses=" +
+                std::to_string(acc_poses / 30) + " loop=" +
                 std::to_string(acc_us / 30000) + "ms (" +
                 std::to_string(acc_us / 30) + "us/frame: posed=" +
                 std::to_string(acc_posed_us / 30) + "us clockonly=" +
@@ -4063,7 +4090,7 @@ void App::UpdateAnimations(float dtSec, const std::unordered_set<int>& posed_obj
                 std::to_string(acc_slowest_us / 30000) + "ms (last slowest idx=" +
                 std::to_string(slowest_idx) + ")");
             acc_us = acc_slowest_us = acc_count = acc_posed = 0;
-            acc_posed_us = acc_clock_us = 0;
+            acc_posed_us = acc_clock_us = acc_steps = acc_poses = 0;
             frames = 0;
         }
     }
@@ -4254,17 +4281,22 @@ void App::AdvanceGameplayAnimationClocks(const std::unordered_set<int>& posed_ob
 	int clock_only_count = 0;
 	int64_t posed_us = 0;
 	int64_t clock_us = 0;
+	// See App::UpdateAnimations: the deterministic half of the same claim.
+	int64_t steps_total = 0;
+	int64_t poses_total = 0;
 	for (auto& [object_index, playback] : gameplayAnimPlaybacks_) {
 		const auto one_start = profile_anim ? std::chrono::steady_clock::now()
 		                                    : std::chrono::steady_clock::time_point{};
 		const bool posed = posed_object_indices.count(object_index) != 0;
+		const int poses_before = playback.EnginePoseSteps();
 		if (posed) {
 			++posed_count;
-			playback.Update(elapsed_ms);
+			steps_total += playback.Update(elapsed_ms);
 		} else {
 			++clock_only_count;
-			playback.AdvanceClock(elapsed_ms);
+			steps_total += playback.AdvanceClock(elapsed_ms);
 		}
+		poses_total += playback.EnginePoseSteps() - poses_before;
 		if (profile_anim) {
 			const int64_t one_us = std::chrono::duration_cast<std::chrono::microseconds>(
 				std::chrono::steady_clock::now() - one_start).count();
@@ -4290,6 +4322,8 @@ void App::AdvanceGameplayAnimationClocks(const std::unordered_set<int>& posed_ob
 		static int64_t acc_slowest_us = 0;
 		static int64_t acc_playbacks = 0;
 		static int64_t acc_elapsed_ms = 0;
+		static int64_t acc_steps = 0;
+		static int64_t acc_poses = 0;
 		static int frames = 0;
 		acc_playbacks += (int64_t)gameplayAnimPlaybacks_.size();
 		acc_posed += posed_count;
@@ -4298,12 +4332,16 @@ void App::AdvanceGameplayAnimationClocks(const std::unordered_set<int>& posed_ob
 		acc_clock_us += clock_us;
 		acc_slowest_us += slowest_us;
 		acc_elapsed_ms += (int64_t)elapsed_ms;
+		acc_steps += steps_total;
+		acc_poses += poses_total;
 		if (++frames >= 30) {
 			Logger::Get().Log(LogLevel::INFO,
 				"[GameplayAnimProfile] 30 frames: playbacks=" +
 				std::to_string(acc_playbacks / 30) + " posed=" +
 				std::to_string(acc_posed / 30) + " clockonly=" +
-				std::to_string(acc_clock / 30) + " loop=" +
+				std::to_string(acc_clock / 30) + " steps=" +
+				std::to_string(acc_steps / 30) + " poses=" +
+				std::to_string(acc_poses / 30) + " loop=" +
 				std::to_string(acc_posed_us / 30000 + acc_clock_us / 30000) + "ms (" +
 				std::to_string((acc_posed_us + acc_clock_us) / 30) + "us/frame: posed=" +
 				std::to_string(acc_posed_us / 30) + "us clockonly=" +
@@ -4313,7 +4351,7 @@ void App::AdvanceGameplayAnimationClocks(const std::unordered_set<int>& posed_ob
 				std::to_string(acc_elapsed_ms / 30));
 			acc_playbacks = acc_posed = acc_clock = 0;
 			acc_posed_us = acc_clock_us = acc_slowest_us = 0;
-			acc_elapsed_ms = 0;
+			acc_elapsed_ms = acc_steps = acc_poses = 0;
 			frames = 0;
 		}
 	}

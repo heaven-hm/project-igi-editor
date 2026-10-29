@@ -31,6 +31,17 @@
  * src/game/game.c:449 `BoneObj_SetFrameRate(30.0f)`), exactly as the retail game
  * loop does. `currentTimeMs` is then read back out of the engine with
  * `Anim_GetTime`; the editor never adds to it itself.
+ *
+ * THE POSE IS PER FRAME, NOT PER ENGINE FRAME. Of the N engine frames a long
+ * editor frame covers, only the LAST is the frame this draw shows, and only it is
+ * posed: the engine builds a pose once per frame for each object it DRAWS
+ * (`Human_WakeIfVisible` 0x45F140 -> `Human_Wake` 0x45F240 -> `BoneObj_Update`
+ * 0x4D38C0, src/humanbase/human.c:262-297) while the clock advances exactly once
+ * per frame for every active AI (`inst->time = inst->speed + inst->time`,
+ * src/boneobj/boneobj.c:884-885; retail's loop has no elapsed time at all,
+ * src/win/appmain.c:224-227). Posing all N cost N-1 discarded full poses per
+ * drawn object per frame and made the loop's cost grow with the frame time - see
+ * `AnimPlayer::AdvanceSeconds` for the rule and the bit-identity argument.
  *****************************************************************************/
 #include "animation.h"
 
@@ -157,44 +168,56 @@ void AnimPlayback::Start(const AnimationClip* c) {
     BuildEnginePlayer();
 }
 
-void AnimPlayback::Update(float dtMs) {
-    if (clip == nullptr) return;
-    if (!engine_) return;          // the engine refuses this clip; see EngineReady
+int AnimPlayback::Update(float dtMs) {
+    if (clip == nullptr) return 0;
+    if (!engine_) return 0;        // the engine refuses this clip; see EngineReady
     SyncEngineFlags();
 
+    int steps = 0;
     if (playing && dtMs > 0.0f) {
-        // REAL milliseconds in, engine ticks out: one Step() per whole engine
-        // frame at the current frame rate (160 ticks at 30 fps), which is the
-        // only way the retail loop advances the clock.
-        if (engine_->AdvanceSeconds(dtMs * 0.001f) > 0) {
-            // At least one Step ran, and `Step()` is pose-then-advance, so the
-            // bones hold the frame this draw should show (see the header). A
-            // sub-frame tick steps nothing and leaves the flag alone.
+        // REAL milliseconds in, engine ticks out: one engine frame per whole
+        // frame of elapsed time at the current frame rate, which is the only way
+        // the retail loop advances the clock. A long frame therefore moves the
+        // clock several engine frames - but only the frame this draw shows is
+        // POSED (`AnimPlayer::AdvanceSeconds`), because the engine poses a drawn
+        // object once per frame at draw time (`Human_WakeIfVisible` 0x45F140 ->
+        // `Human_Wake` 0x45F240 -> `BoneObj_Update` 0x4D38C0,
+        // src/humanbase/human.c:262-297) while the clock advances once per frame
+        // (`inst->time = inst->speed + inst->time`, src/boneobj/boneobj.c:884-885).
+        // Posing every one of those frames was N-1 discarded poses per drawn
+        // object per frame, and made the loop's cost grow with the frame time.
+        steps = engine_->AdvanceSeconds(dtMs * 0.001f);
+        if (steps > 0) {
+            // The drawn frame was posed (Step() is pose-then-advance), so the
+            // bones hold the frame this draw should show (see the header).
             pose_current_ = true;
         }
     }
 
     FinishAdvance();
+    return steps;
 }
 
-void AnimPlayback::AdvanceClock(float dtMs) {
-    if (clip == nullptr) return;
-    if (!engine_) return;
+int AnimPlayback::AdvanceClock(float dtMs) {
+    if (clip == nullptr) return 0;
+    if (!engine_) return 0;
     SyncEngineFlags();
 
+    int steps = 0;
     if (playing && dtMs > 0.0f) {
         // The engine's per-frame clock for an object it does not draw:
         // `Soldier_Update` 0x45D080 -> `Human_FireAnimTrigger` 0x4613D0 ->
         // `BoneObj_GetEvents` 0x4D3210 (src/humanbase/human.c:1368-1387,
         // src/boneobj/boneobj.c:112-129). No pose - that is `Human_Wake`'s job
         // at draw time (0x45F240, src/humanbase/human.c:289-297).
-        engine_->AdvanceSecondsClockOnly(dtMs * 0.001f);
+        steps = engine_->AdvanceSecondsClockOnly(dtMs * 0.001f);
         // The bones no longer sit at the tick the next drawn frame should show,
         // so the first getter call poses them (retail's wake-at-draw).
         pose_current_ = false;
     }
 
     FinishAdvance();
+    return steps;
 }
 
 void AnimPlayback::PoseNow() {
@@ -221,6 +244,10 @@ void AnimPlayback::FinishAdvance() {
 
 bool AnimPlayback::EngineReady() const {
     return engine_ != nullptr && engine_->valid();
+}
+
+int AnimPlayback::EnginePoseSteps() const {
+    return engine_ ? engine_->PoseSteps() : 0;
 }
 
 const std::vector<glm::mat4>& AnimPlayback::WorldTransforms() {

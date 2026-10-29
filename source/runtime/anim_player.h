@@ -200,11 +200,47 @@ public:
     bool StepPose();
 
     // Editor convenience, NOT engine logic: accumulate wall-clock seconds and
-    // call Step() once per whole engine frame at the current frame rate. The
-    // engine itself advances exactly one `gTicksPerFrame` per Step, which is why
-    // it needs no accumulator. Returns the number of engine frames stepped, so a
-    // caller can tell "the clock moved (and the bones were posed)" from "this
-    // frame was shorter than one engine frame (nothing moved at all)".
+    // advance the clock in whole engine frames at the current frame rate, POSING
+    // AT MOST THE LAST ONE. The engine itself advances exactly one
+    // `gTicksPerFrame` per Step, which is why it needs no accumulator.
+    //
+    // WHY ONLY ONE POSE.  The engine spends two different per-frame budgets, and
+    // only the second is per drawn object:
+    //
+    //   * the CLOCK advances exactly once per frame for every active AI -
+    //     `Soldier_Update` 0x45D080 -> `Human_FireAnimTrigger` 0x4613D0 ->
+    //     `BoneObj_GetEvents` 0x4D3210, `inst->time = inst->speed + inst->time`
+    //     (src/boneobj/boneobj.c:884-885) - and retail's main loop calls
+    //     `Game_Update()` once per iteration with no elapsed time at all
+    //     (src/win/appmain.c:224-227), so it never "catches up";
+    //   * the POSE is built once per frame for each object that is DRAWN, at
+    //     draw time: `Human_WakeIfVisible` 0x45F140 -> `Human_Wake` 0x45F240 ->
+    //     `BoneObj_Update` 0x4D38C0 (src/humanbase/human.c:262-297).
+    //
+    // Retail therefore pays at most ONE pose per drawn object per frame however
+    // long the frame took. An editor frame can be longer than an engine frame, and
+    // the editor keeps the preview clock in real time, so N engine frames can be
+    // due at once - but only the LAST of them is the frame this render draws.
+    // Posing all N is N-1 full recursive poses whose result is overwritten before
+    // anything reads it, and because that wasted work makes the frame longer (and
+    // the next frame's N larger), it is a feedback loop. The intermediate frames
+    // are stepped with `StepClock()` - exactly what the engine does for an object
+    // it does not draw.
+    //
+    // The state this leaves is bit-identical to posing every one of the N frames:
+    // the clock, the events of the last frame, and the pose that is drawn (the
+    // N-th Step's `BoneObj_Update`, i.e. the frame at the tick before the final
+    // advance) are the same numbers, because a pose writes only the bone
+    // transforms (`BoneObj_UpdateBone` 0x4D3A90, src/boneobj/boneobj.c:423-525)
+    // and `BoneObj_GetEvents` reads none of them (it walks `bone->blend`,
+    // src/boneobj/boneobj.c:112-129). The one difference is a clip whose bone tree
+    // cannot be posed at all - the port reports that instead of faulting: the
+    // clock now runs the frames the pose skip covered and `Step()` still reports
+    // the failure on the drawn frame.
+    //
+    // Returns the number of engine frames stepped, so a caller can tell "the clock
+    // moved" from "this frame was shorter than one engine frame (nothing moved at
+    // all)".
     int AdvanceSeconds(float seconds);
 
     // The same accumulator over `StepClock()`: whole engine frames of the clock
@@ -219,6 +255,13 @@ public:
     void SetSpeed(float multiplier);
     // Anim_SetTime HOOK 0x4D65B0 (src/boneobj/anim.c:181-185): a raw store.
     void SetTime(float ticks);
+
+    // Deterministic cost counter, NOT engine logic: how many times this player has
+    // run the engine's full bone pose, `BoneObj_Update` 0x4D38C0 - the expensive
+    // half of a step. A rendered frame must add at most ONE per drawn playback,
+    // whatever the frame time was; `[AnimProfile]` reports it as `poses=`. It
+    // counts calls, not successes, because the cost is paid either way.
+    int PoseSteps() const { return pose_steps_; }
 
     // Anim_GetTime 0x4D6500 / Anim_GetLength 0x4D64E0 / Anim_GetPhase 0x4D6520 /
     // Anim_GetId 0x4D64C0 (src/boneobj/anim.c:137-161).
@@ -313,6 +356,7 @@ private:
     std::vector<EngineBoneEvent> events_;
     float advance_seconds_ = 0.0f;
     bool pose_dirty_ = true;
+    int pose_steps_ = 0;   // see PoseSteps(): engine pose builds, a cost counter
 
 public:
     AnimPlayer() = default;

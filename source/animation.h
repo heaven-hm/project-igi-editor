@@ -209,7 +209,16 @@ struct AnimPlayback {
     // conversion to engine ticks happens inside the engine's frame arithmetic
     // (one Step is gTicksPerFrame = 160 ticks, src/lod/boneobj.c:86-90), never
     // by feeding a tick value into a millisecond parameter.
-    void Update(float dtMs);
+    //
+    // A long frame steps as many engine frames as the wall clock covered - the
+    // preview stays in real time - but only the frame this draw shows is POSED;
+    // the rest are clock-only. Retail pays one pose per drawn object per frame
+    // whatever the frame time (`Human_WakeIfVisible` 0x45F140 -> `Human_Wake`
+    // 0x45F240, src/humanbase/human.c:262-297) while the clock advances once per
+    // frame (`inst->time = inst->speed + inst->time`, src/boneobj/boneobj.c:884-885);
+    // see `AnimPlayer::AdvanceSeconds` for the full rule. Returns the number of
+    // engine frames stepped.
+    int Update(float dtMs);
     // The same clock advance WITHOUT the pose, for a playback whose pose is not
     // drawn this frame. The engine does exactly this split for a human: the
     // per-frame update advances the clock and nothing else
@@ -223,7 +232,8 @@ struct AnimPlayback {
     // The frame arithmetic, the sub-frame accumulator and the end test are
     // identical to `Update`, so a playback that switches back to `Update` when
     // it becomes visible poses at the tick it would have reached anyway.
-    void AdvanceClock(float dtMs);
+    // Returns the number of engine frames stepped.
+    int AdvanceClock(float dtMs);
     // The pose half of `Update`, at the CURRENT clock, without advancing it -
     // `Human_Wake` 0x45F240 (src/humanbase/human.c:289-297). Called by the pose
     // getters when the clock has moved without a pose (`AdvanceClock`), which is
@@ -252,6 +262,13 @@ struct AnimPlayback {
     // second, boneobj.c:1014) is reported here instead of being faked. Out of
     // line: `igi::AnimPlayer` is incomplete in this header.
     bool EngineReady() const;
+
+    // Deterministic cost counter, NOT engine logic: how many times the engine's
+    // full bone pose (`BoneObj_Update` 0x4D38C0) has run for this playback,
+    // including the draw-time wake. `[AnimProfile]` reports the per-frame delta as
+    // `poses=`; a drawn playback must add at most ONE per rendered frame however
+    // long that frame took. See `AnimPlayer::PoseSteps`.
+    int EnginePoseSteps() const;
 
     // The pose the engine produced for the frame it last stepped, in METRES and
     // in the model's own frame - the space `Renderer::DrawAnimSkeleton` and the

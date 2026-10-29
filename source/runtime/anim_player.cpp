@@ -280,6 +280,7 @@ void AnimPlayer::AssignFrom(const AnimPlayer& other) {
     events_ = other.events_;
     advance_seconds_ = other.advance_seconds_;
     pose_dirty_ = other.pose_dirty_;
+    pose_steps_ = other.pose_steps_;
     LinkEnginePointers();
 }
 
@@ -355,6 +356,7 @@ void AnimPlayer::Step() {
     // `BoneMagicObj_Run` 0x531620 (src/freecam/bonemagic.c:101-112):
     // BoneObj_Update at :105, BoneObj_GetEvents at :110. The engine poses the
     // frame that is about to be drawn and only then moves the clock on.
+    ++pose_steps_;   // see PoseSteps(): this is the expensive half of a step
     if (!BoneObjUpdate(data_.state, kIdentity3x3, kFreshMatrixCount)) {
         playing_ = false;
         return;
@@ -368,6 +370,7 @@ bool AnimPlayer::StepPose() {
     if (!data_.valid()) return false;
     // Human_Wake 0x45F240 (src/humanbase/human.c:289-297) is exactly this: a
     // pose of the current clock with no advance. The clock is NOT moved here.
+    ++pose_steps_;   // see PoseSteps()
     if (!BoneObjUpdate(data_.state, kIdentity3x3, kFreshMatrixCount)) return false;
     pose_dirty_ = true;
     return true;
@@ -391,14 +394,29 @@ int AnimPlayer::AdvanceSeconds(float seconds) {
     advance_seconds_ += seconds;
     const float frame_seconds = FrameSeconds(ticks_per_frame_);
     if (!(frame_seconds > 0.0f)) return 0;
-    int steps = 0;
-    while (advance_seconds_ >= frame_seconds && steps < kMaxStepsPerAdvance) {
-        Step();
+
+    // How many whole engine frames the banked wall clock covers, with the same
+    // one-frame-at-a-time subtraction (and the same bound) the per-frame loop
+    // used, so the banked remainder stays the float it has always been.
+    int due = 0;
+    while (advance_seconds_ >= frame_seconds && due < kMaxStepsPerAdvance) {
         advance_seconds_ -= frame_seconds;
+        ++due;
+    }
+    if (due >= kMaxStepsPerAdvance) advance_seconds_ = 0.0f;
+
+    // ONE POSE FOR THE FRAME THAT IS DRAWN, clock-only for the rest - see the
+    // header for the engine rule and why this is not a behaviour change. The
+    // drawn frame is the LAST one: the editor draws the frame the engine's
+    // pose-then-advance step produced (`BoneMagicObj_Run` 0x531620,
+    // src/freecam/bonemagic.c:105,110).
+    int steps = 0;
+    for (int i = 0; i < due; ++i) {
+        if (i + 1 < due) StepClock();
+        else Step();
         ++steps;
         if (!playing_) break;
     }
-    if (steps >= kMaxStepsPerAdvance) advance_seconds_ = 0.0f;
     return steps;
 }
 
@@ -519,6 +537,7 @@ const std::vector<glm::mat4>& AnimPlayer::PoseModelLocal() {
     // then placed in the model's own frame. This is the same space
     // `AnimationRegistry::EvaluateWorld` emits, which is what the caller's
     // `objMat` expects.
+    ++pose_steps_;   // see PoseSteps()
     BoneObjUpdate(data_.state, kIdentity3x3, kFreshMatrixCount);
     CapturePose(pose_);
     return pose_;
@@ -529,6 +548,7 @@ const std::vector<glm::mat4>& AnimPlayer::PoseWithObjectRotation(const float m[9
         pose_object_.clear();
         return pose_object_;
     }
+    ++pose_steps_;   // see PoseSteps()
     BoneObjUpdate(data_.state, m, kFreshMatrixCount);
     CapturePose(pose_object_);
     return pose_object_;
