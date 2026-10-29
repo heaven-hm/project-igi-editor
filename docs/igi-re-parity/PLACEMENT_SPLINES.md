@@ -598,7 +598,9 @@ Observed output (host lane, `bash scripts/run-host-tests.sh`):
 * `test_mcp_domain_tools.DerivesTransformAndModelLayoutsFromSchemas` fails in the
   host lane with `map::at: key not found`. It is unrelated to this workstream
   (the schema layer, `source/level/task_schema.cpp`, is being edited in parallel)
-  and was left untouched.
+  and was left untouched. **Superseded by §18**: the schema layer now carries the
+  `SplineObj` row, and the host lane reported the two `SplineTaskTreeTest` schema
+  tests green under Wine.
 
 ---
 
@@ -954,3 +956,126 @@ that lane's "not host-portable" list; it self-skips without `IGI_GAME_PATH`):
 | `IGI_E2E_STAGE=…/scratch/e2e-railpoly bash scripts/e2e-headless.sh` (full: smoke + tests + verify) | **E2E PASS**, exit 0: smoke loads all 14 levels, level 7 fails on exactly `s332_02_1` (known retail defect), 0 missing textures; `--run-tests` 278/278 assertions; 14/14 `--verify-level` passes |
 | Windows suite under Wine (`bin/igi_tests.exe`, `--gtest_filter=-*VerifyLevel*`) | **1792 tests ran, 1780 passed, 12 skipped, 0 failed**, exit 0, with the one pre-existing flaky MCP HTTP test (`McpHttpIntegrationTest.StopUnblocksAnIdleAuthenticatedOrUnauthenticatedClient`, documented at `PAUSE_MENU_STYLE.md:359-364`) excluded; including it, that test is the only failure. All 11 new tests pass |
 | On-screen appearance | **not verified** — see §16.5 |
+
+---
+
+# Follow-up (task-9): the authoring surface for issue #79
+
+Issue #79 asks for road and track spline objects "and the authoring workflow".
+The data model (`source/runtime/spline_rules.{h,cpp}`), the geometry
+(`source/level/spline_geometry.{h,cpp}`) and the render path
+(`source/renderer/renderer_splines.cpp`) had already landed. What had not was the
+part of the editor that *writes* a road: the task tree's property panel.
+
+## 18.1 The gap, measured
+
+`GetBuiltinSchema("SplineObj")` returned `nullptr`, and the property panel is
+skipped entirely when the resolved schema is null:
+
+```
+source/renderer/renderer_draw.cpp:2228   const TaskSchema* scp = GetSchema(obj.type);
+source/renderer/renderer_draw.cpp:2229   if (scp) {
+```
+
+so selecting a road's `SplineObj` node in the task tree opened an empty panel. A
+level whose `Task_DeclareParameters` line declared the type did get a schema at
+load (`source/app_level.cpp:388-397` → `TaskSchemaNS::RegisterSchema`), which is
+why the only shipped level that has splines (`MISSIONS/location0/level1`, the one
+level whose script is QSC rather than QVM) looked fine — but the builtin table
+that every other task type relies on had no `SplineObj` row, and the waypoint row
+labelled its third parameter `Model`, a name the engine never uses.
+
+## 18.2 What was changed
+
+| File | Change |
+| --- | --- |
+| `source/level/task_schema.cpp` | `SplineObj` builtin schema added; the `SplineObjWaypoint` block rewritten to derive from the oracle table too. Both now loop over `igi::SplineObjParamTable()` / `igi::SplineObjWaypointParamTable()` and accumulate `token_count`, the same pattern the `Smoke` and `AlarmLight` rows already use (issue #43) — so the inspector rows cannot drift from the ported oracle, and the waypoint's third row is now authored `Waypoint Model` |
+| `source/runtime/spline_rules.h` | included by `task_schema.cpp` for those two tables |
+| `CMakeLists.txt` | `source/runtime/spline_rules.cpp` added to the **`igi_mcp`** target's source list (it already links `smoke.cpp` / `alarm_light.cpp` for the same reason) and `tests/test_spline_task_tree.cpp` added to the `igi_tests` list |
+| `tests/test_spline_task_tree.cpp` | new: 6 host-portable tests, §18.4 |
+
+Nothing in `source/level/level_objects.cpp` or `renderer_splines.cpp` changed: the
+loader already reads the container's position from args 9-11
+(`level_objects.cpp:312-320`, `level_objects_serialize.cpp:243-261` and `:466-476`)
+and the renderer already pairs consecutive waypoint children into spans.
+
+## 18.3 The rows, and why the offsets are what they are
+
+Both tables are the engine's own `ParamTable_Add` order, and the argument offsets
+fall out of the declared types' token counts (Real32x9 and ObjectPos and RGB
+consume three script arguments, `src/physobj/paramops.c:170-186`,
+`ParamReal32x9_Parse` `HOOK(0x4EFBA0)` at `paramops.c:423-435`):
+
+| `SplineObj` row | type | arg | | `SplineObjWaypoint` row | type | arg |
+| --- | --- | --- | --- | --- | --- | --- |
+| Linear Segments | bool8 | 3 | | Orientation | Real32x9 | 3-5 |
+| Display waypoints | bool8 | 4 | | Position | ObjectPos | 6-8 |
+| Snap Length | bool8 | 5 | | Waypoint Model | String16 | 9 |
+| Automatic Orientation | bool8 | 6 | | Segment Model | String16 | 10 |
+| Number of Matrices / Segment | Int32 | 7 | | NumAreas | Int32 | 11 |
+| Collision LOD | Int32 | 8 | | Align | bool8 | 12 |
+| **Position** | Real32x3 | **9-11** | | Flip | bool8 | 13 |
+| Gamma Orientation | Angle | 12 | | Automatic Orientation | bool8 | 14 |
+| Dirlight Angular Effect | RGB | 13-15 | | | | |
+| Dirlight Ambient Effect | RGB | 16-18 | | | | |
+
+Oracle: `SplineObj_Open` `HOOK(0x502250)`, IGI-RE `src/editobj/spline.c:177-225`
+(`ParamTable_New(10)` at `:204` with the ten `ParamTable_Add` calls at `:205-214`;
+`ParamTable_New(8)` at `:215` with the eight at `:216-223`; the 2..20 range at
+`:202-203`). Retail data: `MISSIONS/location0/level1/objects.qsc:2-4`, the two
+`Task_DeclareParameters` lines, reproduced verbatim in the new test.
+
+The container's Position row is typed `Real32x3`, not `ObjectPos`, deliberately:
+`App::ApplyPropPositionDrag` treats **every** `ObjectPos` field as the object's own
+position and writes `obj.pos` plus the pad's two args (`app_input_mouse.cpp:762`,
+`:784-811`), which is right for args 3-5 and wrong for args 9-11. A `Real32x3` row
+renders as three labelled numeric boxes (`renderer.h:246-252`) and scrubs to
+`fd.argOffset + comp` (`app_input_mouse.cpp:711-717`), which is exactly the three
+tokens `UpdateCoordinatesInLine` persists. This is the same reasoning the `Wire`
+"End" row already records (`task_schema.cpp:88-95`).
+
+## 18.4 Tests
+
+`tests/test_spline_task_tree.cpp`, 6 tests, all host-portable except that the
+suite is one of the ones the native lane cannot *link* (`LevelObjects::Load` needs
+`File_FreeBuf`); it runs in the Windows suite under Wine.
+
+| Test | What it pins |
+| --- | --- |
+| `WaypointsAreNestedUnderTheirContainer` | the loader nests both waypoints under the container (`parentIndex`/`childrenIndices`), which is what the tree view recurses |
+| `ContainerSchemaMatchesTheEnginesDeclaration` | the 10 rows equal `ParseDeclaration` of the shipped declaration — name, type **and** offset — plus the offsets individually, including Position @9 |
+| `WaypointSchemaMatchesTheEnginesDeclaration` | the 8 rows likewise; asserts the third row is named `Waypoint Model` |
+| `RegisteredDeclarationAgreesWithTheBuiltin` | a level-declared schema and the builtin resolve to identical rows, so the panel cannot change shape between levels |
+| `ContainerPositionRowEditsArgs9To11Only` | a Position edit rewrites args 9-11 and the exact serialized line, with the four flags, the two counts and the gamma untouched |
+| `WaypointSegmentModelRowIsTheRenderedSlot` | "Segment Model" @10 is the slot the renderer repeats along the span, and NumAreas/Align/Flip/Automatic Orientation are @11-14 |
+
+## 18.5 Verified / unverified
+
+* **Verified**: the schema rows against the shipped declaration and the engine's
+  ParamTable order (unit tests above, run under Wine — see the evidence table);
+  the tree nesting; the arg-9-11 round trip through `UpdateCoordinatesInLine`.
+* **Not verified**: anything visual. The editor's GUI needs an OpenGL 4.1
+  compatibility context and this host offers 2.1, so no panel has been seen
+  rendered. The claim is that the panel now has a schema to build from and that
+  the rows are the engine's; the first person to run the i686 build on a GL 4.1
+  machine settles the rest.
+* **Not addressed**: the container's remaining authored fields (`collide`, `snap`,
+  `autoOrient`, `angle`, `color1`, `color2`) are editable through the inspector's
+  `argTokens` writes but are not mirrored into `LevelObject` members, because no
+  editor code path reads them yet — the geometry uses `linearSegments` and
+  `splineSegmentCount` only. Adding members with no reader would be dead state;
+  the rows are what the issue asked for.
+
+## 18.6 Evidence
+
+| Gate | Result |
+| --- | --- |
+| `cmake --build build-mingw --target igi_tests igi-editor --parallel` | exit 0 |
+| `cmake --build build-mingw --target igi_mcp --parallel` | exit 0 — this is the target the new `spline_rules.cpp` entry links into |
+| `bash scripts/check-build-integrity.sh` | **PASS** — 383 objects consistent |
+| Windows suite under Wine, `--gtest_filter=-*VerifyLevel*` | 1910 ran, 1897 passed, 12 skipped, **1 failed**: `Keybindings48.ImplementedQuickActionsUseTheHostTestedHelpers`, which fails on `AnimTimerSpeedIndex` / `pb->Reset()` / `pb->Pause()` in `source/app_input.cpp` and belongs to the concurrent keybindings/anim work, not to this change (it fails identically in the host lane). `SplineTaskTreeTest` 6/6 and `McpDomainToolsTest` 25/25 pass |
+| `IGI_HOST_NO_CACHE=1 bash scripts/run-host-tests.sh` | exit 1: 1450 ran, 1447 passed, 1 skipped, **2 failed** — the same `Keybindings48` test plus `AnimFrameStep73.ForwardStepBelowTheLengthIsAPlainAddition`, both from the concurrent anim/keybindings edits. `test_spline_task_tree.cpp` is one of the suites the native lane cannot link (`File_FreeBuf`), so it is not in that count; it runs in the Windows suite above |
+| `IGI_E2E_STAGE=$PWD/scratch/e2e-79 bash scripts/e2e-headless.sh --fast` | **E2E PASS**, exit 0: smoke loads all 14 levels, level 7 fails on exactly `s332_02_1` (known retail defect); `--run-tests` 278/278 |
+| `IGI_E2E_STAGE=$PWD/scratch/e2e-79-full bash scripts/e2e-headless.sh` (full) | **E2E PASS**, exit 0: 3/3 tiers — smoke, `--run-tests` 278/278, and 14/14 `--verify-level` passes |
+| `bash scripts/perf-guard.sh` | **PERF GUARD PASS**, exit 0 |
+| On-screen appearance of the panel | **not verified** — see §18.5 |

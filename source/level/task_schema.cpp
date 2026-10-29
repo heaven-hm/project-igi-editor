@@ -8,6 +8,10 @@
 // shipping declaration.
 #include "runtime/alarm_light.h"
 #include "runtime/smoke.h"
+// The authored SplineObj / SplineObjWaypoint parameter tables (issue #79). Every row
+// carries the IGI-RE ParamTable_Add order and the retail Task_DeclareParameters name,
+// so the inspector rows below cannot drift from the engine.
+#include "runtime/spline_rules.h"
 
 namespace TaskSchemaNS {
 
@@ -127,23 +131,52 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
           add(sc, "Viewcone Gamma",     "Int32",    17);
           add(sc, "Viewcone Length",    "Real32",   18);
           add(sc, "On Expression",      "VarString", 19); }
-        // SplineObjWaypoint: the shipped declaration is
-        //   Task_DeclareParameters("SplineObjWaypoint", "Orientation", "Real32x9",
-        //     "Position", "ObjectPos", "Waypoint Model", "String16", "Segment Model",
-        //     "String16", "NumAreas", "Int32", "Align", "bool8", "Flip", "bool8",
-        //     "Automatic Orientation", "bool8");
-        // (MISSIONS/location0/level1/objects.qsc), and the engine's ParamTable registers
-        // the same eight in the same order (SplineObj_Open HOOK 0x502250,
-        // src/editobj/spline.c:215-223).  The editor previously stopped at arg 10.
+        // ─── Road / track splines (issue #79) ────────────────────────────────
+        //
+        // A road, a track, a bridge or a rail is a `SplineObj` container task with a
+        // chain of `SplineObjWaypoint` children; each waypoint after the first carries
+        // the segment model for the span that ends at it. Both types are declared by
+        // the engine itself and by the shipped level script:
+        //
+        //   IGI-RE src/editobj/spline.c:177-225  SplineObj_Open HOOK 0x502250
+        //     ParamTable_New(10) @:204, the ten ParamTable_Add calls @:205-214
+        //     (the 2..20 segment range is gSplineObjSegmentRange @:202-203);
+        //     ParamTable_New(8) @:215, the eight Add calls @:216-223.
+        //   MISSIONS/location0/level1/objects.qsc:2-4 — the level's own
+        //     Task_DeclareParameters lines, which agree entry for entry and in order.
+        //
+        // Both rows are DERIVED FROM THE PORTED ORACLE TABLE rather than hand-copied,
+        // the same way Smoke and AlarmLight above are: `SplineObjParamTable()` and
+        // `SplineObjWaypointParamTable()` (source/runtime/spline_rules.cpp) carry the
+        // authored name, the declared type and the token count of every parameter, and
+        // their corpus tests compare those rows against the shipping declaration. That
+        // is what keeps the inspector from drifting from the engine.
+        //
+        // WITHOUT the SplineObj row the task tree's property panel rendered NOTHING for
+        // a spline container — `GetSchema("SplineObj")` returned nullptr, and
+        // renderer_draw.cpp:2228-2230 skips the whole panel when the schema is null —
+        // so a road could be selected but not edited. Note the container's "Position"
+        // is args 9-11, NOT 3-5 (args 3-5 are four bool8 flags then two Int32s); the
+        // row order below is what puts it there.
+        { auto& sc = s["SplineObj"];
+          int offset = 3;  // argTokens: [0]=id, [1]=type, [2]=name
+          for (int i = 0; i < igi::kSplineObjParamCount; ++i) {
+              const igi::SplineParamDesc& p = igi::SplineObjParamTable()[i];
+              add(sc, p.authored_name, p.type_name, offset);
+              offset += p.token_count;
+          } }
+        //
+        // The waypoint's third parameter is authored "Waypoint Model", which is what
+        // this row now says; it used to be labelled "Model", a name the engine never
+        // uses. Nothing keys off the literal (app_editor.cpp:896 matches any name
+        // containing "Model"), so the correction is display-only.
         { auto& sc = s["SplineObjWaypoint"];
-          add(sc, "Orientation", "Real32x9",  3);
-          add(sc, "Position",    "ObjectPos", 6);
-          add(sc, "Model",       "String16",  9);
-          add(sc, "Segment Model", "String16", 10);
-          add(sc, "NumAreas",    "Int32",     11);
-          add(sc, "Align",       "bool8",     12);
-          add(sc, "Flip",        "bool8",     13);
-          add(sc, "Automatic Orientation", "bool8", 14); }
+          int offset = 3;
+          for (int i = 0; i < igi::kSplineObjWaypointParamCount; ++i) {
+              const igi::SplineParamDesc& p = igi::SplineObjWaypointParamTable()[i];
+              add(sc, p.authored_name, p.type_name, offset);
+              offset += p.token_count;
+          } }
         // AmbientArea
         { auto& sc = s["AmbientArea"];
           add(sc, "Position",    "ObjectPos", 3);

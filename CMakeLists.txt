@@ -410,6 +410,9 @@ add_executable(igi_tests
     tests/test_spline_geometry.cpp
     tests/test_placement_splines.cpp
     tests/test_spline_waypoint_params.cpp
+    # The task-tree / inspector surface of the road and track spline objects
+    # (issue #79): the container + waypoint rows and the arg offsets they edit.
+    tests/test_spline_task_tree.cpp
     tests/test_level_object_parse_paths.cpp
     tests/test_train_rail.cpp
     tests/test_rail_polyline.cpp
@@ -750,11 +753,13 @@ add_executable(igi_mcp
     source/level/qvm_compiler.cpp
     source/level/qvm_decompiler.cpp
     source/level/task_schema.cpp
-    # task_schema.cpp derives the Smoke and AlarmLight inspector rows from these
-    # two modules' authored parameter tables (issue #43), so this binary needs
-    # them to link.  Both are pure logic -- no Windows, GL or level headers.
+    # task_schema.cpp derives the Smoke, AlarmLight and SplineObj /
+    # SplineObjWaypoint inspector rows from these modules' authored parameter
+    # tables (issues #43 and #79), so this binary needs them to link.  All are
+    # pure logic -- no Windows, GL or level headers.
     source/runtime/smoke.cpp
     source/runtime/alarm_light.cpp
+    source/runtime/spline_rules.cpp
     source/renderer/res_writer.cpp
 )
 target_include_directories(igi_mcp PRIVATE source)
