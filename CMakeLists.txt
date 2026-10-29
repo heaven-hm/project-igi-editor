@@ -448,6 +448,10 @@ add_executable(igi_tests
     tests/test_spline_rules.cpp
     tests/test_anim_rules.cpp
     tests/test_lightmap_rules.cpp
+    # Which way up a `.olm` page is sampled: the engine's own V mapping
+    # (render.c:1117-1118, D3DTSS_TEXCOORDINDEX=1) against the editor shader's
+    # second flip (renderer_objects.cpp:172, :327), measured on the retail bake.
+    tests/test_lightmap_uv_orientation.cpp
     tests/test_smoke_rules.cpp
     # The same emitter RUNNING: the per-tick spawn, lifetime, velocity and cone
     # rules of Smoke_Run 0x437DB0 + Particle2D_Run 0x4FD660 (#43).

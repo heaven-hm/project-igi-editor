@@ -169,8 +169,20 @@ void main() {
 
     vec3 litColor;
     if (u_useLightmap != 0) {
-        vec2 olmUV = vec2(v_uv2.x, 1.0 - v_uv2.y);
-        vec3 lm = texture(u_lightmap, olmUV).rgb * u_lightmapScale;
+        // NO V FLIP. The engine samples the lightmap at the vertex's own second
+        // texture coordinate: stage 1 is set to D3DTSS_TEXCOORDINDEX = 1
+        // (Direct3DRender_SetLightmapStages HOOK 0x49D960, src/render/render.c:854)
+        // and Direct3DRender_UploadLightmapMesh scales that coordinate and nothing
+        // else (HOOK 0x49EB50, src/render/render.c:1117-1118). D3DTex_Upload copies
+        // source row y to surface row y (src/sysmisc/d3dtex.c:660-668) and D3D
+        // samples v = 0 at row 0, so the row order of the `.olm` bytes IS the
+        // engine's v order. The diffuse channel is flipped once at the model
+        // boundary (source/renderer/model.cpp:83-84); uv2 is not, so flipping it
+        // here would cancel that and mirror the bake. Measured on the retail
+        // corpus: sampling at uv2.y puts up-facing texels 13.0 levels brighter
+        // than down-facing ones, sampling at 1 - uv2.y inverts it to -5.0
+        // (tests/test_lightmap_uv_orientation.cpp, 333 model/.olm pairs).
+        vec3 lm = texture(u_lightmap, v_uv2).rgb * u_lightmapScale;
         if (u_lm_authentic == 0) {
             // Warm ambient floor: no lightmapped face should be black.
             // OLM stores absolute lighting; dark faces get lifted to warm minimum.
@@ -324,8 +336,9 @@ void main() {
 
     vec3 litColor;
     if (u_useLightmap != 0) {
-        vec2 olmUV = vec2(v_uv2.x, 1.0 - v_uv2.y);
-        vec3 lm = texture2D(u_lightmap, olmUV).rgb * u_lightmapScale;
+        // NO V FLIP -- see the GLSL 3.30 copy above for the oracle citations
+        // (src/render/render.c:854, :1117-1118; src/sysmisc/d3dtex.c:660-668).
+        vec3 lm = texture2D(u_lightmap, v_uv2).rgb * u_lightmapScale;
         if (u_lm_authentic == 0) {
             // Warm ambient floor: no lightmapped face should be black.
             // OLM stores absolute lighting; dark faces get lifted to warm minimum.

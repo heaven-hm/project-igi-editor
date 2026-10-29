@@ -561,6 +561,69 @@ Two independent measurements, both read-only against
 
 ---
 
+## 5d. The lightmap V coordinate — a second flip, and its removal
+
+**Finding.** The fragment shader sampled the baked atlas with an extra V
+negation, `vec2 olmUV = vec2(v_uv2.x, 1.0 - v_uv2.y)`, in both shader variants
+(`source/renderer/renderer_objects.cpp:172` GLSL 3.30, `:327` GLSL 1.20). That
+flip had no oracle and was **wrong**: it mirrored every baked lightmap against
+the engine's sampling.
+
+**Why the engine has no flip.** Three links, all cited:
+
+| Link | Oracle | What it says |
+|---|---|---|
+| the coordinate | `Direct3DRender_SetLightmapStages` HOOK **0x49D960**, `src/render/render.c:854` | stage 1 is `D3DTSS_TEXCOORDINDEX = 1`, i.e. the vertex's **own** second texture coordinate |
+| the value | `Direct3DRender_UploadLightmapMesh` HOOK **0x49EB50**, `src/render/render.c:1117-1118` | `out[i*10+8] = src[i*10+8] * uScale`, `+9 ... vScale` — a scale, **not** a negation; the vertex stream is FVF 530, 40 bytes, lightmap UV at floats 8/9 (`gMeshFVF` `src/dxinit/d3drender.c:359`) |
+| the row order | `D3DTex_Upload` `src/sysmisc/d3dtex.c:660-668` | source row `y` is copied to surface row `y`; D3D samples `v = 0` at row 0, so the `.olm` byte order **is** the engine's v order |
+
+The diffuse channel is flipped once at the model boundary
+(`source/renderer/model.cpp:83-84`, "flip V at the model sampling boundary").
+`uv2` is uploaded unflipped at `:85-86`, so the shader's flip was the only
+conversion — a *second* one on top of the model-boundary convention, i.e. a
+no-op that cancels and mirrors the bake.
+
+**The measurement.** `tests/test_lightmap_uv_orientation.cpp` pairs each
+format-3 retail model with the `.olm` whose page-record sizes equal its own LTMP
+array, then bins every drawn vertex's atlas texel by that vertex's normal. A
+`.olm` page is a UV-space bake, so the texel under a vertex was lit with that
+vertex's normal; the retail sun is above the horizon (`Dirlight_Update`,
+`src/dirlight/dirlight.c:56-127`), so up-facing texels must be brighter than
+down-facing ones — and only the correct V mapping reproduces that. Verbatim:
+
+```
+[olm-v] models=333 pairs=333 verts=42429/42429 |
+        engine: up=135.20(n=6821) side=130.61(n=26920) down=122.17(n=5355) up-down=+13.03 |
+        flip:   up=140.72(n=6821) side=142.86(n=26920) down=145.68(n=5355) up-down=-4.97 |
+        control(mispaired atlases): mean=-1.19(n=1641)
+        unbaked-rate: matched=0.027 control=0.015
+```
+
+Sampling at the vertex's own `uv2.y` gives the physically correct ordering
+(up > side > down, margin **+13.03**); sampling at `1 - uv2.y` inverts it
+(**-4.97**).
+
+**Why that is the pairing rule's doing, and not a coincidence.** The same
+vertices are also scored against **1,641** unrelated atlases from the same
+levels (the first eight `.olm` files of each level, excluding the matched one).
+Those mispaired atlases average **-1.19** — indistinguishable from noise, and an
+order of magnitude below the matched atlas's +13.03. The test asserts that the
+control's mean stays below the matched margin, asserts the bin sizes, and
+asserts the sign of the engine-side margin, so a future edit that re-introduces
+the flip fails on the retail corpus.
+
+**The fix.** The negation is removed from both shader variants; the lightmap is
+sampled at `v_uv2`, the engine's own coordinate. Nothing else changed: the
+per-group page bind (`set->tex[g->lightmap]`), the four-conjunct accept test and
+the `uScale`/`vScale` non-application of §8 are all untouched.
+
+**Not verified by this.** No rendered pixel — the measurement is a property of
+the retail bake and the engine's sampling rule, not of an editor frame. The host
+cannot run the GUI (GL 4.1 needed, 2.1 offered), so the visual confirmation is
+the user's.
+
+---
+
 ## 6. Corpus evidence
 
 `tests/test_lightmap_rules.cpp` walks every `lightmaps.res` under
@@ -732,6 +795,7 @@ $ IGI_E2E_STAGE=$PWD/scratch/e2e-lm-pages bash scripts/e2e-headless.sh --fast
 | The build gate | **verified** — `scripts/build-windows.sh`: x64 link 0, i686 compile 0, build integrity 0 |
 | The `LoadOlmPages` rejection branch itself (not just the predicate) | **unverified as a unit test** — it calls GL only *after* the accept test, but the file lives in a GL-linked target, so the host lane cannot link it. The predicate, the mesh-side mapping and the identification rule it is driven by are all host-tested; the call is exercised by compilation, the Windows suite and the e2e lane |
 | Any rendered or in-game lightmap | **unverified** — the GUI needs GL 4.1, this host offers 2.1 |
+| The lightmap V coordinate (§5d) | **verified as a corpus property** — `[olm-v] models=333 pairs=333 verts=42429 up-down=+13.03` at `uv2.y` vs `-4.97` at `1 - uv2.y`, `exit 0`; **not** verified as a rendered frame |
 
 ## 8. Unverified
 
@@ -884,7 +948,8 @@ output is checked against the engine's own accept test.
 | `source/renderer/olm_texture.{h,cpp}` | the reader: every page of a `.olm`, engine layout, and the four-conjunct accept test |
 | `source/renderer/model.{h,cpp}` | `SubMesh.lightmapPage` — the render group's `LmGroup.lightmap` |
 | `source/renderer/lightmap_ref_index.h` | `PageIndexForGroup` (rule 5) and `RefMeshIsIdentified` (which ref's mesh the accept test can name) |
-| `source/renderer/renderer_objects.{h,cpp}`, `renderer.h` | per-LOD page vectors, the per-submesh bind, `GetLodOlmAcceptInput` / `GetLodCount` |
+| `source/renderer/renderer_objects.{h,cpp}`, `renderer.h` | per-LOD page vectors, the per-submesh bind, `GetLodOlmAcceptInput` / `GetLodCount`, and the lightmap V coordinate (§5d) |
+| `tests/test_lightmap_uv_orientation.cpp` | which V mapping a retail `.olm` bake agrees with — the corpus pin for §5d |
 | `source/app_editor.cpp` | `ResolveAndApplyLightmap` loads every page and applies the accept test where the ref's mesh is identified |
 | `tests/test_lightmap_rules.cpp` | unit tests for the accept test, the mesh side and the `.olm` layout; corpus tests over the real install |
 | `tests/test_lightmap_ref_index.cpp` | the page rule, the ref-identification rule, plus the format-3 page corpus differential |
