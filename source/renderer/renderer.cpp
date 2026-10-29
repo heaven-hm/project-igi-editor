@@ -113,6 +113,13 @@ bool Renderer::Init() {
     return false;
   }
 
+  // The Smoke particles (#43). Init failure is not fatal to the editor: the
+  // emitter still simulates, it just is not drawn (Renderer_Smoke::Draw returns
+  // early when the program is 0).
+  if (!smoke_.Init()) {
+    Logger::Get().Log(LogLevel::WARNING, "[Renderer_Smoke] Init failed; smoke particles will not be drawn.");
+  }
+
   // init default state
   glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
 
@@ -146,6 +153,7 @@ void Renderer::Shutdown() {
   terrain_.Shutdown();
   objects_.Shutdown();
   rain_.Shutdown();
+  smoke_.Shutdown();
   flat_sky_layers_.Shutdown();
 
   skydome_.Shutdown();
@@ -165,6 +173,9 @@ void Renderer::BeginLoadLevel() {
   // Disable rain until the new level's QSC is parsed — prevents rain from a
   // prior level bleeding into a level that has no RainEffect task.
   rain_.SetParams(false, false, 0.0f, 0.0f, 0.0f);
+  // The previous level's Smoke emitters and their live particles are gone with
+  // its task tree; the new level's list is published on the next frame.
+  smoke_.Clear();
   graph_overlay_ = GraphFile{};
   graph_overlay_visible_ = false;
   graph_overlay_dirty_ = false;

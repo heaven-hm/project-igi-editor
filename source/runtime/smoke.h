@@ -162,7 +162,7 @@ struct SmokeParams {
     float gamma = 0.0f;                   // yaw, radians
     int count = 100;
     float radius = 0.0f;
-    float spread = 0x1.921fb6p-1f;        // pi/2, radians
+    float spread = 0x1.921fb6p-1f;        // pi/4, radians (Smoke_Create, smoke.c:226)
     float min_velocity = 4.5f;
     float max_velocity = 6.0f;
     float colour[3] = {2.0f, 2.0f, 2.0f};
@@ -213,6 +213,10 @@ public:
     // Random_Float 0x4B4770 (random.c:21-24): `(Next() & 0xFFFF) / 65536`,
     // i.e. 16 bits of mantissa, uniform on {0, 1/65536, ..., 65535/65536}.
     long double Float();
+    // Random_Seed 0x4B47E0 (random.c:34-40): Random_Init then
+    // `a ^= seed; b += seed << 15; c -= seed << 9`. Particle2D_Open seeds
+    // gParticle2DRandom with 0x12332153 (particle.c:99-100).
+    void Seed(std::uint32_t seed);
 
 private:
     std::uint32_t a_ = 0;
@@ -271,6 +275,99 @@ void SmokeEmitSpeedArguments(const SmokeParams& params, float* a, float* b);
 // backwards; because the fraction is uniform on [0,1) the sample is still
 // uniform on [a, b], so the reversal is distribution-preserving.
 float SmokeSampleSpeed(float a, float b, long double fraction);
+
+// ---------------------------------------------------------------------------
+// Particle2D_Emit's direction: the emission cone (particle.c:569-633)
+// ---------------------------------------------------------------------------
+//
+// Particle2D_Emit turns the emitter's axis into ONE particle direction:
+//
+//   u = normalize(dir)                                    particle.c:577-586
+//   |u.x| > 0.75 ? (a, b) = (1, 0) : (0, 1)               particle.c:587-593
+//   v = (a*u.z, -b*u.z, b*u.y - a*u.x);  w = normalize(v)  particle.c:594-606
+//   c = w x u                                             particle.c:607-609
+//   tilt = Random_Float * spread                          particle.c:610
+//   az   = PI - Random_Float * 2*PI                       particle.c:611
+//   ax   = spread * 0.5 - tilt                            particle.c:612
+//   d    = column2(RotZ(az) * RotX(ax)) * (c, w, u)       particle.c:613-615
+//   e    = normalize(d);  vel = e * speed                 particle.c:617-631
+//
+// Column 2 of RotZ(az)*RotX(ax) is (sin az sin ax, -cos az sin ax, cos ax)
+// (matrix.c:148-164 Matrix_SetRotZ 0x4B3BE0, matrix.c:112-127 Matrix_SetRotX
+// 0x4B3B60, matrix.c:99-110 Matrix_SetEuler 0x4B38E0, matrix.c:6-21 Mul), so
+// `d` is the axis `u` tilted by |ax| inside the (c, w) plane. `ax` runs over
+// (spread/2 - spread, spread/2] -- i.e. **the cone's half-angle is spread/2,
+// not spread**, even though the authored parameter is named "Maximum Random
+// Angle" (smoke.c:172). That is the engine's arithmetic, reproduced here.
+//
+// The two draws are consumed in the order tilt, azimuth (particle.c:610-611);
+// the speed draw comes last (particle.c:616). Particle2D_Emit's random source
+// is gParticle2DRandom -- a DIFFERENT stream from the emitter's gSmokeRandom,
+// seeded once in Particle2D_Open (particle.c:99-100).
+struct SmokeConeBasis {
+    float u[3] = {0.0f, 0.0f, 1.0f};  // the normalised axis
+    float w[3] = {0.0f, -1.0f, 0.0f};
+    float c[3] = {-1.0f, 0.0f, 0.0f}; // w x u
+};
+
+// The (u, w, c) frame Particle2D_Emit builds from the emitter axis
+// (particle.c:577-609). `dir` is Smoke_Changed's axis (SmokeDirection).
+SmokeConeBasis SmokeConeFrame(const float dir[3]);
+
+// The unit direction of one particle (particle.c:610-628), given the two
+// Random_Float draws the caller has already taken, in the engine's order.
+void SmokeEmitDirection(const float dir[3], float spread, long double tilt_fraction,
+                        long double azimuth_fraction, float out_dir[3]);
+
+// The full velocity Particle2D_Add stores (particle.c:616-632):
+// `e * speed`, with `speed = SmokeSampleSpeed(a, b, speed_fraction)`.
+void SmokeEmitVelocity(const float dir[3], float spread, float speed_a, float speed_b,
+                       long double tilt_fraction, long double azimuth_fraction,
+                       long double speed_fraction, float out_vel[3]);
+
+// ---------------------------------------------------------------------------
+// Particle2D_Run's per-particle step (particle.c:264-305)
+// ---------------------------------------------------------------------------
+//
+// One particle per engine tick, in the engine's order:
+//
+//   vel += gravity                  (zero for Smoke, smoke.c:395)
+//   pos += vel
+//   angle += spin
+//   scale += grow
+//   if (delay) delay--;             -- and the level is NOT faded this tick
+//   else { level -= fade; the particle dies when level <= 0 or scale <= 0 }
+//
+// (particle.c:280-304). `delay` and `fade` are the two arguments Smoke_Run
+// derives (smoke.c:331-332, SmokeDelayFrames/SmokeFadeFrames) and `fade` is
+// `frames ? 1/frames : 1` (particle.c:563), so the fade is a per-tick
+// SUBTRACTION of a float -- the lifetime is `delay + frames` ticks plus
+// whatever the float recurrence leaves behind (1 - 30*(1/30) rounds to exactly
+// 0, 1 - 60*(1/60) does not).
+//
+// `frame`/`frameTimer` advance only for an animated sprite (`t->animated` is
+// `sprite->map != NULL`, particle.c:519-520); the editor does not load the
+// retail .spr at all, so a particle's frame stays 0 here.
+struct SmokeParticleState {
+    double pos[3] = {0.0, 0.0, 0.0};
+    float vel[3] = {0.0f, 0.0f, 0.0f};
+    float spin = 0.0f;   // radians per tick (Smoke_Run's `spin` argument)
+    float level = 0.0f;  // fades to 0; also the alpha for the default fade mode
+    float fade = 0.0f;   // per-tick subtraction
+    float angle = 0.0f;  // accumulated spin, the quad's screen rotation
+    float scale = 1.0f;  // grows by the group's `grow` per tick
+    int delay = 0;       // ticks before the fade starts
+    int frame = 0;
+    int frame_timer = 0;
+};
+
+// One tick of Particle2D_Run for one particle (particle.c:280-304). Returns
+// false when the particle is removed this tick (the engine's
+// Particle2D_Remove, particle.c:422-433). `gravity`, `grow` and `frame_delay`
+// are the group's (Particle2D_New) fields; Smoke's gravity is (0,0,0) and its
+// frameDelay is 0 (smoke.c:403).
+bool SmokeParticleTick(SmokeParticleState& p, const float gravity[3], float grow, int frame_delay,
+                       int animated_frames);
 
 // The `frames`/`delay` arguments (smoke.c:331-332):
 //   delay = round_int(fadeDelay * kRate)          -- authored "Life Time"

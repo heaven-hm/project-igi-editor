@@ -504,6 +504,27 @@ void Renderer::Draw(const draw_params_s &params,
                rain_.IsSnow()
                    ? objects_.GetOrLoadGameTexture(igi::rain::SnowTextureName())
                    : 0u);
+
+    // ── Smoke particles (#43) ────────────────────────────────────────────────
+    // Every authored "Smoke" task in the level is one emitter; the level's list
+    // is re-published each frame and an emitter whose parameters did not change
+    // keeps its live particles (Smoke_Changed's own rebuild rule,
+    // src/fxobj/smoke.c:347-350). Renderer_Smoke::Draw then steps the whole
+    // simulation by exactly ONE engine frame and draws it -- the engine's tick
+    // rule (src/win/appmain.c:224-227), the same one RainEffect_Run follows.
+    if (params.level_objects_) {
+      std::vector<igi::SmokeParams> emitters;
+      for (const LevelObject& obj : params.level_objects_->GetObjects()) {
+        if (obj.type != "Smoke") continue;
+        igi::SmokeParams parsed;
+        // A truncated task is skipped, not filled with defaults
+        // (ParseSmokeParams, source/runtime/smoke.cpp).
+        if (igi::ParseSmokeParams(obj.argTokens, &parsed)) emitters.push_back(parsed);
+      }
+      smoke_.SetEmitters(std::move(emitters));
+      smoke_.Draw(ubo_mats_, params.view_define_->pos_, params.view_define_->right_,
+                  params.view_define_->up_, params.view_define_->forward_);
+    }
   }
 
   // Everything from here on (graph overlay, 2D HUD text, state restore) is the

@@ -564,7 +564,190 @@ data. The tests assert this as counted findings rather than as invariants.
 
 ---
 
-## 12. Verified, and not
+## 12. The emitter running: the viewport simulation (the second half of #43)
+
+§1-§4 are the emitter's static half. This section is the live half: the emitter
+spawning and stepping particles in the viewport, on the engine's own tick.
+
+### 12.1 The tick
+
+`Smoke_Run` HOOK `0x437DB0` (`smoke.c:298-339`) and `Particle2D_Run` HOOK
+`0x4FD660` (`particle.c:264-305`) are both tick handlers. The engine's loop has
+no elapsed time at all (`src/win/appmain.c:224-227`), so **one engine frame is
+one tick**, and a long editor frame buys no extra steps. `SmokeSimulation::Tick`
+(`source/runtime/smoke_sim.cpp`) is called once per rendered frame from
+`Renderer_Smoke::Draw`, which is the same rule the weather particles already
+follow (`RainEffect_Run` HOOK `0x436990`, `fxobj/rain.c:98-105`; commit
+f4204d55 pinned the same invariant for the animation clock and
+`scripts/perf-guard.sh` budgets it).
+
+### 12.2 The spawn rate
+
+`acc = t->rate + t->acc; while (acc > 30.0) { emit; acc = t->acc - 30.0; }`
+(`smoke.c:316-337`), with `acc` a FLOAT field that `Smoke_Create` starts at 0
+(`smoke.c:228`). The steady state is exactly `rate / 30` particles per tick, but
+the comparison is strict, so the **first tick of an exact multiple of 30 emits
+one fewer** and a rate below 30 emits nothing until the carry crosses 30:
+
+| rate | emissions per tick | first tick |
+|---|---|---|
+| 30 | 1 | 0 |
+| 60 | 2 | 1 |
+| 150 | 5 | 4 |
+| 1 | 1 every 30 ticks | 0 for the first 30 |
+
+Reproduced, not corrected (`tests/test_smoke_particles.cpp`).
+
+### 12.3 The lifetime
+
+`delay = round("Life Time" × 30)` and `frames = round("Fade Time" × 30 ÷
+"Intensity")` (`smoke.c:331-332`), and `Particle2D_Add` stores
+`fade = frames ? 1/frames : 1` (`particle.c:563`). `Particle2D_Run` then does:
+
+```c
+if (p->delay) { p->delay--; }                  /* particle.c:293-295 */
+else { level = (long double)p->level - p->fade;
+       p->level = level;
+       if (level > 0 && p->scale > 0) keep; else remove; }   /* :296-304 */
+```
+
+so the particle is stepped `delay + frames` times, and **not always exactly
+`frames` fade ticks**: the fade is a per-tick float subtraction, and
+`1 − 30·(1/30)` rounds to exactly 0 while `1 − 60·(1/60)` leaves a positive
+residue and survives a 61st tick. The tests pin both (30 → 30, 60 → 61), which
+is why the default "Fade Time" of 1 s gives a 45-tick particle and a steady-state
+pool of 44 for a rate of 30.
+
+### 12.4 The velocity and the cone
+
+`Particle2D_Emit` HOOK `0x4FE210` (`particle.c:569-634`) builds the direction
+from an orthonormal frame `(c, w, u)` around the emitter axis (`u`), then tilts
+it:
+
+```c
+tilt = Random_Float(gParticle2DRandom) * spread;          /* :610 */
+az   = kPi - Random_Float(gParticle2DRandom) * kTwoPi;    /* :611 */
+ax   = spread * 0.5f - tilt;                              /* :612 */
+Matrix_SetEuler(&m, ax, 0, az);                           /* :613 */
+d[i] = m.m[2]*c[i] + m.m[5]*w[i] + m.m[8]*u[i];           /* :614-615 */
+speed = (speedMax - speedMin) * Random_Float + speedMin;  /* :616 */
+vel[i] = normalize(d)[i] * speed;                         /* :617-631 */
+```
+
+Column 2 of `RotZ(az)·RotX(ax)` is `(sin az·sin ax, −cos az·sin ax, cos ax)`
+(`matrix.c:99-164`), so the deviation of the emitted direction from the axis is
+exactly `|ax|`, and `ax` runs over `(−spread/2, spread/2]`. **The cone's
+half-angle is `spread/2`, not `spread`**, even though the authored parameter is
+named "Maximum Random Angle" — with the authored default of `0x1.921fb6p-1`
+(π/4, `smoke.c:226`) the cone opens to π/8. The placement gizmo in
+`renderer_objects_visual.cpp` used to draw `spread`; it now draws `spread/2`.
+
+The speed is uniform on `[min × 136, max × 136]` (`kSpeed`, `smoke.c:98`), and
+the reversal of the two authored velocity names (§1) does not change the
+distribution.
+
+### 12.5 The two random streams
+
+`Smoke_Create` calls `Random_Init(gSmokeRandom)` (`smoke.c:246`) and
+`Particle2D_Open` calls `Random_Init` + `Random_Seed(gParticle2DRandom,
+0x12332153)` (`particle.c:99-100`). The emitter's three draws per particle
+(angle, radius, rotation fraction) come from the first stream and
+`Particle2D_Emit`'s three (tilt, azimuth, speed) from the second, in that order.
+A first particle of a fresh simulation is therefore fully determined, and the
+suite pins it against an independent re-derivation of the oracle's arithmetic:
+with the default axis (+Z), "Radius" 2 m, "Maximum Random Angle" π/4 and
+velocities 4.5/6.0 the first particle is born at `(1489.50269, −2263.80298)` and
+leaves with velocity `(10.762025, 190.378006, 734.919495)`.
+
+Two bugs were caught by that pin while this was written, and are worth recording
+because both are invisible to a range-only check: C++ leaves argument evaluation
+order unspecified, so passing the three `Random_Float()` draws as arguments
+permuted them; and a simulation that does not apply `Random_Seed(0x12332153)`
+starts the particle stream from the *emitter's* state, which shifts every
+velocity.
+
+### 12.6 The draw
+
+`Particle2D_Draw` HOOK `0x4FD020` (`particle.c:108-208`) projects each particle
+(`TransContext_Project` `0x497F20`) and draws a screen-space quad whose
+half-extent is `size × scaleX ÷ depth` (`TransContext_ScaleSize` `0x498040`,
+`transctx.c:282-288`), rotated by the accumulated `angle` when the particle
+spins, with the colour and alpha selected by the flags:
+
+```c
+if (t->flags & 0x80000) alpha = p->level;          /* :195-196 */
+else { alpha = 1.0f; r = colour.x * p->level; ... } /* :197-202 */
+```
+
+`Particle2D_New` ORs `0x40000` into the flags (`particle.c:515`), so the branch
+is decided by the authored "Fade Mode" alone: mode 0 fades the alpha, modes 1
+and 2 fade the colour. A world-space camera-facing quad of half-extent
+`size × p.scale` projects to exactly the engine's pixel size, so the viewport
+draws the engine's quad as a billboard (`source/renderer/renderer_smoke.cpp`).
+
+**Named divergence: the sprite texels.** The engine binds `smoke1.spr` /
+`smoke2.spr` / `fireball.spr` / `blood1.spr` (`smoke.c:189-192`, `:380-393`)
+through `QVertex_DrawQuadEx` (`particle.c:205-206`). Those live inside
+`COMMON/SPRITES/SPRITES.RES` and are a chunked LOOP/FONT container with palettes
+(`Sprite_Load` HOOK `0x4B6720`, `src/res/sprite.c:162-262`), which the editor has
+no loader for. The quad is filled with a procedural radial falloff instead: the
+geometry, size, colour, alpha and fade are the engine's, the texels are not.
+
+### 12.7 Named divergences (simulation)
+
+* **Emitter before group within a tick.** The group is created by
+  `Smoke_Changed` as a child of `Level_GetDynamic()` (`smoke.c:401-404`) and
+  `Task_New` appends (`List_AddTail`, `src/task/task.c:146-147`), while the
+  emitter itself sits wherever the level nested it — inside the `Dynamic`
+  subtree in the shipped data (`LEVEL1/objects.qsc:546` opens `Dynamic`, the
+  first `Smoke` is at `:903`). The port therefore emits first and integrates
+  after, so a particle moves on its birth tick. This is an argument from the tree
+  and the shipped file, not a runtime trace.
+* **Two per-simulation random streams.** The engine shares one `gSmokeRandom`
+  across every Smoke task and one `gParticle2DRandom` across every group. One
+  simulation object with its own pair reproduces a single emitter exactly and
+  keeps two emitters' previews independent; with several emitters the engine's
+  shared stream would interleave their draws.
+* **"Generate factor" is not evaluated.** The authored VarString expression
+  (`smoke.c:314-315`) needs a script context the preview does not have, so the
+  authored "Initial generate factor value" is used for every tick.
+  `SmokeSimulation::EmittersWithExpression()` reports how many emitters the
+  editor is approximating.
+* **The emitter does not follow a moving ancestor.** `Smoke_Move` HOOK
+  `0x437AD0` and `Smoke_UpdateLocal` HOOK `0x438240` need a `RigidDynCubeObj`
+  parent with a live matrix; the emitter stays at its authored Position.
+  `Particle2D_Translate` (`0x4FE610`) is applied, because it only needs the
+  emitter's own delta ("Move Particles").
+
+### 12.8 Verified, and not
+
+* **Verified by execution (host + Windows).** 24 new host-portable tests
+  (`tests/test_smoke_particles.cpp`) pin the spawn rate per tick (30/60/150/1),
+  the pool cap, the lifetime including the 30-vs-61 float case, the first
+  particle against an independent derivation, the speed range, the cone
+  half-angle (never past `spread/2`, and filled to it), the zero-spread axis,
+  the emission disc, the axis formula, the cone frame's orthonormality in both
+  `|u.x| > 0.75` branches, straight-line motion under zero gravity, grow, spin,
+  the one-tick-per-call rule, the rebuild rule, "Move Particles", determinism and
+  the seeded stream. All 24 pass in the host lane and in the Windows i686
+  `igi_tests` binary.
+* **Not verified — no rendered result.** The GUI needs OpenGL 4.1 and this host
+  provides 2.1, so **no smoke particle has ever been seen on screen**. What is
+  proven is that the simulation runs on the engine's tick and that the draw path
+  compiles, is wired into `Renderer::Draw` once per frame, and uses the engine's
+  own quad size, colour and alpha rules. The appearance, the blend result and the
+  billboard orientation are unverified.
+* **Not verified — the group's task-tree ordering** (§12.7) and the animated
+  sprite frame counter (`Particle2D.frame`), which the editor never advances
+  because it loads no `.spr` frame map.
+* **Not verified — `Particle2D_Run`'s collision callback.** `Smoke_Changed`
+  passes a NULL callback (`smoke.c:404`), so the engine's per-15-tick
+  `Coll_Lines` trace (`particle.c:348-388`) never runs for smoke; the port omits
+  it for the same reason.
+
+---
+
+## 13. Verified, and not
 
 **Verified by execution** (host lane, `IGI_GAME_PATH=/Users/haseeb-mir/Downloads/IGI`):
 
@@ -629,13 +812,16 @@ tests read the retail files and ran rather than skipping (0 skips).
 
 ---
 
-## 13. Files
+## 14. Files
 
 | Path | What |
 |---|---|
-| `source/runtime/smoke.h`, `smoke.cpp` | the Smoke port |
+| `source/runtime/smoke.h`, `smoke.cpp` | the Smoke port (the static half, plus Particle2D_Emit's direction and Particle2D_Run's step) |
+| `source/runtime/smoke_sim.h`, `smoke_sim.cpp` | the emitter running: Smoke_Run + the Particle2D pool (the live half, §12) |
+| `source/renderer/renderer_smoke.h`, `renderer_smoke.cpp` | the particles in the viewport (§12.6) |
 | `source/runtime/alarm_light.h`, `alarm_light.cpp` | the AlarmLight port |
 | `tests/test_smoke_rules.cpp` | 33 unit + 6 corpus tests |
+| `tests/test_smoke_particles.cpp` | 24 unit tests for the live half (§12.8) |
 | `tests/test_alarm_light_rules.cpp` | 21 unit + 5 corpus tests |
-| `CMakeLists.txt` | purely additive: two test files and two runtime sources |
+| `CMakeLists.txt` | purely additive: three test files and three runtime sources |
 | `docs/igi-re-parity/TRIAGE_REMAINING_ISSUES.md` | the #43 row this closes |

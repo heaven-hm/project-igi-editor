@@ -1223,9 +1223,10 @@ void DrawPropsGizmos(const LevelObject& obj, GLuint ubo_mats, GLuint ubo_binding
     }
 
     // ── Smoke (the retail particle emitter, issue #43) ───────────────────────
-    // A placement indicator, not a simulation: the game has no gizmo, and the
-    // emitter's particles only exist at run time.  Everything drawn here is an
-    // authored value of the task:
+    // The PLACEMENT INDICATOR, kept alongside the live simulation: the particles
+    // themselves are emitted and stepped by igi::SmokeSimulation and drawn by
+    // Renderer_Smoke (renderer_smoke.cpp), while this draws the authored
+    // geometry the author edits. Everything here is an authored value:
     //   * the origin is the "Position" parameter (ParamTable slot 0,
     //     Smoke_Init HOOK 0x437510, src/fxobj/smoke.c:167),
     //   * the emission axis is the one Smoke_Changed builds --
@@ -1234,8 +1235,13 @@ void DrawPropsGizmos(const LevelObject& obj, GLuint ubo_mats, GLuint ubo_binding
     //     i.e. (sin yaw * sin pitch, -cos yaw * sin pitch, cos pitch), +Z at zero
     //     pitch (HOOK 0x438000, smoke.c:361-365), with "Alpha" the pitch and
     //     "Gamma" the yaw (smoke.c:168-169),
-    //   * the cone's half-angle is "Maximum Random Angle" (smoke.c:172) and its
-    //     base ring radius is "Radius" (smoke.c:171).
+    //   * the cone's half-angle is HALF of "Maximum Random Angle": Particle2D_Emit
+    //     tilts each particle by `ax = spread * 0.5 - Random_Float * spread`
+    //     (particle.c:610-612), so the deviation from the axis runs over
+    //     (-spread/2, spread/2] and the authored "Maximum Random Angle" of
+    //     0x1.921fb6p-1 (pi/4) opens the cone to pi/8, not to pi/4,
+    //   * the base ring radius is "Radius" (smoke.c:171), which is the disc the
+    //     emitted positions are drawn from (smoke.c:321,328-330).
     // The cone's LENGTH is a presentation choice: the engine emits at random
     // speeds up to "Maximum Velocity" (smoke.c:173-174), so the cloud has no
     // authored extent.
@@ -1264,9 +1270,10 @@ void DrawPropsGizmos(const LevelObject& obj, GLuint ubo_mats, GLuint ubo_binding
         b.line(o - az * arm, o + az * arm);
         const size_t geometry = b.count();
 
-        // The emission cone: the axis +/- "Maximum Random Angle", 1 m long, with
-        // its base ring at "Radius" (0 when the level authors none).
-        const float half = std::max(0.0f, std::min(sp.spread, glm::half_pi<float>()));
+        // The emission cone: the axis +/- HALF of "Maximum Random Angle"
+        // (particle.c:612), 1 m long, with its base ring at "Radius" (0 when the
+        // level authors none).
+        const float half = std::max(0.0f, std::min(sp.spread * 0.5f, glm::half_pi<float>()));
         const float len = kGizmoRefLen;
         const float ring = (float)sp.radius;
         const glm::vec3 tip = o + axis * len;

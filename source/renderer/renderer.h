@@ -14,6 +14,7 @@
 #include "renderer_objects.h"
 #include "renderer_splines.h"
 #include "renderer_rain.h"
+#include "renderer_smoke.h"
 #include "../level/task_schema.h"
 #include "../mission_state.h"
 #include "../runtime/runtime_renderer.h"
@@ -857,6 +858,16 @@ public:
 	// `speed = r->snow ? kSnowSpeed : kRainSpeed` (Rain_Update, HOOK 0x499CF0,
 	// src/dxinit/rain.c:572, constants at :122-123).
 	void SetRainSpeedScale(float scale) { rain_.SetSpeedScale(scale); }
+	// The level's authored "Smoke" emitters (issue #43). Each is the engine's
+	// Smoke task: Smoke_Run HOOK 0x437DB0 spawns `rate / 30` particles per engine
+	// tick into a Particle2D pool of "Number of Particles" slots
+	// (src/fxobj/smoke.c:298-339, src/graphtask/particle.c:264-305). The
+	// simulation steps ONCE per rendered frame -- the engine's tick rule.
+	void SetSmokeEmitters(std::vector<igi::SmokeParams> emitters) {
+		smoke_.SetEmitters(emitters);
+	}
+	void ClearSmokeEmitters() { smoke_.Clear(); }
+	const igi::SmokeSimulation& SmokeSimulationState() const { return smoke_.Simulation(); }
 	void ClearSuppressedAttas() { objects_.ClearSuppressedAttas(); }
 	bool SuppressAttachmentInMef(const std::string& parentModelId, const std::string& attModelId, const glm::vec3& localPos) {
 		return objects_.SuppressAttachmentInMef(parentModelId, attModelId, localPos);
@@ -914,6 +925,7 @@ private:
 	Renderer_Objects		objects_;
 	Renderer_Splines		splines_;
 	Renderer_Rain			rain_;
+	Renderer_Smoke			smoke_;
 	bool                    shutdown_started_ = false;
 	std::unordered_set<std::string>	logged_skinned_draws_;
 	std::unordered_map<std::string, float>	skinned_pose_samples_;

@@ -203,6 +203,16 @@ long double SmokeRandom::Float() {
     return static_cast<long double>(Next() & 0xFFFFu) * (1.0L / 65536.0L);
 }
 
+void SmokeRandom::Seed(std::uint32_t seed) {
+    // Random_Seed 0x4B47E0 (random.c:34-40). The shifts are on the unsigned
+    // seed, so `seed << 15` and `seed << 9` wrap modulo 2^32 before the
+    // add/subtract -- reproduced exactly.
+    Reset();
+    a_ ^= seed;
+    b_ += seed << 15;
+    c_ -= seed << 9;
+}
+
 // ---------------------------------------------------------------------------
 // The per-tick rule
 // ---------------------------------------------------------------------------
@@ -309,6 +319,155 @@ float SmokeSampleSpeed(float a, float b, long double fraction) {
     // i.e. (b - a) * fraction + a in the callee's own parameter names.
     return static_cast<float>((static_cast<long double>(b) - static_cast<long double>(a)) * fraction +
                               static_cast<long double>(a));
+}
+
+// ---------------------------------------------------------------------------
+// Particle2D_Emit's direction (particle.c:569-633)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// particle.c:580 `NONZERO(x)` is `x < 0 || x > 0` (graphtask.h:34), i.e. false
+// for zero AND for NaN.
+bool NonZero(float x) { return x < 0.0f || x > 0.0f; }
+
+// `inv = 1 / x87_sqrt(...)` with the products in long double, stored back into
+// the float components one at a time (particle.c:581-585, :600-606, :617-623).
+// x87_sqrt is the hardware square root; std::sqrt of a long double is the same
+// value for every input this path sees (named divergence, smoke.h header).
+void Normalize3(float v[3]) {
+    if (!NonZero(v[0]) && !NonZero(v[1]) && !NonZero(v[2])) return;
+    const long double inv =
+        1.0L / std::sqrt(static_cast<long double>(v[0]) * v[0] + static_cast<long double>(v[1]) * v[1] +
+                         static_cast<long double>(v[2]) * v[2]);
+    for (int i = 0; i < 3; ++i) v[i] = static_cast<float>(v[i] * inv);
+}
+
+}  // namespace
+
+SmokeConeBasis SmokeConeFrame(const float dir[3]) {
+    SmokeConeBasis frame;
+    float u[3] = {dir ? dir[0] : 0.0f, dir ? dir[1] : 0.0f, dir ? dir[2] : 1.0f};
+    float v[3];
+    float a, b;
+
+    // particle.c:577-586.
+    Normalize3(u);
+    // particle.c:587-593: the branch tests the FIRST component against
+    // kAxisLimit = 0.75 (particle.c:81).
+    if (std::fabs(static_cast<double>(u[0])) > 0.75) {
+        a = 1.0f;
+        b = 0.0f;
+    } else {
+        a = 0.0f;
+        b = 1.0f;
+    }
+    // particle.c:594-599.
+    v[0] = a * u[2];
+    v[1] = -(b * u[2]);
+    v[2] = b * u[1] - a * u[0];
+    frame.w[0] = v[0];
+    frame.w[1] = v[1];
+    frame.w[2] = v[2];
+    Normalize3(frame.w);  // particle.c:600-606
+    // particle.c:607-609: `c = w x u`.
+    frame.c[0] = static_cast<float>(static_cast<long double>(frame.w[1]) * u[2] -
+                                    static_cast<long double>(frame.w[2]) * u[1]);
+    frame.c[1] = static_cast<float>(-(static_cast<long double>(frame.w[0]) * u[2] -
+                                      static_cast<long double>(frame.w[2]) * u[0]));
+    frame.c[2] = static_cast<float>(static_cast<long double>(frame.w[0]) * u[1] -
+                                    static_cast<long double>(frame.w[1]) * u[0]);
+    for (int i = 0; i < 3; ++i) frame.u[i] = u[i];
+    return frame;
+}
+
+void SmokeEmitDirection(const float dir[3], float spread, long double tilt_fraction,
+                        long double azimuth_fraction, float out_dir[3]) {
+    if (out_dir == nullptr) return;
+
+    const SmokeConeBasis frame = SmokeConeFrame(dir);
+    // particle.c:610-612. `tilt = Random_Float * spread` is a long double
+    // expression stored into the float `tilt`; `ax = spread * kHalf - tilt` is
+    // float arithmetic.
+    const float tilt = static_cast<float>(tilt_fraction * static_cast<long double>(spread));
+    // particle.c:611 `az = kPi.f - Random_Float * kTwoPi.f`; kPiF here is the
+    // file's own float pi (smoke.c:150-151 defines the same value for the
+    // ranges) and kSmokeTwoPi is smoke.c:94's kTwoPi.
+    const float az = static_cast<float>(static_cast<long double>(kPiF) -
+                                        azimuth_fraction * static_cast<long double>(kSmokeTwoPi));
+    const float ax = spread * 0.5f - tilt;
+
+    // particle.c:613 `Matrix_SetEuler(&m, ax, 0, az)` then particle.c:614-615
+    // `d[i] = m.m[2]*c[i] + m.m[5]*w[i] + m.m[8]*u[i]`. Column 2 of
+    // RotZ(az)*RotX(ax) is (sin az sin ax, -cos az sin ax, cos ax) with the
+    // FLOAT-rounded sin/cos the matrix builders store (matrix.c:112-127,
+    // :148-164).
+    const float sx = static_cast<float>(std::sin(static_cast<long double>(ax)));
+    const float cx = static_cast<float>(std::cos(static_cast<long double>(ax)));
+    const float sz = static_cast<float>(std::sin(static_cast<long double>(az)));
+    const float cz = static_cast<float>(std::cos(static_cast<long double>(az)));
+    const float col2[3] = {
+        static_cast<float>(static_cast<long double>(sz) * sx),
+        static_cast<float>(-(static_cast<long double>(cz) * sx)),
+        cx,
+    };
+
+    float d[3];
+    for (int i = 0; i < 3; ++i) {
+        d[i] = static_cast<float>(static_cast<long double>(col2[0]) * frame.c[i] +
+                                  static_cast<long double>(col2[1]) * frame.w[i] +
+                                  static_cast<long double>(col2[2]) * frame.u[i]);
+    }
+    // particle.c:617-623: `e = d * inv`, component by component into a float
+    // array (the same shape as Normalize3, but it is spelled out in the engine
+    // because `ez` is kept separately).
+    if (NonZero(d[0]) || NonZero(d[1]) || NonZero(d[2])) {
+        const long double inv =
+            1.0L / std::sqrt(static_cast<long double>(d[0]) * d[0] + static_cast<long double>(d[1]) * d[1] +
+                             static_cast<long double>(d[2]) * d[2]);
+        for (int i = 0; i < 3; ++i) out_dir[i] = static_cast<float>(d[i] * inv);
+    } else {
+        for (int i = 0; i < 3; ++i) out_dir[i] = d[i];
+    }
+}
+
+void SmokeEmitVelocity(const float dir[3], float spread, float speed_a, float speed_b,
+                       long double tilt_fraction, long double azimuth_fraction,
+                       long double speed_fraction, float out_vel[3]) {
+    if (out_vel == nullptr) return;
+    float unit[3];
+    SmokeEmitDirection(dir, spread, tilt_fraction, azimuth_fraction, unit);
+    // particle.c:616 then :629-631: `speed = (b - a)*Random + a`, `vel = e*speed`.
+    const float speed = SmokeSampleSpeed(speed_a, speed_b, speed_fraction);
+    for (int i = 0; i < 3; ++i)
+        out_vel[i] = static_cast<float>(static_cast<long double>(unit[i]) * speed);
+}
+
+bool SmokeParticleTick(SmokeParticleState& p, const float gravity[3], float grow, int frame_delay,
+                       int animated_frames) {
+    // particle.c:280-285.
+    if (gravity != nullptr) {
+        for (int i = 0; i < 3; ++i) p.vel[i] = p.vel[i] + gravity[i];
+    }
+    for (int i = 0; i < 3; ++i) p.pos[i] = static_cast<double>(p.vel[i]) + p.pos[i];
+    // particle.c:286-287.
+    p.angle = p.spin + p.angle;
+    p.scale = grow + p.scale;
+    // particle.c:288-292: only an animated sprite advances its frame.
+    if (animated_frames > 0 && ++p.frame_timer >= frame_delay) {
+        p.frame_timer = 0;
+        if (p.frame < animated_frames - 1) ++p.frame;
+    }
+    // particle.c:293-304.
+    if (p.delay != 0) {
+        p.delay = static_cast<short>(p.delay - 1);  // Particle2D.delay is int16
+        return true;
+    }
+    const long double level = static_cast<long double>(p.level) - static_cast<long double>(p.fade);
+    p.level = static_cast<float>(level);
+    // particle.c:300 `if (level > kZero.f && p->scale > kZero.f)`: both
+    // comparisons are false for NaN, so a NaN level removes the particle.
+    return (level > 0.0L) && (p.scale > 0.0f);
 }
 
 // ---------------------------------------------------------------------------
