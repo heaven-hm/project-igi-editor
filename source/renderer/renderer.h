@@ -746,13 +746,6 @@ public:
 		return objects_.SelectObjectDrawLod(obj, camera_pos, camera_forward, tan_half_fovx);
 	}
 	glm::vec3				GetMeshCenter(const std::string& modelId, bool isBuilding) { return objects_.GetMeshCenter(modelId, isBuilding); }
-	// The parsed geometry (XTVC collision vertices + ECFC faces), for the
-	// collision drop the snap uses on humans.  Forwarded so the snap does not
-	// reach into Renderer_Objects directly.
-	const ParsedGeometry*	GetParsedGeometryForCollision(const std::string& modelId, bool isBuilding) {
-		return objects_.GetOrLoadParsedGeometry(modelId, isBuilding);
-	}
-
 	float					GetMeshZOffset(const std::string& modelId, bool isBuilding) { return objects_.GetMeshZOffset(modelId, isBuilding); }
 	int						PickObjectAtScreen(int x, int y, int w, int h,
 											   const view_define_s& vd,
