@@ -78,3 +78,12 @@ std::string RES_NormalizeResourceName(const std::string& name);
 
 // Read a single entry by offset/size.  Returns empty on I/O error.
 std::vector<uint8_t> RES_ReadEntry(const std::string& filepath, const ResEntryInfo& info);
+
+// IGI_PROFILE-only diagnostic: how many archive entries have been read off disk
+// through RES_ReadEntry since process start.  Every call opens the .res and reads
+// the whole entry, so this COUNT -- not a wall-clock time -- is what a
+// memoization regression changes (the LOD-header cache in
+// renderer_objects_mesh.cpp took the per-frame object pass from ~2832 of these to
+// zero), and unlike a time it cannot be perturbed by host load.  Counted only
+// when IGI_PROFILE is set, so an ordinary run pays nothing.
+uint64_t RES_EntryReadCount();

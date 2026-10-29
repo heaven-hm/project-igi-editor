@@ -41,6 +41,7 @@
 #include "config.h"
 #include "smoke_level_core.h"
 #include "renderer/renderer_objects.h"
+#include "renderer/res_writer.h"
 #include "utils.h"
 #include "level/level_common.h"
 #include "level/level_objects.h"
@@ -446,6 +447,15 @@ int CLIHandler::SmokeLevel(const SmokeLevelParams& params) {
                                      run.resolvedFromLooseFile) << "\n";
     PrintMissing("MISSING MODELS", run.missingModelIds);
     PrintMissing("MISSING TEXTURES", run.missingTextureIds);
+    // IGI_PROFILE-only: how many archive entries this headless pass read off disk
+    // (see res_writer.h).  A count, so it is comparable across runs whatever the
+    // host load was; it is the cost side of the resolve work, whose wall-clock
+    // "Time" line above is not.  Printed only when the flag is set, so the
+    // default output (and the e2e-headless.sh baseline assertions) are unchanged.
+    if (std::getenv("IGI_PROFILE") != nullptr) {
+        std::cout << "  Res reads         : " << RES_EntryReadCount()
+                  << " archive entry read(s) (IGI_PROFILE)\n";
+    }
 
     PrintSep();
     if (failedLevels == 0) {

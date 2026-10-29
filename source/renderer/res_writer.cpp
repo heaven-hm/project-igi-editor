@@ -40,6 +40,8 @@
 
 #include "res_writer.h"
 #include "../logger.h"
+#include <atomic>
+#include <cstdlib>
 #include <fstream>
 #include <cstring>
 #include <functional>
@@ -460,9 +462,27 @@ bool RES_BuildIndex(const std::string& filepath,
 // ---------------------------------------------------------------------------
 // RES_ReadEntry — seek to a known offset, read exactly info.data_size bytes
 // ---------------------------------------------------------------------------
+namespace {
+// IGI_PROFILE-only: count of archive-entry reads (see res_writer.h).  Gated on
+// the same flag the rest of the instrumentation uses, so an ordinary run is
+// unchanged: no counter, no atomic, no branch taken.
+bool ResReadCountingEnabled() {
+    static const bool enabled = std::getenv("IGI_PROFILE") != nullptr;
+    return enabled;
+}
+std::atomic<uint64_t> g_res_entry_reads{0};
+}  // namespace
+
+uint64_t RES_EntryReadCount() {
+    return g_res_entry_reads.load(std::memory_order_relaxed);
+}
+
 std::vector<uint8_t> RES_ReadEntry(const std::string& filepath, const ResEntryInfo& info) {
     std::vector<uint8_t> buf;
     if (info.data_size == 0) return buf;
+    if (ResReadCountingEnabled()) {
+        g_res_entry_reads.fetch_add(1, std::memory_order_relaxed);
+    }
     std::ifstream file(filepath, std::ios::binary);
     if (!file.is_open()) return buf;
     file.seekg(static_cast<std::streamoff>(info.data_offset), std::ios::beg);

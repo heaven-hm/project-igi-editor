@@ -1629,6 +1629,16 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         static int64_t pResolve = 0, pDraw = 0, pAtta = 0;
         static int64_t pObjects = 0, pDraws = 0;
         static int64_t pCulledLod = 0, pSkipped = 0;
+        // IGI_PROFILE-only: archive-entry reads during this window.  A count, not
+        // a time: the memoized LOD-header cache took the object pass from ~2832
+        // .res reads a frame to none, and a count cannot be moved by host load.
+        // Seeded on the first pass so the level-load reads are not charged to the
+        // first window.
+        static uint64_t pLastReads = RES_EntryReadCount();
+        static uint64_t pResReads = 0;
+        const uint64_t reads_now = RES_EntryReadCount();
+        pResReads += reads_now - pLastReads;
+        pLastReads = reads_now;
         pResolve += profResolveUs;
         pDraw += profDrawUs;
         pAtta += profAttaUs;
@@ -1646,10 +1656,12 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 " objects=" + std::to_string(pObjects / kProfileFrames) + "/frame" +
                 " submeshDraws=" + std::to_string(pDraws / kProfileFrames) + "/frame" +
                 " culledLod=" + std::to_string(pCulledLod / kProfileFrames) + "/frame" +
-                " skipped=" + std::to_string(pSkipped / kProfileFrames) + "/frame");
+                " skipped=" + std::to_string(pSkipped / kProfileFrames) + "/frame" +
+                " resReads=" + std::to_string(pResReads / kProfileFrames) + "/frame");
             pframes = 0;
             pResolve = pDraw = pAtta = pObjects = pDraws = 0;
             pCulledLod = pSkipped = 0;
+            pResReads = 0;
         }
     }
 
@@ -1664,6 +1676,13 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     if (show_magic_obj_spheres) {
         DrawMagicObjSpheres(objects, ubo_mats);
     }
+
+    // Rail polylines (GitHub issue #59, acceptance criterion 2). Independent of
+    // the magic-objects overlay above: the rail is its own editor view with its
+    // own switch (igi::SetRailPathGizmosEnabled), default on, so a level with a
+    // Train shows its rail without anything else being enabled. See
+    // DrawRailPathGizmos for why this is presentation and not engine behaviour.
+    DrawRailPathGizmos(objects, selected_object_index, ubo_mats, ubo_binding_point_);
 }
 
 bool Renderer_Objects::IsVehicleType(const std::string& type) {

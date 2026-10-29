@@ -89,6 +89,9 @@
 #   --exe PATH           i686 igi1ed.exe               (default: bin/Release/igi1ed.exe)
 #   --stage DIR          staging root                  (default: scratch/e2e-headless)
 #   --fast               smoke + --run-tests only (skip the 14 verify passes)
+#   --perf-guard         also run scripts/perf-guard.sh (headless perf budgets,
+#                        +~2 min; off by default, also settable with
+#                        IGI_E2E_PERF_GUARD=1)
 #   --keep-stage         reuse the existing stage (skip the re-copy)
 #   --diag-log           turn the staged copy's QEDLogs/QEDDebug on
 #   --smoke-timeout S    wall limit for the smoke run  (default: 1800)
@@ -114,6 +117,10 @@ LEVELS=""
 FAST=0
 KEEP_STAGE=0
 DIAG_LOG=0
+# The perf guard is a separate lane (scripts/perf-guard.sh) because it needs its
+# own stage, ~3.5 min and the deterministic bench workloads.  It is wired here
+# only as an opt-in step, so the default run stays as fast as it was.
+PERF_GUARD="${IGI_E2E_PERF_GUARD:-0}"
 SMOKE_TIMEOUT="${IGI_E2E_SMOKE_TIMEOUT:-1800}"
 
 while [ $# -gt 0 ]; do
@@ -125,8 +132,9 @@ while [ $# -gt 0 ]; do
     --fast)        FAST=1 ;;
     --keep-stage)  KEEP_STAGE=1 ;;
     --diag-log)    DIAG_LOG=1 ;;
+    --perf-guard)  PERF_GUARD=1 ;;
     --smoke-timeout) shift; SMOKE_TIMEOUT="${1:?--smoke-timeout needs seconds}" ;;
-    -h|--help)     sed -n '2,90p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)     sed -n '2,104p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "error: unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -535,12 +543,35 @@ PY
   if [ "$VERIFY_VERDICT" -eq 0 ]; then assert_ok "tier verify"; else assert_fail "tier verify"; fi
 fi
 
-# ── 6. summary ──────────────────────────────────────────────────────────────
+# ── 6. tier: perf guard (opt-in, --perf-guard / IGI_E2E_PERF_GUARD=1) ───────
+# A separate lane on purpose: it measures PERFORMANCE, which none of the tiers
+# above do, and it needs its own stage (scratch/wine-smoke/run) plus ~3.5 min of
+# Wine runs with the deterministic bench workloads.  Running it by default would
+# slow this lane down and mix "the levels still load" with "the frame budget
+# still holds", so it is off unless asked for.  Its own exit code is the verdict:
+# 0 all budgets held, 1 a budget was exceeded, 2 preflight (stage not populated).
+if [ "$PERF_GUARD" = 1 ]; then
+  say ""
+  hr
+  say "==> 6. TIER perf — scripts/perf-guard.sh (headless performance budgets)"
+  hr
+  PERF_LOG="$LOG_DIR/perf-guard.log"
+  PERF_RC=0
+  bash scripts/perf-guard.sh >"$PERF_LOG" 2>&1 || PERF_RC=$?
+  grep -E "^   (PASS|FAIL|SKIP|measured|note)|^==>" "$PERF_LOG" 2>/dev/null | sed 's/^/   | /' | tee -a "$LOG"
+  if [ "$PERF_RC" -eq 0 ]; then
+    assert_ok "tier perf (all budgets held)"
+  else
+    assert_fail "tier perf (exit $PERF_RC — full log: $PERF_LOG)"
+  fi
+fi
+
+# ── 7. summary ──────────────────────────────────────────────────────────────
 say ""
 say "==================================================================="
 say " e2e-headless.sh summary"
 say "   levels           : $LEVELS"
-say "   tiers            : smoke, tests$([ "$FAST" = 1 ] && printf '' || printf ', verify')"
+say "   tiers            : smoke, tests$([ "$FAST" = 1 ] && printf '' || printf ', verify')$([ "$PERF_GUARD" = 1 ] && printf ', perf' || printf '')"
 say "   assertions       : $CHECKS_RUN run, $CHECKS_FAILED failed"
 say "   known defect     : level $KNOWN_DEFECT_LEVEL fails on $KNOWN_DEFECT_MODEL (retail data)"
 say "   logs             : $LOG_DIR"
