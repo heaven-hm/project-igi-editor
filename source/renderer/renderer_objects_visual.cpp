@@ -1489,6 +1489,248 @@ static void DrawPickupTouchVolume(const glm::vec3& origin, float range, float ha
                glm::vec4(0.35f, 0.75f, 1.00f, 1.0f), glm::vec4(0.0f));
 }
 
+// ─── DrawHumanShadowQuads ────────────────────────────────────────────────────
+// The engine's ONLY shadow: the flat blob quad under each Human-derived task.
+//
+// ENGINE BASIS, all in runtime/human_shadow.h and pinned by
+// tests/test_human_shadow.cpp:
+//   * Shadow_New HOOK 0x4E0CC0 (src/shadow/shadow.c:154-198) builds two triangles
+//     with fixed UVs out of four corners; Shadow_MagicObjEnterHandler HOOK 0x4E09D0
+//     (:84-146) refills those corners every frame from the owner's ground position
+//     (:141) in the ground basis (:105-140) and writes the fade-scaled colour
+//     (:101-104). Human_CreateHandler HOOK 0x45EB30 (src/soldier/human.c:357-358)
+//     is the only caller, and it passes kShadowSize/kShadowHeight (human.c:189-190)
+//     plus the shadow1.tex handle (human.c:310).
+//   * How it is drawn, PolyList_Draw HOOK 0x49A9B0 (src/dxinit/polylist.c:294-417):
+//     the poly's `flags` are 0 (shadow.c:169 passes 0), so the blend is the default
+//     branch -- ALPHABLENDENABLE 1, SRCBLEND 5 = SRCALPHA, DESTBLEND 6 = INVSRCALPHA
+//     (:368-372); the render states are ZWRITEENABLE 0 (:260 SET_RS(0xE,0)),
+//     ZFUNC 4 = LESSEQUAL (:261), ALPHATESTENABLE 1 with ALPHAREF 0 and ALPHAFUNC 5
+//     = GREATER (:256-258); and the texture stage is COLOROP 4 = MODULATE with
+//     COLORARG1 2 = TEXTURE and COLORARG2 0 = DIFFUSE while ALPHAOP is SELECTARG1
+//     of ALPHAARG1 2 = TEXTURE (:400-408), i.e. the RGB is the texture's times the
+//     vertex colour and the blend alpha is the texture's own alpha.
+//   * The colour is flat across the quad: all three colour pointers of a triangle
+//     point at the one `sh->color` (shadow.c:174, :187).
+//
+// TWO DELIBERATE EDITOR DIFFERENCES, stated rather than hidden:
+//   * No fog. The engine fogs polylist triangles (FOGENABLE = gFogEnable, :248),
+//     but the editor's object pass is unfogged too, so the shadow matches the pass
+//     it sits in. This is presentation, not rule.
+//   * Backface culling is disabled for the quad (the engine culls CW, :253), because
+//     the editor's object pass draws everything with culling off (renderer_objects.cpp)
+//     and the quad's winding must not depend on that choice.
+namespace {
+
+struct ShadowVert { float x, y, z, u, v, r, g, b; };
+
+GLuint EnsureShadowShader() {
+    static GLuint prog = 0;
+    static bool attempted = false;
+    if (attempted) return prog;
+    attempted = true;
+    static const char* vs = R"(
+#version 330 core
+layout(std140) uniform Matrices {
+    mat4 u_unused1;
+    mat4 u_unused2;
+    mat4 u_mvp;
+};
+layout(location = 0) in vec3 a_pos;
+layout(location = 1) in vec2 a_uv;
+layout(location = 2) in vec3 a_color;
+out vec2 v_uv;
+out vec3 v_color;
+void main() {
+    v_uv = a_uv;
+    v_color = a_color;
+    gl_Position = u_mvp * vec4(a_pos, 1.0);
+}
+)";
+    static const char* fs = R"(
+#version 330 core
+uniform sampler2D u_texture;
+in vec2 v_uv;
+in vec3 v_color;
+out vec4 fragColor;
+void main() {
+    vec4 tex = texture(u_texture, v_uv);
+    // ALPHATESTENABLE with ALPHAREF 0 and ALPHAFUNC GREATER (polylist.c:256-258):
+    // a fully transparent texel is discarded, not blended.
+    if (tex.a <= 0.0) discard;
+    // COLOROP MODULATE(texture, diffuse) with the alpha from the texture
+    // (polylist.c:400-408).
+    fragColor = vec4(tex.rgb * v_color, tex.a);
+}
+)";
+    // GLSL 1.20 variants for the legacy 2.1 context: no layout(), no uniform
+    // blocks. gl_helper.cpp's UBO emulation uploads the third matrix as `u_mvp`
+    // and binds the inline attribute locations (see EnsureGizmoShader above).
+    static const char* vs_120 = R"(
+#version 120
+uniform mat4 u_mvp;
+attribute vec3 a_pos;
+attribute vec2 a_uv;
+attribute vec3 a_color;
+varying vec2 v_uv;
+varying vec3 v_color;
+void main() {
+    v_uv = a_uv;
+    v_color = a_color;
+    gl_Position = u_mvp * vec4(a_pos, 1.0);
+}
+)";
+    static const char* fs_120 = R"(
+#version 120
+uniform sampler2D u_texture;
+varying vec2 v_uv;
+varying vec3 v_color;
+void main() {
+    vec4 tex = texture2D(u_texture, v_uv);
+    if (tex.a <= 0.0) discard;
+    gl_FragColor = vec4(tex.rgb * v_color, tex.a);
+}
+)";
+    const char* vs_src = g_gl_info.legacy_gl21_ ? vs_120 : vs;
+    const char* fs_src = g_gl_info.legacy_gl21_ ? fs_120 : fs;
+    GLint ok = 0;
+    GLuint vert = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vert, 1, &vs_src, nullptr);
+    glCompileShader(vert);
+    glGetShaderiv(vert, GL_COMPILE_STATUS, &ok);
+    if (!ok) { glDeleteShader(vert); return 0; }
+
+    GLuint frag = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(frag, 1, &fs_src, nullptr);
+    glCompileShader(frag);
+    glGetShaderiv(frag, GL_COMPILE_STATUS, &ok);
+    if (!ok) { glDeleteShader(vert); glDeleteShader(frag); return 0; }
+
+    GLuint p = glCreateProgram();
+    glAttachShader(p, vert);
+    glAttachShader(p, frag);
+    if (g_gl_info.legacy_gl21_) {
+        GL_LegacyBindInlineAttribLocations(p);
+    }
+    glLinkProgram(p);
+    glDeleteShader(vert);
+    glDeleteShader(frag);
+    glGetProgramiv(p, GL_LINK_STATUS, &ok);
+    if (!ok) { glDeleteProgram(p); return 0; }
+    prog = p;
+    return prog;
+}
+
+}  // namespace
+
+void Renderer_Objects::DrawHumanShadowQuads(
+        GLuint ubo_mats, const std::vector<igi::HumanShadowPlacement>& shadows) {
+    if (shadows.empty()) return;
+
+    // The engine's texture. Game_AddTexture("shadow1.tex") (human.c:310) resolves as
+    // the resource identity "LOCAL:common/textures/shadow1.tex" out of
+    // <IGI>/common/textures/textures.res (Game_LoadTextures, src/game/game.c:524-534),
+    // which is what GetOrLoadGameTexture builds for this name. A miss is the engine's
+    // null-texture branch (polylist.c:404-407): draw nothing.
+    const GLuint texture = GetOrLoadGameTexture(igi::kShadowTextureName);
+    if (texture == 0) return;
+
+    const GLuint prog = EnsureShadowShader();
+    if (prog == 0) return;
+
+    // ground_pos + the local corner of the engine's own triangles (shadow.c:141
+    // makes the corners local to the PolyList position).
+    std::vector<ShadowVert> verts;
+    verts.reserve(shadows.size() * 6);
+    for (const igi::HumanShadowPlacement& s : shadows) {
+        if (!s.valid) continue;
+        const igi::HumanShadowTriangles tri = igi::HumanShadowBuildTriangles(s.verts);
+        for (int t = 0; t < tri.count; ++t) {
+            for (int v = 0; v < 3; ++v) {
+                ShadowVert out{};
+                out.x = (float)(s.ground_pos[0] + (double)tri.pos[t][v][0]);
+                out.y = (float)(s.ground_pos[1] + (double)tri.pos[t][v][1]);
+                out.z = (float)(s.ground_pos[2] + (double)tri.pos[t][v][2]);
+                out.u = tri.uv[t][v][0];
+                out.v = tri.uv[t][v][1];
+                out.r = s.color[0];
+                out.g = s.color[1];
+                out.b = s.color[2];
+                verts.push_back(out);
+            }
+        }
+    }
+    if (verts.empty()) return;
+
+    // Save what this changes: it is called from inside the frame's object pass.
+    GLint prev_prog = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
+    const GLboolean blend_was_enabled = glIsEnabled(GL_BLEND);
+    GLint prev_src_blend = 0, prev_dst_blend = 0, prev_depth_func = 0, prev_active_texture = 0;
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &prev_src_blend);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &prev_dst_blend);
+    glGetIntegerv(GL_DEPTH_FUNC, &prev_depth_func);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &prev_active_texture);
+    GLboolean depth_mask_was_enabled = GL_TRUE;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_mask_was_enabled);
+    const GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
+    GLint prev_tex = 0;
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev_tex);
+
+    static GLuint vao = 0, vbo = 0;
+    if (vao == 0) {
+        glGenVertexArrays(1, &vao);
+        glGenBuffers(1, &vbo);
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(ShadowVert), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(ShadowVert), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(ShadowVert), (void*)(5 * sizeof(float)));
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+
+    glUseProgram(prog);
+    const GLuint blk = glGetUniformBlockIndex(prog, "Matrices");
+    if (blk != GL_INVALID_INDEX) glUniformBlockBinding(prog, blk, ubo_binding_point_);
+    glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
+
+    // polylist.c: ZFUNC LESSEQUAL, ZWRITEENABLE 0, ALPHABLENDENABLE with
+    // SRCALPHA/INVSRCALPHA, culling off for the reason in the comment above.
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glUniform1i(glGetUniformLocation(prog, "u_texture"), 0);
+
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(verts.size() * sizeof(ShadowVert)),
+                 verts.data(), GL_STREAM_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, (GLsizei)verts.size());
+
+    // Restore.
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)prev_tex);
+    glActiveTexture((GLenum)prev_active_texture);
+    glBlendFunc((GLenum)prev_src_blend, (GLenum)prev_dst_blend);
+    if (!blend_was_enabled) glDisable(GL_BLEND);
+    glDepthMask(depth_mask_was_enabled);
+    glDepthFunc((GLenum)prev_depth_func);
+    if (cull_was_enabled) glEnable(GL_CULL_FACE);
+    glUseProgram((GLuint)prev_prog);
+}
+
 // ─── DrawRailPathGizmos ──────────────────────────────────────────────────────
 // The rail polyline of GitHub issue #59, acceptance criterion 2 ("rail path
 // polyline visible in viewport for any level with a Train task").

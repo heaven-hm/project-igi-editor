@@ -466,6 +466,35 @@ void Renderer::Draw(const draw_params_s &params,
                   params.view_define_->forward_, params.fast_scene_preview_,
                   params.view_define_->tan_half_fovx_);
     if (profileRenderer) objectsEnd = ProfileClock::now();
+    // ── The human blob shadow (GitHub issue #63) ─────────────────────────────
+    // The engine's ONLY shadow renderer: Human_CreateHandler (HOOK 0x45EB30,
+    // src/soldier/human.c:357-358) creates one `Shadow` per Human-derived task and
+    // Shadow_MagicObjEnterHandler (HOOK 0x4E09D0, src/shadow/shadow.c:84-146) lays
+    // its quad at the owner's ground position with the fade-scaled colour. The
+    // placements are built HERE because the ground hit is the App's own query
+    // (draw_params_s::terrain_z_at_world_xy_); the rule itself -- which types own a
+    // shadow, where the quad sits, how big it is and how it fades -- lives in
+    // igi::BuildHumanShadowPlacement (source/runtime/human_shadow.cpp) and is pinned
+    // by tests/test_human_shadow.cpp. Gated like the object pass draws a human
+    // (renderer_objects.cpp: DRAW_OBJECTS or DRAW_PROPS for a non-building).
+    if (params.level_objects_ && (params.draw_parts_ & (DRAW_OBJECTS | DRAW_PROPS))) {
+      std::vector<igi::HumanShadowPlacement> shadows;
+      for (const LevelObject& obj : params.level_objects_->GetObjects()) {
+        if (obj.deleted || !igi::IsHumanShadowOwner(obj.type)) continue;
+        // The engine's ground hit (Human_ProbeGround HOOK 0x462390,
+        // src/humanbase/human.c:1839-1857) is a collision query; the editor's
+        // analogue is the terrain query. A miss is not the engine's
+        // `groundValid = 0`: the editor's placements are authored on the ground, so
+        // the placement's own Z is used and the height above it is zero.
+        bool have_ground = false;
+        float ground_z = 0.0f;
+        if (params.terrain_z_at_world_xy_)
+          have_ground = params.terrain_z_at_world_xy_(obj.pos.x, obj.pos.y, ground_z);
+        shadows.push_back(igi::BuildHumanShadowPlacement(
+            obj.pos.x, obj.pos.y, obj.pos.z, have_ground, (double)ground_z));
+      }
+      objects_.DrawHumanShadowQuads(ubo_mats_, shadows);
+    }
     if (profileRenderer) splinesStart = ProfileClock::now();
     splines_.Draw(params.level_objects_->GetObjects(), ubo_mats_,
                   objects_.GetShaderProgram());
