@@ -543,6 +543,59 @@ void App::SnapObjectsToTerrain() {
             continue;
         }
 
+        // HUMANS ARE DROPPED FIRST, BEFORE THE UNDERGROUND / INDOOR-CHILD RETURNS.
+        //
+        // Those two branches `continue` early, so a soldier inside or under a
+        // building -- exactly the ones rendering half buried -- never reached the
+        // collision drop that was added below, and the first attempt at this fix
+        // therefore changed nothing for them.  The engine has no such special case:
+        // Game_DropToGround (HOOK 0x4149B0, src/game/misc.c:75-97) probes down then
+        // up through Coll_DropPointsMat (HOOK 0x4CB9F0, src/coll/coll.c:813-818 ->
+        // Coll_Drop :518-616 -> Coll_VerticalHit HOOK 0x4CB050, :626-774) and the
+        // human is placed on whatever it hits -- a building floor included, which is
+        // the whole reason a human's authored `placePos` is not its drawn Z
+        // (Human_ParamChangedHandler HOOK 0x45F890, src/humanbase/human.c:448-461,
+        // feeds placePos to the COLLISION cube and sets only the matrix rotation).
+        // A bunker floor is collision too, so the same drop is right underground.
+        if (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale") {
+            std::vector<igi::DropTriangle> human_collision;
+            for (const auto& other : objects) {
+                if (other.modelId.empty() || other.deleted) continue;
+                if (other.modelId == obj.modelId && other.pos.x == obj.pos.x &&
+                    other.pos.y == obj.pos.y) {
+                    continue;  // never drop a soldier onto its own collision box
+                }
+                const glm::vec3 ext = renderer_.GetMeshExtents(other.modelId, other.isBuilding);
+                const double k = 40.96 * (double)std::max(other.scale, 0.001f);
+                if (std::abs(other.pos.x - obj.pos.x) > (double)ext.x * k) continue;
+                if (std::abs(other.pos.y - obj.pos.y) > (double)ext.y * k) continue;
+                const ParsedGeometry* geo =
+                    renderer_.GetParsedGeometryForCollision(other.modelId, other.isBuilding);
+                if (geo == nullptr || geo->xtvcVerts.empty() || geo->ecfcFaces.empty()) continue;
+                const glm::mat4 m = igi::IgiObjectMatrix(other.pos, other.rot, other.scale);
+                igi::AppendTransformedTriangles(
+                    reinterpret_cast<const float*>(geo->xtvcVerts.data()),
+                    geo->xtvcVerts.size(),
+                    reinterpret_cast<const unsigned short*>(&geo->ecfcFaces[0].a),
+                    geo->ecfcFaces.size() * 3,
+                    &m[0][0], human_collision);
+            }
+            const igi::DropHit hit = igi::DropToGround(human_collision, obj.pos.x, obj.pos.y);
+            if (hit.found) {
+                const float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
+                obj.snap_z_offset = (double)(zOffset * 40.96f * obj.scale);
+                obj.pos.z = (double)hit.z + obj.snap_z_offset;
+                Logger::Get().Log(LogLevel::INFO, "[App] Snapped human (collision drop) " + obj.modelId +
+                    " authoredZ=" + std::to_string(obj.original_pos.z) +
+                    " dropZ=" + std::to_string(hit.z) +
+                    " mainZOffset=" + std::to_string(zOffset) +
+                    " snapZOffset=" + std::to_string(obj.snap_z_offset) +
+                    " -> Z=" + std::to_string(obj.pos.z));
+                snapped++;
+                continue;
+            }
+        }
+
         // Underground objects (Tunnels, ElevatorTunnels, UndergroundRooms) have their
         // Z defined precisely in the QSC and must go below terrain. Preserve original Z.
         // We also check parents: if a child (like a Door or Terminal) is inside an underground
