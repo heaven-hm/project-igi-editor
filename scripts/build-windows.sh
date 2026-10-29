@@ -157,9 +157,21 @@ gtest_disconnected_flag() {
 
 configure_tree() {
   local tree="$1" cc="$2" cxx="$3" rc="$4"
+  # A build tree whose CMakeCache.txt survives but whose CMakeFiles/rules.ninja
+  # does not is CORRUPT, and `cmake --build` reports it as
+  #   ninja: error: build.ninja:35: loading 'CMakeFiles/rules.ninja': No such file
+  #   or directory
+  # which reads like a ninja problem rather than a configure problem.  Both trees
+  # have hit this (the i686 one and then the x64 one), so the reuse check now
+  # requires the generated rules to be present too -- otherwise it reconfigures in
+  # place, which PRESERVES the object files.  That is the documented recovery; a
+  # delete-and-rebuild is not needed and costs a full rebuild.
   if [ "$RECONFIGURE" = 0 ] && [ -f "$tree/CMakeCache.txt" ]; then
-    echo "==> reuse existing configure in $(basename "$tree") (--reconfigure to redo)"
-    return 0
+    if [ -f "$tree/CMakeFiles/rules.ninja" ]; then
+      echo "==> reuse existing configure in $(basename "$tree") (--reconfigure to redo)"
+      return 0
+    fi
+    echo "==> $(basename "$tree") is CORRUPT (CMakeCache.txt present but CMakeFiles/rules.ninja missing); reconfiguring in place, which keeps the objects"
   fi
   local disconnected
   disconnected="$(gtest_disconnected_flag "$tree")"
