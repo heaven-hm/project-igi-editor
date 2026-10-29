@@ -217,3 +217,28 @@ stand-in and must be labelled as one rather than presented as engine behaviour.
 
 **Do not re-litigate the two ruled-out hypotheses above** — both were checked against the code and
 against IGI-RE, and neither is the cause.
+
+### The fix path, and it is closer than it looks
+
+The engine drops onto **collision**, and the editor **already parses collision geometry** — it just
+never queries it:
+
+* `XtvcVertex` (XTVC collision vertices, 16 bytes each) and `EcfcFace` (ECFC faces, 8 bytes each) are
+  declared at `source/renderer/mef_native.h:40-63` and populated on the parsed mesh:
+  `xtvcVerts` / `ecfcFaces` and the second set `xtvcVerts1` / `ecfcFaces1` (`:153-162`).
+* Those are exactly the chunks the engine's own collision walk consumes — `Direct3DRender_LoadModel`
+  HOOK `0x49FB10` fills XTVC/ECFC/TAMC/HSPC as **collision** data
+  (`src/bonemesh/d3drender.c:204-261`), which is why the "dual vertex set" premise of #47 was wrong.
+* The models that carry *only* collision geometry are the ones the editor skips drawing
+  (`colbox`, `colbox2`, `colbox3`, `colbox4`, `colbox66` — `IsCollisionProxyModelId`,
+  `source/level/terrain_snap_rules.h`) — and their XTVC/ECFC is parsed all the same.
+
+So the faithful fix is a **collision drop over the level's own collision meshes plus the terrain**,
+mirroring `Coll_DropPointsMat` HOOK `0x4CB9F0` → `Coll_Drop` → `Coll_VerticalHit` HOOK `0x4CB050`
+(`src/coll/coll.c:813-818`, `:518-616`, `:626-774`) and called the way `Game_DropToGround`
+HOOK `0x4149B0` (`src/game/misc.c:75-97`) calls it — probe **down, then up**. That is a bigger change
+than a band tweak, but it needs **no new data**: the vertices and faces are already in memory, and
+it removes the terrain-only limitation that the `no_terrain=26` line exposes.
+
+**Not implemented.** It is the next real piece of work, and it should be done with the headless
+measurement (above) in place so its effect on all 14 levels is visible before and after.
