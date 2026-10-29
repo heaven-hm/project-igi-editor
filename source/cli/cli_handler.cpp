@@ -13,12 +13,22 @@
 #include <iostream>
 
 bool CLIHandler::IsCLICommand(int argc, char **argv) {
+  // --import-mef is matched through the writer's own predicate rather than an
+  // inline strcmp here.  This translation unit is compiled only into the
+  // Windows igi-editor target and is not part of the host test pool, so an
+  // inline duplicate of the test would be a second copy that nothing checks:
+  // mef_writer::IsImportMefInvocation is what tests/test_mef_import.cpp covers,
+  // and calling it makes that coverage apply to the real dispatch.  See
+  // docs/igi-re-parity/MEF_IMPORT.md section 10.1.
+  if (mef_writer::IsImportMefInvocation(argc, argv)) {
+    return true;
+  }
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
     if (arg == "--help" || arg == "--run-tests" ||
         arg == "--extract-level" || arg == "--verify-level" ||
         arg == "--smoke-level" ||
-        arg == "--import-model" || arg == "--import-mef") {
+        arg == "--import-model") {
       return true;
     }
   }

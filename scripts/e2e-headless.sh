@@ -22,6 +22,12 @@
 #                                   parse (it is not a standalone oracle: the
 #                                   AI comparison needs a game-run log).
 #     --run-tests                   the native parser unit tests.
+#     --mef <in.obj> --import-mef <out.mef>
+#                                   the OBJ -> MEF importer (issue #29).  Run
+#                                   here because the dispatch lives in
+#                                   source/cli/cli_handler.cpp, which no host
+#                                   lane compiles -- this is the only gate that
+#                                   exercises the shipping binary's dispatch.
 #
 #   This script drives all three over levels 1..14, asserts the KNOWN baseline
 #   (see "EXPECTED OUTCOME" below) and exits non-zero the moment reality stops
@@ -471,6 +477,119 @@ else
   assert_fail "tier tests (exit=$RUN_RC, failed assertions=${FAILED_ASSERTIONS:-unknown})"
 fi
 
+# ── 4b. tier: --import-mef (OBJ -> MEF importer, issue #29) ─────────────────
+#
+# WHY THIS TIER EXISTS
+#   tests/test_mef_import.cpp covers the OBJ parser, the MEF builder, the ILFF
+#   serialiser and the argument parser, but it runs in the host lane, which does
+#   not compile source/cli/cli_handler.cpp (that file is in SOURCES_CLI, built
+#   only into the Windows igi-editor target).  So the question that issue #29
+#   actually asks -- "does igi1ed.exe --mef <in.obj> --import-mef <out.mef>
+#   work from the CLI?" -- is answered by no gate unless it is answered here, by
+#   running the shipping binary.  This tier is that gate: it is the only place
+#   the real dispatch, the real OBJ parser and the real serialiser run together.
+#
+#   It is GL-free: --import-mef is dispatched before any window or GL context is
+#   created, so it needs no OpenGL 4.1 and runs on this host.
+#
+#   What it does NOT prove: that the written .mef renders (that needs the GUI) or
+#   that the geometry survived (that is the host lane's round trip, which parses
+#   the writer's output with the shipping reader).  This tier proves the file is
+#   produced by the command the issue names, and that the container it produces
+#   is a well-formed ILFF with a self-consistent declared size.
+say ""
+hr
+say "==> 4b. TIER import — --mef <in.obj> --import-mef <out.mef> (issue #29, GL-free)"
+hr
+IMPORT_DIR="$STAGE/import"
+IMPORT_WIN="Z:$(printf '%s' "$IMPORT_DIR" | tr '/' '\\')"
+mkdir -p "$IMPORT_DIR"
+rm -f "$IMPORT_DIR"/*.mef
+# A two-material mesh, so the OBJ parser, the group builder and the DNER group
+# chain are all exercised rather than a single-triangle trivial case.
+cat > "$IMPORT_DIR/quad_hp.obj" <<'OBJ'
+# OBJ fixture for the e2e import tier (issue #29).
+v -1.0 0.0 -1.0
+v  1.0 0.0 -1.0
+v  1.0 0.0  1.0
+v -1.0 0.0  1.0
+v  0.0 1.0  0.0
+vt 0.0 0.0
+vt 1.0 0.0
+vt 1.0 1.0
+vt 0.0 1.0
+vt 0.5 0.5
+vn 0.0 1.0 0.0
+usemtl wall
+f 1/1/1 4/4/1 3/3/1
+f 1/1/1 3/3/1 2/2/1
+usemtl trim
+f 1/1/1 2/2/1 5/5/1
+f 2/2/1 3/3/1 5/5/1
+f 3/3/1 4/4/1 5/5/1
+f 4/4/1 1/1/1 5/5/1
+OBJ
+
+# The exact command form issue #29 asks for: --mef <input.obj> --import-mef <out.mef>.
+IMPORT_LOG="$LOG_DIR/import.log"
+run_mode "$IMPORT_LOG" 300 --mef "$IMPORT_WIN\\quad_hp.obj" --import-mef "$IMPORT_WIN\\quad_hp.mef"
+say "   wine igi1ed.exe --mef <in.obj> --import-mef <out.mef>"
+say "   exit=$RUN_RC  elapsed=${RUN_SECS}s  log=$IMPORT_LOG"
+grep -E "^\[MEF\]" "$IMPORT_LOG" 2>/dev/null | sed 's/^/   | /' | tee -a "$LOG"
+MEF_OUT="$IMPORT_DIR/quad_hp.mef"
+if [ "$RUN_RC" -eq 0 ] && grep -q "\[MEF\] SUCCESS" "$IMPORT_LOG" 2>/dev/null && [ -s "$MEF_OUT" ]; then
+  assert_ok "issue #29 CLI form: --mef <in.obj> --import-mef <out.mef> wrote $MEF_OUT"
+else
+  assert_fail "issue #29 CLI form (exit=$RUN_RC, output $([ -s "$MEF_OUT" ] && echo present || echo missing))"
+fi
+
+# The container the importer emits must be a well-formed ILFF: magic, and a
+# declared total size that matches the bytes on disk.  Read independently of the
+# editor (xxd/wc), so this is not the writer checking itself.
+if [ -s "$MEF_OUT" ]; then
+  MEF_MAGIC="$(xxd -p -l 4 "$MEF_OUT" 2>/dev/null)"
+  MEF_BYTES="$(wc -c < "$MEF_OUT" | tr -d ' ')"
+  MEF_DECL_HEX="$(xxd -p -s 4 -l 4 "$MEF_OUT" 2>/dev/null | sed 's/^\(..\)\(..\)\(..\)\(..\)$/\4\3\2\1/')"
+  MEF_DECL=$((16#$MEF_DECL_HEX))
+  if [ "$MEF_MAGIC" = "494c4646" ]; then
+    assert_ok "written file starts with the ILFF magic"
+  else
+    assert_fail "written file magic is '$MEF_MAGIC', expected '494c4646' (ILFF)"
+  fi
+  if [ "$MEF_DECL" = "$MEF_BYTES" ]; then
+    assert_ok "ILFF declared size ($MEF_DECL) matches the file size ($MEF_BYTES)"
+  else
+    assert_fail "ILFF declared size ($MEF_DECL) != file size ($MEF_BYTES)"
+  fi
+else
+  assert_fail "no output .mef to inspect"
+fi
+
+# The second accepted form, --import-mef <in.obj> <out.mef>, must take the same
+# path and produce the same bytes.
+run_mode "$IMPORT_LOG.two" 300 --import-mef "$IMPORT_WIN\\quad_hp.obj" "$IMPORT_WIN\\quad_hp_two.mef"
+say "   wine igi1ed.exe --import-mef <in.obj> <out.mef>"
+say "   exit=$RUN_RC  elapsed=${RUN_SECS}s"
+if [ "$RUN_RC" -eq 0 ] && [ -s "$IMPORT_DIR/quad_hp_two.mef" ] &&
+   cmp -s "$MEF_OUT" "$IMPORT_DIR/quad_hp_two.mef"; then
+  assert_ok "--import-mef <in.obj> <out.mef> produces byte-identical output"
+else
+  assert_fail "--import-mef <in.obj> <out.mef> (exit=$RUN_RC, or output differs)"
+fi
+
+# A refusal must be a refusal: non-zero exit and no file left behind.  The
+# importer builds everything before touching the disk for exactly this reason.
+MEF_ABSENT="$IMPORT_DIR/absent.mef"
+rm -f "$MEF_ABSENT"
+run_mode "$IMPORT_LOG.bad" 300 --mef "$IMPORT_WIN\\does_not_exist.obj" --import-mef "$IMPORT_WIN\\absent.mef"
+say "   wine igi1ed.exe --mef <missing.obj> --import-mef <out.mef>"
+say "   exit=$RUN_RC  elapsed=${RUN_SECS}s"
+if [ "$RUN_RC" -ne 0 ] && [ ! -e "$MEF_ABSENT" ]; then
+  assert_ok "an unreadable OBJ fails (exit $RUN_RC) and leaves no output file"
+else
+  assert_fail "an unreadable OBJ must fail and leave no file (exit=$RUN_RC, file $([ -e "$MEF_ABSENT" ] && echo present || echo absent))"
+fi
+
 # ── 5. tier: --verify-level --skip-launch per level ─────────────────────────
 if [ "$FAST" = 1 ]; then
   say ""
@@ -571,7 +690,7 @@ say ""
 say "==================================================================="
 say " e2e-headless.sh summary"
 say "   levels           : $LEVELS"
-say "   tiers            : smoke, tests$([ "$FAST" = 1 ] && printf '' || printf ', verify')$([ "$PERF_GUARD" = 1 ] && printf ', perf' || printf '')"
+say "   tiers            : smoke, tests, import$([ "$FAST" = 1 ] && printf '' || printf ', verify')$([ "$PERF_GUARD" = 1 ] && printf ', perf' || printf '')"
 say "   assertions       : $CHECKS_RUN run, $CHECKS_FAILED failed"
 say "   known defect     : level $KNOWN_DEFECT_LEVEL fails on $KNOWN_DEFECT_MODEL (retail data)"
 say "   logs             : $LOG_DIR"

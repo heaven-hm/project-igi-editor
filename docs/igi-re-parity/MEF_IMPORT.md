@@ -39,8 +39,9 @@ Delivered code:
 | file | role |
 |---|---|
 | `source/renderer/mef_writer.h` / `.cpp` | self-contained OBJ parser, MEF builder, ILFF serialiser, CLI glue |
-| `tests/test_mef_import.cpp` | 25 tests: asset-free round trip + full retail corpus round trip |
+| `tests/test_mef_import.cpp` | 29 tests: asset-free round trip + full retail corpus round trip |
 | `source/cli/cli_handler.cpp` | `--import-mef` dispatch (3 added lines + help text) |
+| `scripts/e2e-headless.sh` | step 4b, the `import` tier: runs the shipping binary's dispatch (§10.1) |
 | `CMakeLists.txt` | 2 added lines (test source, test source pool) |
 
 ## 1. Conclusion up front
@@ -60,7 +61,10 @@ What is **proved** here:
   static retail models** and for synthetic OBJs (§7);
 * the collision chunks are self-consistent and the generated sphere tree is
   reachable by the game's own traversal algorithm (§5);
-* the retail corpus reproduces every derived HSEM field the writer computes (§4).
+* the retail corpus reproduces every derived HSEM field the writer computes (§4);
+* the **shipping 32-bit `igi1ed.exe`** routes the issue's exact command form to the
+  importer, writes a well-formed ILFF, and the file it wrote parses back to the OBJ's
+  geometry through the editor's own reader (§10.1).
 
 What is **not** proved, and cannot be from this host:
 
@@ -68,7 +72,8 @@ What is **not** proved, and cannot be from this host:
   criterion 2). The editor GUI needs OpenGL 4.1 compatibility; this host offers 2.1.
 * that the output `.mef` **loads in-game without crashing** (acceptance criterion 3).
   That is the Windows/Wine suite plus a retail `IGI.exe` run, which is out of scope
-  for the session that produced this file.
+  for the session that produced this file. Parsing through the editor's port of the
+  engine loader is the nearest available proxy, and it is a proxy, not a run.
 * that the reversed winding (§6) renders correctly in game. The winding rule is
   inferred from the shipped corpus and the engine's cull mode; the two are
   consistent, but no differential render was performed.
@@ -474,22 +479,25 @@ majority convention is the only defensible default. This is also why the OBJ pat
 
 ## 7. Tests
 
-`tests/test_mef_import.cpp` — 25 tests, all passing on the host lane:
+`tests/test_mef_import.cpp` — 29 tests, all passing on the host lane:
 
 * **OBJ parsing (4):** positions/normals/UVs, n-gon fan triangulation, negative
   (relative) indices, rejection of empty/vertexless input.
-* **Round trip (9):** synthetic quad → MEF → `ParseMefFile`; geometry, UVs, normals
+* **Round trip (10):** synthetic quad → MEF → `ParseMefFile`; geometry, UVs, normals
   and triangle order compared; `--keep-winding`; generated normals are unit length
   and face the OBJ's front side; the ILFF container (magic, declared size, align,
   form id, chunk links, `next = align4(16+size)`, last-chunk termination) is checked
   byte by byte; the collision chunks are checked for size/count consistency and for
   tree reachability; format 3 emits 40-byte vertices and a 56-byte D3DR; a
   22050-triangle mesh exercises the DNER record split (3 records, `next = 65532`,
-  `0xFFFF` terminator, `D3DR` group count 3); and the area-weighted smoothing of
-  generated normals is pinned against an exactly predicted value (§8.2).
-* **Refusals (4):** format 1 output is refused; a skeletal *reference* MEF is refused
+  `0xFFFF` terminator, `D3DR` group count 3); the area-weighted smoothing of
+  generated normals is pinned against an exactly predicted value (§8.2); and the
+  HSEM bounding sphere the engine's LOD and cull paths read is pinned (§4).
+* **Refusals (6):** format 1 output is refused; a skeletal *reference* MEF is refused
   and leaves **no output file**; skeletal `ParsedGeometry` is refused; empty geometry
-  is refused.
+  is refused; the largest mesh the 16-bit group fields can address (65535 vertices)
+  is **accepted** and round-trips through the shipping reader; 65536 vertices is
+  refused and leaves no output file.
 * **Reference MEF (1):** a static reference's `ATTA` chunk is copied byte for byte
   and `attach_count` follows.
 * **CLI (5):** the issue's command form, the two-operand form, the optional switches,
@@ -497,6 +505,23 @@ majority convention is the only defensible default. This is also why the OBJ pat
   writing a file that the shipping reader then parses.
 * **Corpus (2):** every static retail model is re-serialised and re-parsed; and 40
   real retail models are exported to OBJ text and imported back.
+
+**The two tests added last** (see §10.1) cover the two things the issue is actually
+about that nothing pinned before:
+
+* the **bounding-sphere contract** — `MeshHeader.center` and `MeshHeader.sphere` are
+  the only HSEM fields the oracle demonstrably reads, so the writer's
+  `sphere == max |v − center|` is asserted on an off-origin fixture where `sphere`
+  and `radius` differ by two orders of magnitude, together with the `--pivot-origin`
+  variant;
+* the **high-poly ceiling** — a 65535-vertex mesh (21845 triangles) is written and
+  read back with every index intact, and 65536 vertices is refused. 65535 is a hard
+  format limit, not a policy choice: a DNER group's vertex window is 16-bit in both
+  formats (`MeshGroup` `src/render/rendertypes.h:6-18`; `LmGroup`
+  `src/render/render.c:40-54`) and `draw_group` passes those fields straight to
+  `IDirect3DDevice7_DrawIndexedPrimitiveVB` over a 16-bit index array
+  (`src/render/render.c:526-531`), with a 16-bit `base` that leaves no room to chain
+  groups past it either.
 
 Corpus results (`IGI_GAME_PATH=/Users/haseeb-mir/Downloads/IGI`):
 
@@ -591,24 +616,85 @@ hard-edge detection / vertex splitting for OBJs that lack normals.
 
 | criterion | status |
 |---|---|
-| CLI command works | **implemented and unit-tested** at the argument-parsing level (`RunImportMefCli` is in the host lane). The `cli_handler.cpp` dispatch itself is **not compiled by any gate available here** — see below. |
+| CLI command works | **implemented, unit-tested and now gated at the binary level.** `RunImportMefCli` is covered by the host lane; the `cli_handler.cpp` dispatch is covered by the `import` tier of `scripts/e2e-headless.sh`, which runs the shipping 32-bit `igi1ed.exe` under Wine with the issue's exact command form (§10.1). |
 | Output `.mef` loads in the editor viewport | **not verified** — needs the Windows editor GUI with OpenGL 4.1. |
-| Output `.mef` loads in-game without crashing | **not verified** — needs the Windows suite and a retail run. |
+| Output `.mef` loads in-game without crashing | **not verified** — needs the Windows suite and a retail run. What *is* verified is the nearest thing available here: a `.mef` written by the shipping binary is parsed by the editor's own reader (the port of `Direct3DRender_LoadModel`, HOOK 0x49FB10) and its geometry, UVs, normals, winding and material groups all survive (§10.1). |
 | Static building models (no bones) fully supported | **implemented**; 2212 static retail models round-trip byte-exactly through the shipping reader. |
 | Original bone/attachment data preserved when replacing skeletal models | **partial by design**: static references have their `ATTA` copied verbatim; a skeletal reference is refused rather than silently degraded. The issue asks for preservation when replacing a *skeletal* model, which this importer deliberately does not attempt. |
-| Unit test covering OBJ → MEF round trip | **done** — 25 tests, including the full retail corpus and a real-asset OBJ round trip. |
+| Unit test covering OBJ → MEF round trip | **done** — 29 tests, including the full retail corpus and a real-asset OBJ round trip. |
 
-### 10.1 The one gate that could not be run
+### 10.1 The dispatch gate — closed
 
-`source/cli/cli_handler.cpp` is in `SOURCES_CLI`, which is compiled only into the
-Windows `igi-editor` target; the host lane's `target_sources(igi_tests PRIVATE ...)`
-pool does not contain it. The file was checked with
-`clang++ -std=c++20 -fsyntax-only -I source -I source/cli -I source/runtime -I third_party/glm-1.0.1 -I third_party/GL/include source/cli/cli_handler.cpp`
-(exit 0, two pre-existing warnings in `source/level/task_tree.h`), but a syntax check
-is not a build of the Windows target and is not a test.
+The previous revision of this document recorded one gate it could not run:
+`source/cli/cli_handler.cpp` lives in `SOURCES_CLI`, which is compiled only into the
+Windows `igi-editor` target, so no host lane ever exercised the code that decides
+whether `--mef <in.obj> --import-mef <out.mef>` reaches the importer. A
+`clang++ -fsyntax-only` check was the most that could be said, and a syntax check is
+not a build and not a test.
 
-All of the importer's logic — argument parsing included — lives in
-`source/renderer/mef_writer.cpp`, which *is* in the host pool and *is* covered by
-`tests/test_mef_import.cpp`. The `cli_handler.cpp` change is a three-line dispatch
-plus help text, so the untested surface is as small as it can be made without
-changing the build layout.
+That gate now exists, and it does not need the host pool: **`scripts/e2e-headless.sh`
+runs the shipping binary**. A new `import` tier (step 4b, run in both `--fast` and
+the full pass) writes an OBJ into the staging directory and then asserts, under Wine:
+
+* `igi1ed.exe --mef <in.obj> --import-mef <out.mef>` exits 0 and prints
+  `[MEF] SUCCESS`;
+* the file it wrote starts with the `ILFF` magic and its declared size word equals
+  the file size on disk (read with `xxd`/`wc`, not with the editor's own code);
+* `igi1ed.exe --import-mef <in.obj> <out.mef>` produces a **byte-identical** file;
+* `igi1ed.exe --mef <missing.obj> --import-mef <out.mef>` exits non-zero and leaves
+  **no output file**.
+
+Measured on this host (2026-10-29, stage `scratch/e2e-29`):
+
+```
+==> 4b. TIER import — --mef <in.obj> --import-mef <out.mef> (issue #29, GL-free)
+   | [MEF] Importing OBJ 'Z:\...\scratch\e2e-29\import\quad_hp.obj' -> 'Z:\...\quad_hp.mef'
+   | [MEF] 5 vertices, 6 triangles, 2 groups, format 0, collision 5 verts/6 faces/1 surfaces, winding reversed
+   | [MEF] SUCCESS: wrote 1232 bytes to 'Z:\...\scratch\e2e-29\import\quad_hp.mef'
+   PASS  issue #29 CLI form: --mef <in.obj> --import-mef <out.mef> wrote .../quad_hp.mef
+   PASS  written file starts with the ILFF magic
+   PASS  ILFF declared size (1232) matches the file size (1232)
+   PASS  --import-mef <in.obj> <out.mef> produces byte-identical output
+   PASS  an unreadable OBJ fails (exit 1) and leaves no output file
+   tiers            : smoke, tests, import
+   assertions       : 7 run, 0 failed
+==> E2E PASS (exit 0)
+```
+
+**And the round trip is closed across binaries.** The artifact that the Windows
+binary wrote was parsed with the editor's own reader
+(`ParseMefFile`, `source/renderer/mef_native.cpp`), which reports exactly the OBJ's
+geometry back — 5 vertices, 6 triangles, 2 render blocks, positions/UVs/normals
+identical and the winding reversed as designed:
+
+```
+modelType=0 fromRenderMesh=1 vertices=5 triangles=6 blocks=2 collVerts=0 collFaces=0
+v0 pos=(-1.0000 0.0000 -1.0000) n=(0.0000 1.0000 0.0000) uv=(0.0000 0.0000)
+v1 pos=(-1.0000 0.0000 1.0000) n=(0.0000 1.0000 0.0000) uv=(0.0000 1.0000)
+v2 pos=(1.0000 0.0000 1.0000)  n=(0.0000 1.0000 0.0000) uv=(1.0000 1.0000)
+v3 pos=(1.0000 0.0000 -1.0000) n=(0.0000 1.0000 0.0000) uv=(1.0000 0.0000)
+v4 pos=(0.0000 1.0000 0.0000)  n=(0.0000 1.0000 0.0000) uv=(0.5000 0.5000)
+t0 = 0 2 1   t1 = 0 3 2   t2 = 0 4 3   t3 = 3 4 2   t4 = 2 4 1   t5 = 1 4 0
+block0 mat=0 tris=0..2      block1 mat=1 tris=2..4
+```
+
+The OBJ's faces are `1/4/3`, `1/3/2`, `1/2/5`, `2/3/5`, `3/4/5`, `4/1/5`; welded in
+first-use order those are `(0,1,2) (0,2,3) (0,3,4) (3,2,4) (2,1,4) (1,0,4)`, and the
+reversed forms are exactly the six triangles above. The two `usemtl` groups come back
+as two render blocks with the right triangle ranges.
+
+Two further changes came out of this:
+
+* `cli_handler.cpp` now calls `mef_writer::IsImportMefInvocation` instead of
+  duplicating the `--import-mef` string test inline. That function is what
+  `tests/test_mef_import.cpp` covers, so the host lane's coverage now applies to the
+  predicate the binary actually uses; the inline copy it replaced was a second,
+  unchecked implementation.
+* the HSEM bounding-sphere and 65535-vertex boundary tests described in §7 were
+  added, because those are the two things a *high-poly replacement* can get wrong
+  that no test pinned before.
+
+**Still not proven:** that the output renders correctly in the viewport or in game,
+and that the reversed winding (§6) is right — both need a GL 4.1 host or a retail
+run. Nothing above changes that.
+

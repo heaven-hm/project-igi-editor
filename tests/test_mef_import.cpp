@@ -874,6 +874,101 @@ TEST(MefImportRoundTripTest, WritesFormatThreeWithTenFloatVertices) {
         ExpectVec3Near(parsed.vertices[i].rawPos, kQuadPositions[i], 1e-6f, "position");
 }
 
+// HSEM center[3] / sphere are the model's bounding sphere, and the engine reads
+// BOTH of them:
+//
+//   ModelObj_GetLOD      HOOK 0x4CFCB0, src/lod/mesh3d.c:209-226
+//       x = o->pos[0] - c->pos.x + h->center.x;
+//       dist = ... + h->center.z/y ...;
+//       return lod_select(vm, dist, max_scale(o->scale) * h->sphere, ...);
+//   Mesh3D_ExcludeRigid  HOOK 0x4D0510, src/lod/mesh3d.c:321-334
+//       x = m[2]*h->center.z + m[1]*h->center.y + m[0]*h->center.x; ...
+//       return Mesh3D_Exclude(v, max_scale(o->scale) * h->sphere, clip);
+//
+// and lod_select itself (src/lod/mesh3d.c:161-207) turns the radius into the
+// cull threshold `e = (gLodRange - r) * (1 - gLodBlend) + r`, returning -1
+// (culled) once `cull * e >= fov * q`.  So a written sphere that does not bound
+// the mesh about `center` makes a replaced model disappear early or linger, and
+// moves its LOD switch distance.
+//
+// The fixture sits far from the origin so that the two candidate radii are far
+// apart: a writer that put `radius` (max |v|, HSEM +120) into `sphere` would be
+// caught rather than passing by coincidence.
+TEST(MefImportRoundTripTest, WritesTheBoundingSphereTheLodAndCullPathsRead) {
+    const char* const kOffsetQuadObj =
+        "v 100 0 0\n"
+        "v 110 0 0\n"
+        "v 110 10 0\n"
+        "v 100 10 0\n"
+        "vn 0 0 1\n"
+        "usemtl wall\n"
+        "f 1 2 3\n"
+        "f 1 3 4\n";
+    const glm::vec3 kExpectedCenter(105.f, 5.f, 0.f);
+    const float kExpectedSphere = std::sqrt(5.f * 5.f + 5.f * 5.f);   // ~7.07107
+    const float kExpectedRadius = std::sqrt(110.f * 110.f + 10.f * 10.f);  // ~110.4536
+
+    mef_writer::ObjMesh obj;
+    std::string error;
+    ASSERT_TRUE(mef_writer::ParseObjText(kOffsetQuadObj, &obj, &error)) << error;
+
+    mef_writer::MefModel model;
+    ASSERT_TRUE(mef_writer::BuildMefFromObj(obj, mef_writer::WriteOptions(), &model, &error))
+        << error;
+    std::vector<uint8_t> bytes;
+    ASSERT_TRUE(mef_writer::SerialiseMef(model, &bytes, &error)) << error;
+
+    const std::vector<ChunkView> chunks = WalkChunks(bytes);
+    const ChunkView* hsem = FindChunk(chunks, "HSEM");
+    ASSERT_NE(hsem, nullptr);
+    ASSERT_GE(hsem->size, 156u) << "MeshHeader is 0x90 bytes plus a 12-byte tail";
+
+    // MeshHeader offsets (src/model/modeltypes.h:9-29): center at +48, sphere at
+    // +60, radius at +120.  The writer's HSEM payload starts at MeshHeader +0.
+    ExpectVec3Near(glm::vec3(GetF32(bytes, hsem->payload + 48), GetF32(bytes, hsem->payload + 52),
+                             GetF32(bytes, hsem->payload + 56)),
+                   kExpectedCenter, 1e-4f, "HSEM center");
+    const float sphere = GetF32(bytes, hsem->payload + 60);
+    const float radius = GetF32(bytes, hsem->payload + 120);
+    EXPECT_NEAR(sphere, kExpectedSphere, 1e-4f) << "sphere must be max |v - center|";
+    EXPECT_NEAR(radius, kExpectedRadius, 1e-4f) << "radius is max |v| about the model origin";
+    EXPECT_GT(std::fabs(sphere - radius), 100.f)
+        << "fixture must keep sphere and radius far apart for this test to mean anything";
+
+    // The contract the engine relies on: every vertex is inside the sphere, and
+    // the sphere is tight (some vertex sits on it).  Checked on the vertices the
+    // shipping reader returns, not on the writer's own bookkeeping.
+    const std::string path = WriteTempFile("offset_quad_sphere.mef", bytes);
+    ParsedGeometry parsed;
+    ASSERT_NO_THROW(parsed = ParseMefFile(path));
+    ASSERT_EQ(parsed.vertices.size(), 4u);
+    float furthest = 0.f;
+    for (const auto& vertex : parsed.vertices) {
+        const float d = glm::length(vertex.rawPos - kExpectedCenter);
+        EXPECT_LE(d, sphere + 1e-4f) << "a vertex lies outside the written bounding sphere";
+        furthest = std::max(furthest, d);
+    }
+    EXPECT_NEAR(furthest, sphere, 1e-4f) << "the sphere must be tight around the mesh";
+
+    // --pivot-origin: the caller overrides the centre, so the sphere is measured
+    // about the origin instead.
+    mef_writer::WriteOptions originOptions;
+    originOptions.useBoundsCentrePivot = false;
+    originOptions.pivot = glm::vec3(0.f);
+    mef_writer::MefModel originModel;
+    ASSERT_TRUE(mef_writer::BuildMefFromObj(obj, originOptions, &originModel, &error)) << error;
+    std::vector<uint8_t> originBytes;
+    ASSERT_TRUE(mef_writer::SerialiseMef(originModel, &originBytes, &error)) << error;
+    const ChunkView* originHsem = FindChunk(WalkChunks(originBytes), "HSEM");
+    ASSERT_NE(originHsem, nullptr);
+    ExpectVec3Near(glm::vec3(GetF32(originBytes, originHsem->payload + 48),
+                             GetF32(originBytes, originHsem->payload + 52),
+                             GetF32(originBytes, originHsem->payload + 56)),
+                   glm::vec3(0.f), 1e-6f, "HSEM center under --pivot-origin");
+    EXPECT_NEAR(GetF32(originBytes, originHsem->payload + 60), kExpectedRadius, 1e-4f)
+        << "with the origin as centre the sphere must equal max |v|";
+}
+
 // ===========================================================================
 // Refusals and reference-MEF handling
 // ===========================================================================
@@ -931,6 +1026,110 @@ TEST(MefImportRefusalTest, EmptyParsedGeometryIsRefused) {
     EXPECT_FALSE(
         mef_writer::BuildMefFromGeometry(geometry, mef_writer::WriteOptions(), &model, &error));
     EXPECT_FALSE(error.empty());
+}
+
+// The largest mesh the format can carry, and the first one it cannot.
+//
+// A DNER group's vertex window is 16-bit in BOTH formats:
+//   MeshGroup  src/render/rendertypes.h:6-18   uint16_t base; uint16_t vertexCount;
+//   LmGroup    src/render/render.c:40-54       uint16_t base; uint16_t vertexCount;
+// and draw_group hands those fields straight to the draw call
+// (src/render/render.c:526-531,
+//  IDirect3DDevice7_DrawIndexedPrimitiveVB(DEV, d->primType, vb, start + g->base,
+//                                          g->vertexCount, (WORD *)g->indices, ...)),
+// with a 16-bit index array behind them.  A group therefore cannot address more
+// than 0xFFFF vertices, and because `base` is 16-bit as well there is no way to
+// chain groups past that either: 65535 is a hard ceiling on a static mesh, not a
+// policy choice of the writer.
+//
+// This is the case the issue is about -- a high-poly replacement -- so the
+// boundary is pinned from both sides, through the OBJ text parser and the
+// shipping reader.
+namespace {
+
+mef_writer::ObjMesh MakeFanMesh(size_t vertexCount) {
+    mef_writer::ObjMesh mesh;
+    mesh.positions.resize(vertexCount);
+    // A zig-zag in y so that ANY three consecutive vertices form a triangle with
+    // non-zero area: the writer drops degenerate faces before it counts vertices,
+    // and a fixture on a straight line would be filtered out and never reach the
+    // limit being tested.
+    for (size_t i = 0; i < vertexCount; ++i)
+        mesh.positions[i] = glm::vec3(static_cast<float>(i), (i % 3 == 0) ? 0.f : 1.f, 0.f);
+    mesh.normals.push_back(glm::vec3(0.f, 0.f, 1.f));
+    for (size_t i = 0; i + 2 < vertexCount; i += 3) {
+        mef_writer::ObjFace face;
+        for (int k = 0; k < 3; ++k) {
+            face.v[k] = static_cast<uint32_t>(i + k);
+            face.vn[k] = 0;
+        }
+        mesh.faces.push_back(face);
+        mesh.faceMaterial.push_back("wall");
+    }
+    // The 3-at-a-time loop above leaves `vertexCount % 3` positions unreferenced,
+    // and the writer only emits welded, referenced vertices.  Close the mesh so
+    // the welded count is exactly `vertexCount`.
+    const size_t covered = mesh.faces.size() * 3;
+    if (vertexCount > covered) {
+        mef_writer::ObjFace face;
+        face.v[0] = static_cast<uint32_t>(covered);
+        face.v[1] = static_cast<uint32_t>(covered + 1 < vertexCount ? covered + 1 : 1u);
+        face.v[2] = 0u;
+        for (int k = 0; k < 3; ++k)
+            face.vn[k] = 0;
+        mesh.faces.push_back(face);
+        mesh.faceMaterial.push_back("wall");
+    }
+    return mesh;
+}
+
+}  // namespace
+
+TEST(MefImportRefusalTest, AcceptsTheLargestMeshTheSixteenBitGroupFieldsAddress) {
+    const mef_writer::ObjMesh mesh = MakeFanMesh(0xFFFFu);
+
+    mef_writer::MefModel model;
+    std::string error;
+    ASSERT_TRUE(mef_writer::BuildMefFromObj(mesh, mef_writer::WriteOptions(), &model, &error))
+        << error;
+    ASSERT_EQ(model.vertices.size(), 0xFFFFu);
+
+    std::vector<uint8_t> bytes;
+    ASSERT_TRUE(mef_writer::SerialiseMef(model, &bytes, &error)) << error;
+
+    const std::string path = WriteTempFile("vertex_limit_65535.mef", bytes);
+    ParsedGeometry parsed;
+    ASSERT_NO_THROW(parsed = ParseMefFile(path));
+    EXPECT_EQ(parsed.vertices.size(), 0xFFFFu);
+    EXPECT_EQ(parsed.triangles.size(), 0xFFFFu / 3u);
+    // Every index must survive the 16-bit index arrays.
+    for (const auto& triangle : parsed.triangles)
+        for (int k = 0; k < 3; ++k)
+            ASSERT_LT(triangle[k], 0xFFFFu);
+}
+
+TEST(MefImportRefusalTest, RefusesMoreVerticesThanTheSixteenBitGroupFieldsAddress) {
+    const mef_writer::ObjMesh mesh = MakeFanMesh(0x10000u);
+
+    mef_writer::MefModel model;
+    std::string error;
+    EXPECT_FALSE(mef_writer::BuildMefFromObj(mesh, mef_writer::WriteOptions(), &model, &error));
+    EXPECT_NE(error.find("65535"), std::string::npos) << error;
+    EXPECT_NE(error.find("16-bit"), std::string::npos) << error;
+
+    // And through the file entry point, so a refusal cannot leave a truncated
+    // .mef behind for the game to load.
+    const std::string objPath = WriteTempText("too_many_vertices.obj", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    const fs::path outPath = TempDir() / "too_many_vertices.mef";
+    std::error_code ec;
+    fs::remove(outPath, ec);
+
+    mef_writer::WriteOptions options;
+    options.maxVertices = 2;  // keep the fixture small; the rule under test is the same one
+    std::string fileError;
+    EXPECT_FALSE(mef_writer::WriteMefFromObj(objPath, outPath.string(), options, &fileError));
+    EXPECT_FALSE(fileError.empty());
+    EXPECT_FALSE(fs::exists(outPath)) << "a refused import must not leave an output file";
 }
 
 TEST(MefImportReferenceTest, StaticReferenceAttachmentsAreCopiedVerbatim) {
