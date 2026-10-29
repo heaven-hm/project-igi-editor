@@ -66,4 +66,11 @@ namespace igi {
 void SetLadderGizmosEnabled(bool enabled);
 bool LadderGizmosEnabled();
 
+// The rail polyline overlay of GitHub issue #59 (DrawRailPathGizmos,
+// renderer_objects_visual.cpp). Same opt-out shape as the ladder gizmos above,
+// and for the same reason: the engine draws no rail gizmo, so there is no engine
+// state to read — only an editor view preference. Default: on.
+void SetRailPathGizmosEnabled(bool enabled);
+bool RailPathGizmosEnabled();
+
 }  // namespace igi

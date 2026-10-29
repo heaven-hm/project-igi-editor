@@ -1517,6 +1517,18 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		return;
 	}
 
+	// L: toggle the rail polyline overlay (GitHub issue #59). On by default, so a
+	// level with a Train shows its rail immediately; the switch itself lives in
+	// the renderer (igi::SetRailPathGizmosEnabled) because the overlay is a
+	// process-wide view preference, exactly like the ladder gizmos.
+	if (key == 'l' || key == 'L') {
+		igi::SetRailPathGizmosEnabled(!igi::RailPathGizmosEnabled());
+		const bool shown = igi::RailPathGizmosEnabled();
+		status_message_ = shown ? "Rail paths: ON" : "Rail paths: OFF";
+		Logger::Get().Log(LogLevel::INFO, std::string("[App] Rail path overlay ") + (shown ? "shown" : "hidden"));
+		return;
+	}
+
 	if ((key == 13) && (glutGetModifiers() & GLUT_ACTIVE_ALT)) { // ALT + ENTER toggle full screen mode
 		window_state_.full_screen_ = !window_state_.full_screen_;
 

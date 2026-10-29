@@ -6,6 +6,7 @@
 #include "app_internal.h"
 #include "renderer/spline_geometry.h"
 #include "runtime/elevator_rules.h"
+#include "runtime/rail_source.h"
 
 static bool containsIgnoreCase(const std::string& str, const std::string& substr) {
     if (substr.empty()) return true;
@@ -373,11 +374,9 @@ bool App::ValidateParentChildCompatibility(const LevelObject& parent, const std:
 void App::EvaluateTrainTrackPositions() {
 	auto& objects = level_.GetLevelObjects().GetObjects();
 
-	std::map<std::string, int> taskToIdx;
-	for (int i = 0; i < (int)objects.size(); ++i) {
-		if (!objects[i].taskId.empty())
-			taskToIdx[objects[i].taskId] = i;
-	}
+	// `task id -> object index`, shared with the viewport's rail preview so both
+	// resolve a "RailroadQTaskID" / "SplineObj taskid" reference the same way.
+	const std::unordered_map<std::string, int> taskToIdx = igi::BuildTaskIndex(objects);
 
 	struct SplineData {
 		// The rail as the engine sees it: one Hermite span per waypoint pair,
@@ -437,39 +436,22 @@ void App::EvaluateTrainTrackPositions() {
 		if (cached != splineCache.end()) return &cached->second;
 		auto it = taskToIdx.find(id);
 		if (it == taskToIdx.end()) return nullptr;
-		const auto& spline = objects[it->second];
-		if (spline.childrenIndices.size() < 2) return nullptr;
+		// One span per waypoint pair, with the Hermite tangents taken from the
+		// waypoints' own local X axes, the container's "Number of Matrices /
+		// Segment" (arg 7) as the sub-segment count and its "Linear Segments"
+		// (arg 3) as the engine's `rigid` flag (src/editobj/spline.c:205). That
+		// construction lives in igi::BuildRailSource so the viewport's rail
+		// preview draws the same curve the cars are placed on
+		// (source/runtime/rail_source.h).
+		const igi::RailSource source = igi::BuildRailSource(objects, it->second);
+		if (!source.valid) return nullptr;
 		SplineData sd;
-		// One span per waypoint pair. The Hermite tangents are the waypoints' own
-		// local X axes (src/sound/segsetup.c:99-101), the sub-segment count is the
-		// container's "Number of Matrices / Segment" (arg 7, defaulted from
-		// obj->maxSegments by SplineObjWaypoint_Create, src/tagitem/spline.c:561),
-		// and the container's "Linear Segments" (arg 3) is the engine's `rigid`
-		// flag (src/editobj/spline.c:205).
-		const int segments = std::clamp(spline.splineSegmentCount, 2, 20);
-		std::vector<spline_geometry::SplineSpan> spans;
-		spans.reserve(spline.childrenIndices.size() - 1);
-		for (size_t c = 0; c + 1 < spline.childrenIndices.size(); ++c) {
-			const LevelObject& from = objects[spline.childrenIndices[c]];
-			const LevelObject& to = objects[spline.childrenIndices[c + 1]];
-			spline_geometry::SplineSpan span;
-			span.from = from.pos;
-			span.to = to.pos;
-			span.rotFrom = spline_geometry::EngineEulerMatrix(from.rot);
-			span.rotTo = spline_geometry::EngineEulerMatrix(to.rot);
-			span.segments = segments;
-			span.rigid = spline.linearSegments;
-			// The waypoint's own Flip (arg 13) is not modelled by LevelObject, so
-			// every span is evaluated unflipped.
-			span.reversed = false;
-			spans.push_back(span);
-		}
-		sd.rail = spline_geometry::BuildRailPath(spans);
-		sd.totalLen = sd.rail.length;
+		sd.rail = source.path;
+		sd.totalLen = source.path.length;
 		// SplineObj_GetWaypointPos(graph, 0) and (graph, count - 1): the authored
 		// waypoint points, which the Elevator "Linear" branch interpolates.
-		sd.firstWaypoint = objects[spline.childrenIndices.front()].pos;
-		sd.lastWaypoint = objects[spline.childrenIndices.back()].pos;
+		sd.firstWaypoint = source.first_waypoint;
+		sd.lastWaypoint = source.last_waypoint;
 		splineCache[id] = sd;
 		return &splineCache[id];
 	};

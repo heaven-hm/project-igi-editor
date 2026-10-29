@@ -215,6 +215,18 @@ struct RailPath {
 
 RailPath BuildRailPath(const std::vector<SplineSpan>& spans);
 
+// The rail as a drawable polyline: the engine's own joints in order, one entry
+// per `setup_segments` joint (src/sound/segsetup.c:88-199), with nothing
+// reordered, decimated or re-interpolated. Consecutive entries are therefore one
+// straight segment of the curve `SampleRailPoint` walks and `PlaceTrainOnRail`
+// places cars on: for every joint but the last, `SampleRailPoint(arc[i])` IS
+// `polyline[i]`, and the last joint's arc is the rail length, which wraps to the
+// rail start exactly as `WrapRailDistance` describes. That is what makes this the
+// rail the trains ride rather than a chord approximation of it. Returns one point
+// for a rail with a single joint (no segment to draw) and nothing for a rail with
+// no joints.
+std::vector<glm::dvec3> RailPolyline(const RailPath& path);
+
 // SplineObj_GetPoints (HOOK 0x4FEC10, src/tagitem/spline.c:219-454): the scalar
 // is signed and end-relative — negative values measure backwards from the last
 // waypoint, and the result is wrapped into [0, length).

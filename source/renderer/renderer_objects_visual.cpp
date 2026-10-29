@@ -7,6 +7,7 @@
 #include "igi_transform.h"
 #include "runtime/alarm_light.h"
 #include "runtime/pickup_rules.h"
+#include "runtime/rail_source.h"
 #include "runtime/smoke.h"
 
 #include <cstring>
@@ -1318,10 +1319,14 @@ namespace igi {
 
 namespace {
 bool g_ladder_gizmos_enabled = true;
+bool g_rail_path_gizmos_enabled = true;
 }  // namespace
 
 void SetLadderGizmosEnabled(bool enabled) { g_ladder_gizmos_enabled = enabled; }
 bool LadderGizmosEnabled() { return g_ladder_gizmos_enabled; }
+
+void SetRailPathGizmosEnabled(bool enabled) { g_rail_path_gizmos_enabled = enabled; }
+bool RailPathGizmosEnabled() { return g_rail_path_gizmos_enabled; }
 
 }  // namespace igi
 
@@ -1475,6 +1480,60 @@ static void DrawPickupTouchVolume(const glm::vec3& origin, float range, float ha
                glm::vec4(1.00f, 0.65f, 0.15f, 1.0f), glm::vec4(0.0f));
     FlushGizmo(gate, prog, ubo_mats, ubo_binding, 0,
                glm::vec4(0.35f, 0.75f, 1.00f, 1.0f), glm::vec4(0.0f));
+}
+
+// ─── DrawRailPathGizmos ──────────────────────────────────────────────────────
+// The rail polyline of GitHub issue #59, acceptance criterion 2 ("rail path
+// polyline visible in viewport for any level with a Train task").
+//
+// EDITOR-ONLY PRESENTATION. The engine draws no rail: it holds the rail as
+// `SplineObj` joints and only ever samples it to place a car or a platform
+// (`SplineObj_GetPoints` HOOK 0x4FEC10, src/tagitem/spline.c:219-454, driven by
+// `Train_Place` HOOK 0x42A2C0, src/missile/train.c:209-274, and
+// `Elevator_UpdatePlace` HOOK 0x43D960, src/props/elevator.c:41-83). There is no
+// engine constant for a line colour, so the two colours below are presentation
+// choices; nothing else here is invented.
+//
+// What IS engine-derived is the line's geometry. `igi::BuildRailSource` resolves
+// the same curve `App::EvaluateTrainTrackPositions` places the cars on - the same
+// function, not a second copy of the rule - and
+// `spline_geometry::RailPolyline` returns the engine's own `setup_segments`
+// joints in order (src/sound/segsetup.c:88-199), so the drawn polyline is the
+// rail the trains ride rather than a chord approximation of it. `RailPolyline`'s
+// contract - joint i is the point `SampleRailPoint` returns for `arc[i]` - is
+// pinned in tests/test_rail_polyline.cpp.
+//
+// Which rails appear is `igi::RailContainersToShow`: every `SplineObj` a rail
+// consumer names, plus the selected object's own rail. No model id, task type or
+// level is special-cased.
+void DrawRailPathGizmos(const std::vector<LevelObject>& objects, int selected_index,
+                        GLuint ubo_mats, GLuint ubo_binding) {
+    if (!igi::RailPathGizmosEnabled()) return;
+
+    const GLuint prog = EnsureGizmoShader();
+    if (prog == 0) return;
+
+    const std::vector<int> containers = igi::RailContainersToShow(objects, selected_index);
+    if (containers.empty()) return;
+
+    const int selected_container = igi::SelectedRailContainer(objects, selected_index);
+
+    for (int container : containers) {
+        const igi::RailSource rail = igi::BuildRailSource(objects, container);
+        if (!rail.valid) continue;
+        const std::vector<glm::dvec3> polyline = spline_geometry::RailPolyline(rail.path);
+        // A rail needs two joints before there is a segment to draw.
+        if (polyline.size() < 2) continue;
+
+        GzBatch b;
+        for (size_t i = 0; i + 1 < polyline.size(); ++i) {
+            b.line(glm::vec3(polyline[i]), glm::vec3(polyline[i + 1]));
+        }
+        const glm::vec4 colour = (container == selected_container)
+            ? glm::vec4(1.00f, 1.00f, 0.25f, 1.0f)   // the rail being edited
+            : glm::vec4(0.75f, 0.70f, 1.00f, 1.0f);  // the level's other rails
+        FlushGizmo(b, prog, ubo_mats, ubo_binding, 0, colour, colour);
+    }
 }
 
 // ─── DrawAttachmentsForSpline ─────────────────────────────────────────────────

@@ -176,6 +176,17 @@ struct LevelObject {
 // (Renderer_Objects::ubo_binding_point_); the gizmo is a no-op for other types.
 void DrawPropsGizmos(const LevelObject& obj, GLuint ubo_mats, GLuint ubo_binding);
 
+// The rail polyline overlay (GitHub issue #59 acceptance 2), implemented in
+// renderer/renderer_objects_visual.cpp and called once per frame from
+// Renderer_Objects::Draw. EDITOR-ONLY PRESENTATION: the engine draws no rail
+// gizmo — the geometry is the engine's own `setup_segments` joints, resolved by
+// igi::BuildRailSource and returned in order by spline_geometry::RailPolyline,
+// so the line drawn is the curve App::EvaluateTrainTrackPositions places the
+// cars on. `selected_index` highlights the selected object's rail; the
+// process-wide switch is igi::SetRailPathGizmosEnabled (default on).
+void DrawRailPathGizmos(const std::vector<LevelObject>& objects, int selected_index,
+                        GLuint ubo_mats, GLuint ubo_binding);
+
 // Stable per-placement key for a lightmap binding. Most objects use their unique
 // Task_New id. Nested / ATTA tasks all share the literal taskId "-1" (not unique),
 // so those key off their ORIGINAL authored position instead (which the QSC binding

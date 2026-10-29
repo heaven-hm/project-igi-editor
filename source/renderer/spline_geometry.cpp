@@ -837,6 +837,13 @@ RailPath BuildRailPath(const std::vector<SplineSpan>& spans) {
     return path;
 }
 
+std::vector<glm::dvec3> RailPolyline(const RailPath& path) {
+    std::vector<glm::dvec3> out;
+    out.reserve(path.joints.size());
+    for (const SplineJoint& joint : path.joints) out.push_back(joint.pos);
+    return out;
+}
+
 double WrapRailDistance(double distance, double length) noexcept {
     if (!std::isfinite(distance) || !(length > 0.0)) return 0.0;
     double d = distance;

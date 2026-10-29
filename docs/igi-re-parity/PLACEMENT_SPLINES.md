@@ -814,3 +814,143 @@ honours them.
 
 The honest framing for the issue tracker: *behavioural but not reachable* —
 "unreachable in shipped data" is the reason to defer it, not "cosmetic".
+
+---
+
+# Follow-up (task-8): the rail polyline overlay (acceptance criterion 2)
+
+Issue #59's second acceptance criterion — *"Rail path polyline visible in
+viewport for any level with a Train task"* — had no consumer at all: after task-7
+landed the geometry, `grep -rn RailPath source/` matched only
+`spline_geometry.{h,cpp}` and `app_lookup.cpp`. The curve was computed and used
+for placement, but nothing drew it. This section records what was added.
+
+## 16. What was added
+
+| Piece | Where | What it is |
+| --- | --- | --- |
+| `spline_geometry::RailPolyline` | `source/renderer/spline_geometry.{h,cpp}` | the rail's own joint list, in order, as drawable points |
+| `igi::BuildRailSource`, `igi::BuildTaskIndex`, `igi::FindLastTaskIndexById` | `source/runtime/rail_source.{h,cpp}` (new) | the ONE container → `RailPath` resolver, now called by the placement pass *and* the overlay |
+| `igi::RailContainersToShow`, `igi::SelectedRailContainer` | same | which rails the overlay offers, derived from the level's own references |
+| `DrawRailPathGizmos` | `source/renderer/renderer_objects_visual.cpp` | the `GL_LINES` submission, through the existing `GzBatch` / `FlushGizmo` gizmo batch |
+| call site | `source/renderer/renderer_objects.cpp` (end of `Renderer_Objects::Draw`) | once per frame, beside the magic-object overlay |
+| toggle | `igi::SetRailPathGizmosEnabled` / `RailPathGizmosEnabled` (`renderer_objects_internal.h`), bound to the `L` key in `app_input_keyboard.cpp` | **default ON**, same opt-out shape as the ladder gizmos |
+
+### 16.1 This is editor presentation, not engine behaviour
+
+**The engine draws no rail gizmo.** It holds the rail as `SplineObj` joints and
+only ever *samples* it, to place a car or a platform:
+`SplineObj_GetPoints` HOOK `0x4FEC10` (`src/tagitem/spline.c:219-454`), driven by
+`Train_Place` HOOK `0x42A2C0` (`src/missile/train.c:209-274`) and
+`Elevator_UpdatePlace` HOOK `0x43D960` (`src/props/elevator.c:41-83`). There is
+therefore **no engine constant for a line colour or a line width**, and the two
+colours (periwinkle `0.75,0.70,1.00` for a level's rails, yellow
+`1.00,1.00,0.25` for the selected one) are presentation choices, marked as such
+in the code.
+
+What *is* engine-derived is the geometry the line is made of:
+
+* the joint positions are the engine's own `setup_segments` joints
+  (`src/sound/segsetup.c:88-199`), one per sub-segment sample — the same joints
+  `SplineObj_GetPoints` walks;
+* they are chained by `BuildRailPath`, which drops the waypoint a pair of spans
+  shares, exactly as the engine has one segment per waypoint after the first;
+* the polyline is drawn in joint order, with no reordering, decimation or
+  re-interpolation, so segment *i* is the segment the arc table
+  (`SplineObj.length`, `src/tagitem/spline.c:824-830`) is measured along.
+
+### 16.2 One construction, not two
+
+The overlay does **not** re-derive the rail. `igi::BuildRailSource` is the
+function `App::EvaluateTrainTrackPositions` now calls for every rail it places a
+car on (`source/app_lookup.cpp`, `getSpline`), so the drawn polyline and the curve
+the trains ride are the same computation by construction. That extraction is
+behaviour-preserving:
+
+* the span rule, the `2..20` clamp and the rigid flag are unchanged — the clamp's
+  floor of 2 is *not* an engine rule (the engine caps at 20 and forces 1 for a
+  rigid span, both applied inside `BuildSplineSpan`); it is the editor's guard
+  against `inv = kOne / o->segments` (`src/sound/segsetup.c:107`) at 0, and it is
+  carried over verbatim. Every shipped `SplineObj` declares 20, so it is
+  unobservable on retail data;
+* `taskToIdx` in the placement pass is now `igi::BuildTaskIndex`, the same
+  last-declaration-wins map the overlay's scan implements
+  (`FindLastTaskIndexById`);
+* the only new code path is a bounds check on a child index, which replaces
+  undefined behaviour (the placement pass indexes `childrenIndices` unchecked) and
+  cannot change a defined result.
+
+### 16.3 Which rails are shown
+
+`igi::RailContainersToShow` collects every `SplineObj` a rail consumer names, plus
+the selected object's own rail so a rail can be inspected before anything is
+placed on it. A non-empty `LevelObject::splineTaskId` is exactly "this task rides
+a rail": only a `Train`'s "RailroadQTaskID" (arg 5,
+`source/level/level_objects.cpp:363`) and an `Elevator`'s "SplineObj taskid"
+(arg 10, `:556`) write it. No model id, task-type list or level number is
+consulted anywhere in the overlay.
+
+### 16.4 Tests
+
+`tests/test_rail_polyline.cpp` (10 tests, registered at `CMakeLists.txt:415`) —
+the GL draw is not host-testable (it needs a GL 4.1 context and the host lane has
+none), so the tests pin everything the drawn line is made of:
+
+| Test | Pins |
+| --- | --- |
+| `RailPolyline.IsTheJointListInOrder` | the polyline *is* the joint list, and the fixture genuinely bends away from its chord |
+| `RailPolyline.JointIsTheSampledPointAtItsOwnArc` | `SampleRailPoint(arc[i]) == polyline[i]`; the last joint's arc is `length`, which wraps to the rail start |
+| `RailPolyline.SegmentChainHasTheEngineRailLength` | the drawn chain's own length is `SplineObj.length` (4 461 592.905424 on the shipped LEVEL1 rail) and is >20 000 units longer than the waypoint chord |
+| `RailPolyline.FewerThanTwoJointsHasNoSegment` | a degenerate rail emits no segment |
+| `RailSource.ChainsSpansWithoutDuplicatingTheSharedWaypoint` | N spans × S sub-segments → N·S+1 joints; the authored endpoints are `SplineObj_GetWaypointPos` |
+| `RailSource.MatchesThePlacementConstruction` | the resolver reproduces the placement's spans exactly, on the retail rail |
+| `RailSource.ClampsTheSegmentCountAndCollapsesRigidSpans` | 99 → 20, 0 → 2, rigid → 1 |
+| `RailSource.RefusesWhatHasNoRail` | no children / bad index / stale child index → no rail, no crash |
+| `RailSource.TaskIndexKeepsTheLastDeclaration` | map and scan resolve a duplicate id identically |
+| `RailOverlaySelection.FollowsTheLevelsOwnRailReferences` | ridden rails + selected rail only; deleted objects contribute nothing |
+
+`tests/test_rail_source_corpus.cpp` (1 test, Windows lane — it links
+`LevelObjects::Load`, which the host-native lane cannot link, so it appears in
+that lane's "not host-portable" list; it self-skips without `IGI_GAME_PATH`):
+
+| Test | Pins |
+| --- | --- |
+| `RetailLevel1RailIsTheRailTheTrainsRide` | the shipped `LEVEL1/objects.qsc` through `QSC::Load` → `LevelObjects::Load` → `BuildRailSource`: rail 1500 is a non-rigid `SplineObj` with **12** `SplineObjWaypoint` children in file order, the curve is 221 joints / 4 461 592.905424 units, `RailPolyline` is that joint list, `RailContainersToShow` offers exactly that one rail for the level, and a `Train` selection resolves to it |
+
+### 16.5 Verified / unverified
+
+* **Verified**: the resolver reproduces the placement rail on the shipped LEVEL1
+  data (`RailSource.MatchesThePlacementConstruction`,
+  `SegmentChainHasTheEngineRailLength`); the polyline is the sampled curve; the
+  selection policy is the level's own references; the editor and test binaries
+  build, the host lane passes, and the 14-level headless lane still passes with
+  the overlay compiled in.
+* **Unverified**: *that a line appears on screen*. The editor needs an OpenGL 4.1
+  compatibility context and this host offers 2.1, and Wine maps no visible
+  window, so no frame of the overlay has been observed. The claim stops at "the
+  draw call is reached with this geometry and this colour under these GL state
+  assumptions"; the first person to run the i686 build on a GL 4.1 machine settles
+  it.
+* **Known divergence carried over, not fixed**: the placement pass builds a rail
+  from a container's `childrenIndices` without skipping *deleted* children, and
+  the overlay matches that (deliberately — the preview must show the rail the cars
+  are on). Whether a deleted waypoint should still bend the rail is a placement
+  question, owned by the placement code, not by this overlay.
+* **Scope of the overlay**: it is called from `Renderer_Objects::Draw`, so it
+  follows the object pass — clearing "objects" in the View menu (or Ctrl+Shift+Z)
+  hides it too, and it is also drawn in the F8 gameplay preview, exactly as the
+  wire/stationary-gun/smoke gizmos of #42/#43 already are. The magic-object
+  overlay is *not* drawn in gameplay (`source/app.cpp:1586` forces that flag
+  off), so the rail is more permissive than that one; the `L` key turns it off in
+  either mode.
+
+## 17. Evidence for this follow-up
+
+| Gate | Result |
+| --- | --- |
+| `cmake --build build-mingw --target igi_tests igi-editor --parallel` | exit 0 (337 steps; both binaries relinked) |
+| `bash scripts/check-build-integrity.sh` | **PASS** — 368 objects consistent |
+| `IGI_HOST_NO_CACHE=1 bash scripts/run-host-tests.sh` | **OK: 1351 tests passed in 76 suites**, exit 0; `test_rail_polyline` 10/10, `test_train_rail` 13/13 (placement unchanged), `test_placement_splines` 22/22, `test_elevator_rules` 11/11 |
+| `IGI_E2E_STAGE=…/scratch/e2e-railpoly bash scripts/e2e-headless.sh` (full: smoke + tests + verify) | **E2E PASS**, exit 0: smoke loads all 14 levels, level 7 fails on exactly `s332_02_1` (known retail defect), 0 missing textures; `--run-tests` 278/278 assertions; 14/14 `--verify-level` passes |
+| Windows suite under Wine (`bin/igi_tests.exe`, `--gtest_filter=-*VerifyLevel*`) | **1792 tests ran, 1780 passed, 12 skipped, 0 failed**, exit 0, with the one pre-existing flaky MCP HTTP test (`McpHttpIntegrationTest.StopUnblocksAnIdleAuthenticatedOrUnauthenticatedClient`, documented at `PAUSE_MENU_STYLE.md:359-364`) excluded; including it, that test is the only failure. All 11 new tests pass |
+| On-screen appearance | **not verified** — see §16.5 |
