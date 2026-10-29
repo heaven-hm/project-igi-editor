@@ -441,6 +441,7 @@ add_executable(igi_tests
     tests/test_pickup_rules.cpp
     tests/test_sound_rules.cpp
     tests/test_terrain_snap_rules.cpp
+    tests/test_collision_drop_rules.cpp
 )
 
 # Explicit runtime so igi_tests always matches igi-editor (/MDd Debug, /MD Release).
