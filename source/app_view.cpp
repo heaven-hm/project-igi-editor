@@ -610,7 +610,21 @@ void App::SnapObjectsToTerrain() {
             float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
             obj.snap_z_offset = (double)(zOffset * 40.96f * obj.scale);
             obj.pos.z = (double)terrainZ + obj.snap_z_offset;
-            Logger::Get().Log(LogLevel::DEBUG, "[App] Snapped human " + obj.modelId + " to Z=" + std::to_string(obj.pos.z));
+            // INFO, with the ARITHMETIC, not just the result.  The drawn Z is
+            // terrainZ + (mainZOffset * 40.96 * scale), where mainZOffset is the
+            // mesh's own `-min_p.z` (model.cpp:311) -- the pivot->feet lift.  A
+            // soldier that still renders half-buried is therefore either a wrong
+            // terrainZ, a wrong mainZOffset, or a snap that never ran, and those
+            // three are indistinguishable from the final Z alone.  Printing the
+            // terms is what makes the next run decide instead of guess.
+            Logger::Get().Log(LogLevel::INFO, "[App] Snapped human " + obj.modelId +
+                " authoredZ=" + std::to_string(obj.original_pos.z) +
+                " terrainZ=" + std::to_string(terrainZ) +
+                " zDelta=" + std::to_string(zDelta) +
+                " mainZOffset=" + std::to_string(zOffset) +
+                " scale=" + std::to_string(obj.scale) +
+                " snapZOffset=" + std::to_string(obj.snap_z_offset) +
+                " -> Z=" + std::to_string(obj.pos.z));
             snapped++;
         } else {
             // Keep the authored QSC Z.  This is the engine's own answer to every case
@@ -639,8 +653,20 @@ void App::SnapObjectsToTerrain() {
                 Logger::Get().Log(LogLevel::INFO, "[App] Deep underground, preserving Z for " + obj.modelId + " (" + obj.name + ") Z=" + std::to_string(obj.pos.z));
                 skipped++;
             } else {
-                // Non-human prop, or a human on a platform above the surface band / below
-                // the terrain: the authored Z is authoritative.
+                // Non-human prop, or a human on a platform above the surface band:
+                // the authored Z is authoritative.  A HUMAN that lands here is the
+                // interesting case -- it is a soldier the rule deliberately did not
+                // move -- so log its arithmetic too, otherwise "kept" and "should
+                // have snapped" look identical in the log.
+                if (isHuman) {
+                    Logger::Get().Log(LogLevel::INFO, "[App] Kept human " + obj.modelId +
+                        " (above the surface band, standing on something): authoredZ=" +
+                        std::to_string(obj.original_pos.z) +
+                        " terrainZ=" + std::to_string(terrainZ) +
+                        " zDelta=" + std::to_string(zDelta) +
+                        " mainZOffset=" + std::to_string(renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding)) +
+                        " -> Z=" + std::to_string(obj.pos.z));
+                }
                 skipped++;
             }
         }
