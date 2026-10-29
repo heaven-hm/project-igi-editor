@@ -98,6 +98,15 @@ float ExponentialFogEFoldingDistance(float terrain_fog_scale) {
     return ExponentialFogDistanceForFraction(terrain_fog_scale, 0.63212055882855767840f);
 }
 
+float LinearFogFarMetresForAuthoredDensity(float authored_density, float fallback_metres) {
+    // See the header: kEFoldingMetresPerAuthoredDensity is the engine's e-folding
+    // distance in metres per unit of authored density. The expression is the one
+    // Level::LoadFogInfo used inline before this module had a caller, so it is
+    // bit-for-bit the same result for every input.
+    if (!(authored_density > 0.0f)) return fallback_metres;
+    return (1.0f / authored_density) * kEFoldingMetresPerAuthoredDensity;
+}
+
 float FogComputeAmount(float haze_amount, float depth_units, float scale, float fov) {
     // src/sector/light.c:55-72.
     const float f = fov * kFovScale + kFovBase;

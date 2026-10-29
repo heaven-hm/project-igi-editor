@@ -1,7 +1,10 @@
 # Per-mission authored fog (#66)
 
 Status: implemented in `source/runtime/mission_fog.{h,cpp}`, tested in
-`tests/test_mission_fog.cpp`. Every constant, offset and line number below is
+`tests/test_mission_fog.cpp` and `tests/test_mission_fog_wiring.cpp`. Wired into
+the editor: `Level::LoadFogInfo` (`source/level/level.cpp`) resolves the authored
+keyframe through the QSC bridge in `source/level/fog_qsc.h`, so there is ONE fog
+path rather than two (see §15). Every constant, offset and line number below is
 cited to IGI-RE (`/Users/haseeb-mir/Documents/Code/IGI-RE`), which is the only
 evidence source used. Nothing here is taken from open-igi or from web research.
 
@@ -195,15 +198,22 @@ The Lead's arithmetic was: with LEVEL1's real numbers `scale = 1.89 * 0.0005 =
 So the honest answer has three parts:
 
 1. **The `/65536` variant cannot reach a visible range at any authored density
-   in the shipped data, and it is also the one whose input is undefined.**
-   `TerrainMesh_DrawTriangle` declares `float k = 0, fog[3], out;`
-   (`terrainmesh.c:876`) and calls `Fog_Compute(&out, ...)` at `:960` **without
-   ever assigning `out`** — verified by scanning every line of that function
-   (`terrainmesh.c:866-1000`): `out` occurs exactly twice, the declaration and the
-   call. The `/65536` in `Fog_Compute` exists to undo a `×65536` that the intended
-   caller was supposed to supply. The reconstruction therefore cannot tell us what
-   `*out` is, and this module takes it as an explicit parameter instead of reading
-   uninitialised stack. This is a genuine gap in IGI-RE, not a tuning problem.
+   in the shipped data, and its haze term is zero in retail.** The first half is
+   arithmetic (measured above). The second half is now verified rather than
+   assumed, and it CORRECTS an earlier claim in this document: `Fog_Compute`'s
+   `*out` is not undefined. `Fog_Compute` calls `Haze_GetFog(color, out, ...)` as
+   its second statement (`light.c:62`), and `Haze_GetFog` writes `*density = 0`
+   before accumulating (`haze.c:188`), so `*out` is the accumulated HazeLayer
+   density — 0 whenever no layer is visible. `TerrainMesh_DrawTriangle` declaring
+   `float k = 0, fog[3], out;` (`terrainmesh.c:876`) and calling
+   `Fog_Compute(&out, ...)` at `:960` is therefore fine: the callee assigns it,
+   and `:961` reads it. No shipped level places a HazeLayer at all (no
+   `OBJECTS.QVM` of the fourteen contains the string "Hazinglayers"), so for
+   retail data the haze term is exactly 0 and this variant is
+   `(Float_Log2(depth) - 130) * scale / 65536`, which the table above shows is
+   below one 8-bit step at every shipped density. The `/65536` still implies the
+   intended caller supplied a `×65536`; that inference is unchanged, but it is no
+   longer needed to explain a missing value.
 
 2. **The lightmap-table variant is not "broken", it is an 8-bit quantity.** For
    LEVEL1's 0.000945 the table is ~0.1 out of 255, i.e. zero. Reaching a
@@ -405,54 +415,30 @@ and after restoring the file byte-identically (`diff` empty →
 powers of two and **passed under `std::log2`** — the discriminating values in §3.1
 were added because of that.
 
-## 10. Renderer wiring — diff supplied, NOT applied
+## 10. Renderer wiring — applied, and the parse deduplicated
 
-The task says not to wire this into the renderer, because the renderer cannot be
-verified behaviourally on this host. The change I would make, for the Lead:
+`renderer.cpp` needs no change at all: `Renderer::SetFogIntensity` /
+`ApplyFogIntensity` (`renderer.cpp:184-208`) and the `fog_intensity_` slider keep
+multiplying whatever base distance the level supplies, by
+`2 * 0.5^(intensity/100)`.
 
-```diff
---- a/source/renderer/renderer.cpp
-+++ b/source/renderer/renderer.cpp
-@@ -176,8 +176,13 @@ void Renderer::SetupClearColor(const glm::vec4 &color) {
--void Renderer::SetupFog(const glm::vec4 &color, float fog_far) {
--  fog_base_color_ = color;
--  fog_base_far_ = fog_far;
-+void Renderer::SetupFog(const glm::vec4 &color, float fog_far) {
-+  // Unchanged: the manual Fog Intensity slider keeps overriding the base.
-+  fog_base_color_ = color;
-+  fog_base_far_ = fog_far;
-   ApplyFogIntensity();
- }
-```
+The change belongs at the call site, and it is now there in two steps:
 
-i.e. **no change is required in `renderer.cpp` at all.** The whole change belongs
-at the call site in `source/level/level.cpp:509-510`, replacing the invented
-constant with the engine's derived distance, and feeding the authored colour that
-is already being read correctly:
+1. `19d226a4` replaced the invented `120.0f` at `source/level/level.cpp:528` with
+   the engine's derived `488.28125f` — the e-folding distance
+   `1 / (gWorldScale * density * 0.0005)` game units, `= 488.28125 / density`
+   metres at `kFixed = 4096` (`terraind3d.c:164`, `direct3d.c:532`,
+   `globallight.c:115,125`).
+2. The inline parse that constant sat in is gone (§15): `LoadFogInfo` now calls
+   `igi::ResolveAuthoredFogFromQsc` (`source/level/fog_qsc.h`) →
+   `igi::ResolveMissionFog` → `igi::LinearFogFarMetresForAuthoredDensity`, so the
+   keyframe selection, the colour and the distance all come from this module.
 
-```diff
---- a/source/level/level.cpp
-+++ b/source/level/level.cpp
-@@
--			// Factor 120: density=0.12 (level1 haze) → fog_far=1000m; density=0.5 → 240m.
--			bestFogFarMeters = (curFogDensity > 0.0f) ? (1.0f / curFogDensity) * 120.0f : fog_far_meters;
-+			// The engine's fog is exponential with coefficient
-+			// gWorldScale * gTerrainFogScale (terraind3d.c:164), so its
-+			// e-folding distance is 1 / (0.001 * density * 0.0005) game units
-+			// = 488.28125 / density metres at kFixed = 4096. The previous
-+			// 120.0f had the right 1/density shape but an invented constant,
-+			// making every level's fog 4.069x too thick.
-+			bestFogFarMeters = (curFogDensity > 0.0f)
-+				? (1.0f / curFogDensity) * 488.28125f : fog_far_meters;
-```
-
-`Renderer::SetFogIntensity` / `ApplyFogIntensity` (`renderer.cpp:184-208`) and the
-`fog_intensity_` slider are untouched, so the manual override keeps working
-exactly as it does today: it multiplies the derived base distance by
-`2 * 0.5^(intensity/100)`. The derived base is what changes.
-
-This is a behaviour change to the editor's fog thickness on every level, so it is
-the Lead's call, and it cannot be verified visually on this host.
+`tests/test_mission_fog_wiring.cpp` reproduces the pre-deduplication code verbatim
+and requires bit-identical values on all fourteen retail levels, so step 2 changed
+no number. The `120.0f` → `488.28125f` change in step 1 was a real behaviour change
+to the editor's fog thickness (4.069× thinner on every level); it is the part that
+cannot be verified visually on this host.
 
 ## 11. Verified vs unverified
 
@@ -472,20 +458,27 @@ the Lead's call, and it cannot be verified visually on this host.
 
 * No rendered frame. Nothing here proves the fog *looks* like the retail game;
   only that the arithmetic matches the reconstructed engine.
-* The `light.c` `Fog_Compute` `*out` term is undefined in IGI-RE (§4.1), so the
-  haze contribution to the terrain vertex fog cannot be verified at all.
+* The `light.c` `Fog_Compute` haze term is 0 for every shipped level (no
+  `Hazinglayers` task anywhere, §4.1), so its contribution to the terrain vertex
+  fog is unexercised by real data — not undefined, as an earlier revision of this
+  document claimed.
 * `HazeGetFog` is reconstructed and unit-tested against hand-computed values, but
   no shipped level places a `HazeLayer`, so it is unexercised by real data.
 * The `gTerrainFogScale` → D3D `FOGDENSITY` handoff (`terraind3d.c:302`) is read
   but not executed; a live Direct3D trace would be needed to confirm the shader
   consumes it as the exponential coefficient.
-* The proposed `level.cpp` change in §10 is a diff only; it was not applied, built
-  or rendered.
+* The deduplicated `LoadFogInfo` cannot be executed on this host at all: the GUI
+  needs OpenGL 4.1 (this Mac offers 2.1) and no headless mode loads a level
+  through `Level::Load`. The Windows-lane test in §15 drives the same code path
+  (`QVM_Decompile` → `QSC::Load` → the bridge → the resolver) but not the renderer
+  call itself, and `--smoke-level` deliberately skips `LoadFogInfo`.
 
 ## 12. Known gaps in IGI-RE found while doing this
 
-* **`Fog_Compute`'s `*out` is uninitialised at its only call site**
-  (`terrainmesh.c:876` declaration, `:960` call, no assignment between). The
+* **`Fog_Compute`'s `*out` is written by its callee, not left uninitialised**
+  (corrected 2026-10-29). `haze.c:188` sets `*density = 0` before accumulating, so
+  `TerrainMesh_DrawTriangle`'s `out` is defined; the earlier "uninitialised"
+  reading of `terrainmesh.c:876,960` was wrong. What remains true is that the
   `/65536` implies the intended caller supplied `×65536`.
 * **`gFogDensity` (`AT 0xB46D04`, `BSS(B46D04)` at `src/dxinit/d3drender.c:366`)
   is read in three places but never assigned anywhere in the decompiled source**:
@@ -530,3 +523,45 @@ task, with `flatsky.c:126-128` and the LEVEL1 values in §1 as its evidence.
 | `tests/test_mission_fog.cpp` | new — 16 tests, incl. the retail corpus |
 | `docs/igi-re-parity/MISSION_FOG.md` | new — this document |
 | `CMakeLists.txt` | `tests/test_mission_fog.cpp` added after `tests/test_magic_object_expand.cpp`; `source/runtime/mission_fog.cpp` added to the `igi_tests` source pool after `source/runtime/level_weather.cpp` |
+
+## 15. Deduplication: ONE fog path (2026-10-29)
+
+`Level::LoadFogInfo` (`source/level/level.cpp`) used to carry its own copy of the
+"which keyframe, and what are its fog colour and density" parse while
+`source/runtime/mission_fog.cpp` implemented the same rule — two implementations
+of one engine rule, which is how the invented `120.0f` survived in one of them.
+The inline copy is gone:
+
+* `source/level/fog_qsc.h` (new) is the only bridge from a parsed QSC to this
+  module: `FogTokenFromQscArg` (one token per QSC argument, in order, so declared
+  parameter *k* is token *k+3*), `FogTaskObjectFromFunc`, `FogTaskObjectsFromQsc`
+  and `ResolveAuthoredFogFromQsc`. Floats are written with `%.9g` of the float
+  value — `FLT_DECIMAL_DIG` — because the QSC parser stores every number as a
+  double (`level_common.cpp` `ParseArgs`) and this module re-parses with `strtof`;
+  `ArgTokenFromArg`'s `%.7g` is for re-serialising source text and can land an ulp
+  away, which would move the fog distance with it.
+* `igi::LinearFogFarMetresForAuthoredDensity(density, fallback)` (new) holds the
+  distance rule. `kEFoldingMetresPerAuthoredDensity = 488.28125f` is kept as an
+  exact literal with a `static_assert` because the float form
+  `1.0f / (0.001f * 0.0005f * 4096.0f)` evaluates to **488.2812f** — one ulp low —
+  and would move every level's fog distance in the last place.
+* `LoadFogInfo` now reads: resolve → take set 0's colour and density → distance →
+  `SetupFog(color, distance * WORLD_UNITS_PER_METER)`, and logs the result
+  (`"[Level] authored GlobalLightKeyframe fog: ..."`).
+
+`tests/test_mission_fog_wiring.cpp` (new) is the acceptance test: it reproduces
+the pre-deduplication loop verbatim and requires **bit-identical** colour and
+distance — not `EXPECT_FLOAT_EQ`'s four-ulp tolerance — on all fourteen retail
+levels, plus LEVEL1/LEVEL4's shipped `objects.qsc` text. 8 tests; the corpus table
+it prints shows legacy and wired distances equal to the last digit (LEVEL1
+258.349884 m, LEVEL14 51.398026 m, …). `tests/support/mission_fog_corpus.h` (new)
+holds the shared QVM bytecode walk so both fog suites read the corpus one way.
+
+The end-to-end half (`objects.qvm` → `QVM_Decompile` → `objects.qsc` →
+`QSC::Load` → the bridge → the resolver, all fourteen levels) is compiled only on
+Windows: `QSC::Load` needs `File_LoadText`/`File_FreeBuf` from
+`source/common.cpp`, which is a Windows-only translation unit
+(`#error "unsupported platform"`), so a host-native binary cannot link it. The
+host half drives the same rules through the QVM walk, and the Windows half
+cross-checks the bridge's tokens against that walk token for token, so the two
+halves cannot drift apart silently.

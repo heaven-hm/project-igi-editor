@@ -412,6 +412,10 @@ add_executable(igi_tests
     tests/test_spline_waypoint_params.cpp
     tests/test_level_object_parse_paths.cpp
     tests/test_train_rail.cpp
+    tests/test_rail_polyline.cpp
+    # Corpus-backed (Windows lane only): the shipped LEVEL1 QSC through the real
+    # loader into igi::BuildRailSource. Self-skips without IGI_GAME_PATH.
+    tests/test_rail_source_corpus.cpp
     tests/test_igi_transform.cpp
     tests/test_props_wire_interactables.cpp
     tests/test_scamera_params.cpp
@@ -428,6 +432,7 @@ add_executable(igi_tests
     tests/test_loading_bar_style.cpp
     tests/test_magic_object_expand.cpp
     tests/test_mission_fog.cpp
+    tests/test_mission_fog_wiring.cpp
     tests/test_elevator_rules.cpp
     tests/test_spline_rules.cpp
     tests/test_anim_rules.cpp
@@ -569,6 +574,13 @@ target_sources(igi_tests PRIVATE
     source/runtime/level_weather.cpp
     source/runtime/mission_fog.cpp
     source/runtime/elevator_rules.cpp
+    # The shared SplineObj -> rail resolver (`igi::BuildRailSource`). Both
+    # App::EvaluateTrainTrackPositions and the viewport's rail overlay
+    # (renderer/renderer_objects_visual.cpp) call it, so the drawn polyline and
+    # the curve the cars are placed on are one construction; the host lane needs
+    # it for tests/test_rail_polyline.cpp. igi-editor picks it up through the
+    # source/runtime/*.* glob.
+    source/runtime/rail_source.cpp
     source/runtime/spline_rules.cpp
     # The engine's own span render path (`igi::spline`). The renderer's
     # BuildEngineSpanMesh adapter calls it, so the host lane needs it to link

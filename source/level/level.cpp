@@ -16,6 +16,7 @@
 #include "qsc_lexer.h"
 #include "qsc_parser.h"
 #include "qvm_compiler.h"
+#include "fog_qsc.h"
 
 
 
@@ -450,96 +451,71 @@ void Level::LoadStartPosInfo(const QSC* qsc_objects, glm::vec3& start_pos, float
 }
 
 void Level::LoadFogInfo(const QSC* qsc_objects, IRenderResLoader* render_res_loader) {
+	// ONE fog path. The authored GlobalLightKeyframe is parsed by
+	// igi::ResolveMissionFog (source/runtime/mission_fog.cpp) through the QSC
+	// bridge in fog_qsc.h; this function no longer carries its own copy of the
+	// parse. Both halves of the rule are IGI-RE's:
+	//
+	//   * which keyframe: the level's default state is the one with the smallest
+	//     Time. A level can list more than one keyframe (every retail level
+	//     authors a daytime one and a Time=100 night one) and NOT in
+	//     chronological order, so "the first one found" is not a safe rule.
+	//     GlobalLightKeyframe declares 51 parameters ending in "Time" (Real32)
+	//     (src/animcam/globallight.c:264-282).
+	//   * what the values are: "Fog color terrain" is declared parameters 4..6
+	//     and "Fog density terrain" is parameter 7 (src/animcam/globallight.c:
+	//     266-270), i.e. QSC args 7..9 and 10 once the three leading Task_New
+	//     arguments (id, type, name) are counted.
+	//
+	// These are the pre-refactor defaults, kept for a level that authors no
+	// usable keyframe.
 	glm::vec4 fog_color(0.15f, 0.15f, 0.15f, 1.0f);
 	float fog_far_meters = 30000.0f;
 
-	const QSC::func_s* qsc_funcs[1024];
-	int num_func = qsc_objects->FindFuncByStr("GlobalLightKeyframe", qsc_funcs);
+	const igi::MissionFog authored_fog = igi::ResolveAuthoredFogFromQsc(*qsc_objects);
 
-	// GlobalLightKeyframe declares 51 parameters ending in "Time" (Real32) —
-	// same animated-keyframe shape as Dirlight/DirlightKeyframe. A level can
-	// list more than one (observed: level3 has Time=12 and Time=100 entries)
-	// and NOT in chronological order, so blindly reading qsc_funcs[0] picked
-	// whichever the decompiler happened to emit first rather than the
-	// default/lowest-Time state. Mirror app_level.cpp's Dirlight selection:
-	// among all keyframes found, pick the one with the smallest Time.
-	bool haveBest = false;
-	float bestTime = 0.0f;
-	float bestFogColor[3] = { fog_color.r, fog_color.g, fog_color.b };
-	float bestFogFarMeters = fog_far_meters;
+	if (authored_fog.authored) {
+		fog_color = glm::vec4(authored_fog.sets[0].fog[0],
+				      authored_fog.sets[0].fog[1],
+				      authored_fog.sets[0].fog[2],
+				      1.0f);
 
-	for (int fi = 0; fi < num_func; ++fi) {
-		const QSC::func_s* f = qsc_funcs[fi];
-
-		float curFogColor[3] = { fog_color.r, fog_color.g, fog_color.b };
-		float curFogDensity = 0.0f;
-		float curTime = 0.0f;
-		bool haveDensity = false;
-
-		int arg_idx = 0;
-		const QSC::arg_s* a = f->args_;
-		while (a) {
-			if (a->type_ == QSC::arg_s::type_t::DBL) {
-				// Task_New args are [0]=task id, [1]=func name, [2]=instance name,
-				// THEN the declared GlobalLightKeyframe parameters begin (same
-				// +3 leading-arg offset confirmed for FlatSky against objects.qsc):
-				// [3]=PushButton, [4-6]=Ambient terrain RGB, [7-9]=Fog terrain RGB,
-				// [10]=Fog density terrain, [11]=Link setting terrain, ...,
-				// last arg = Time. Colors are already-normalized 0-1 floats.
-				switch (arg_idx) {
-				case 7: curFogColor[0] = (float)a->dbl_; break;
-				case 8: curFogColor[1] = (float)a->dbl_; break;
-				case 9: curFogColor[2] = (float)a->dbl_; break;
-				case 10: curFogDensity = (float)a->dbl_; haveDensity = true; break;
-				}
-				curTime = (float)a->dbl_; // last DBL seen by loop end == Time
-			}
-			a = a->next_;
-			arg_idx++;
-		}
-
-		if (haveDensity && (!haveBest || curTime < bestTime)) {
-			haveBest = true;
-			bestTime = curTime;
-			bestFogColor[0] = curFogColor[0];
-			bestFogColor[1] = curFogColor[1];
-			bestFogColor[2] = curFogColor[2];
-			// Fog density of 0 is a valid "no fog at this keyframe" state
-			// (observed: level3's night keyframe) — keep the far/no-fog default.
-			//
-			// The constant is the engine's e-folding distance, derived rather than chosen.
-			// IGI-RE src/glowmesh/terraind3d.c:164 attenuates by
-			//     1 / exp(vz * gWorldScale * gTerrainFogScale)
-			// with gWorldScale = 0.001f (src/d3d/direct3d.c:532) and gTerrainFogScale
-			// = authored_density * 0.0005 (src/animcam/globallight.c:125, the
-			// 0x1.0624dep-11 constant at :115). The exponent is therefore
-			// vz * density * 5e-7, which reaches 1 -- the e-folding point -- at
-			// vz = 2e6 / density world units. At the editor's 4096 units per metre that
-			// is 2e6 / 4096 = 488.28125 / density metres.
-			//
-			// This replaces an invented 120.0f, which made the fog 4.069x too thick on
-			// every level (LEVEL1: 63.5 m instead of 258.35 m). The old comment's example
-			// was also mis-attributed: density 0.12 is LEVEL5's, not level1's, which
-			// authors 1.89.
-			//
-			// HONEST LIMIT: the engine's fog is exponential and this renderer's is linear,
-			// so this is the honest bridge (the e-folding distance), not an equivalence.
-			// Matching retail exactly would need exponential fog in the shader.
-			bestFogFarMeters = (curFogDensity > 0.0f) ? (1.0f / curFogDensity) * 488.28125f : fog_far_meters;
-		}
-	}
-
-	if (haveBest) {
-		fog_color.r = bestFogColor[0];
-		fog_color.g = bestFogColor[1];
-		fog_color.b = bestFogColor[2];
-		fog_far_meters = bestFogFarMeters;
+		// The engine's fog is exponential: the terrain vertex fog attenuates by
+		//      1 / exp(vz * gWorldScale * gTerrainFogScale)
+		// (src/glowmesh/terraind3d.c:164) with gWorldScale = 0.001f
+		// (src/d3d/direct3d.c:532) and gTerrainFogScale = authored_density *
+		// 0.0005 (src/animcam/globallight.c:115,125 -- the 0x1.0624dep-11
+		// constant), clamped to 0..16384 by TerrainMesh_SetFog
+		// (src/glowmesh/terrainmesh.c:302-320). The exponent reaches 1 -- the
+		// e-folding point -- at vz = 2e6 / density world units.
+		//
+		// This renderer's fog is LINEAR, so it gets that e-folding distance in
+		// metres: 2e6 / 4096 = 488.28125 / density. It is the honest bridge, not
+		// an equivalence -- matching retail exactly would need exponential fog in
+		// the shader. This replaced an invented 120.0f, which had the right
+		// 1/density shape but made the fog 4.069x too thick on every level
+		// (LEVEL1: 63.5 m instead of 258.35 m).
+		//
+		// A density of 0 is a valid "no fog at this keyframe" state (the night
+		// keyframe of every retail level), and keeps the far/no-fog default.
+		fog_far_meters = igi::LinearFogFarMetresForAuthoredDensity(
+			authored_fog.sets[0].density, fog_far_meters);
 	}
 
 	// fog_far_meters is derived from the QSC fog-density value in meters; the
 	// renderer's fog distance check operates in world units (v_fragPos/u_cameraPos
 	// are WORLD_UNITS_PER_METER per meter), so convert before handing it off.
 	render_res_loader->SetupFog(fog_color, fog_far_meters * WORLD_UNITS_PER_METER);
+
+	// The resolved fog is otherwise invisible (nothing prints it, and the GUI
+	// cannot run on this host), which is how an invented 120.0f constant survived
+	// here for so long. Report it.
+	char fog_log[256];
+	Str_SPrintf(fog_log, sizeof(fog_log),
+		    "[Level] authored GlobalLightKeyframe fog: %s, far %.2f m (density %.6f)\n",
+		    authored_fog.authored ? "present" : "absent", fog_far_meters,
+		    authored_fog.authored ? authored_fog.sets[0].density : 0.0f);
+	Logger::Get().Log(LogLevel::INFO, fog_log);
 }
 
 void Level::LoadSkydomeInfo(const QSC* qsc_objects, IRenderResLoader* render_res_loader) {

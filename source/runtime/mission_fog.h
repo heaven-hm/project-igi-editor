@@ -142,16 +142,48 @@ float ExponentialFogDistanceForFraction(float terrain_fog_scale, float fraction)
 // by a factor of 4.069 -- see docs/igi-re-parity/MISSION_FOG.md §5.
 float ExponentialFogEFoldingDistance(float terrain_fog_scale);
 
+// The editor's world scale: common.h:40 WORLD_UNITS_PER_METER = 4096.0f, which
+// is the engine's own kFixed (src/math/mathvars.h:7). Kept here so the fog
+// distance below can be derived without pulling an editor header into this
+// host-portable module.
+constexpr float kEditorWorldUnitsPerMetre = 4096.0f;
+
+// The engine's e-folding distance per unit of AUTHORED density, in metres:
+//   1 / (kWorldScale * kGlobalLightFogScale) = 2 000 000 world units, and
+//   2 000 000 / 4096 units-per-metre          = 488.28125 m.
+//
+// The literal is deliberate and the static_assert below is the point: the
+// "obvious" constexpr form 1.0f / (kWorldScale * kGlobalLightFogScale *
+// kEditorWorldUnitsPerMetre) evaluates to 488.2812f -- one ulp LOW, because
+// 0.001f * 0.0005f is not exactly 5e-7 -- and that ulp would move every level's
+// fog distance in the last place. This value is a bridge to a linear renderer,
+// not an equivalence: it is the engine's exponential sampled at its e-folding
+// point. Matching retail exactly would need exponential fog in the shader.
+constexpr float kEFoldingMetresPerAuthoredDensity = 488.28125f;
+static_assert(kEFoldingMetresPerAuthoredDensity * kEditorWorldUnitsPerMetre == 2000000.0f,
+              "the e-folding distance must be exactly 2 000 000 world units / 4096 per metre");
+
+// The fog distance the editor's linear renderer is handed, in METRES, for an
+// authored "Fog density terrain" value: the engine's e-folding distance,
+// 488.28125 / density. Returns `fallback_metres` for a density that is 0
+// (the engine's own "no fog at this keyframe" state -- every retail level
+// authors a Time=100 night keyframe with density 0), negative, or NaN.
+//
+// The arithmetic is deliberately `(1.0f / density) * kEFolding...`: that is the
+// expression Level::LoadFogInfo used before this module had a caller, so moving
+// it here changes no value for any input.
+float LinearFogFarMetresForAuthoredDensity(float authored_density, float fallback_metres);
+
 // Fog_Compute HOOK 0x4DA790 (src/sector/light.c:55-72).
-//   haze_amount is the Haze_GetFog result, i.e. the value of *out on entry.
+//   haze_amount is the accumulated HazeLayer density, i.e. the value Haze_GetFog
+//   leaves in *out -- Fog_Compute calls it as its second statement, so the term
+//   IS defined in IGI-RE (an earlier note here claimed it was not; it is written
+//   by the callee, and with no visible HazeLayer -- which is every shipped level,
+//   no OBJECTS.QVM references "Hazinglayers" -- it is 0). It is an explicit
+//   argument because it is an input to the arithmetic, not because it is unknown.
 //   fov is gTransContext.fov; the engine scales depth by fov*0.83 + 0.17 when
 //   that factor is below 1.
 // Returns the value the engine writes back to *out, clamped to 0..1.
-//
-// DIVERGENCE, named: in the reconstructed TerrainMesh_DrawTriangle the caller's
-// `out` is declared and never assigned before the call (terrainmesh.c:880,960),
-// so the `*out` term is undefined in the decompilation. This function therefore
-// takes it as an explicit argument instead of reading uninitialised memory.
 float FogComputeAmount(float haze_amount, float depth_units, float scale, float fov);
 
 // terrainmesh.c:282 -- the lightmap fog table entry, in 0..255.
