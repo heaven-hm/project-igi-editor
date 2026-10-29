@@ -1,5 +1,6 @@
 #include "app_internal.h"
 #include "renderer/igi_transform.h"
+#include "renderer/posed_draw_transform.h"
 #include "runtime/door_params.h"
 #include "runtime/camera_preview_policy.h"
 #include "runtime/config_qvm.h"
@@ -1807,15 +1808,29 @@ void App::Frame(float delta_seconds) {
             if (worldTransforms.empty()) continue;
 
             const auto& obj = objs[idx];
-            // OpenIGI feeds the evaluated skeleton world pose directly to the
-            // MEF skinner. A second bind-pose alignment remaps already-valid
-            // bones and can move held geometry onto an unrelated body bone.
-            glm::mat4 objMat(1.0f);
-            objMat = glm::translate(objMat, glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z));
-            objMat = glm::rotate(objMat, (float)obj.rot.z, glm::vec3(0, 0, 1));
-            objMat = glm::rotate(objMat, (float)obj.rot.x, glm::vec3(1, 0, 0));
-            objMat = glm::rotate(objMat, (float)obj.rot.y, glm::vec3(0, 1, 0));
-            objMat = glm::scale(objMat, glm::vec3(40.96f * obj.scale));
+            // ONE matrix for the posed body, the bone overlay and the weapon, and
+            // it is the STATIC path's own composition (`IgiEulerRotationMatrix` =
+            // Rz*Ry*Rx, `Matrix_SetEuler` HOOK 0x4B38E0, src/math/matrix.c) PLUS
+            // the model's rig origin.
+            //
+            // WHY THE ORIGIN. The engine's skinned vertices are in the SKELETON's
+            // frame -- `BoneMesh_Skin` 0x49B700 adds `Bone::pos`
+            // (src/dxinit/d3drender.c:259-264) and the bone chain starts at the
+            // skeleton's root offset, which `BoneObj_Load` 0x4D67A0 copies out of
+            // the BOBJ's TLST (src/boneobj/boneobj.c:1570-1576): (0,0,0) for every
+            // shipped human rig. Every other consumer of `obj.pos` -- the static
+            // bind-pose bake (`SkinSkinnedVertices`, source/renderer/
+            // mef_native.cpp:1122-1129), the terrain snap, the picking ray, the
+            // level's authored placements -- is calibrated to a rig whose root
+            // pivot is (0,0,3990.4) instead, i.e. 0.974 m above the feet. Drawing
+            // the pose without that origin put every posed AI 0.974 m below the
+            // static mesh, i.e. under the terrain. `PosedObjectMatrix` is the one
+            // place that decision lives; tests/test_skinned_static_parity.cpp
+            // asserts the two paths agree through it.
+            const ParsedGeometry* skinGeo =
+                renderer_.GetOrLoadSkinGeometry(obj.modelId, obj.isBuilding);
+            const glm::mat4 objMat = igi::PosedObjectMatrix(
+                obj.pos, obj.rot, obj.scale, skinGeo != nullptr ? &skinGeo->bones : nullptr);
             // The mesh is skinned by the engine's own BoneMesh_Skin 0x49B700
             // over these same bone records (raw `Bone::matrix` + `Bone::pos`),
             // which is what `Direct3DRender_DrawBoneMesh` 0x49F700 does.
@@ -1835,8 +1850,7 @@ void App::Frame(float delta_seconds) {
             }
 
             if (!obj.weaponModelId.empty()) {
-                const ParsedGeometry* geo = renderer_.GetOrLoadSkinGeometry(obj.modelId, obj.isBuilding);
-                int handIdx = findHandBoneIndex(obj.modelId, geo);
+                int handIdx = findHandBoneIndex(obj.modelId, skinGeo);
                 if (handIdx >= 0 && (size_t)handIdx < worldTransforms.size()) {
                     glm::mat4 handWorldMat = objMat * worldTransforms[handIdx] * kWeaponHandCorrection;
                     renderer_.DrawAttachedMesh(obj.weaponModelId, false, handWorldMat);
@@ -2714,13 +2728,44 @@ void App::SetupRuntimeMissionState() {
 		return false;
 	};
 
+	// The CutScene camera projection needs the authored task tree, and the walk
+	// rule lives in `igi::CollectAuthoredCameraKeyTokens`
+	// (source/runtime/cutscene_camera.h) so it can be tested without a level
+	// archive. This is the mechanical part: three fields per object, and it is
+	// only built when the level authors a CutScene at all (11 of the 14 retail
+	// levels do not).
+	//
+	// `parentIndex` is the link the level loader builds as it parses
+	// (`LoadRecursive`, source/level/level_objects.cpp:670-676, passes
+	// `currentObjIdx` down as the nested task's parent), so it is exactly the
+	// child chain `CutScene_CollectKeys` 0x4F4880 walks in the engine
+	// (src/cutscene/cutscene.c:163-180).
+	std::vector<igi::AuthoredCameraKeyObject> camera_key_objects;
+	const bool has_cut_scene = std::any_of(
+		authored_objects.begin(), authored_objects.end(),
+		[](const LevelObject& object) { return object.type == "CutScene"; });
+	if (has_cut_scene) {
+		camera_key_objects.reserve(authored_objects.size());
+		for (const LevelObject& authored_object : authored_objects) {
+			igi::AuthoredCameraKeyObject projected;
+			projected.parent_index = authored_object.parentIndex;
+			projected.type = authored_object.type;
+			projected.arg_tokens = authored_object.argTokens;
+			projected.deleted = authored_object.deleted;
+			camera_key_objects.push_back(std::move(projected));
+		}
+	}
+
 	std::vector<igi::MissionStateTaskSource> task_sources;
 	for (int object_index = 0;
 		 object_index < static_cast<int>(authored_objects.size());
 		 ++object_index) {
 		const LevelObject& authored_object = authored_objects[object_index];
-		// CutScene tasks are deliberately never collected: gameplay is the
-		// engine/interaction slice only, with no intro/end cinematics.
+		// CutScene tasks ARE collected: the camera programme below the task is
+		// the retail intro/end cinematic, and the runtime plays it with the
+		// engine's own timeline rule (GitHub issue #80). The run/reset
+		// expression gating stays with the runtime's expression state; this
+		// function only carries the authored data across.
 		if (authored_object.deleted ||
 			(authored_object.type != "AreaActivate" &&
 				authored_object.type != "EditVariable" &&
@@ -2729,7 +2774,8 @@ void App::SetupRuntimeMissionState() {
 				authored_object.type != "ConditionalSound" &&
 				authored_object.type != "ConditionalContainer" &&
 				authored_object.type != "GuardGenerator" &&
-				authored_object.type != "ExplodeObject")) {
+				authored_object.type != "ExplodeObject" &&
+				authored_object.type != "CutScene")) {
 			continue;
 		}
 
@@ -2738,6 +2784,10 @@ void App::SetupRuntimeMissionState() {
 		task_source.task_id = authored_object.taskId;
 		task_source.object_index = object_index;
 		task_source.argument_tokens = authored_object.argTokens;
+		if (authored_object.type == "CutScene") {
+			task_source.edit_camera_arg_tokens =
+				igi::CollectAuthoredCameraKeyTokens(camera_key_objects, object_index);
+		}
 		if (authored_object.type == "ConditionalContainer") {
 			task_source.descendant_object_indices =
 				collect_descendants(object_index);

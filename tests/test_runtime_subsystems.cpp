@@ -3368,6 +3368,38 @@ TEST(RuntimeWorldTest, AuthoredCutSceneHonorsStartTimeAndTimeScale) {
     EXPECT_EQ(world.GetLevelFlow().GetStatus(), MissionStatus::Success);
 }
 
+namespace {
+
+// Authored CutScene / EditCamera calls for the two camera tests below, in the
+// `LevelObject::argTokens` layout the loaders and `igi::ParseCutSceneScreen` /
+// `igi::ParseCutSceneKey` expect ([0] = task id, [1] = type, [2] = name,
+// [3] = parameter 0). The 21 and 23 token counts are the retail tables' own
+// argument counts (cutscene.c:227-263, editcamera.c:88-107).
+std::vector<std::string> CutSceneCameraTestTokens(float time_scale, float viewport_height_factor) {
+    return {
+        "1204", "CutScene", "",
+        "0", "0", "0", "0", "0", "0",
+        "", "", "", "0", "FALSE", std::to_string(time_scale),
+        std::to_string(viewport_height_factor), "0", "0", "0", "", "",
+    };
+}
+
+std::vector<std::string> EditCameraCameraTestTokens(double x, double y, double z, double alpha,
+                                                    double beta, double gamma, double fov,
+                                                    double duration, bool smooth) {
+    return {
+        "-1", "EditCamera", "Shot",
+        std::to_string(x), std::to_string(y), std::to_string(z),
+        std::to_string(alpha), std::to_string(beta), std::to_string(gamma),
+        std::to_string(fov), std::to_string(duration),
+        "-1", "TRUE", "-1", "TRUE",
+        smooth ? "TRUE" : "FALSE",
+        "-1", "CAMERAFILTER_TYPE_NONE", "0.5", "0", "0", "0", "0",
+    };
+}
+
+}  // namespace
+
 TEST(RuntimeWorldTest, AuthoredCutScenePublishesCameraSnapshot) {
     RuntimeWorld world;
     world.Initialize(FlatTerrain);
@@ -3376,13 +3408,14 @@ TEST(RuntimeWorldTest, AuthoredCutScenePublishesCameraSnapshot) {
     cut_scene.task_id = "1204";
     cut_scene.initial_run = true;
     cut_scene.duration_seconds = 1.0f;
-    cut_scene.camera_shots.push_back({
-        glm::vec3(100.0f, 200.0f, 300.0f),
-        glm::vec3(0.0f),
-        1.2f,
-        1.0f,
-        false,
-    });
+    // One authored EditCamera key. The runtime no longer takes a five-field
+    // "shot" record: the camera is the ENGINE's timeline
+    // (CutScene_CollectKeys 0x4F4880 + CutScene_Interpolate 0x4F55D0), resolved
+    // by igi::BuildAuthoredCutSceneProgramme -- see runtime/cutscene_camera.h.
+    cut_scene.camera_programme = igi::BuildAuthoredCutSceneProgramme(
+        CutSceneCameraTestTokens(1.0f, 1.0f),
+        {EditCameraCameraTestTokens(100.0, 200.0, 300.0, 0.0, 0.0, 0.0, 1.2, 1.0, true)});
+    ASSERT_TRUE(cut_scene.camera_programme.valid);
 
     world.SetAuthoredMissionState({}, {}, {}, {}, {cut_scene});
     world.UpdateSimulationTick(0, PlayerInputCmd());
@@ -3392,6 +3425,42 @@ TEST(RuntimeWorldTest, AuthoredCutScenePublishesCameraSnapshot) {
     EXPECT_EQ(camera.position, glm::vec3(100.0f, 200.0f, 300.0f));
     EXPECT_EQ(camera.forward, glm::vec3(0.0f, 1.0f, 0.0f));
     EXPECT_FLOAT_EQ(camera.field_of_view_y_radians, 1.2f);
+    EXPECT_EQ(camera.shot_index, 0);
+}
+
+// The regression guard for the removed `glm::mix` camera: two keys 100 units
+// apart, one second each, both smooth. At tick 15 (t = 0.5) the engine's Hermite
+// gives 37.5, while a linear blend of the two authored positions would give 50.
+// Nothing here is asserted against the spline's own arithmetic -- the value is
+// the one CutScene_Spline 0x4F6290 (src/cutscene/cutscene.c:631-651) produces
+// for the k[4] window CutScene_Update selects, and tests/test_cutscene_camera.cpp
+// pins the same number against the engine primitives directly.
+TEST(RuntimeWorldTest, AuthoredCutSceneCameraFollowsTheEngineSpline) {
+    RuntimeWorld world;
+    world.Initialize(FlatTerrain);
+
+    AuthoredMissionCutScene cut_scene;
+    cut_scene.task_id = "1204";
+    cut_scene.initial_run = true;
+    cut_scene.duration_seconds = 2.0f;
+    cut_scene.camera_programme = igi::BuildAuthoredCutSceneProgramme(
+        CutSceneCameraTestTokens(1.0f, 1.0f),
+        {EditCameraCameraTestTokens(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, true),
+         EditCameraCameraTestTokens(100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, true)});
+    ASSERT_TRUE(cut_scene.camera_programme.valid);
+
+    world.SetAuthoredMissionState({}, {}, {}, {}, {cut_scene});
+    // RuntimeWorld::UpdateAuthoredCutScenes advances the scene's tick and THEN
+    // evaluates the camera, so N calls leave the clock at tick N. Fifteen calls
+    // therefore evaluate t = 15/30 = 0.5.
+    for (uint64_t tick = 0; tick < 15; ++tick) {
+        world.UpdateSimulationTick(tick, PlayerInputCmd());
+    }
+
+    const RuntimeCutSceneCamera& camera = world.GetActiveCutSceneCamera();
+    EXPECT_TRUE(camera.active);
+    EXPECT_NEAR(camera.position.x, 37.5f, 1e-4f);
+    EXPECT_NE(camera.position.x, 50.0f);
     EXPECT_EQ(camera.shot_index, 0);
 }
 

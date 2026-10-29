@@ -417,6 +417,10 @@ add_executable(igi_tests
     # loader into igi::BuildRailSource. Self-skips without IGI_GAME_PATH.
     tests/test_rail_source_corpus.cpp
     tests/test_igi_transform.cpp
+    # The posed (skinned) draw path vs the static bind-pose path, for one model
+    # at one placement: host-portable, corpus-backed (self-skips without
+    # IGI_GAME_PATH) plus a synthetic case that always runs.
+    tests/test_skinned_static_parity.cpp
     tests/test_props_wire_interactables.cpp
     tests/test_scamera_params.cpp
     tests/test_door_params.cpp
@@ -440,6 +444,12 @@ add_executable(igi_tests
     tests/test_smoke_rules.cpp
     tests/test_heli_rules.cpp
     tests/test_cutscene_rules.cpp
+    tests/test_cutscene_camera.cpp
+    # The same link over the SHIPPED level data. A separate file on purpose: it
+    # calls LevelObjects::Load, which the host-native lane cannot link, and a
+    # combined file would take the pure-rule suite out of the host lane too.
+    # Self-skips without IGI_GAME_PATH.
+    tests/test_cutscene_camera_corpus.cpp
     tests/test_alarm_light_rules.cpp
     tests/test_rain_rules.cpp
     tests/test_weather_texture.cpp
@@ -598,6 +608,11 @@ target_sources(igi_tests PRIVATE
     source/runtime/smoke.cpp
     source/runtime/heli_rules.cpp
     source/runtime/cutscene_rules.cpp
+    # The authored CutScene -> engine timeline link (#80). It is what gives
+    # cutscene_rules.cpp its first caller, so the host lane needs it to link
+    # tests/test_cutscene_camera.cpp and tests/test_mission_state.cpp;
+    # igi-editor picks it up through the source/runtime/*.* glob.
+    source/runtime/cutscene_camera.cpp
     source/runtime/alarm_light.cpp
     source/runtime/pickup_rules.cpp
     source/runtime/rain_rules.cpp

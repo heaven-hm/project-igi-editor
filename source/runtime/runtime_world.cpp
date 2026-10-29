@@ -81,12 +81,6 @@ int SecondsToSimulationTicks(float seconds) {
     return static_cast<int>(tick_count);
 }
 
-double PositiveFiniteSeconds(float seconds) {
-    return std::isfinite(seconds) && seconds > 0.0f
-        ? static_cast<double>(seconds)
-        : 0.0;
-}
-
 glm::vec3 NormalizeOrFallback(
     const glm::vec3& value,
     const glm::vec3& fallback) {
@@ -1821,88 +1815,51 @@ void RuntimeWorld::PublishAuthoredCutSceneState(
 void RuntimeWorld::UpdateAuthoredCutSceneCamera(
     const AuthoredMissionCutScene& definition,
     int tick_count) {
-    if (definition.camera_shots.empty()) {
+    // The engine's own camera rule, not a linear mix. CutScene_Update 0x4F5400
+    // (src/cutscene/cutscene.c:417-462) selects the four-key window at
+    // `t = tick / gCutSceneTicksPerSec`, and CutScene_Interpolate 0x4F55D0
+    // (cutscene.c:473+) evaluates a cubic Hermite through it -- CutScene_Spline
+    // 0x4F6290 (cutscene.c:465-471, :631). The editor used to blend the authored
+    // shots with `glm::mix` on position and on the forward/up columns, which is
+    // not that rule: it has no tangents, so it cannot overshoot or ease the way
+    // the retail camera does. `igi::EvaluateAuthoredCutSceneAtTick` calls the
+    // ported rule; runtime/cutscene_camera.h records the whole chain, and why
+    // the band-filter colour arm is not taken here.
+    CutSceneCameraState state;
+    if (!EvaluateAuthoredCutSceneAtTick(
+            definition.camera_programme, tick_count, &state)) {
         return;
     }
 
-    const double current_time_seconds = static_cast<double>(tick_count) /
-        static_cast<double>(GameClock::TICK_RATE_HZ);
-    const double time_scale = PositiveFiniteSeconds(definition.time_scale);
-    double shot_start_seconds = 0.0;
+    // `Matrix_SetEuler(&rot, ax, ay, az)` (cutscene.c, Matrix_SetEuler 0x4B38E0)
+    // followed by `Camera_Set(gCutSceneCamera, &pos, &rot, fov, ...)`. The
+    // orientation helper is that same Rz*Ry*Rx composition, and the snapshot's
+    // right/forward/up columns keep the convention this camera has always
+    // exposed to App::ApplyRuntimeCutSceneCamera.
+    const glm::mat3 orientation = BuildEngineOrientation(
+        glm::vec3(state.angles[0], state.angles[1], state.angles[2]));
 
-    for (size_t shot_index = 0;
-         shot_index < definition.camera_shots.size();
-         ++shot_index) {
-        const AuthoredMissionCutSceneShot& shot =
-            definition.camera_shots[shot_index];
-        const double shot_duration_seconds =
-            PositiveFiniteSeconds(shot.duration_seconds) * time_scale;
-        const bool is_active_shot = current_time_seconds <
-                shot_start_seconds + shot_duration_seconds ||
-            shot_index + 1 == definition.camera_shots.size();
-        if (!is_active_shot) {
-            shot_start_seconds += shot_duration_seconds;
-            continue;
-        }
-
-        const double shot_progress = shot_duration_seconds > 0.0
-            ? (current_time_seconds - shot_start_seconds) / shot_duration_seconds
-            : 0.0;
-        const float interpolation = static_cast<float>(std::clamp(
-            shot_progress,
-            0.0,
-            1.0));
-        const glm::mat3 active_orientation = BuildEngineOrientation(
-            shot.orientation);
-        glm::vec3 position = shot.position;
-        glm::mat3 orientation = active_orientation;
-        float field_of_view = shot.field_of_view_radians;
-
-        if (shot.smooth_to_next && shot_index + 1 < definition.camera_shots.size()) {
-            const AuthoredMissionCutSceneShot& next_shot =
-                definition.camera_shots[shot_index + 1];
-            position = glm::mix(shot.position, next_shot.position, interpolation);
-            const glm::mat3 next_orientation = BuildEngineOrientation(
-                next_shot.orientation);
-            const glm::vec3 forward = NormalizeOrFallback(
-                glm::mix(active_orientation[1], next_orientation[1], interpolation),
-                active_orientation[1]);
-            glm::vec3 up = NormalizeOrFallback(
-                glm::mix(active_orientation[2], next_orientation[2], interpolation),
-                active_orientation[2]);
-            const glm::vec3 right = NormalizeOrFallback(
-                glm::cross(forward, up),
-                active_orientation[0]);
-            up = NormalizeOrFallback(glm::cross(right, forward), up);
-            orientation[0] = right;
-            orientation[1] = forward;
-            orientation[2] = up;
-            field_of_view = glm::mix(
-                shot.field_of_view_radians,
-                next_shot.field_of_view_radians,
-                interpolation);
-        }
-
-        active_cut_scene_camera_.active = true;
-        active_cut_scene_camera_.position = position;
-        active_cut_scene_camera_.right = orientation[0];
-        active_cut_scene_camera_.forward = orientation[1];
-        active_cut_scene_camera_.up = orientation[2];
-        active_cut_scene_camera_.field_of_view_y_radians =
-            std::isfinite(field_of_view) && field_of_view > 0.0f
-            ? field_of_view
-            : 1.0f;
-        active_cut_scene_camera_.viewport_height_factor =
-            std::isfinite(definition.viewport_height_factor)
-            ? std::max(0.0f, definition.viewport_height_factor)
-            : 1.0f;
-        active_cut_scene_camera_.time_of_day =
-            std::isfinite(definition.time_of_day)
-            ? definition.time_of_day
-            : -1.0f;
-        active_cut_scene_camera_.shot_index = static_cast<int>(shot_index);
-        return;
-    }
+    active_cut_scene_camera_.active = true;
+    active_cut_scene_camera_.position =
+        glm::vec3(state.position[0], state.position[1], state.position[2]);
+    active_cut_scene_camera_.right = orientation[0];
+    active_cut_scene_camera_.forward = orientation[1];
+    active_cut_scene_camera_.up = orientation[2];
+    active_cut_scene_camera_.field_of_view_y_radians =
+        std::isfinite(state.fov) && state.fov > 0.0f ? state.fov : 1.0f;
+    // The AUTHORED "Viewport height factor" (`CutScene.screenSize`, the value
+    // CutScene_Interpolate turns into the letterbox factor at cutscene.c:587),
+    // reported as before so the field's meaning does not change under callers.
+    active_cut_scene_camera_.viewport_height_factor =
+        std::isfinite(definition.camera_programme.screen.screen_size)
+        ? std::max(0.0f, definition.camera_programme.screen.screen_size)
+        : 1.0f;
+    // The SPLINED time of day (cutscene.c:496-498): a key's own unk98 when it is
+    // >= 0, otherwise the CutScene's authored fallback. That is what the engine
+    // passes to Camera_Set, so it is what a preview must report.
+    active_cut_scene_camera_.time_of_day =
+        std::isfinite(state.time_of_day) ? state.time_of_day : -1.0f;
+    active_cut_scene_camera_.shot_index = state.active_key;
 }
 
 void RuntimeWorld::UpdateAuthoredCutScenes() {

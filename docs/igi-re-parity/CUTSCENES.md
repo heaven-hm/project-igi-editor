@@ -516,9 +516,10 @@ OK: 42 tests passed in 1 suites
   and, on the retail data, that every key holds its authored pose at its own
   start time.
 - **Not verified — no rendered result.** The editor's GUI needs OpenGL 4.1 and
-  this host provides 2.1, so nothing here was observed on screen. The module is
-  not wired into a draw path; whether the ported rule produces the retail
-  *appearance* is unverified. It is pure logic plus a documented API.
+  this host provides 2.1, so nothing here was observed on screen. §13 wires the
+  module into the gameplay camera path, but whether the ported rule produces the
+  retail *appearance* is unverified: the pose is proved by value-level tests and
+  citations, not by a frame.
 - **Not verified — anything requiring the live world.** `posAttach`/`rotAttach`
   resolution (`EditCamera_AttachPosition` `0x508940`,
   `EditCamera_AttachRotation` `0x508620`), the four screen filters, and the
@@ -557,6 +558,58 @@ OK: 42 tests passed in 1 suites
 | Path | What |
 |---|---|
 | `source/runtime/cutscene_rules.h`, `cutscene_rules.cpp` | the cutscene camera timeline port |
+| `source/runtime/cutscene_camera.h`, `cutscene_camera.cpp` | the authored CutScene + EditCamera chain -> engine timeline link (§13) |
 | `tests/test_cutscene_rules.cpp` | 34 unit + 8 corpus tests |
-| `CMakeLists.txt` | purely additive: one test file in the `igi_tests` sources and one runtime source in `target_sources(igi_tests PRIVATE ...)` |
+| `tests/test_cutscene_camera.cpp` | 13 rule tests + 6 projection tests (host-portable) |
+| `tests/test_cutscene_camera_corpus.cpp` | 4 tests over the shipped `objects.qsc` (Windows lane; self-skips without `IGI_GAME_PATH`) |
+| `CMakeLists.txt` | purely additive: two test files in the `igi_tests` sources and one runtime source in `target_sources(igi_tests PRIVATE ...)` |
 | `docs/igi-re-parity/CUTSCENES.md` | this document |
+
+## 13. The wiring (issue #80, camera half)
+
+Until this landed the module had **no caller**. The gameplay camera was a
+hand-written LINEAR blend in `RuntimeWorld::UpdateAuthoredCutSceneCamera`
+(`glm::mix` on position and on the forward/up columns), and the authored camera
+data never arrived at all: `App::SetupRuntimeMissionState` skipped `CutScene`
+tasks by name, and nothing ever filled the five-field
+`AuthoredMissionCutSceneShot` list the blend consumed. Both halves are fixed.
+
+**What changed, and what each piece is for.**
+
+| Piece | File | What it does |
+|---|---|---|
+| the link | `source/runtime/cutscene_camera.{h,cpp}` | `CollectAuthoredCameraKeyTokens` is the engine's own walk over the editor's flat object list; `BuildAuthoredCutSceneProgramme` runs `ParseCutSceneScreen` on the CutScene call, `ParseCutSceneKey` on each EditCamera call, then `CollectCutSceneKeys` + `UnwrapCutSceneAngles`; `EvaluateAuthoredCutSceneAtTick` is `CutSceneTimeFromTick` + `EvaluateCutScene` |
+| the authored data | `source/app.cpp` | `CutScene` is collected (it was excluded by name), and its EditCamera descendants are projected in the engine's own walk order — the projection is only built for a level that authors a CutScene |
+| the carrier | `source/mission_state.h`, `source/mission_state_loader.{h,cpp}` | `AuthoredMissionCutScene::camera_programme` replaces the five-field `camera_shots` list |
+| the rule | `source/runtime/runtime_world.cpp` | the camera snapshot is `EvaluateAuthoredCutSceneAtTick`'s output; the linear blend is gone, and the now-unused `PositiveFiniteSeconds` helper with it |
+
+**Why the linear blend was wrong, in one number.** Two keys 100 units apart on
++ X, one second each, both smooth. At tick 15 (`t = 0.5`) the engine's window is
+`[k0, k0, k1, k1]` with times `[0, 0, 1, 1]`, so `m1 = 0`, `m2 = 100`, `u = 0.5`
+and `Hermite_Eval` returns **37.5**. A linear blend returns **50**. Both
+`tests/test_cutscene_camera.cpp` and the Windows
+`RuntimeWorldTest.AuthoredCutSceneCameraFollowsTheEngineSpline` pin 37.5.
+
+**Verified by execution.** `tests/test_cutscene_camera.cpp`: 13 rule tests + 6
+projection tests, host lane, 0 failed. `tests/test_mission_state.cpp`: 10 tests
+(two of them new, one for the programme and one for the "no EditCamera key"
+refusal), 0 failed. `tests/test_cutscene_camera_corpus.cpp` (Windows lane, over
+the shipped `objects.qsc` of levels 1, 2 and 4): 4 tests, 0 failed — it resolves
+all **9 authored CutScene calls and all 120 authored EditCamera keys**, requires
+every one of them to belong to exactly one CutScene, and re-checks the
+hold-at-start-time property through the editor's own projection. Every count
+here is value-level; none of it renders a frame.
+
+**A note on the gameplay decision.** `App::SetupRuntimeMissionState` used to skip
+`CutScene` by name ("gameplay is the engine/interaction slice only, with no
+intro/end cinematics"). That was a product decision, not a parity claim, and
+removing it means the three cutscene levels now hand the camera to their authored
+intro cutscene at level start — which is what retail does (`CutScene_1000`'s run
+expression is `!CutScene_1000.isFinished`). If the editor wants cinematics to stay
+opt-in, the one line to restore is the `"CutScene"` name in that filter; the rest
+of this work is independent of it.
+
+**Still not verified.** The rendered appearance (no GL 4.1 on this host); the
+`posAttach`/`rotAttach` resolution, the four screen filters and the run/reset
+expression gating (§8, §10); and the shake sequence, whose amplitude is splined
+and exposed but whose RNG draws are not reproducible.

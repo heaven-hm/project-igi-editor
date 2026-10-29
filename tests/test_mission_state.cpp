@@ -84,12 +84,23 @@ TEST(MissionStateLoaderTest, LoadsCutSceneExpressionsAndAuthoredDuration) {
     source.task_type = "CutScene";
     source.task_id = "1204";
     source.authored_duration_seconds = 15.0f;
-    source.authored_camera_shots.push_back({
-        glm::vec3(1.0f, 2.0f, 3.0f),
-        glm::vec3(0.1f, 0.2f, 0.3f),
-        1.2f,
-        4.0f,
-        true,
+    // One authored EditCamera key, in the LevelObject::argTokens layout
+    // ([0] = task id, [1] = type, [2] = name, [3] = parameter 0). The 23 tokens
+    // are the 16-row EditCamera table's own argument count (editcamera.c:88-107).
+    source.edit_camera_arg_tokens.push_back({
+        "-1", "EditCamera", "Shot",
+        "1", "2", "3",                 // Position
+        "0.1", "0.2", "0.3",           // Alpha / Beta / Gamma
+        "1.2",                         // FOV
+        "4",                           // Duration
+        "-1", "TRUE",                  // Link task ID, Update link continously
+        "-1", "TRUE",                  // Target task ID, Update target continously
+        "TRUE",                        // Smooth to next
+        "-1",                          // Time of day (-1 means use default)
+        "CAMERAFILTER_TYPE_LINE",      // FILTER
+        "1",                           // Noise
+        "0", "0", "0",                 // Filter color
+        "0",                           // Camera shake
     });
     source.argument_tokens = {
         "1204", "CutScene", "", "0", "0", "0", "0", "0", "0",
@@ -108,11 +119,45 @@ TEST(MissionStateLoaderTest, LoadsCutSceneExpressionsAndAuthoredDuration) {
     EXPECT_FLOAT_EQ(cut_scene.time_scale, 0.7f);
     EXPECT_FLOAT_EQ(cut_scene.duration_seconds, 15.0f);
     EXPECT_FLOAT_EQ(cut_scene.viewport_height_factor, 0.8f);
-    ASSERT_EQ(cut_scene.camera_shots.size(), 1U);
-    EXPECT_EQ(
-        cut_scene.camera_shots[0].position,
-        glm::vec3(1.0f, 2.0f, 3.0f));
-    EXPECT_TRUE(cut_scene.camera_shots[0].smooth_to_next);
+
+    // The camera programme is the engine's timeline, not a copy of the raw
+    // tokens: one key, unwrapped, with `end` already scaled by the CutScene's
+    // own "Time scale" (CutScene_CollectKeys 0x4F4880, cutscene.c:163-180).
+    const igi::AuthoredCutSceneProgramme& programme = cut_scene.camera_programme;
+    ASSERT_TRUE(programme.valid);
+    ASSERT_EQ(programme.keys.size(), 1U);
+    EXPECT_DOUBLE_EQ(programme.keys[0].params.position[0], 1.0);
+    EXPECT_DOUBLE_EQ(programme.keys[0].params.position[1], 2.0);
+    EXPECT_DOUBLE_EQ(programme.keys[0].params.position[2], 3.0);
+    EXPECT_FLOAT_EQ(programme.keys[0].params.angles[0], 0.1f);
+    EXPECT_FLOAT_EQ(programme.keys[0].params.angles[1], 0.2f);
+    EXPECT_FLOAT_EQ(programme.keys[0].params.angles[2], 0.3f);
+    EXPECT_FLOAT_EQ(programme.keys[0].params.fov, 1.2f);
+    EXPECT_FLOAT_EQ(programme.keys[0].params.duration, 4.0f);
+    EXPECT_TRUE(programme.keys[0].params.smooth);
+    EXPECT_FLOAT_EQ(programme.keys[0].start_time, 0.0f);
+    // 0.7 * 4.0: the authored duration scaled by the authored time scale.
+    EXPECT_FLOAT_EQ(programme.end, 2.8f);
+}
+
+TEST(MissionStateLoaderTest, CutSceneWithoutEditCameraKeysIsNotAProgramme) {
+    igi::MissionStateTaskSource source;
+    source.task_type = "CutScene";
+    source.task_id = "1204";
+    source.argument_tokens = {
+        "1204", "CutScene", "", "0", "0", "0", "0", "0", "0",
+        "!CutScene_1204.isFinished", "", "", "0", "FALSE", "1.0",
+        "0.8", "0", "0", "0", "", "",
+    };
+
+    const igi::AuthoredMissionStateDefinitions definitions =
+        igi::LoadAuthoredMissionStateDefinitions({source});
+
+    ASSERT_EQ(definitions.cut_scenes.size(), 1U);
+    // The task itself is still reported (its expressions and timing are real);
+    // only the camera half is refused, because there is no key to evaluate.
+    EXPECT_FALSE(definitions.cut_scenes.front().camera_programme.valid);
+    EXPECT_TRUE(definitions.cut_scenes.front().camera_programme.keys.empty());
 }
 
 TEST(MissionStateLoaderTest, RejectsNonFiniteCutSceneTiming) {

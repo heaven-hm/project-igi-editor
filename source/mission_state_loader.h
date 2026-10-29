@@ -15,7 +15,11 @@ struct MissionStateTaskSource {
     int object_index = -1;
     std::vector<std::string> argument_tokens;
     float authored_duration_seconds = 0.0f;
-    std::vector<AuthoredMissionCutSceneShot> authored_camera_shots;
+    // A CutScene task's EditCamera descendants, in the order
+    // `CutScene_CollectKeys` (0x4F4880) walks them. Each entry is that object's
+    // `LevelObject::argTokens`; `igi::BuildAuthoredCutSceneProgramme`
+    // (runtime/cutscene_camera.h) turns them into the engine timeline.
+    std::vector<std::vector<std::string>> edit_camera_arg_tokens;
     std::vector<int> descendant_object_indices;
     std::vector<int> guard_object_indices;
 };

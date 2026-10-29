@@ -282,7 +282,14 @@ AuthoredMissionStateDefinitions LoadAuthoredMissionStateDefinitions(
             cut_scene.duration_seconds = std::max(
                 0.0f,
                 task_source.authored_duration_seconds);
-            cut_scene.camera_shots = task_source.authored_camera_shots;
+            // The camera half. The engine's own timeline, resolved from the
+            // authored EditCamera key chain by CutScene_CollectKeys 0x4F4880
+            // and CutScene_UnwrapAngles 0x4F4940 -- see runtime/cutscene_camera.h.
+            // Built from the SAME tokens the field-by-field read above validated,
+            // so a task rejected there never reaches this.
+            cut_scene.camera_programme = BuildAuthoredCutSceneProgramme(
+                task_source.argument_tokens,
+                task_source.edit_camera_arg_tokens);
             definitions.cut_scenes.push_back(std::move(cut_scene));
             continue;
         }

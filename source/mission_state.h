@@ -2,6 +2,8 @@
 
 #include <glm/glm.hpp>
 
+#include "runtime/cutscene_camera.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -37,16 +39,6 @@ struct AuthoredMissionLevelTimer {
     bool initial_run = false;
 };
 
-// One authored EditCamera shot nested below a CutScene task. Positions use the
-// same native world-unit space as LevelObject and RuntimeWorld.
-struct AuthoredMissionCutSceneShot {
-    glm::vec3 position = glm::vec3(0.0f);
-    glm::vec3 orientation = glm::vec3(0.0f);
-    float field_of_view_radians = 1.0f;
-    float duration_seconds = 0.0f;
-    bool smooth_to_next = false;
-};
-
 // Authored CutScene timing, expressions, and camera presentation state.
 struct AuthoredMissionCutScene {
     std::string task_id;
@@ -63,7 +55,15 @@ struct AuthoredMissionCutScene {
     float viewport_fade_in_seconds = 0.0f;
     float viewport_fade_out_seconds = 0.0f;
     float time_of_day = -1.0f;
-    std::vector<AuthoredMissionCutSceneShot> camera_shots;
+    // The authored EditCamera key chain, resolved into the engine's own timeline
+    // (igi::BuildAuthoredCutSceneProgramme, runtime/cutscene_camera.h). Empty and
+    // `valid == false` when the task authors no key, which is also the case for
+    // every level that has no CutScene task at all.
+    //
+    // This REPLACED a five-field `AuthoredMissionCutSceneShot` list that
+    // RuntimeWorld mixed LINEARLY. The engine does not mix linearly: see
+    // runtime/cutscene_camera.h for the addresses.
+    AuthoredCutSceneProgramme camera_programme;
 };
 
 // Authored ConditionalSound edge definition. RuntimeWorld evaluates the
