@@ -207,5 +207,13 @@ load is GL-free (`source/level/terrain_io.cpp` — zero `gl*`/`GL_*` references)
 ignore_discard)` (`level.cpp:146-154`, `:389-396`), and the one dependency to satisfy is
 `IRenderResLoader` for the material/lightmap texture stage (`terrain_io.cpp:406`, `:433`).
 
+**That dependency is the expensive part, and it was checked:** the ONLY implementation of
+`IRenderResLoader` is `Renderer` itself (`source/renderer/renderer.h:402`, interface at
+`source/common.h:352-358`), and the renderer needs GL 4.1. So a headless terrain load needs a
+**stub** implementing the full interface (at least `SetupClearColor`, `SetupFog`, and
+`LoadTerrainMatTex`/`LoadTerrainLMPTex`) whose texture calls no-op — which is fine for a Z query,
+because neither call affects the terrain's geometry or its octree, but it is an editor-side
+stand-in and must be labelled as one rather than presented as engine behaviour.
+
 **Do not re-litigate the two ruled-out hypotheses above** — both were checked against the code and
 against IGI-RE, and neither is the cause.
