@@ -119,14 +119,18 @@ TEST(TerrainSnapRules, HumansOffTheSurfaceKeepTheirAuthoredZ) {
 // terrain surface is lifted onto it.  The old rule kept the authored Z for every
 // negative delta, which left half-buried soldiers exactly where the QSC put them --
 // the reported "some part above ground some below it".
-TEST(TerrainSnapRules, HumansBelowTheSurfaceAreLiftedOntoIt) {
+// The shipped rule: a soldier BELOW the terrain keeps its authored Z (the
+// pre-Oct-28 behaviour of source/app_view.cpp, restored).  An earlier commit on
+// this branch snapped a negative delta instead, on the engine's up-probe
+// reasoning, and the AI ended up below the ground in the editor.
+TEST(TerrainSnapRules, HumansBelowTheSurfaceKeepTheirAuthoredZ) {
     EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, -0.5),
-              igi::TerrainSnapDecision::SnapToTerrain);
+              igi::TerrainSnapDecision::KeepAuthoredZ);
     EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, -4096.0),
-              igi::TerrainSnapDecision::SnapToTerrain);
+              igi::TerrainSnapDecision::KeepAuthoredZ);
     EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, -13000000.0),
-              igi::TerrainSnapDecision::SnapToTerrain);
-    // The boundary is exact: 0 snaps, and just above the band still keeps.
+              igi::TerrainSnapDecision::KeepAuthoredZ);
+    // The boundaries: 0 snaps, and just above the band still keeps.
     EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, 0.0),
               igi::TerrainSnapDecision::SnapToTerrain);
     EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, 100.0),
@@ -135,9 +139,6 @@ TEST(TerrainSnapRules, HumansBelowTheSurfaceAreLiftedOntoIt) {
               igi::TerrainSnapDecision::KeepAuthoredZ);
 }
 
-// A miss must be decided before any human/zDelta reasoning: on a miss the editor's
-// Level::GetTerrainZ leaves terrainZ at 0, so zDelta is the full authored Z (in the
-// millions) and would otherwise look like "elevated".
 TEST(TerrainSnapRules, MissIsDecidedBeforeTheElevationBand) {
     EXPECT_EQ(igi::DecideTerrainSnap(/*terrainFound=*/false, /*isHuman=*/true, 179656496.0),
               igi::TerrainSnapDecision::KeepAuthoredZ);

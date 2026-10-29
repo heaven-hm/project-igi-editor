@@ -96,23 +96,20 @@ inline constexpr double kSnapDeepUnderground = -1000000.0;
 inline TerrainSnapDecision DecideTerrainSnap(bool terrainFound, bool isHuman, double zDelta) {
     if (!terrainFound) return TerrainSnapDecision::KeepAuthoredZ;
     if (!isHuman) return TerrainSnapDecision::KeepAuthoredZ;
-    // A NEGATIVE delta is snapped, not kept.  Game_DropToGround (HOOK 0x4149B0,
-    // src/game/misc.c:88-95) probes DOWN first, and when that misses it probes UP
-    // (`dz = -dz`) before giving up:
-    //     if (!hit.found) { dz = -dz; Coll_DropPoints(...);
-    //                       if (!hit.found) return; }
-    //     memcpy(&pos->z, &hit.pos.z, sizeof(double));
-    // so an object sitting BELOW the terrain surface is lifted onto it - that is the
-    // engine's own answer for a sunk placement.  Refusing to snap a negative delta
-    // left every half-buried soldier exactly where the QSC put it, which is the
-    // reported "some part above ground some below it".
+    // RESTORED to the rule that shipped for months before this branch touched it
+    // (source/app_view.cpp at 6cef506f^, the pre-Oct-28 form):
     //
-    // The genuine underground case never reaches this line: a bunker floor sits under
-    // a DiscardTerrain hole, so the query misses and rule 1 (no terrain -> keep) has
-    // already returned (src/terredit/discard.c:10-12; DiscardTerrain_Visit HOOK
-    // 0x52C0B0, :113-117).  A human standing on a platform ABOVE the surface is still
-    // kept by the band test below.
-    if (zDelta > kSnapSurfaceBandAbove) return TerrainSnapDecision::KeepAuthoredZ;
+    //     // Human soldiers: snap to terrain unless they are elevated (on a
+    //     // platform/building) or below terrain (underground bunker).
+    //     if (zDelta > 100.0 || zDelta < 0.0) { keep }
+    //
+    // An earlier commit on this branch dropped the `zDelta < 0.0` half on the
+    // reasoning that Game_DropToGround (HOOK 0x4149B0, src/game/misc.c:75-97)
+    // probes down AND up, so a soldier below the surface should be lifted onto it.
+    // That reasoning is still defensible against the engine, but it changed what
+    // the user saw -- the AI ended up below the ground -- and the user's report is
+    // the authority on what the editor should do here.  Restored verbatim.
+    if (zDelta > kSnapSurfaceBandAbove || zDelta < 0.0) return TerrainSnapDecision::KeepAuthoredZ;
     return TerrainSnapDecision::SnapToTerrain;
 }
 
