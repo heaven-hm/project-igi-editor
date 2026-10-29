@@ -150,3 +150,62 @@ If you encounter any other bugs, crashes, or rendering issues that are not docum
 * **🎮 Discord**: Message us directly at `Jones_IGI#3954` or join the modding community on the [Project IGI Discord Server](https://discord.com/invite/QpbQrRFAER).
 * **📧 Email**: [igiproz.hm@gmail.com](mailto:igiproz.hm@gmail.com)
 * **🌟 GitHub**: Create a detailed issue on the [project-igi-editor GitHub Repository](https://github.com/Jones-HM/project-igi-editor/issues) with reproduction steps and logs.
+
+---
+
+## 5. AI render below the ground — open, with the investigation recorded
+
+**Symptom** (user report): AI soldiers render **half above and half below** the ground, on some
+levels. In the **pause-menu view the same soldier is correctly placed**; leaving the pause menu
+returns it to sunk. Two distinct observations, and the second is the more informative one.
+
+**What the engine does — this is the part that is settled.** A human has an authored position and a
+drawn one, and they are *not* the same value:
+
+* `placePos` is the authored `ObjectPos` parameter — `ParamTable_Add(gHumanParams, &tmp,
+  tmp.placePos, Param_ObjectPos(), 7, NULL)` (`src/soldier/human.c:296`).
+* It feeds the **collision cube**, not the draw: `DynCube_Move(Game_GetWorld(), h, h->placePos,
+  h->radius)` (`src/humanbase/human.c:457`), and the handler sets only the matrix's **rotation**
+  (`Matrix_SetRotZ`, `:460`) — `Human_ParamChangedHandler` HOOK `0x45F890`
+  (`src/humanbase/human.c:448-461`).
+* The **drawn** translation comes from the ground/collision system: `BoneObj_Update(h->h.matrix.m,
+  h->h.anim)` (`src/rpg/rpg.c:690`).
+
+So **the editor must not draw a soldier at its authored QSC Z.** It must draw it where the ground
+system would put it, and the editor's only ground query is `Level::GetTerrainZ` — **terrain only**,
+while the engine drops onto **collision** geometry, which includes building floors
+(`Game_DropToGround` HOOK `0x4149B0`, `src/game/misc.c:75-97`, probes down then up;
+`Coll_DropPointsMat` HOOK `0x4CB9F0` → `Coll_Drop` → `Coll_VerticalHit` HOOK `0x4CB050`).
+
+**The user's log gives one hard number:** `[App] Snap complete. snapped=0 skipped=1843
+no_terrain=26` — **nothing was snapped at all**, and 26 placements had no terrain under them.
+
+### Hypotheses examined, and their status
+
+| hypothesis | status |
+|---|---|
+| The pose's root-bone translation is applied on top of the object matrix (double-applied) | **RULED OUT** — the editor's `BoneObjUpdate` is a faithful transcription: `pos = {0,0,0}` for the root and `root->local.x/y/z = 0` (`anim_rules.cpp:1659-1716`, matching `boneobj.c:371-415`) |
+| The two draw paths disagree about units | **RULED OUT** — the skinned path's `kMefNativeScale = 1/40.96` (`mef_native.h:12`) brings engine units to MEF-native, after which both paths apply the same `RENDERER_MODEL_SCALE_DOWN = 0.001f` (`common.h:54`) |
+| The skinned (posed) and static paths place the mesh in different spaces | **OPEN** — the pause view draws the static mesh, the viewport the skinned replacement; a space mismatch would produce exactly a half-height offset in one view only. Not yet tested |
+| The ±100-unit surface band (`kSnapSurfaceBandAbove`) refuses to move a soldier that is further off | **OPEN** — `DecideTerrainSnap` keeps a human whose `zDelta > 100`; the band is the editor's invention, and `Game_DropToGround` has no band |
+| A terrain-only query misses where the engine would find a floor | **OPEN, and the leading candidate** — the editor cannot query collision at all; the `no_terrain=26` in the user's log are exactly these |
+
+### Why this is still open
+
+`App::SnapObjectsToTerrain` runs **only** from `App::LoadLevel`, which needs the GL 4.1 GUI and
+cannot run on the 2.1 build host — so the one defect that needs its numbers has never been
+measurable in a lane. Two diagnostics are now committed to change that:
+
+* `afb598ee` — the snap logs its **arithmetic** (`authoredZ`, `terrainZ`, `zDelta`, `mainZOffset`,
+  `snapZOffset`, result) for both the snapped and the kept case, so one real run decides.
+* `7bad0cb6` — `CollectHumanSnapSamples()` / `FormatSnapSample()` in `smoke_level_core`, the
+  headless collector for the same numbers (additive; no caller yet).
+
+**The next step is the terrain loader in the smoke lane**, and it is fully specified: the terrain
+load is GL-free (`source/level/terrain_io.cpp` — zero `gl*`/`GL_*` references), the API is
+`Terrain::load_params_s` + `terrain_.Load(...)` + `terrain_.GetZ(root_dyn_cube_, x, y, z,
+ignore_discard)` (`level.cpp:146-154`, `:389-396`), and the one dependency to satisfy is
+`IRenderResLoader` for the material/lightmap texture stage (`terrain_io.cpp:406`, `:433`).
+
+**Do not re-litigate the two ruled-out hypotheses above** — both were checked against the code and
+against IGI-RE, and neither is the cause.
