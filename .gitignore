@@ -5,10 +5,17 @@
 #   * Build trees are matched by ANCHORED PATH, never by blanket extension, so a
 #     new source or fixture file is never silently dropped from the repo.
 #   * Blanket extension ignores for TEXT SOURCE categories (*.txt, *.py, *.ps1,
-#     *.qsc, *.conf, *.zip, *.rc) were removed. They had silently excluded the
+#     *.qsc, *.conf, *.rc) were removed, along with *.zip (an archive is a
+#     plausible committed fixture, and every archive this build downloads lands
+#     under an already-ignored build tree).  They had silently excluded the
 #     entire Python verification harness (`tools/host-tests/host_test_runner.py`,
 #     `tools/igi-re-parity/tu-check.py`) from git, which would have broken the
 #     build gate on a fresh clone.
+#   * `*.log` is the one extension rule that stays, deliberately: run logs are
+#     output, not source (`source/cli/verify_level.cpp:405` writes `igi1ed.log`
+#     beside the executable; the debug command queue writes
+#     `screenshots/ffmpeg_err.log`).  A log that IS a test fixture has to be
+#     force-added or the rule scoped to its directory.
 #   * `bin/` is build output only; the old `bin/` … `!bin/` pair contradicted
 #     itself and let generated fixtures show up as untracked files.
 # =============================================================================
@@ -30,6 +37,12 @@
 *.gch
 *.pch
 *.a
+# ...except the i686 GL import libraries, which are BUILD INPUTS, not build
+# output: they live in third_party/ and the 32-bit editor cannot link without
+# them (docs/igi-re-parity/WINE_SMOKE.md §1, scripts/run-wine-smoke.sh).  The
+# blanket `*.a` rule above -- together with the unanchored `x86/` rule below --
+# is what hid them (issue #44).
+!third_party/GL/lib/x86/*.a
 *.la
 *.lai
 *.lib
@@ -45,7 +58,6 @@
 *.tlog
 *.log
 *.app
-*.zip
 
 # --- CMake -------------------------------------------------------------------
 CMakeCache.txt
@@ -73,11 +85,16 @@ Makefile
 *.opendb
 *.ncb
 *.db
-Debug/
-Release/
-x64/
-x86/
-vcbuild/
+# Anchored at the repository root: Visual Studio writes these next to the .sln.
+# Unanchored they matched at any depth, so `x86/` also swallowed
+# third_party/GL/lib/x86/ -- the i686 GL import libraries the Win32 build links
+# against (issue #44).  Root-level build trees are already covered by
+# `/build-*/`, and `/bin/` covers bin/Release/.
+/Debug/
+/Release/
+/x64/
+/x86/
+/vcbuild/
 
 # --- VS Code -----------------------------------------------------------------
 .vscode/
@@ -111,6 +128,10 @@ node_modules/
 claude.md
 cursor.md
 agents.md
+# `agents.md` only matches AGENTS.md on a case-insensitive filesystem (macOS),
+# which is the only reason the working copy is ignored today.  Name it explicitly
+# so the same file stays ignored from a case-sensitive checkout (Linux CI).
+AGENTS.md
 .env
 .env.*
 !.env.example

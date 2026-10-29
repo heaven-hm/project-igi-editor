@@ -92,10 +92,12 @@ editor's own log on. The source tree is never touched.
   `Downloads/IGI/igi1ed.exe` is never overwritten.
 
 The i686 link needs `third_party/GL/lib/x86/{libfreeglut.a,libglew32.a}`.
-They are gitignored (`.gitignore:79` has a blanket `x86/` rule), so they are
-copied in from
-`/Users/haseeb-mir/Documents/Code/project-igi-editor/third_party/GL/lib/x86/`
-by the script. **No `CMakeLists.txt` change was needed** — `CMakeLists.txt:209-217`
+They are not committed — the old blanket `x86/` rule in `.gitignore` hid them
+entirely (issue #44 re-anchored that rule to the repository root and re-included
+`third_party/GL/lib/x86/*.a`, so they now show up as untracked build inputs
+instead of being invisible) — so the script copies them in from
+`/Users/haseeb-mir/Documents/Code/project-igi-editor/third_party/GL/lib/x86/`.
+**No `CMakeLists.txt` change was needed** — `CMakeLists.txt:209-217`
 already selects `lib/x86` by pointer size and links `freeglut glew32 OpenGL32
 winmm`.
 
