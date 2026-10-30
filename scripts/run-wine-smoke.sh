@@ -21,10 +21,23 @@
 #   4. inspect     — `file` + `objdump -p` on the linked exe
 #   5. stage       — <STAGE_DIR>: the exe, `version`, `editor/`, the 32-bit
 #                    freeglut/glew32 DLLs, the MinGW runtime DLLs it imports,
-#                    and symlinks to every other retail data entry
+#                    and a REAL COPY (an APFS clone) of every other retail data
+#                    entry.  The repository's shaders/ are overlaid onto the
+#                    staged editor/ so a run cannot load a stale tier.
 #   6. run         — through a COPY of the user's Wine launcher placed inside
 #                    the staging directory, with a bounded timeout
 #   7. summary     — per-tier PASS/FAIL + what the run does and does not prove
+#
+# THE STAGE IS WRITE-ISOLATED, AND THAT IS CHECKED
+#   It used to symlink every retail entry back into the install, on the theory
+#   that Wine follows host symlinks transparently.  It does — for writes too.
+#   The editor recompiles <game>/editor/qed/*.qsc into .qvm at every start
+#   (source/config.cpp:20-27, :216-236) and writes the menu back to the file it
+#   was read from (source/app_menu.cpp:806), so a symlinked menusystem/ or
+#   config.qvm wrote STRAIGHT THROUGH to the retail install; that is what
+#   corrupted the retail menu QVMs.  The stage is now a real copy, no symlink
+#   may point back into the install, and the install's mtime+size manifest is
+#   compared before and after the run.  See scripts/lib/retail-stage.sh.
 #
 # THE pkill TRAP (read this before editing)
 #   The launcher begins with `pkill -9 -f "<the exe name>"`, which kills ANY
@@ -64,6 +77,14 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Shared staging helpers.  See scripts/lib/retail-stage.sh: the writable copy of
+# the retail install must be a REAL copy, because two code paths write into the
+# game tree (Config::Init's QSC->QVM recompile and the menu editor's write-back)
+# and a symlinked menusystem/ or config.qvm wrote straight through to the retail
+# install.
+# shellcheck source=lib/retail-stage.sh
+. "$REPO_ROOT/scripts/lib/retail-stage.sh"
 
 # ── configuration ───────────────────────────────────────────────────────────
 WINE_BIN="${IGI_WINE_BIN:-/Applications/Wine Stable.app/Contents/Resources/wine/bin/wine}"
@@ -108,7 +129,7 @@ while [ $# -gt 0 ]; do
     --tiers)        shift; TIERS="${1:?--tiers needs a comma list}" ;;
     --stage)        shift; STAGE_DIR="${1:?--stage needs a dir}" ;;
     --timeout)      shift; GUI_TIMEOUT="${1:?--timeout needs seconds}" ;;
-    -h|--help)      sed -n '2,66p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)      sed -n '2,76p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "error: unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -239,6 +260,13 @@ else
 say "==> 5. staging into $STAGE_DIR"
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR"
+
+# The retail tree is read-only and that is CHECKED, not asserted in prose: this
+# manifest is compared against one taken after the runs (section 8).
+RETAIL_BEFORE="$LOG_DIR/retail-before.manifest"
+retail_manifest "$DATA_DIR" "$RETAIL_BEFORE"
+say "   retail manifest: $(wc -l <"$RETAIL_BEFORE" | tr -d ' ') file(s) recorded under $DATA_DIR"
+
 cp -p "$EXE_SRC" "$STAGE_DIR/$EXE_NAME"
 say "   exe      $STAGE_DIR/$EXE_NAME"
 for extra in version; do
@@ -251,16 +279,54 @@ if [ -d "$REPO_ROOT/bin/Release/editor" ]; then
   cp -R "$REPO_ROOT/bin/Release/editor" "$STAGE_DIR/editor"
   say "   dir      editor/ ($(find "$STAGE_DIR/editor" -type f | wc -l | tr -d ' ') files)"
 fi
-# Everything else the editor needs comes from the retail install.  Symlink it
-# rather than copying 1.1 GB; Wine follows host symlinks transparently.
-LINKED=0
-for entry in "$DATA_DIR"/* "$DATA_DIR"/.[!.]*; do
-  [ -e "$entry" ] || continue
-  base="$(basename "$entry")"
-  [ -e "$STAGE_DIR/$base" ] && continue
-  ln -s "$entry" "$STAGE_DIR/$base" && LINKED=$((LINKED + 1))
-done
-say "   links    $LINKED retail entries symlinked from $DATA_DIR"
+
+# The shaders the editor loads come from <exeDir>/editor/shaders
+# (source/common.cpp:907), so the staged editor directory is overlaid with the
+# REPOSITORY's shaders/ rather than whatever the build last produced.  A stale
+# tier there is what made the terrain render fully fogged on every GL 4.1 host
+# (commit 33368d7c updated the C++ and shaders/ but not assets/editor/shaders,
+# which is what the POST_BUILD step copies).
+say "   shaders  overlaid from the repository:"
+if overlay_repo_shaders "$REPO_ROOT" "$STAGE_DIR" | sed 's/^/   /'; then
+  :
+else
+  say "   ERROR: could not overlay the repository's shaders onto the stage (exit 2)"
+  exit 2
+fi
+
+# Everything else the editor needs comes from the retail install.  This is a
+# REAL copy (an APFS clone), NOT a symlink farm: `Wine follows host symlinks
+# transparently` was true and was the problem, because it followed them for
+# WRITES too.  The editor recompiles <game>/editor/qed/*.qsc -> *.qvm at every
+# start (source/config.cpp:20-27, :216-236) and writes the menu back to
+# <game>/menusystem/ingamemenu.qvm (source/app_menu.cpp:806), so a symlinked
+# menusystem/ or config.qvm wrote through to the retail install.
+say "   game copy: a real copy of $DATA_DIR"
+if ! stage_retail_tree "$DATA_DIR" "$STAGE_DIR/game"; then
+  say "   ERROR: could not stage a real copy of $DATA_DIR (exit 2)"
+  exit 2
+fi
+# `game/` would be found by the launcher only as a subdirectory, so lay the
+# retail entries at the top level of the stage instead, and keep every one of
+# them a real file.
+if [ -d "$STAGE_DIR/game" ]; then
+  for entry in "$STAGE_DIR/game"/* "$STAGE_DIR/game"/.[!.]*; do
+    [ -e "$entry" ] || continue
+    base="$(basename "$entry")"
+    [ -e "$STAGE_DIR/$base" ] && continue
+    mv "$entry" "$STAGE_DIR/$base"
+  done
+  rm -rf "$STAGE_DIR/game"
+fi
+say "   staged   $(find "$STAGE_DIR" -maxdepth 1 -mindepth 1 | wc -l | tr -d ' ') retail entries as real files"
+ESCAPING_LINKS="$(find "$STAGE_DIR" -type l -exec readlink {} \; 2>/dev/null | grep -c "^$DATA_DIR" || true)"
+if [ "${ESCAPING_LINKS:-0}" -eq 0 ]; then
+  say "   no staged symlink escapes back into the retail tree"
+else
+  say "   ERROR: $ESCAPING_LINKS staged symlink(s) point back into $DATA_DIR (exit 2)"
+  find "$STAGE_DIR" -type l -exec readlink {} \; 2>/dev/null | grep "^$DATA_DIR" | head -5 | sed 's/^/          /'
+  exit 2
+fi
 # IGI_WINE_EXTRA_LINKS: extra "name=target" symlinks to add to the stage dir.
 # Used for the differential experiment on tests that resolve paths relative to
 # the current directory (e.g. the FNT suite wants `assets/editor/qed/*.fnt`).
@@ -378,6 +444,8 @@ T_HELP="skipped"; T_TESTS="skipped"; T_GUI="skipped"
 R_HELP="-"; R_TESTS="-"; R_GUI="-"
 S_HELP="-"; S_TESTS="-"; S_GUI="-"
 HELP_OK=1; TESTS_OK=1; GUI_OK=1
+# Cleared by section 8 if the retail install was written to during the run.
+RETAIL_OK=1
 
 # ── 6a. tier: help ──────────────────────────────────────────────────────────
 if tier_enabled help; then
@@ -450,13 +518,51 @@ if [ "$DO_BUILD" = 1 ] && [ "$DO_RESTORE" = 1 ] && [ "$RESTORE_NEEDED" = 1 ] && 
   say "==> restored $EXE_SRC from $BACKUP (the pre-existing artifact; --keep-output to skip)"
 fi
 
-# ── 8. summary ──────────────────────────────────────────────────────────────
+# ── 8. the stage did not reach the retail tree ──────────────────────────────
+#
+# This used to be a comment ("Symlink it rather than copying 1.1 GB; Wine
+# follows host symlinks transparently") and a printed sentence in the sibling
+# lane.  It was not true, and the retail menu QVMs were corrupted twice because
+# of it: the editor recompiles <game>/editor/qed/*.qsc into .qvm at every start
+# (source/config.cpp:20-27, :216-236) and writes the menu back to the file it was
+# read from (source/app_menu.cpp:806), so a symlinked menusystem/ or config.qvm
+# wrote straight through.  A sentence is not a check; mtime+size before and
+# after is.
+say ""
+hr
+say "==> 8. retail tree isolation"
+hr
+RETAIL_AFTER="$LOG_DIR/retail-after.manifest"
+retail_manifest "$DATA_DIR" "$RETAIL_AFTER"
+RETAIL_CHANGES_LOG="$LOG_DIR/retail-changes.txt"
+: >"$RETAIL_CHANGES_LOG"
+if retail_manifest_report "$RETAIL_BEFORE" "$RETAIL_AFTER" >"$RETAIL_CHANGES_LOG" 2>&1; then
+  say "   PASS  the retail tree is byte-for-byte unchanged (mtime+size, $(wc -l <"$RETAIL_AFTER" | tr -d ' ') files)"
+else
+  sed 's/^/   | /' "$RETAIL_CHANGES_LOG" | tee -a "$MAIN_LOG"
+  say "   (full list: $RETAIL_CHANGES_LOG)"
+  say "   FAIL  the retail tree at $DATA_DIR was WRITTEN TO during this run"
+  RETAIL_OK=0
+fi
+
+ESCAPING_LINKS="$(find "$STAGE_DIR" -type l -exec readlink {} \; 2>/dev/null | grep -c "^$DATA_DIR" || true)"
+if [ "${ESCAPING_LINKS:-0}" -eq 0 ]; then
+  say "   PASS  no staged symlink escapes back into the retail tree"
+else
+  say "   FAIL  $ESCAPING_LINKS staged symlink(s) escape into $DATA_DIR"
+  RETAIL_OK=0
+fi
+
+# ── 9. summary ──────────────────────────────────────────────────────────────
 say ""
 say "==================================================================="
 say " run-wine-smoke.sh summary"
 say "   tier help   : $T_HELP  (exit $R_HELP, ${S_HELP}s)"
 say "   tier tests  : $T_TESTS  (exit $R_TESTS, ${S_TESTS}s)"
 say "   tier gui    : $T_GUI  (exit $R_GUI, ${S_GUI}s)"
+say "   retail tree : $([ "${RETAIL_OK:-1}" -eq 1 ] && printf 'unchanged (verified)' || printf 'CHANGED — see the FAIL lines above')"
+say "   shaders     : the repository's shaders/ were overlaid onto the stage"
+say "   stage       : $STAGE_DIR (a real copy of $DATA_DIR, not a symlink farm)"
 say ""
 say "   What this proves: the Win32 binary links, loads under Wine, and the"
 say "   tiers above really executed (see the logs under $LOG_DIR)."
@@ -467,6 +573,10 @@ say "   logs: $LOG_DIR"
 say "   finished: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 say "==================================================================="
 
+if [ "${RETAIL_OK:-1}" -ne 1 ]; then
+  say "==> SMOKE FAILED (the retail install was written to) (exit 1)"
+  exit 1
+fi
 if [ "$HELP_OK" -eq 1 ] && [ "$TESTS_OK" -eq 1 ] && [ "$GUI_OK" -eq 1 ]; then
   say "==> SMOKE OK (exit 0)"
   exit 0

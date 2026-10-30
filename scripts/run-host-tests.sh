@@ -18,6 +18,27 @@
 # The complete transcript is teed to build-mingw/host-tests.log and the script
 # exits non-zero if any suite fails to build or fails a test.
 #
+# EVERY SUITE GETS A DISPOSITION
+#   run / excluded_by_policy / failed_to_build.  Only a suite named in
+#   tools/host-tests/host_exclusions.txt (the reviewed allowlist of suites that
+#   are architecturally not host-portable) may be dropped without failing the
+#   lane.  Anything else that does not build FAILS, and the OK line carries the
+#   drop counts:
+#
+#       OK: 1614 tests passed in 90 suites (29 excluded by policy, 0 dropped)
+#
+#   This replaced a runner that logged a failed trial compile and then discarded
+#   it, so one run silently dropped 18 suites and 540 tests and still printed OK
+#   with exit 0.  See scratch/tester/P1-host-lane-silent-drop.md.  The verdict
+#   logic is itself checked by tools/host-tests/host_lane_selftest.py, which runs
+#   as a preflight below.
+#
+# ONE RUN PER OBJECT CACHE
+#   Two concurrent invocations sharing build-mingw/host-tests is what exposed
+#   the silent drop, so the runner now takes an exclusive lock on the cache and
+#   refuses to start if another run holds it.  Give a concurrent run its own
+#   cache with IGI_HOST_OUT_DIR=<dir>.
+#
 # Corpus-backed suites use an installed retail game tree (QSC/QVM/RES/DAT/MTP/TEX
 # parsers, level weather, resource append).  Set IGI_GAME_PATH to point at one;
 # the default is /Users/haseeb-mir/Downloads/IGI.  Suites whose corpus input is
@@ -53,6 +74,19 @@ mkdir -p "$LOG_DIR" "$OUT_DIR"
   if ! command -v clang++ >/dev/null 2>&1 && ! command -v c++ >/dev/null 2>&1; then
     echo "error: no host C++ compiler on PATH (set IGI_HOST_CXX)" >&2
     exit 127
+  fi
+
+  # Guard on the guard.  The verdict logic that decides THIS lane's exit code is
+  # itself checked before anything is compiled, because that logic has already
+  # been wrong once in a way that mattered: it summed only the suites that
+  # happened to compile, so one run dropped 18 suites and 540 tests and still
+  # printed "OK: 1018 tests passed in 67 suites" with exit 0.  See
+  # tools/host-tests/host_lane_selftest.py and
+  # scratch/tester/P1-host-lane-silent-drop.md.
+  echo "==> host-lane verdict self-test"
+  if ! python3 "$REPO_ROOT/tools/host-tests/host_lane_selftest.py"; then
+    echo "error: the host lane's own verdict logic failed its self-test — refusing to run" >&2
+    exit 1
   fi
 
   # Corpus-backed suites read the installed-game root from the environment.

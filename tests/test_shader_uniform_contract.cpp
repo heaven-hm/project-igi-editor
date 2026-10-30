@@ -221,25 +221,33 @@ CppSites ScanCppSites() {
         if (!CouldDeclareOrUploadUniforms(raw)) continue;
         sites.files_scanned.insert(Relative(path));
 
-        for (std::sregex_iterator it(raw.begin(), raw.end(), lookup_re), end; it != end; ++it) {
+        // Comments are removed before the call sites are read, not just before
+        // the shader bodies.  A commented-out `glGetUniformLocation(prog, "x")`
+        // is not an upload: counting it would invent a name the C++ provides
+        // and could mask a real orphan.  String literals survive verbatim, so
+        // the inline shader sources below are unaffected.
+        const std::string text = StripCppComments(raw);
+
+        for (std::sregex_iterator it(text.begin(), text.end(), lookup_re), end; it != end; ++it) {
             sites.uploaded_names.insert((*it)[1].str());
         }
-        for (std::sregex_iterator it(raw.begin(), raw.end(), legacy_re), end; it != end; ++it) {
+        for (std::sregex_iterator it(text.begin(), text.end(), legacy_re), end; it != end; ++it) {
             const std::string name = (*it)[1].str();
             sites.uploaded_names.insert(name);
             sites.legacy_offsets[name] = std::stoi((*it)[2].str());
         }
-        for (std::sregex_iterator it(raw.begin(), raw.end(), block_bind_re), end; it != end; ++it) {
+        for (std::sregex_iterator it(text.begin(), text.end(), block_bind_re), end; it != end; ++it) {
             sites.block_bindings[(*it)[1].str()] = std::stoi((*it)[2].str());
         }
-        for (std::sregex_iterator it(raw.begin(), raw.end(), create_re), end; it != end; ++it) {
+        for (std::sregex_iterator it(text.begin(), text.end(), create_re), end; it != end; ++it) {
             sites.shader_filenames.push_back((*it)[1].str());
             sites.shader_filenames.push_back((*it)[2].str());
         }
 
         // The inline shader strings (renderer_objects*.cpp, renderer_rain.cpp,
         // renderer_smoke.cpp) declare uniforms too; those names are "provided"
-        // by the same C++ that compiles them.
+        // by the same C++ that compiles them.  ParseShaderSource() strips
+        // comments again, which is a no-op on already-stripped text.
         const ShaderDecls inline_decls = ParseShaderSource(raw);
         sites.inline_declared.insert(inline_decls.plain.begin(), inline_decls.plain.end());
         for (const auto& [name, block] : inline_decls.blocks) {

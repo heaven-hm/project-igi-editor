@@ -1,0 +1,79 @@
+# host_exclusions.txt — the REVIEWED allowlist of test suites the native host
+# lane (tools/host-tests/host_test_runner.py, driven by scripts/run-host-tests.sh)
+# deliberately does not build.
+#
+# WHY THIS FILE EXISTS
+#   The runner used to log a suite that failed to build and then DROP it: only
+#   the suites that compiled and ran were summed into the exit code, so a
+#   compile failure was invisible and the lane printed OK.  On 2026-10-30 one
+#   run dropped 18 suites and 540 tests relative to another run of the same
+#   command on the same commit and still printed
+#
+#       OK: 1018 tests passed in 67 suites
+#
+#   with exit 0.  See scratch/tester/P1-host-lane-silent-drop.md.
+#
+#   Now every candidate suite gets exactly one disposition, and a suite that
+#   does not build FAILS the lane unless it is named here.  Adding an entry is a
+#   deliberate, reviewable act; that is the whole point of the file.
+#
+# FORMAT
+#   <repo-relative path to the suite>  # <why it cannot be built on the host>
+#   Blank lines and lines starting with `#` are ignored.  Every entry must have
+#   a reason, and every entry must name a file that exists — the runner fails
+#   the lane otherwise (a manifest naming phantom files is a failure this
+#   project has already committed four times in CMakeLists.txt).
+#
+# WHAT BELONGS HERE
+#   Only suites that are architecturally NOT host-portable: they need windows.h
+#   or another Windows-only API, or they need an engine symbol whose translation
+#   unit does not compile with the host toolchain.  They still run in the
+#   Windows `igi_tests` binary, which is the gate for them (AGENTS.md: "the host
+#   lane is NOT the full test suite").
+#
+#   A suite that fails to build for any OTHER reason — a bad edit, a missing
+#   header, a new windows.h include, a genuinely broken test — must NOT be added
+#   here.  Fix it.  That is the regression this file exists to catch.
+#
+# REMOVING ENTRIES
+#   When a suite becomes host-portable the runner prints
+#       note: policy entry now builds and runs -- remove it: <path>
+#   and the entry should be deleted.  The lane does not fail on a stale entry
+#   (a suite getting better is not a regression), but the note keeps the list
+#   from rotting.
+
+# ── needs windows.h or another Windows-only declaration (trial compile fails) ──
+tests/test_verify_level.cpp        # includes <windows.h> directly
+tests/test_igi1conv_lightmap.cpp   # source/utils_igi1conv.h uses DWORD/Win32 types
+tests/test_runtime_subsystems.cpp  # source/app.h declares Windows-only types
+tests/test_config.cpp              # Config's Windows-only members do not exist on the host
+tests/test_verify_unit.cpp         # VerifyUnit's Windows-only members do not exist on the host
+tests/test_visual_integrity.cpp    # igi::VisualIntegrityView layout is Windows-only
+
+# ── links, then aborts on an engine symbol the host build cannot resolve ───────
+# The suite compiles, the link is satisfied lazily, and the first call to the
+# symbol dies inside dyld before any test result exists.  These are the
+# "engine-symbol suites" the P1 report names.
+tests/test_mcp_server.cpp          # mcp::CallRuntimeTool — source/runtime does not build on the host
+tests/test_mcp_runtime_tools.cpp   # mcp::CallRuntimeTool — same translation unit
+tests/test_mcp_string_tools.cpp    # Config::Get()
+tests/test_menu_text_res.cpp       # Config::Get()
+tests/test_logger.cpp              # Config::Get()
+tests/test_utils.cpp               # Utils::SetLogEnabled / Utils::GetIGIRootPath
+tests/test_dat_parser.cpp          # Utils::GetIGIRootPath()
+tests/test_dat_writer.cpp          # Utils::GetIGIRootPath()
+tests/test_graph_parser.cpp        # Utils::GetIGIRootPath()
+tests/test_res_parser.cpp          # Utils::GetIGIRootPath()
+tests/test_res_stream_append.cpp   # Utils::GetIGIRootPath()
+tests/test_tex_parser.cpp          # Utils::GetIGIRootPath()
+tests/test_mtp_parser.cpp          # Utils::GetIGIRootPath()
+tests/test_mtp_writer.cpp          # Utils::GetIGIRootPath()
+tests/test_fnt_parser.cpp          # Utils::GetIGIRootPath()
+tests/test_pickup_resolve.cpp      # Utils::TrimFileInPlace
+tests/test_animation.cpp           # AlignAnimationWorldToMefBind
+tests/test_vanilla_fixture_parity.cpp  # igi::QvmNativeRegistry::TrySetValueByName
+tests/test_level_weather.cpp       # File_FreeBuf(void*)
+tests/test_spline_task_tree.cpp    # File_FreeBuf(void*)
+tests/test_level_object_parse_paths.cpp  # File_FreeBuf(void*)
+tests/test_rail_source_corpus.cpp  # File_FreeBuf(void*)
+tests/test_cutscene_camera_corpus.cpp    # File_FreeBuf(void*)
