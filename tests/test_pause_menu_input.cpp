@@ -35,11 +35,9 @@
 #include <vector>
 
 #include "renderer/res_chunks.h"
-#include "renderer/tex_parser.h"
 #include "runtime/pause_menu_cursor.h"
 #include "runtime/pause_menu_input_policy.h"
 #include "runtime/pause_menu_state.h"
-#include "runtime/retail_pointer_sprite.h"
 
 namespace {
 
@@ -130,11 +128,6 @@ using igi::PauseMenuSpecialKeyAction;
 // translation unit reads through `RES_Extract` -> `Logger` -> `Config::Get()`,
 // which is not host-portable.  The corpus tests below do the archive walk and
 // the LOOP parse themselves, with the engine's own chunk helpers.
-using igi::kRetailPointerArchive;
-using igi::kRetailPointerHotspotX;
-using igi::kRetailPointerHotspotY;
-using igi::kRetailPointerResourceName;
-using igi::kRetailPointerSpriteName;
 
 }  // namespace
 
@@ -271,143 +264,3 @@ TEST(PauseMenuInput, ThePolicyUsesGlutsOwnSpecialKeyCodes) {
 
 // ─── ITEM 2: the menu pointer is the GAME's resource ────────────────────────
 
-TEST(PauseMenuInput, TheMenuPointerIsTheGamesPointerSprite) {
-    // `MenuManager_Update` HOOK 0x417CF0 (src/menu/menumanager.c:226-236):
-    //     Cursor_SetSprite(mm->pointer, MenuManager_FindSprite(mm, "pointer.spr"));
-    EXPECT_STREQ(kRetailPointerSpriteName, "pointer.spr");
-    // Read out of the in-game menu's archive - the same archive the editor's
-    // retail font comes from (source/runtime/pause_menu_font.cpp), and one of
-    // the two `MenuManager_LoadResources` walks
-    // (`Resource_ForEach(dir, MenuManager_AddResource, mm)`, :251).
-    EXPECT_STREQ(kRetailPointerArchive, "MENUSYSTEM/ingamemenu.res");
-    EXPECT_STREQ(kRetailPointerResourceName, "LOCAL:menusystem/pointer.spr");
-    // `Cursor_CreateHandler` HOOK 0x424C10 (src/widget/cursor.c:25-36).
-    EXPECT_EQ(kRetailPointerHotspotX, -2);
-    EXPECT_EQ(kRetailPointerHotspotY, 0);
-}
-
-TEST(PauseMenuInput, TheMenuPointerReplacesThePlatformCursor) {
-    // Before this change `ShouldDrawCustomCursor(true)` was false, so the menu
-    // showed the OS cursor and never drew the game's sprite at all.
-    EXPECT_FALSE(igi::ShouldDrawCustomCursor(/*pauseMenuVisible=*/true));
-    EXPECT_TRUE(igi::ShouldDrawCustomCursor(/*pauseMenuVisible=*/false));
-    // The platform cursor is the fallback ONLY when the sprite could not be read.
-    EXPECT_FALSE(igi::ShouldUseNativeCursor(/*pauseMenuVisible=*/true,
-                                            /*retailPointerAvailable=*/true));
-    EXPECT_TRUE(igi::ShouldUseNativeCursor(/*pauseMenuVisible=*/true,
-                                           /*retailPointerAvailable=*/false));
-    EXPECT_FALSE(igi::ShouldUseNativeCursor(/*pauseMenuVisible=*/false,
-                                            /*retailPointerAvailable=*/true));
-}
-
-TEST(PauseMenuInput, TheRetailPointerIsInTheArchiveUnderTheEnginesName) {
-    if (!MenuCorpusAvailable()) {
-        GTEST_SKIP() << "menusystem/ingamemenu.res not found; set IGI_GAME_PATH";
-    }
-    const std::vector<uint8_t> archive = ReadWholeFile(IngameMenuRes());
-    ASSERT_FALSE(archive.empty());
-    ASSERT_GE(archive.size(), 20u);
-    EXPECT_EQ(std::string(reinterpret_cast<const char*>(archive.data()), 4), "ILFF");
-    EXPECT_EQ(std::string(reinterpret_cast<const char*>(archive.data() + 16), 4), "IRES");
-
-    // The engine's resource identity is the NAME chunk text, upper-cased with
-    // '\' folded to '/' (`Resource_Create` 0x4B59F0, src/res/resource.c:65-104;
-    // `Resource_IsLoaded` 0x4B5B90 then compares the whole string).  Finding it
-    // by that name is what proves the member `MenuManager_FindSprite` looks up is
-    // the one in the shipped file.
-    const std::vector<uint8_t> member = FindMember(archive, kRetailPointerResourceName);
-    ASSERT_FALSE(member.empty())
-        << kRetailPointerResourceName << " is not in " << IngameMenuRes().string();
-    // 1884 bytes: a LOOP v9 header, one frame record and 20*22*4 = 1760 bytes of
-    // ARGB8888 pixels.
-    EXPECT_EQ(member.size(), 1884u);
-    EXPECT_EQ(std::string(reinterpret_cast<const char*>(member.data()), 4), "LOOP");
-}
-
-TEST(PauseMenuInput, TheRetailPointerParsesToTheEnginesFrameSize) {
-    if (!MenuCorpusAvailable()) {
-        GTEST_SKIP() << "menusystem/ingamemenu.res not found; set IGI_GAME_PATH";
-    }
-    const std::vector<uint8_t> archive = ReadWholeFile(IngameMenuRes());
-    ASSERT_FALSE(archive.empty());
-    const std::vector<uint8_t> member = FindMember(archive, kRetailPointerResourceName);
-    ASSERT_FALSE(member.empty());
-
-    TEXFile tex;
-    std::istringstream stream(std::string(reinterpret_cast<const char*>(member.data()),
-                                          member.size()),
-                              std::ios::binary);
-    ASSERT_TRUE(igi_tex::TEX_ParseStreamCore(stream, tex)) << tex.error;
-    ASSERT_EQ(tex.images.size(), 1u);
-    // 20x22 in ARGB8888 is what `Sprite_Load`'s v9 branch builds
-    // (src/res/sprite.c:235-248), which is what `Sprite_Width`/`Sprite_Height`
-    // (HOOK 0x4B6CE0 / 0x4B6D00) report to `Draw_Sprite`.
-    EXPECT_EQ(tex.version, 9u);
-    EXPECT_EQ(tex.images[0].width, 20u);
-    EXPECT_EQ(tex.images[0].height, 22u);
-    EXPECT_EQ(tex.images[0].mode, 3u);
-    EXPECT_EQ(tex.images[0].pixels.size(), 20u * 22u * 4u);
-}
-
-TEST(PauseMenuInput, TheArrowTipSitsOnThePointersHotspot) {
-    if (!MenuCorpusAvailable()) {
-        GTEST_SKIP() << "menusystem/ingamemenu.res not found; set IGI_GAME_PATH";
-    }
-    const std::vector<uint8_t> archive = ReadWholeFile(IngameMenuRes());
-    ASSERT_FALSE(archive.empty());
-    const std::vector<uint8_t> member = FindMember(archive, kRetailPointerResourceName);
-    ASSERT_FALSE(member.empty());
-    TEXFile tex;
-    std::istringstream stream(std::string(reinterpret_cast<const char*>(member.data()),
-                                          member.size()),
-                              std::ios::binary);
-    ASSERT_TRUE(igi_tex::TEX_ParseStreamCore(stream, tex)) << tex.error;
-    const TEXImage& frame = tex.images.front();
-
-    // The editor's own swizzle, the one `App::EnsureRetailPointerCursor` applies
-    // before uploading (`RetailPointerToRgba`, the same BGRA -> RGBA mapping
-    // `LoadOneSpr` uses for the loose `.spr` cursors).
-    const std::vector<uint8_t> rgba =
-        igi::RetailPointerToRgba(frame.pixels.data(), frame.pixels.size());
-    ASSERT_EQ(rgba.size(), static_cast<std::size_t>(frame.width) * frame.height * 4u);
-
-    // The arrow's tip is the first opaque pixel on the top row, at x = 2.  With
-    // `Cursor_CreateHandler`'s hotX = -2 (src/widget/cursor.c:29) the drawn tip
-    // lands exactly on the pointer - which is why the hotspot is -2,0 and not
-    // something invented for this change.
-    int first_opaque_x = -1;
-    for (int x = 0; x < static_cast<int>(frame.width); ++x) {
-        if (rgba[(0 * frame.width + x) * 4 + 3] != 0) { first_opaque_x = x; break; }
-    }
-    EXPECT_EQ(first_opaque_x, 2);
-    EXPECT_EQ(kRetailPointerHotspotX + first_opaque_x, 0);
-
-    // The pointer's body is opaque white: `Cursor_Draw` HOOK 0x424C40 passes
-    // 128.0f for r, g and b (src/widget/cursor.c:40) and `DrawSprite` multiplies
-    // by `COLOR_SCALE` = 1/128 (src/math/draw.c:12, :124-126), so 128 is full
-    // intensity - the sprite is drawn un-tinted.
-    const std::size_t probe = (10u * frame.width + 10u) * 4u;
-    ASSERT_LT(probe + 3u, rgba.size());
-    EXPECT_GT(rgba[probe + 3], 0) << "the pointer's body should be opaque";
-    EXPECT_GT(rgba[probe + 0], 200) << "the body should be white";
-    EXPECT_GT(rgba[probe + 1], 200);
-    EXPECT_GT(rgba[probe + 2], 200);
-}
-
-TEST(PauseMenuInput, TheArgba8888SwizzleMatchesTheEngineUploadPath) {
-    // `Pixel_Copy32` 0x517F00 (src/terrdraw/pixel.c:112-125) uploads the file's
-    // B,G,R,A as-is to a 32-bit surface; the editor's `pic_s` wants R,G,B,A, so
-    // the two colour channels are swapped and alpha is kept.  This is the same
-    // swizzle `LoadOneSpr` does for the loose `.spr` cursors (source/app_ui.cpp).
-    const uint8_t bgra[8] = {0x11, 0x22, 0x33, 0x44, 0xAA, 0xBB, 0xCC, 0xDD};
-    const std::vector<uint8_t> rgba = igi::RetailPointerToRgba(bgra, sizeof(bgra));
-    ASSERT_EQ(rgba.size(), sizeof(bgra));
-    EXPECT_EQ(rgba[0], 0x33);
-    EXPECT_EQ(rgba[1], 0x22);
-    EXPECT_EQ(rgba[2], 0x11);
-    EXPECT_EQ(rgba[3], 0x44);
-    EXPECT_EQ(rgba[4], 0xCC);
-    EXPECT_EQ(rgba[5], 0xBB);
-    EXPECT_EQ(rgba[6], 0xAA);
-    EXPECT_EQ(rgba[7], 0xDD);
-}

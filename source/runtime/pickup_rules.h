@@ -247,10 +247,31 @@ bool PickupTouchesPlayer(float model_radius, const double pickup_pos[3],
                          const double player_pos[3]);
 
 // The three task types a level PLACES that the engine's touch broadcast can
-// acquire. AddAmmo is deliberately excluded: it is created by the weapon code as
-// a child of a human, never authored into a level (AddAmmo_Create
-// 0x46DC20, src/comprun/pickup.c:782-788), and it declares no Position
-// parameter (pickup.c:776-777).
+// acquire. AddAmmo is deliberately excluded, and for two independent reasons
+// that are both properties of the ENGINE, not of what authors happen to write:
+//
+//   1. it declares no Position parameter, so it has no world place for the
+//      touch test to measure from (pickup.c:776-777);
+//   2. it registers no handler on the touch event at all — its
+//      `Game_GetEvent1` slot is never set, and `AddAmmo_Run` HOOK 0x46DC40
+//      (pickup.c:790-798) grants on the frame the task runs, not on contact.
+//
+// NOTE ON AN EARLIER CLAIM HERE.  This comment used to say AddAmmo is "created
+// by the weapon code as a child of a human, never authored into a level".  The
+// first half is right — `AddAmmo_Create` HOOK 0x46DC20 (pickup.c:782-788) is
+// reached through the task type's own create slot — but "never authored" is
+// FALSE, and the retail data says so:
+//
+//   MISSIONS/location0/LEVEL2/objects.qsc:36
+//     Task_DeclareParameters("AddAmmo", "ID", "EnumString32", "Ammo", "Int16");
+//   MISSIONS/location0/LEVEL2/objects.qsc:1080
+//     Task_New(-1, "AddAmmo", "", "AMMO_ID_919", 49)
+//
+// placed as a child of the HumanPlayer task opened at :1074.  That is the
+// authored form of "give the player 49 rounds of 9 mm at level start", so the
+// editor's inspector must be able to show and edit it — see the AddAmmo row
+// derived in source/level/task_schema.cpp (issue #49).  What stays true is that
+// AddAmmo is not a PLACED pickup, which is all this predicate decides.
 bool IsPlacedPickupType(const std::string& task_type);
 
 // ---------------------------------------------------------------------------

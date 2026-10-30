@@ -50,14 +50,6 @@ struct TEXFile {
 // Parse a .tex binary file. Returns TEXFile with valid=false on any error.
 TEXFile TEX_Parse(const std::string& filepath);
 
-// Parse a .tex/.spr image that lives INSIDE a `.res` archive, from the bytes
-// `RES_Extract` returned for it.  The engine never has a file here either: it
-// hands `Sprite_Load` (HOOK 0x4B6720, src/res/sprite.c:162-207) the pointer
-// `Resource_Load` returned.  `label` is only used for the log lines.
-// This is the path the retail menu cursor takes
-// (`LOCAL:menusystem/pointer.spr` in `menusystem/ingamemenu.res`).
-TEXFile TEX_ParseBytes(const uint8_t* data, std::size_t size, const std::string& label);
-
 // Export each image in tex as a TGA file into outdir.
 // Names: <basename>_00.tga, <basename>_01.tga, etc. (just _00.tga if 1 image).
 // Returns number of files written.

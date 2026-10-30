@@ -34,6 +34,7 @@ WeaponDefinition CreateVanillaWeapon(
     float random_recoil_yaw,
     float effective_range_meters,
     float gameplay_damage,
+    float retail_engine_damage,
     int32_t calibre_id,
     const char* fire_sound,
     const char* fire_loop_end_sound,
@@ -58,6 +59,7 @@ WeaponDefinition CreateVanillaWeapon(
     definition.random_recoil_yaw = random_recoil_yaw;
     definition.effective_range_meters = effective_range_meters;
     definition.damage = gameplay_damage;
+    definition.engine_damage = retail_engine_damage;
     definition.calibre_id = calibre_id;
     definition.fire_sound = fire_sound;
     definition.fire_loop_end_sound = fire_loop_end_sound;
@@ -142,73 +144,88 @@ std::string NormalizeScriptIdentifier(std::string script_identifier) {
 const std::vector<WeaponDefinition>& WeaponSystem::GetVanillaWeaponCatalog() {
     static const std::vector<WeaponDefinition> catalog = {
         // Values below are the fixed DefineWeaponType fields from the vanilla
-        // WEAPONS/*/WEAPON.QVM roster. Damage remains the runtime bridge value;
-        // the separate ammo QVM damage table is the next ballistics seam.
+        // WEAPONS/*/WEAPON.QVM roster, and every one of them is checked against
+        // the shipping files by tests/test_weapon_config.cpp
+        // (WeaponConfigCorpus.TheRetailRosterMatchesTheParsedWeaponTypes).
+        //
+        // `gameplay_damage` is the editor's own playtest value and is NOT a
+        // retail field; `retail_engine_damage` is DefineWeaponType argument 10
+        // (`WeaponType` + 0x654), which is what the engine applies to a human —
+        // see weapon_system.h for the full citation chain.  There is no damage
+        // field anywhere in the ammunition table: DefineAmmoType
+        // HOOK 0x47CAD0 (src/ammotype/ammotype.c:88-115) declares none, so an
+        // earlier note here that "the separate ammo QVM damage table is the next
+        // ballistics seam" was wrong about where damage lives.
         CreateVanillaWeapon(1, "WEAPON_ID_GLOCK", "Glock 17", "117_01_1",
             400.0f, 400.0f, 17, 1, 1, -1.5f, 1.5f, 1.5f, 0.0f, 0.0f, 0.0f,
-            80.0f, 25.0f, 919, "glock_shot_1", "glock_shot_2"),
+            80.0f, 25.0f, 0.25f, 919, "glock_shot_1", "glock_shot_2"),
         CreateVanillaWeapon(3, "WEAPON_ID_DESERTEAGLE", "Desert Eagle", "106_01_1",
             400.0f, 200.0f, 10, 1, 1, -1.5f, 1.5f, 4.0f, 0.0f, 0.0f, 0.0f,
-            40.0f, 50.0f, 919, "deagle_shot_1", "deagle_shot_1"),
+            40.0f, 50.0f, 0.5f, 919, "deagle_shot_1", "deagle_shot_1"),
         CreateVanillaWeapon(4, "WEAPON_ID_M16A2", "M16 A2", "108_01_1",
             950.0f, 550.0f, 20, 20, 1, -2.0f, 2.0f, 0.8f, 0.0f, 1.2f, 0.4f,
-            200.0f, 35.0f, 556, "m16_loop", "m16_loop_e"),
+            200.0f, 35.0f, 0.3f, 556, "m16_loop", "m16_loop_e"),
         CreateVanillaWeapon(5, "WEAPON_ID_AK47", "AK47", "100_01_1",
             710.0f, 650.0f, 30, 30, 1, -3.5f, 3.5f, 0.8f, 0.0f, 0.6f, 0.6f,
-            2000.0f, 42.0f, 762, "ak47_loop", "ak47_loop_e"),
+            2000.0f, 42.0f, 0.3f, 762, "ak47_loop", "ak47_loop_e"),
         CreateVanillaWeapon(6, "WEAPON_ID_UZI", "Uzi", "111_01_1",
             400.0f, 700.0f, 32, 32, 1, -5.0f, 5.0f, 0.9f, 0.0f, 0.7f, 0.7f,
-            50.0f, 28.0f, 919, "uzi_loop", "uzi_loop_e"),
+            50.0f, 28.0f, 0.15f, 919, "uzi_loop", "uzi_loop_e"),
         CreateVanillaWeapon(7, "WEAPON_ID_MP5SD", "Mp5 SD3", "103_01_1",
             400.0f, 700.0f, 32, 32, 1, -2.0f, 2.0f, 0.8f, 0.0f, 0.8f, 0.0f,
-            80.0f, 28.0f, 919, "mp5sd_loop", "mp5sd_loop_e"),
+            80.0f, 28.0f, 0.15f, 919, "mp5sd_loop", "mp5sd_loop_e"),
         CreateVanillaWeapon(8, "WEAPON_ID_SPAS12", "Spas 12", "109_01_1",
             600.0f, 40.0f, 7, 1, 30, 20.0f, 20.0f, 8.0f, 3.0f, 0.0f, 0.0f,
-            30.0f, 45.0f, 12, "spas12_shot_1", "spas12_shot_1"),
+            30.0f, 45.0f, 0.25f, 12, "spas12_shot_1", "spas12_shot_1"),
         CreateVanillaWeapon(9, "WEAPON_ID_JACKHAMMER", "Jackhammer", "125_01_1",
             280.0f, 180.0f, 12, 12, 30, -14.0f, 14.0f, 5.0f, 0.0f, 0.0f, 0.0f,
-            50.0f, 45.0f, 12, "jackh_loop", "jackh_loop_e"),
+            50.0f, 45.0f, 0.05f, 12, "jackh_loop", "jackh_loop_e"),
         CreateVanillaWeapon(10, "WEAPON_ID_MINIMI", "Minimi", "107_01_1",
             1200.0f, 800.0f, 60, 60, 1, -4.5f, 4.5f, 0.2f, 0.0f, -1.0f, 0.0f,
-            300.0f, 35.0f, 556, "minimi_loop", "minimi_loop_e"),
+            300.0f, 35.0f, 0.3f, 556, "minimi_loop", "minimi_loop_e"),
         CreateVanillaWeapon(11, "WEAPON_ID_DRAGUNOV", "Dragunov", "105_01_1",
             6000.0f, 50.0f, 10, 1, 1, -0.05f, 0.05f, 3.5f, 0.0f, 0.0f, 0.0f,
-            300.0f, 95.0f, 10004, "svddrag_shot_1", "svddrag_shot_1"),
+            300.0f, 95.0f, 0.5f, 10004, "svddrag_shot_1", "svddrag_shot_1"),
         CreateVanillaWeapon(12, "WEAPON_ID_RPG18", "LAW 80", "110_01_1",
             5.0f, 40.0f, 1, 1, 1, 0.0f, 0.0f, 12.0f, 0.0f, 0.0f, 0.0f,
-            600.0f, 100.0f, 1000, "rpg_launch_1", "rpg_launch_1", true,
+            600.0f, 100.0f, 0.25f, 1000, "rpg_launch_1", "rpg_launch_1", true,
             ProjectileType::Rocket),
         CreateVanillaWeapon(13, "WEAPON_ID_UZIX2", "Uzi x 2", "111_04_1",
             400.0f, 1400.0f, 64, 64, 1, -5.0f, 5.0f, 0.9f, 0.0f, 0.7f, 0.7f,
-            50.0f, 28.0f, 919, "uzix2_loop", "uzi_loop_e"),
+            50.0f, 28.0f, 0.15f, 919, "uzix2_loop", "uzi_loop_e"),
         CreateVanillaWeapon(14, "WEAPON_ID_GRENADE", "Hand Grenade", "135_01_1",
             15.0f, 50.0f, 1, 1, 1, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-            1.0f, 100.0f, 10000, "grenade_shot_1", "grenade_shot_1", true,
+            1.0f, 100.0f, 0.5f, 10000, "grenade_shot_1", "grenade_shot_1", true,
             ProjectileType::FragGrenade),
         CreateVanillaWeapon(15, "WEAPON_ID_FLASHBANG", "FlashBang", "137_01_1",
             15.0f, 50.0f, 1, 1, 1, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-            1.0f, 1.0f, 10003, "grenade_shot_1", "grenade_shot_1", true,
+            1.0f, 1.0f, 0.25f, 10003, "grenade_shot_1", "grenade_shot_1", true,
             ProjectileType::Flashbang),
         CreateVanillaWeapon(16, "WEAPON_ID_PROXIMITYMINE", "Proximitymine", "136_01_1",
             15.0f, 60.0f, 1, 1, 1, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-            1.5f, 100.0f, 10001, "grenade_shot_1", "grenade_shot_1", true,
+            1.5f, 100.0f, 0.25f, 10001, "grenade_shot_1", "grenade_shot_1", true,
             ProjectileType::ProximityMine),
         // Rounds/Clip is 10, not 1. WEAPONS/BINOCULARS/WEAPON.QVM calls
         // DefineWeaponType with argument 16 = 10; that is the retail table's
         // "Rounds/Clip" field, stored at WeaponType + 0x648 (game/game.c:630)
         // and granted verbatim by a GunPickup (comprun/pickup.c:583).
+        //
+        // The two sounds are "bin_zoom_1", not empty: the corpus test in
+        // tests/test_weapon_config.cpp reads arguments 44 and 45 out of the
+        // shipping file and found the empty strings here (issue #49).  Both
+        // slots carry the SAME string-pool entry in the retail file.
         CreateVanillaWeapon(18, "WEAPON_ID_BINOCULARS", "Binoculars", "102_01_1",
             8.0f, 50.0f, 10, 1, 1, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-            1.0f, 0.0f, 919, "", "", false),
+            1.0f, 0.0f, 0.25f, 919, "bin_zoom_1", "bin_zoom_1", false),
         CreateVanillaWeapon(19, "WEAPON_ID_MEDIPACK", "Medipack", "121_01_1",
             0.0f, 120.0f, 1, 60, 1, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-            1.0f, 0.0f, 10005, "glock_shot_1", "glock_shot_2"),
+            1.0f, 0.0f, 0.0f, 10005, "glock_shot_1", "glock_shot_2"),
         CreateVanillaWeapon(20, "WEAPON_ID_KNIFE", "Knife", "133_01_1",
             10.0f, 140.0f, 1, 1, 1, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-            1.0f, 100.0f, -1, "knife_1", "knife_2", false),
+            1.0f, 100.0f, 0.1f, -1, "knife_1", "knife_2", false),
         CreateVanillaWeapon(21, "WEAPON_ID_COLT", "Colt Anaconda", "101_01_1",
             360.0f, 60.0f, 6, 1, 1, -2.0f, 2.0f, 6.0f, 0.0f, 0.0f, 0.0f,
-            80.0f, 50.0f, 44, "colt_shot_1", "colt_shot_1"),
+            80.0f, 50.0f, 0.5f, 44, "colt_shot_1", "colt_shot_1"),
     };
     return catalog;
 }

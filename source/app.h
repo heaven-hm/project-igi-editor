@@ -75,12 +75,6 @@ public:
   bool GetTerrainEditEnabled() const;
   void TogglePauseMenu();
   bool GetPauseMode() const;
-  // True once the GAME's own menu pointer (`LOCAL:menusystem/pointer.spr` out of
-  // `menusystem/ingamemenu.res`) has been uploaded.  `main.cpp`'s display
-  // callback keeps the platform cursor hidden while it is available, because
-  // `App::DrawCustomCursor` draws that sprite instead; a failed load leaves the
-  // platform cursor as the fallback so the menu stays usable.
-  bool HasRetailPointerCursor() const { return retail_pointer_tex_ != 0; }
 
   // ── the live pause menu (#74) ───────────────────────────────────────────────
   //
@@ -306,17 +300,6 @@ private:
   void LoadHelpEntries(); // load keybinding lines from qedkeybindings.qsc
   void UpdateCursorMode();
   void DrawCustomCursor();
-
-  // The GAME's own menu pointer, `LOCAL:menusystem/pointer.spr` out of
-  // `menusystem/ingamemenu.res` — the sprite `MenuManager_Update` HOOK 0x417CF0
-  // points the engine's cursor at (src/menu/menumanager.c:233).  Drawn while the
-  // pause menu is open, in place of the platform cursor.
-  GLuint retail_pointer_tex_ = 0;
-  int retail_pointer_w_ = 0;
-  int retail_pointer_h_ = 0;
-  bool retail_pointer_tried_ = false;
-  void EnsureRetailPointerCursor();
-  void DrawRetailPointerCursor();
 
 	std::set<std::string> ai_model_ids_; // AITYPE_ model IDs from IGIModels.json
 

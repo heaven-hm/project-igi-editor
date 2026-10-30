@@ -179,6 +179,26 @@ QVMFile QVM_Parse(const std::string& filepath) {
                     std::to_string(qvm.header.unk08) + ")";
         return qvm;
     }
+    // `unk08` is the bytecode MINOR version.  The engine accepts anything >= 5
+    // and then decodes with the version-5 opcode table only, so a container
+    // written by a toolchain that used another minor is accepted and then
+    // misread.  Every retail IGI1 container carries 5; record the others as a
+    // non-fatal note so the decode error names the real cause.
+    //
+    // NOTE the accept/reject decision is UNCHANGED — it is the engine's.  This
+    // only explains a failure the engine would hit too.
+    if (qvm.header.unk08 != 5) {
+        qvm.warning =
+            "QVM header word 0x08 is " + std::to_string(qvm.header.unk08) +
+            ", not the retail 5.  The engine refuses only values below 5 "
+            "(src/qvm/qvm.c:443-446) and always decodes with its version-5 "
+            "opcode table, so a container that uses another bytecode minor is "
+            "accepted here and its instructions are then misread.  The "
+            "mod-author toolchain reads this word as ver_minor and switches "
+            "opcode tables on it (backend/NeonixTools/src/Qvm.cs:213-224, "
+            "46-50); this reader does not, because IGI-RE has no such table for "
+            "IGI1.";
+    }
 
     // The two pools (src/qvm/qvm.c:472-483).  The engine keys both on the
     // table's byte size, not on the text size.
@@ -506,6 +526,17 @@ QVMFile QVM_Parse(const std::string& filepath) {
             case QVMOpType::JSR:
             case QVMOpType::ILLEGAL:
                 qvm.error = "Illegal instruction";
+                if (!qvm.warning.empty())
+                    qvm.error += " (bytecode minor " +
+                                 std::to_string(qvm.header.unk08) +
+                                 "; the engine decodes version-5 bytecode only)";
+                else if (static_cast<int>(opbyte) == static_cast<int>(QVMOpType::RET))
+                    // The retail writer never emits a bare RET as the first
+                    // instruction of a code section: every retail container
+                    // opens with a callee push.  Report the byte so a foreign
+                    // bytecode order is diagnosable rather than mysterious.
+                    qvm.error += " (opcode 0x13 = RET at offset " +
+                                 std::to_string(pos) + ")";
                 qvm.error_code = QVM_ERR_ILLEGAL;
                 return qvm;
 

@@ -283,7 +283,17 @@ TEST(VanillaWeaponSoundCatalogTest, UsesSoundNamesPresentInVanillaWeaponQvms) {
         {14, "grenade_shot_1"},
         {15, "grenade_shot_1"},
         {16, "grenade_shot_1"},
-        {18, ""},
+        // Binoculars: WEAPONS/BINOCULARS/WEAPON.QVM passes the SAME string-pool
+        // entry for DefineWeaponType arguments 44 and 45, and that entry is
+        // "bin_zoom_1".  This expectation used to be the empty string, which no
+        // shipping weapon file contains — the corpus check in
+        // tests/test_weapon_config.cpp (WeaponConfigCorpus.
+        // TheRetailRosterMatchesTheParsedWeaponTypes) reads the argument out of
+        // the file and is what found it.  The name is referenced but has no
+        // sample in any .res in the shipping install, so
+        // AudioAssetResolver::ResolveWavPath returns empty for it and the
+        // editor stays silent exactly as before.
+        {18, "bin_zoom_1"},
         {19, "glock_shot_1"},
         {20, "knife_1"},
         {21, "colt_shot_1"},

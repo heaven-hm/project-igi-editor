@@ -12,6 +12,10 @@
 // carries the IGI-RE ParamTable_Add order and the retail Task_DeclareParameters name,
 // so the inspector rows below cannot drift from the engine.
 #include "runtime/spline_rules.h"
+// The authored GunPickup / AmmoPickup / AddAmmo parameter layouts (issue #49).
+// Every row carries the IGI-RE ParamTable_Add order and argument type, so the
+// three inventory-drop task types are derived rather than hand-copied.
+#include "runtime/pickup_rules.h"
 
 namespace TaskSchemaNS {
 
@@ -202,7 +206,15 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
           add(sc, "Position", "ObjectPos", 3);
           add(sc, "Heading",  "Real32",    6);
           add(sc, "Model",    "String16",  7); }
-        // Generic positioned objects: pos@3, ori@6, model scanned from arg 9+
+        // Generic positioned objects: pos@3, ori@6, model scanned from arg 9+.
+        //
+        // GenericPickup is deliberately NOT in this list any more (issue #49):
+        // it is one of the four pickup-family layouts and is built by the
+        // `igi::PickupLayouts()` loop below, so listing it here as well would
+        // give it six rows instead of three.  It used to be here, and its three
+        // rows were identical to the derived ones — which is exactly the
+        // duplication the derivation removes.
+        //
         // GunPickup is deliberately NOT in this list: its third parameter is not
         // a model. See the dedicated block below.  AlarmLight is NOT either: its
         // arg 9 is the fourth float of the orientation matrix, and the first
@@ -210,7 +222,7 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
         // "Model @9" row was label and offset both wrong.  It has its own block
         // at the end of this function (issue #43).
         for (const char* t : {"Elevator","Generator",
-                               "GenericPickup","GenericTBA","Plane","Radio",
+                               "GenericTBA","Plane","Radio",
                                "RotatingObject","Siren"}) {
             add(s[t], "Position",    "ObjectPos", 3);
             add(s[t], "Orientation", "Real32x9",  6);
@@ -219,8 +231,9 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
         // GenericPickup's third parameter really is a model — IGI-RE
         // src/comprun/pickup.c:269-271 GenericPickup_Init (0x46C1xx) adds
         //   pos ObjectPos @3, obj.matrix Real32x9 @6, model Param_String16 @9
-        // (the loop above already covers it; recorded here so the GunPickup
-        // contrast below is unambiguous).
+        // — which is why it is the one pickup-family layout whose third row is
+        // "Model"/String16 rather than an enum.  It is built by the family loop
+        // below; recorded here so the GunPickup contrast is unambiguous.
         //
         // GunPickup: IGI-RE src/comprun/pickup.c:460-481 GunPickup_Init
         // (HOOK 0x46CB70) does ParamTable_New(3) and adds
@@ -232,10 +245,47 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
         // weapon-ID slot "Model" of type String16 and offered a free-text box
         // for a value the engine resolves through the weapon enum. Authoring a
         // model name there produced a GunPickup the engine cannot resolve.
-        { auto& sc = s["GunPickup"];
-          add(sc, "Position",    "ObjectPos",     3);
-          add(sc, "Orientation", "Real32x9",      6);
-          add(sc, "ID",          "EnumString32",  9); }
+        //
+        // ─── The pickup family is DERIVED, not hand-copied (issue #49) ───────
+        //
+        // GunPickup, AmmoPickup and AddAmmo are the three task types that put a
+        // weapon or ammunition into a level, and `igi::PickupLayouts()`
+        // (source/runtime/pickup_rules.cpp:75-84) already carries each one's
+        // ParamTable_Add order, its authored names, its argument type and the
+        // argument index of its enum / count.  Deriving the rows from that table
+        // is the same construction Smoke, AlarmLight and SplineObj use above, so
+        // the inspector cannot drift from the ported engine tables.
+        //
+        // THE BUG THIS FIXES: `AddAmmo` had NO row at all, so
+        // `GetSchema("AddAmmo")` returned nullptr and the property panel
+        // rendered nothing for it (renderer_draw.cpp:2327-2335 collects child
+        // schemas with `GetSchema(child.type)` and skips a null one).  AddAmmo
+        // is not a hypothetical type — it is the authored way to give the PLAYER
+        // ammunition at level start, and the retail data uses it:
+        //   MISSIONS/location0/LEVEL2/objects.qsc:36
+        //     Task_DeclareParameters("AddAmmo", "ID", "EnumString32", "Ammo", "Int16")
+        //   MISSIONS/location0/LEVEL2/objects.qsc:1080
+        //     Task_New(-1, "AddAmmo", "", "AMMO_ID_919", 49)
+        // as a child of the HumanPlayer task opened at :1074.  Its engine body is
+        // AddAmmo_Run HOOK 0x46DC40 (pickup.c:790-798).
+        for (int li = 0; li < igi::PickupLayoutCount(); ++li) {
+            const igi::PickupLayout& layout = igi::PickupLayouts()[li];
+            auto& sc = s[layout.task_type];
+            int offset = 3;  // argTokens: [0]=id, [1]=type, [2]=name
+            for (int i = 0; i < layout.param_count; ++i) {
+                const igi::PickupParam& p = layout.params[i];
+                const char* type_name = "String16";
+                switch (p.type) {
+                    case igi::PickupParamType::ObjectPos:    type_name = "ObjectPos";    break;
+                    case igi::PickupParamType::Real32x9:     type_name = "Real32x9";     break;
+                    case igi::PickupParamType::String16:     type_name = "String16";     break;
+                    case igi::PickupParamType::EnumString32: type_name = "EnumString32"; break;
+                    case igi::PickupParamType::Int16:        type_name = "Int16";        break;
+                }
+                add(sc, p.name, type_name, offset);
+                offset += igi::PickupParamArgCount(p.type);
+            }
+        }
         // StationaryGun (the player-mannable machinegun): IGI-RE
         // src/statgun/statgun.c:142-150 StationaryGun_Open (0x473ED0) adds
         // exactly eight params in this order —
@@ -290,11 +340,11 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
         // (pickup.c:709-717), so it is an expression over the ammo enum, and the
         // fourth is what AmmoPickup_Touch hands the toucher as msg.count
         // (pickup.c:744) — never the touching weapon's clip size.
-        { auto& sc = s["AmmoPickup"];
-          add(sc, "Position",    "ObjectPos",    3);
-          add(sc, "Orientation", "Real32x9",     6);
-          add(sc, "ID",          "EnumString32", 9);
-          add(sc, "Ammo",        "Int16",       10); }
+        //
+        // The row itself is built by the pickup-family loop above from
+        // igi::PickupLayouts()[AmmoPickup] (pickup_rules.cpp:80-81), which
+        // carries exactly this order; it is not repeated here so there is one
+        // definition, not two.
 
         // ─── The two retail FX task types (issue #43) ────────────────────────
         //

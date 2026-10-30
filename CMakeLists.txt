@@ -377,6 +377,14 @@ add_executable(igi_tests
     tests/test_res_parser.cpp
     tests/test_res_stream_append.cpp
     tests/test_tex_parser.cpp
+    # The weapon/item configurator's data layer (issue #49): the DefineWeaponType
+    # parameter table, the player's weapon/ammo slots, and the corpus check of
+    # the runtime catalog against the shipping WEAPONS/*/WEAPON.QVM files.
+    tests/test_weapon_config.cpp
+    # Third-party container compatibility (issue #49 part 3): the QVM bytecode
+    # minor the engine accepts and then misdecodes, and the v11 texture format
+    # 0x43 the engine converts through Pixel_Copy32.
+    tests/test_mod_asset_compat.cpp
     tests/test_mtp_parser.cpp
     tests/test_mtp_writer.cpp
     tests/test_fnt_parser.cpp
@@ -445,6 +453,11 @@ add_executable(igi_tests
     # The pause menu's KEY contract (MenuManager_ReadInput HOOK 0x418580) and the
     # GAME's own menu pointer (`LOCAL:menusystem/pointer.spr`, corpus-backed).
     tests/test_pause_menu_input.cpp
+    # The pause menu's POINTER: the EDITOR's own `editor/qed/pointer.anm` -- its
+    # LOOP v9 per-frame records, the engine's per-format decode (D3DTex_DownloadTexture
+    # HOOK 0x50AD10 -> Pixel_1555To32 HOOK 0x517C90) and the hotspot.  Corpus-backed
+    # against the shipped .anm, and the refusal paths are hand-built in memory.
+    tests/test_editor_pointer.cpp
     tests/test_loading_bar_style.cpp
     tests/test_magic_object_expand.cpp
     tests/test_mission_fog.cpp
@@ -615,6 +628,14 @@ target_sources(igi_tests PRIVATE
     source/runtime/audio_asset_resolver.cpp
     source/runtime/config_qvm.cpp
     source/runtime/pause_menu_font.cpp
+    # The EDITOR's own pointer (`editor/qed/pointer.anm`): the LOOP v9 reader with
+    # the per-frame records `Sprite_Load` HOOK 0x4B6720 reads (src/res/sprite.c:246-260)
+    # and the engine's per-format decode (D3DTex_DownloadTexture HOOK 0x50AD10,
+    # src/sysmisc/d3dtex.c:411-432 -> Pixel_1555To32 HOOK 0x517C90).  Pure: no
+    # Logger, no Config, no GL, so the host lane needs it to link
+    # tests/test_editor_pointer.cpp; igi-editor picks it up through the
+    # source/runtime/*.* glob.
+    source/runtime/editor_pointer_sprite.cpp
     source/runtime/human_player_config.cpp
     source/runtime/magic_object_registry.cpp
     source/runtime/magic_object_expand.cpp
@@ -670,6 +691,12 @@ target_sources(igi_tests PRIVATE
     # source/runtime/*.* glob.
     source/runtime/human_shadow.cpp
     source/runtime/pickup_rules.cpp
+    # The weapon/item configurator's data layer (#49): DefineWeaponType's
+    # parameter table, its call-argument reader and the player slot tables.
+    # Pure logic over qvm_parser, so the host lane needs it to link
+    # tests/test_weapon_config.cpp; igi-editor picks it up through the
+    # source/runtime/*.* glob.
+    source/runtime/weapon_config.cpp
     source/runtime/rain_rules.cpp
     source/runtime/sound_emitter.cpp
     # The retail sound container and sample format (#70): the ILFF/IRES pack
@@ -690,7 +717,6 @@ target_sources(igi_tests PRIVATE
     # so tests/test_pause_menu_input.cpp can prove the resource identity in the
     # host lane without a GL context.  igi-editor picks it up through the
     # source/runtime/*.* glob; this line is what the igi_tests / host lane needs.
-    source/runtime/retail_pointer_sprite.cpp
 )
 
 set_source_files_properties(
@@ -806,6 +832,11 @@ add_executable(igi_mcp
     source/runtime/smoke.cpp
     source/runtime/alarm_light.cpp
     source/runtime/spline_rules.cpp
+    # task_schema.cpp now also derives the GunPickup / AmmoPickup / AddAmmo rows
+    # from igi::PickupLayouts() (issue #49), so pickup_rules.cpp is needed here
+    # too.  It is pure logic: <cstdint>, <string>, <vector>, <cmath>, <cstdio>,
+    # <cstdlib>, <cstring> only.
+    source/runtime/pickup_rules.cpp
     source/renderer/res_writer.cpp
 )
 target_include_directories(igi_mcp PRIVATE source)

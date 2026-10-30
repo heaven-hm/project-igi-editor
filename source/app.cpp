@@ -2308,9 +2308,7 @@ void App::TogglePauseMenu() {
 		// HOOK 0x417CF0 points its own `Cursor` task at the sprite
 		// (src/menu/menumanager.c:233) and `Cursor_Draw` HOOK 0x424C40 blits it
 		// (src/widget/cursor.c:38-41).
-		EnsureRetailPointerCursor();
-		glutSetCursor(HasRetailPointerCursor() ? GLUT_CURSOR_NONE
-		                                       : GLUT_CURSOR_INHERIT);
+		glutSetCursor(GLUT_CURSOR_INHERIT);
 	} else {
 		// Closing pause menu: reset mouse state so no stale drag occurs
 		Logger::Get().Log(LogLevel::INFO, "pause menu: closed");

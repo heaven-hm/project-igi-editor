@@ -137,6 +137,20 @@ struct QVMFile {
     // that Qvm_GetString refuses); 0 when there is none.
     int error_code = 0;
 
+    // A NON-FATAL note about the container.  Empty for every retail IGI1 file.
+    //
+    // `unk08` (the header word at 0x08) is a bytecode MINOR version, not an
+    // arbitrary field: `Qvm_Load` HOOK 0x4BD220 refuses `< 5`
+    // (src/qvm/qvm.c:443-446) and then decodes with ONE opcode table, the
+    // version-5 one.  Every retail IGI1 container carries 5.  A third-party
+    // container may carry another minor — 7 is what the mod-author toolchain
+    // writes, read as `verMinor` at offset 8 and used to select the opcode
+    // order (backend/NeonixTools/src/Qvm.cs:213-224 and :46-50) — and the
+    // retail engine, and therefore this reader that follows it, accepts the
+    // header and then misinterprets the first instruction.  When this is
+    // non-empty the caller should show it instead of the bare decode error.
+    std::string warning;
+
     uint32_t totalInstructions() const { return (uint32_t)instructions.size(); }
     uint32_t identifierCount() const { return (uint32_t)identifiers.size(); }
     uint32_t stringCount() const { return (uint32_t)strings.size(); }

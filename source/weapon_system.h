@@ -28,7 +28,25 @@ struct WeaponDefinition {
     float base_spread = 0.02f; // radians, derived from the retail minimum spread
     float minimum_spread_degrees = 0.02f;
     float maximum_spread_degrees = 0.02f;
+    // The editor's own playtest damage.  It is NOT the retail value; see
+    // `engine_damage` for that.
     float damage = 35.0f;
+    // The RETAIL per-weapon damage: `DefineWeaponType` HOOK 0x413F90 argument
+    // 10 -> `WeaponType` + 0x654 (`unk654[0]`), src/weapon/weapontype.c:317-318
+    // and src/weapon/weapontypes.h:44-51.  It is read as damage by
+    // `KnifeStab_Fire` (src/comprun/knifestab.c:108) and copied into
+    // `Bullet.unk38` by `GunShot_AddBullet` HOOK 0x47B190
+    // (src/ammotype/gunshot.c:204); `Bullet_Update` forwards that field as
+    // `BulletHitMsg.unk38` (src/ammotype/bullets.c:139-142, :165-166), which the
+    // human hit handlers read as `HumanHit.damage`
+    // (src/loadscreen/loadscreentypes.h:13-18) and apply at
+    // src/weapon/humanplayer.c:704 and src/soldier/soldier.c:947-949.
+    //
+    // There is no damage field in the ammunition table: `DefineAmmoType`
+    // HOOK 0x47CAD0 (src/ammotype/ammotype.c:88-115) declares none.  The
+    // per-weapon value below is checked against the shipping
+    // WEAPONS/*/WEAPON.QVM files by tests/test_weapon_config.cpp.
+    float engine_damage = 0.0f;
     float effective_range_meters = 500.0f;
     float reload_time_seconds = 2.2f;
     int32_t calibre_id = 919;
@@ -79,14 +97,20 @@ public:
     void AddReserveAmmo(uint32_t count);
     void SetPlayerWeaponCycle(const std::vector<uint32_t>& weapon_cycle);
 
+    // The retail roster and the retail slot order, exposed so the weapon
+    // configurator (issue #49) can enumerate what the engine defines without
+    // instantiating a playtest session.  Both are the shipping values from
+    // WEAPONS/*/WEAPON.QVM and humanplayer/humanplayer.qvm; every field is
+    // checked against those files by tests/test_weapon_config.cpp.
+    static const std::vector<WeaponDefinition>& GetVanillaWeaponCatalog();
+    static const std::vector<uint32_t>& GetVanillaPlayerWeaponCycle();
+
 private:
     struct AmmoState {
         uint32_t clip_ammo = 0;
         uint32_t reserve_ammo = 0;
     };
 
-    static const std::vector<WeaponDefinition>& GetVanillaWeaponCatalog();
-    static const std::vector<uint32_t>& GetVanillaPlayerWeaponCycle();
     float NextRandomUnit();
     void SaveActiveAmmoState();
     void RestoreOrInitializeAmmoState();
