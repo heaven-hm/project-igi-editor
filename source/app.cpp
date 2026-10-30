@@ -312,6 +312,16 @@ bool App::Init(int argc, char** argv) {
 		return g_app.CheckCollision(glm::vec3(x, y, z));
 	};
 	gameplay_host_.Initialize(s_terrain_cb, s_collision_cb);
+	// Authored mission conditions the expression evaluator cannot parse used to
+	// be answered "false" in silence, so an objective that can never be met
+	// looked exactly like one that simply has not been met yet (issue #56).
+	// Report each distinct one to the log. LogAlways rather than Log: a
+	// permanently inert authored condition is a content defect the user has to
+	// be able to see even when the log filter is configured off.
+	gameplay_host_.GetWorld().SetMissionExpressionLogSink(
+		[](LogLevel level, const std::string& message) {
+			Logger::Get().LogAlways(level, message);
+		});
 	gameplay_host_.SetGameplayInputModifier(
 		[this](uint64_t, igi::PlayerInputCmd& input_command) {
 			player_animation_driver_.AugmentInput(

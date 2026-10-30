@@ -184,6 +184,13 @@ public:
     // but registration order is an application concern rather than simulation
     // state, so this refresh is intentionally explicit.
     void RefreshAuthoredGuardGeneratorStates();
+
+    // Editor-side diagnostic seam for authored mission expressions the evaluator
+    // cannot parse (see mission_expression.h). The world cannot reach Logger
+    // itself -- Logger::Log needs Config::Get(), and config.cpp is not
+    // host-portable, while this translation unit is -- so App injects the sink.
+    void SetMissionExpressionLogSink(MissionExpressionLogSink log_sink);
+
     using InteractionQuery = std::function<RuntimeInteractionResult(
         const glm::vec3& interaction_origin,
         const glm::vec3& interaction_direction)>;

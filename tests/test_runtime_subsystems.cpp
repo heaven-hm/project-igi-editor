@@ -3498,6 +3498,46 @@ TEST(RuntimeWorldTest, AuthoredConditionalContainersGateDescendantSnapshots) {
     EXPECT_TRUE(world.GetConditionalContainerSnapshots()[1].is_running);
 }
 
+// Issue #56: an authored condition the evaluator cannot parse used to be answered
+// "false" in silence, so an inert objective looked exactly like an unmet one. The
+// evaluator's own once-per-distinct-string reporting is tested host-side
+// (tests/test_mission_expression.cpp); this is the editor-side half -- the world
+// forwards the sink App installs (source/app.cpp) so the text reaches the log.
+TEST(RuntimeWorldTest, ReportsUnparsedAuthoredConditionsThroughTheLogSink) {
+    RuntimeWorld world;
+    world.Initialize(FlatTerrain);
+
+    std::vector<std::string> reported;
+    world.SetMissionExpressionLogSink(
+        [&reported](LogLevel level, const std::string& message) {
+            EXPECT_EQ(level, LogLevel::WARNING);
+            reported.push_back(message);
+        });
+
+    AuthoredMissionConditionalContainer container;
+    container.object_index = 10;
+    container.task_id = "10";
+    // The shipped shape, byte for byte (LEVEL1/OBJECTS.QVM uses
+    // "MenuManager_SetEnabled(FALSE) && Game_DisableMusic()"): the script calls
+    // other than LevelFlow_GetBreakCutSceneKey are deliberately not implemented,
+    // so this condition is unparseable and the container must be reported.
+    container.condition_expression =
+        "MenuManager_SetEnabled(FALSE) && Game_DisableMusic()";
+
+    world.SetAuthoredMissionState({}, {}, {}, {}, {}, {}, {}, {container});
+    world.UpdateSimulationTick(0, PlayerInputCmd());
+    world.UpdateSimulationTick(1, PlayerInputCmd());
+
+    // The condition is evaluated by SetAuthoredMissionState and again on every
+    // tick; the report is once per distinct string, not once per evaluation.
+    ASSERT_EQ(reported.size(), 1U);
+    EXPECT_NE(
+        reported[0].find(container.condition_expression),
+        std::string::npos);
+    ASSERT_EQ(world.GetConditionalContainerSnapshots().size(), 1U);
+    EXPECT_FALSE(world.GetConditionalContainerSnapshots()[0].is_running);
+}
+
 TEST(RuntimeWorldTest, AuthoredGuardGeneratorGatesPreauthoredGuards) {
     RuntimeWorld world;
     world.Initialize(FlatTerrain);

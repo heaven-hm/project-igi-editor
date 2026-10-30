@@ -1,5 +1,7 @@
 #include "mission_expression.h"
 
+#include "game_clock.h"
+
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
@@ -11,11 +13,20 @@ namespace igi {
 namespace {
 
 using VariableResolver = std::function<bool(std::string_view, double&)>;
+// Zero-argument script functions. Retail registers them with an argument count
+// of 0 (Script_RegisterFunction("LevelFlow_GetBreakCutSceneKey",
+// LevelFlow_GetBreakCutSceneKey, NULL, 0), src/levelflow/levelflow.c:66) and the
+// authored corpus calls them as `Name()`.
+using FunctionResolver = std::function<bool(std::string_view, double&)>;
 
 class ExpressionParser {
 public:
-    ExpressionParser(std::string_view expression, VariableResolver resolver)
-        : expression_(expression), resolver_(std::move(resolver)) {}
+    ExpressionParser(std::string_view expression,
+                     VariableResolver resolver,
+                     FunctionResolver function_resolver)
+        : expression_(expression),
+          resolver_(std::move(resolver)),
+          function_resolver_(std::move(function_resolver)) {}
 
     bool TryParse(bool& out_result) {
         double numeric_result = 0.0;
@@ -267,11 +278,28 @@ private:
             out_value = 0.0;
             return true;
         }
+
+        // A script function call, `Name()`. Retail's script functions carry an
+        // argument count (Script_RegisterFunction, src/script/symbol.c:146-150)
+        // and the authored corpus only ever calls the zero-argument ones, so an
+        // argument list is not part of this grammar: `Name(arg)` fails to parse
+        // (and is reported) rather than being silently accepted.
+        SkipWhitespace();
+        if (cursor_ < expression_.size() && expression_[cursor_] == '(') {
+            ++cursor_;
+            SkipWhitespace();
+            if (cursor_ >= expression_.size() || expression_[cursor_] != ')') {
+                return false;
+            }
+            ++cursor_;
+            return function_resolver_(identifier, out_value);
+        }
         return resolver_(identifier, out_value);
     }
 
     std::string_view expression_;
     VariableResolver resolver_;
+    FunctionResolver function_resolver_;
     size_t cursor_ = 0;
 };
 
@@ -287,6 +315,25 @@ void MissionExpressionState::SetNumber(const std::string& variable_name, double 
 
 void MissionExpressionState::Clear() {
     values_.clear();
+    reported_unparsed_.clear();
+    unparsed_expressions_.clear();
+}
+
+void MissionExpressionState::SetBreakCutSceneKeyHeld(bool held) {
+    break_cutscene_key_held_ = held;
+}
+
+void MissionExpressionState::ReportUnparsed(const std::string& expression) const {
+    if (!reported_unparsed_.insert(expression).second) {
+        return;
+    }
+    unparsed_expressions_.push_back(expression);
+    if (log_sink_) {
+        log_sink_(
+            LogLevel::WARNING,
+            "[MissionExpression] cannot parse authored condition (treated as "
+            "not met): " + expression);
+    }
 }
 
 bool MissionExpressionState::TryEvaluate(
@@ -307,7 +354,18 @@ bool MissionExpressionState::TryEvaluateNumber(
         std::string_view variable_name,
         double& out_value) {
         if (variable_name == "GAME_FREQUENCY") {
-            out_value = 30.0;
+            // The engine's tick rate. Oracle: Game_Init registers
+            // Script_RegisterConstant("GAME_FREQUENCY", 30) (src/game/game.c:262)
+            // and the engine counts every authored duration at that same rate
+            // (#define FPS 30.0f, src/humanstate/humanstate.c:91, feeding
+            // FRAMES(), src/humanstate/humanstate.c:520).
+            //
+            // Resolved from the simulation clock's constant instead of a second
+            // literal: a mission threshold expressed in GAME_FREQUENCY and the
+            // clock that counts the ticks were independent 30s before this, and
+            // nothing asserted they agreed. tests/test_mission_expression.cpp
+            // now fails if either side moves.
+            out_value = static_cast<double>(GameClock::TICK_RATE_HZ);
             return true;
         }
 
@@ -319,8 +377,43 @@ bool MissionExpressionState::TryEvaluateNumber(
         return true;
     };
 
-    ExpressionParser parser(expression, variable_resolver);
-    return parser.TryParseNumber(out_result);
+    const FunctionResolver function_resolver = [this](
+        std::string_view function_name,
+        double& out_value) {
+        // LevelFlow_GetBreakCutSceneKey HOOK 0x488E00
+        // (src/levelflow/levelflow.c:73-82):
+        //
+        //     int key = gKeys[1] & 0x80;
+        //
+        // so the value is the masked DirectInput byte -- 128 while Escape is
+        // held, 0 while it is not -- not the 1 the engine's own comment claims.
+        // The authored corpus only ever tests it for truth
+        // ("EditVariable_4004.nValue == 0 && LevelFlow_GetBreakCutSceneKey()",
+        // LEVEL1/OBJECTS.QVM), but the exact value is reproduced anyway.
+        if (function_name == "LevelFlow_GetBreakCutSceneKey") {
+            out_value = break_cutscene_key_held_ ? 128.0 : 0.0;
+            return true;
+        }
+
+        // MenuManager_SetEnabled, Game_DisableMusic, Game_EnableMusic and
+        // Game_CutsceneDelete are deliberately NOT implemented: each mutates
+        // menu, music or cutscene state, so implementing one is a design
+        // decision rather than a mechanical port (see mission_expression.h for
+        // the call-site counts). They stay unparsed, and the caller reports
+        // them instead of silently answering "not met".
+        return false;
+    };
+
+    ExpressionParser parser(expression, variable_resolver, function_resolver);
+    if (parser.TryParseNumber(out_result)) {
+        return true;
+    }
+
+    // Unchanged semantics: an unparseable expression still fails the call, so
+    // every consumer keeps reading it as "condition not met". It is now also
+    // recorded and reported once per distinct string instead of vanishing.
+    ReportUnparsed(expression);
+    return false;
 }
 
 } // namespace igi

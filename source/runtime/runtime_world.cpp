@@ -2265,6 +2265,10 @@ void RuntimeWorld::SetInteractionQuery(InteractionQuery interaction_query) {
     interaction_query_ = std::move(interaction_query);
 }
 
+void RuntimeWorld::SetMissionExpressionLogSink(MissionExpressionLogSink log_sink) {
+    mission_expression_state_.SetLogSink(std::move(log_sink));
+}
+
 void RuntimeWorld::SetPickupTouchQuery(PickupTouchQuery pickup_touch_query) {
     pickup_touch_query_ = std::move(pickup_touch_query);
 }
