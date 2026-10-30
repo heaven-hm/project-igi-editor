@@ -435,6 +435,12 @@ add_executable(igi_tests
     tests/test_skinned_static_parity.cpp
     tests/test_seated_human.cpp
     tests/test_props_wire_interactables.cpp
+    # A placed StationaryGun's MOUNTED WEAPON: the gun-matrix x mount-local-matrix
+    # product of StationaryGun_Aim 0x474420 (IGI-RE src/statgun/statgun.c:241-258)
+    # against an independent transcription of the same oracle lines, plus the
+    # shipped LEVEL4 record and the retail WEAPONS/*/WEAPON.QVM model arguments.
+    # NEW FILE.
+    tests/test_statgun_mount.cpp
     tests/test_scamera_params.cpp
     tests/test_door_params.cpp
     tests/test_ladder_placement.cpp
@@ -473,6 +479,13 @@ add_executable(igi_tests
     # The same emitter RUNNING: the per-tick spawn, lifetime, velocity and cone
     # rules of Smoke_Run 0x437DB0 + Particle2D_Run 0x4FD660 (#43).
     tests/test_smoke_particles.cpp
+    # The sprite a Smoke particle is DRAWN with (#43, item 1): Sprite_Load
+    # 0x4B6720 + D3DTex_DownloadTexture 0x50AD90 + Grid_LoadCharMap 0x4B75C0,
+    # checked against the four shipped members of
+    # <IGI>/common/sprites/sprites.res.  NEW FILE, added together with
+    # source/runtime/smoke_sprite.cpp (both are listed in this file; staging one
+    # without the other is the failure this note exists to prevent).
+    tests/test_smoke_sprite.cpp
     tests/test_heli_rules.cpp
     # The flight preview that consumes heli_rules (#60): the engine's tick
     # sequence pinned tick by tick, plus the retail corpus link.
@@ -490,6 +503,13 @@ add_executable(igi_tests
     tests/test_pickup_rules.cpp
     tests/test_sound_rules.cpp
     tests/test_terrain_snap_rules.cpp
+    # The .ctr invariants the engine only *assumes* (Terrain_Load HOOK 0x4C6240,
+    # src/terrain/terrain.c:142-143; CollNode src/coll/colltypes.h:95-101;
+    # Coll_Descend src/coll/coll.c:230) plus the two shipped files that pin them:
+    # a level-1 .ctr that satisfies all of them and the level-14 .ctr that does
+    # not (486464 bytes = 11056 * 44, so the engine's 32-byte walk reaches two
+    # nodes). Reads <IGI_GAME_PATH> read-only and self-skips without a corpus.
+    tests/test_terrain_ctr_rules.cpp
     # The engine's ONLY shadow: the blob quad Human_CreateHandler creates
     # (HOOK 0x45EB30, src/soldier/human.c:357-358) and Shadow_MagicObjEnterHandler
     # lays out (HOOK 0x4E09D0, src/shadow/shadow.c:84-146). GitHub issue #63's
@@ -503,6 +523,14 @@ add_executable(igi_tests
     # HOOK 0x50FAE0 (src/glowmesh/terrainmesh.c:277-292).
     tests/test_terrain_lod_settings.cpp
     tests/test_collision_drop_rules.cpp
+    # The engine's OBJECT collision world and the nearest-hit rule that mixes it
+    # with the terrain: Coll_Drop HOOK 0x4CABF0 body (src/coll/coll.c:575-614),
+    # Coll_LinesEx HOOK 0x4CDB20 (src/model/coll.c:432-560),
+    # RigidDynCubeObj_LineHit HOOK 0x4C1840 (src/qasm/rigidhit.c:104-470).
+    # NEW FILE: synthetic box/slope probes plus the shipped LEVEL1 WaterTower
+    # placement whose sniper the terrain-only snap dropped 74,288 units.
+    # Host-portable; the corpus half self-skips without IGI_GAME_PATH.
+    tests/test_collision_world.cpp
     # The C++/shader uniform contract (regression guard for commit 33368d7c):
     # every uniform the C++ uploads must be declared by the shaders and every
     # uniform the shaders declare must be uploaded, in ALL FOUR tiers, plus a
@@ -675,6 +703,13 @@ target_sources(igi_tests PRIVATE
     # host lane needs it to link tests/test_smoke_particles.cpp; igi-editor
     # picks it up through the source/runtime/*.* glob.
     source/runtime/smoke_sim.cpp
+    # The TEXELS those particles are drawn with (#43, item 1): Sprite_Load
+    # 0x4B6720, D3DTex_DownloadTexture's format dispatch 0x50AD90 and
+    # Grid_LoadCharMap 0x4B75C0.  Pure logic over a .spr byte buffer, so the host
+    # lane needs it to link tests/test_smoke_sprite.cpp; igi-editor picks it up
+    # through the source/runtime/*.* glob and renderer_smoke.cpp is its caller.
+    # NEW FILE (with tests/test_smoke_sprite.cpp).
+    source/runtime/smoke_sprite.cpp
     source/runtime/heli_rules.cpp
     # The Heli task's first caller (#60): the authored -> per-tick flight preview.
     # Pure logic, so the host lane needs it to link tests/test_heli_preview.cpp;
@@ -721,6 +756,15 @@ target_sources(igi_tests PRIVATE
     # so tests/test_pause_menu_input.cpp can prove the resource identity in the
     # host lane without a GL context.  igi-editor picks it up through the
     # source/runtime/*.* glob; this line is what the igi_tests / host lane needs.
+    #
+    # The WEAPON_ID_* -> weapon-type-model reader for a placed StationaryGun's
+    # mounted weapon: WEAPONS/<NAME>/WEAPON.QVM -> DefineWeaponType argument 29,
+    # the table WeaponType_Find (0x413BD0) searches and Gun_ParamChangedHandler
+    # loads with VirModel_Find (src/guncasing/gun.c:506).  Pure logic over
+    # weapon_config.cpp + std::filesystem, so the host lane needs it to link
+    # tests/test_statgun_mount.cpp; igi-editor picks it up through the
+    # source/runtime/*.* glob.
+    source/runtime/weapon_model_lookup.cpp
 )
 
 set_source_files_properties(

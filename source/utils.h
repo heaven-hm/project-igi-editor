@@ -11,6 +11,8 @@
 // (tools/host-tests/host_test_runner.py), which has no Windows SDK.
 #if defined(_WIN32)
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
 #endif
 #include <string>
 #include <optional>
@@ -96,8 +98,42 @@ inline std::string GetExeDirectory() {
         exeDir = exeDir.substr(0, lastSlash);
     }
     return exeDir;
+#elif defined(__APPLE__)
+    // Native macOS build.  Inside an .app the assets live in
+    // <bundle>.app/Contents/Resources/editor, not next to the executable in
+    // Contents/MacOS, so resolve the executable and step up to Resources.
+    // Outside a bundle (build-macos/bin) the executable's own directory is
+    // correct, which is what the CMake POST_BUILD step stages for.
+    char raw[4096];
+    uint32_t size = sizeof(raw);
+    if (_NSGetExecutablePath(raw, &size) == 0) {
+        std::error_code ec;
+        std::filesystem::path exe =
+            std::filesystem::weakly_canonical(std::filesystem::path(raw), ec);
+        if (!ec) {
+            std::filesystem::path dir = exe.parent_path();
+            if (dir.filename() == "MacOS" &&
+                dir.parent_path().filename() == "Contents") {
+                return (dir.parent_path() / "Resources").string();
+            }
+            return dir.string();
+        }
+    }
+    return std::filesystem::current_path().string();
 #else
     return std::filesystem::current_path().string();
+#endif
+}
+
+// The engine builds paths with Windows separators ("\\") throughout.  On
+// POSIX those are ordinary filename characters, so convert at the OS boundary.
+// Identity on Windows, so two builds cannot diverge in behaviour.
+inline std::string ToNativePath(std::string path) {
+#if defined(_WIN32)
+    return path;
+#else
+    std::replace(path.begin(), path.end(), '\\', '/');
+    return path;
 #endif
 }
 std::string GetVersionString();

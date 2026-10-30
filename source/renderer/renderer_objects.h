@@ -328,6 +328,39 @@ public:
     // AI's hand). Binds the shared Matrices UBO (ubo_mats) so the shader gets the
     // scene's Proj*View*GlobalScale; worldMat is the model matrix in raw world units.
     void DrawAttachedMesh(const std::string& modelId, bool isBuilding, const glm::mat4& worldMat, GLuint ubo_mats);
+    // Draws every placed StationaryGun's MOUNTED weapon: the gun's matrix x the
+    // weapon's local mount matrix, exactly StationaryGun_Aim 0x474420
+    // (IGI-RE src/statgun/statgun.c:241-258) hands to Weapon_Move 0x4F2310 and
+    // Gun_MoveHandler 0x478A90 adopts verbatim (src/guncasing/gun.c:511-512).
+    // The composition is `igi::statgun::ComposeWeaponMount`
+    // (runtime/statgun_mount.h); this pass performs no arithmetic of its own
+    // beyond mesh-local -> world scaling. Called once per frame by Draw, after
+    // the object passes, so the attached-weapon state changes cannot leak into
+    // them.
+    void DrawMountedStationaryGuns(const std::vector<LevelObject>& objects, int draw_parts,
+                                   GLuint ubo_mats);
+    // Draws the MOUNTED WEAPON of every placed `AIStationaryGunHolder` whose
+    // holder model carries a TASKTYPE_AISTATIONARYGUN attachment: the holder
+    // model's ATTA record is looked up in MAGICOBJ.QVM (CreateMagicObjs,
+    // IGI-RE src/magicobj/rigidcoll.c:381-434), the definition's first data
+    // argument is a WeaponType key, and the weapon model is that type's `key`
+    // field (AIStationaryGun_Create HOOK 0x46EAE0, src/binocular/stationarygun.c:
+    // 123-155; AIStationaryGun_PlaceWeapon HOOK 0x470050, :464-487). Level 14's
+    // sentry gun is holder `456_11_1` + turret `456_12_1` + this weapon
+    // `456_13_1`. The rest pose is pitch = yaw = spin = 0, which puts the weapon
+    // at the gun's position with the HOLDER's matrix.
+    void DrawMountedSentryGuns(const std::vector<LevelObject>& objects, int draw_parts,
+                               GLuint ubo_mats);
+    // Draws every placed SCamera's LENS: the child task the engine always creates
+    // (SCamera_Create `c->lens = Task_New(c, gLensType, NULL)`, IGI-RE
+    // src/scamera/scamera.c:204, HOOK 0x4423F0) and loads the authored "Camera
+    // Model" into (SCameraLens_ParamsChanged HOOK 0x4420D0,
+    // src/scamera/scameralens.c:393-419). Only the holder/body model was drawn
+    // before, so every shipped camera was missing its head. `yawOffset`
+    // (LevelObject, QSC arg 9 "Camera Gamma") separates the holder frame (pure
+    // yaw, scamera.c:242) from the lens frame (yaw + yaw_offset, scameralens.c:414).
+    void DrawSCameraLenses(const std::vector<LevelObject>& objects, int draw_parts,
+                           GLuint ubo_mats);
     // The engine's blob shadow (GitHub issue #63): one flat, texture-alpha-blended
     // quad per placement, exactly the Shadow task's geometry (see
     // runtime/human_shadow.h for the oracle). The placements are built by the caller
@@ -360,6 +393,16 @@ public:
     // cache was built from). Returns nullptr if the model can't be found.
     const ParsedGeometry* GetOrLoadSkinGeometry(const std::string& modelId, bool isBuilding);
     const ParsedGeometry* GetOrLoadParsedGeometry(const std::string& modelId, bool isBuilding);
+
+    // The model's raw .mef bytes, through the SAME resolution the draw and the
+    // collision pass must agree on: the mounted .res index first, then the
+    // cross-level archives, then a loose .mef on disk (GetOrExtractMefTemp,
+    // source/renderer/renderer_objects_mesh.cpp:689-734; the engine itself only
+    // ever asks the mounted archive, Mesh_Load HOOK 0x4CF390,
+    // src/model/model.c:364).  Used by the collision world to read ONLY the
+    // HSMC collision chunks, without parsing the render streams of every placed
+    // model up front.  Returns false when the model does not resolve.
+    bool GetModelMefBytes(const std::string& modelId, bool isBuilding, std::vector<uint8_t>& out);
 
     // Lightmap textures for the "Calculate Light Mapping" button, keyed by
     // the EXACT placement's taskId (not modelId) — mesh_cache_ is shared per

@@ -252,9 +252,27 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
         // object needs no exemption -- it is under the cursor, and the test
         // rejects only what cannot project into the viewport at all.
         if (cameraFwdLen > 0.01f && i != selected_object_index) {
-            const glm::vec3 toObject = glm::vec3(obj.pos) - camera_pos;
-            const float boundRadius =
+            // Same sphere the draw pass uses (renderer_objects.cpp): a Wire's
+            // engine sphere is centred on its anchor MIDPOINT and grown by the
+            // stretched Y scale, not the unstretched model bound at the start
+            // anchor (IGI-RE Wire_ParamsChanged 0x43F3D0, src/props/wire.c:
+            // 184-189). One helper keeps a visible wire clickable.
+            glm::vec3 boundCenter((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z);
+            float boundRadius =
                 glm::length(mesh.halfExtents) * BASE_SCALE * std::max(obj.scale, 0.001f);
+            if (obj.isWire) {
+                glm::dvec3 wa, wb;
+                if (obj.WireAnchors(wa, wb)) {
+                    const igi::props::WireDrawSphere wireBounds =
+                        igi::props::WireDrawBounds(wa, wb, glm::length(mesh.halfExtents),
+                                                   obj.scale, obj.scale);
+                    boundCenter = glm::vec3((float)wireBounds.center.x,
+                                            (float)wireBounds.center.y,
+                                            (float)wireBounds.center.z);
+                    boundRadius = (float)wireBounds.radius;
+                }
+            }
+            const glm::vec3 toObject = boundCenter - camera_pos;
             const float distSq = glm::dot(toObject, toObject);
             const float facing = glm::dot(toObject, cameraFwd);
             if (facing < -boundRadius) continue;
@@ -286,6 +304,20 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
             }
         }
         model = glm::scale(model, glm::vec3(BASE_SCALE * obj.scale));
+
+        // A Wire is DRAWN stretched between its two anchors at their midpoint
+        // (Wire_ParamsChanged 0x43F3D0, src/props/wire.c:160-191); the pick pass
+        // used to draw the unstretched model at the start anchor, so only the
+        // first metre of a 25-143 m wire could be clicked. Same helper as the
+        // draw pass, so the pick mesh is the drawn mesh.
+        if (obj.isWire) {
+            glm::dvec3 wa, wb;
+            glm::mat4 wireModel(1.0f);
+            if (obj.WireAnchors(wa, wb) &&
+                igi::props::WireModelMatrix(wa, wb, obj.scale, &wireModel)) {
+                model = wireModel;
+            }
+        }
 
         // A human the level authors inside a vehicle is DRAWN with the engine's
         // object origin (the pelvis) at the authored position, not with the mesh's

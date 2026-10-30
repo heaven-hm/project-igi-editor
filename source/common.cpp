@@ -29,7 +29,7 @@
 # include <codecvt>
 #endif
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
 # include <unistd.h>
 #endif
 
@@ -58,7 +58,15 @@ float WORLD_Z_NEAR = 2.8672f / 0.001f;
 # define ALIGNED_ALLOC(sz, align)		_aligned_malloc(sz, align)
 # define ALIGNED_FREE(ptr)				_aligned_free(ptr)
 #elif defined(__GNUC__)
-# define ALIGNED_ALLOC(sz, align)		aligned_alloc(static_cast<std::size_t>(align), sz)
+// C11 aligned_alloc requires the size to be an integral multiple of the
+// alignment; Apple's libc enforces it and returns NULL otherwise, which made
+// Mem_Alloc() fail with "memory overflow" for nearly every allocation.  Round
+// up so the request is well-formed on every libc.  Windows is unaffected: it
+// takes the _aligned_malloc branch above.
+# define ALIGNED_ALLOC(sz, align) \
+	aligned_alloc(static_cast<std::size_t>(align), \
+	              ((static_cast<std::size_t>(sz) + static_cast<std::size_t>(align) - 1) / \
+	               static_cast<std::size_t>(align)) * static_cast<std::size_t>(align))
 # define ALIGNED_FREE(ptr)				free(ptr)
 #endif
 
@@ -378,7 +386,7 @@ int	Str_UTF8ToUTF16(const char* utf8, char16_t* utf16, int utf16_chars) {
 	utf16[translen] = 0;
 
 	return translen;
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
 	std::u16string u16_conv = std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>{}.from_bytes(utf8);
 	if (u16_conv.size() >= utf16_chars) {
 		Log(log_type_t::LOG_ERROR,  __FILE__, __LINE__,  "utf16 buffer too small\n");
@@ -429,7 +437,7 @@ int Str_UTF16ToUTF8(const char16_t* utf16, char* utf8, int utf8_bytes) {
 	utf8[translen] = 0;
 
 	return translen;
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__APPLE__)
 	std::string u8_conv = std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>{}.to_bytes(utf16);
 	if (u8_conv.size() >= utf8_bytes) {
 		Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "utf8 buffer too small\n");
@@ -623,8 +631,9 @@ bool File_Exists(const char* filename) {
 	else {
 		return false;
 	}
-#elif defined(__linux__)
-	return access(filename, F_OK) == 0;
+#elif defined(__linux__) || defined(__APPLE__)
+	// Callers build paths with Windows separators; normalise at the syscall.
+	return access(Utils::ToNativePath(filename).c_str(), F_OK) == 0;
 #else
 # error "unsupported platform"
 #endif
@@ -658,7 +667,9 @@ FILE* File_Open(const char* filename, const char* mod) {
 #endif
 
 #if defined(__GNUC__)
-	FILE* f = fopen(filename, mod);
+	// Paths in this code base are written with Windows separators.  Normalise at
+	// the last responsible moment so every File_Load* caller works on POSIX.
+	FILE* f = fopen(Utils::ToNativePath(filename).c_str(), mod);
 	return f;
 #endif
 }
@@ -883,7 +894,7 @@ void Folders_Init() {
 	}
 
 	std::string exeDir = Utils::GetExeDirectory();
-	std::string contentDir = exeDir + "\\editor";
+	std::string contentDir = Utils::ToNativePath(exeDir + "\\editor");
 
 	namespace fs = std::filesystem;
 	if (!fs::exists(contentDir)) {
@@ -892,7 +903,7 @@ void Folders_Init() {
 		std::exit(1);
 	}
 
-	std::string toolsPath = exeDir + "\\editor\\tools";
+	std::string toolsPath = Utils::ToNativePath(exeDir + "\\editor\\tools");
 	if (!fs::exists(toolsPath)) {
 		Logger::Get().Log(LogLevel::FATAL, "FATAL: tools directory not found: " + toolsPath);
 		Utils::ShowError("ERROR: FATAL\ntools directory not found:\n" + toolsPath + "\nEditor will now exit.");

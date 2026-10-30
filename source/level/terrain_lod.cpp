@@ -85,7 +85,16 @@ void Terrain::Update(update_params_s& params, const dyn_cube_s* root_dyn_cube) {
 	float root_cube_ctr_horizontal_dist_to_clip_plane = (float)(UPDATE_ROOT_CUBE_RADIUS / std::cos(params.view_define_->fovx_ * 0.5));
 	float root_cube_ctr_vertical_dist_to_clip_plane   = (float)(UPDATE_ROOT_CUBE_RADIUS / std::cos(params.view_define_->fovy_ * 0.5));
 
-	GenerateRenderCube(root_dyn_cube, ctr_ + 1, root_cube_ctr_horizontal_dist_to_clip_plane, root_cube_ctr_vertical_dist_to_clip_plane);
+	// QCube_Begin HOOK 0x4D2540 (src/lod/qcube.c:366 `if (w->ctr && full)`) and
+	// QCube_DrawObjects (src/lod/qcube.c:392 `if (!w->ctr || full) { if (w->ctr)
+	// ... TerrainMesh_Render(); }`) both test the tree first: with no collision
+	// tree the engine still runs the frame, it simply has no terrain geometry to
+	// walk or draw.  Terrain::LoadCTRFile leaves ctr_ null in exactly that case
+	// (a .ctr that is missing, or one that does not hold 32-byte CollNodes), so
+	// do the same instead of dereferencing ctr_ + 1.
+	if (ctr_) {
+		GenerateRenderCube(root_dyn_cube, ctr_ + 1, root_cube_ctr_horizontal_dist_to_clip_plane, root_cube_ctr_vertical_dist_to_clip_plane);
+	}
 
 	// clear old hash data
 	for (int i = 0; i < CUBE_DATA_HASH_ITEM_COUNT; ++i) {

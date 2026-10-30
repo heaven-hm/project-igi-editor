@@ -1,3 +1,4 @@
+#include "utils.h"   // Utils::ToNativePath
 #include "qvm_parser.h"
 #include <fstream>
 #include <cstring>
@@ -124,7 +125,8 @@ QVMFile QVM_Parse(const std::string& filepath) {
     qvm.valid = false;
 
     // Read entire file into memory
-    std::ifstream file(filepath, std::ios::binary | std::ios::ate);
+    // Callers build the path with Windows separators; normalise for POSIX.
+    std::ifstream file(Utils::ToNativePath(filepath), std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
         qvm.error = "Failed to open file: " + filepath;
         return qvm;

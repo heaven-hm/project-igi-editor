@@ -48,6 +48,10 @@ using namespace TaskSchemaNS;
 bool EnsureLightmapsUnpacked(const std::string& levelDir, std::string& err);
 
 // ── game-process monitor + global-hotkey id (shared: core + app_editor) ──
+// Launching/tracking the game is Win32 process management (CreateProcess /
+// WaitForSingleObject / CreateThread); there is no macOS equivalent that could
+// launch IGI.EXE at all, so the monitor is compiled only where it can be used.
+#if defined(_WIN32)
 struct GameMonitorParam {
 	HANDLE             hProcess;
 	std::atomic<bool>* pExited;
@@ -62,6 +66,7 @@ inline DWORD WINAPI GameMonitorProc(LPVOID param) {
 	pExited->store(true, std::memory_order_release);
 	return 0;
 }
+#endif // _WIN32
 
 constexpr int HOTKEY_ID_TOGGLE_GAME = 0x47; // arbitrary non-conflicting ID
 

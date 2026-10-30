@@ -38,6 +38,7 @@
  * parser turns into alpha is computed from the 1555 fields.
  *****************************************************************************/
 
+#include "utils.h"   // Utils::ToNativePath
 #include "fnt_parser.h"
 #include "res_chunks.h"
 #include "../logger.h"
@@ -368,7 +369,7 @@ FntFont FNT_ParseBytes(std::span<const uint8_t> bytes) {
 
 FntFont FNT_Parse(const std::string& filepath) {
     FntFont font;
-    std::ifstream file(filepath, std::ios::binary | std::ios::ate);
+    std::ifstream file(Utils::ToNativePath(filepath), std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
         Logger::Get().Log(LogLevel::ERR, "[FNT] Could not open file: " + filepath);
         return font;

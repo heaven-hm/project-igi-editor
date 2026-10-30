@@ -39,13 +39,14 @@
 // â”€â”€ Global hotkey support â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // We subclass GLUT's window so WM_HOTKEY messages reach our code even when
 // the editor is iconified and the game has keyboard focus.
-static WNDPROC g_origEditorWndProc = nullptr;
-static App*    g_appForHotkey      = nullptr;
-
 // Defined with the other IGI_PROFILE_* measurement helpers further down, and
 // declared here because App::OnIdle (above them) uses it to enter Game Play for
 // the gameplay animation bench.
 static bool ShouldUseGameplayAnimBench();
+
+#if defined(_WIN32)
+static WNDPROC g_origEditorWndProc = nullptr;
+static App*    g_appForHotkey      = nullptr;
 
 static LRESULT CALLBACK EditorSubclassWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	if (msg == WM_HOTKEY && static_cast<int>(wParam) == HOTKEY_ID_TOGGLE_GAME) {
@@ -55,6 +56,7 @@ static LRESULT CALLBACK EditorSubclassWndProc(HWND hwnd, UINT msg, WPARAM wParam
 	}
 	return CallWindowProc(g_origEditorWndProc, hwnd, msg, wParam, lParam);
 }
+#endif
 
 // Localized mission text (StatusMessage `text`, DefineComputerObjective
 // `name`) is resolved by igi::MissionTextResources, which mirrors the engine's
@@ -244,6 +246,7 @@ bool App::Init(int argc, char** argv) {
 	LoadAutoCompleteKeywords();
 	glutSetCursor(GLUT_CURSOR_NONE);
 
+#if defined(_WIN32)
 	// Cache editor HWND for minimize/restore around game launch
 	editor_hwnd_ = Utils::FindWindow("IGI Editor");
 	if (!editor_hwnd_) editor_hwnd_ = GetActiveWindow();
@@ -260,6 +263,14 @@ bool App::Init(int argc, char** argv) {
 	} else {
 		Logger::Get().Log(LogLevel::WARNING, "[App] editor_hwnd_ is NULL â€” global hotkey will not work");
 	}
+#else
+	// macOS: there is no HWND to cache and no window procedure to subclass, so
+	// the global toggle hotkey has no delivery path.  The in-window toggle key
+	// handled by the keyboard callbacks still works.
+	editor_hwnd_ = nullptr;
+	Logger::Get().Log(LogLevel::INFO,
+	    "[App] macOS: no Win32 HWND; global toggle hotkey disabled");
+#endif
 
 #ifdef _WIN32
 	// Borderless fullscreen: strip caption/frame/box chrome and size the
@@ -351,6 +362,7 @@ void App::Shutdown() {
 		SaveCurrentLevel();
 	}
 
+#if defined(_WIN32)
 	if (editor_hwnd_) {
 		KillTimer(editor_hwnd_, 1);
 		UnregisterHotKey(editor_hwnd_, HOTKEY_ID_TOGGLE_GAME);
@@ -361,6 +373,7 @@ void App::Shutdown() {
 	}
 	g_appForHotkey = nullptr;
 	g_origEditorWndProc = nullptr;
+#endif
 
 	gameplay_host_.SetGameplayInputModifier({});
 	player_animation_driver_.ClearAnimationClips();
@@ -374,6 +387,7 @@ void App::Shutdown() {
 		runtime_guard_generator_hidden_flags_.clear();
 	}
 	gameplay_host_.ShutdownGameplayWindow();
+#if defined(_WIN32)
 	if (game_process_.running) {
 		// Terminate an editor-owned game before tearing down its handles. The
 		// monitor thread waits on hProcess, so it must be joined before hProcess
@@ -390,6 +404,7 @@ void App::Shutdown() {
 		if (game_process_.hThread) CloseHandle(game_process_.hThread);
 		game_process_ = {};
 	}
+#endif
 	bridge_.Stop();
 	StopLevelMusic();
 	level_.Unload();
@@ -707,6 +722,7 @@ void App::OnIdle() {
 	// freeglut pumps messages with a window-handle filter and misses WM_HOTKEY,
 	// which is a thread message only retrievable via PeekMessage(NULL, ...).
 	// Poll it here so F3 works while the game is running and editor is iconified.
+#if defined(_WIN32)
 	if (game_process_.running) {
 		MSG msg = {};
 		while (PeekMessage(&msg, NULL, WM_HOTKEY, WM_HOTKEY, PM_REMOVE)) {
@@ -716,9 +732,11 @@ void App::OnIdle() {
 			}
 		}
 	}
+#endif
 
 	// Check game exit before the frame-rate throttle so it fires on every call,
 	// even when GLUT is running slowly while the editor is iconified.
+#if defined(_WIN32)
 	if (game_process_.running && game_process_.hProcess) {
 		bool exited = game_exited_.load(std::memory_order_acquire);
 		if (!exited) {
@@ -757,6 +775,7 @@ void App::OnIdle() {
 			return;
 		}
 	}
+#endif
 
 	// While the game is running the editor window is iconified.
 	// glutSwapBuffers() deadlocks on minimized windows, so skip rendering entirely.
@@ -1529,14 +1548,27 @@ void App::Frame(float delta_seconds) {
 		mouse_state_.prior_x_ < (PropPanel::kLeft + PropPanel::kWidth);
 	int64_t editor_pick_us = 0;
 	bool editor_pick_called = false;
-	if (IsEditorInputActive() && pointer_changed) {
+	// Hover picking is deferred to a SETTLED pointer: one pick is a whole extra
+	// scene pass plus a synchronous 1x1 glReadPixels
+	// (renderer/renderer_objects_picking.cpp:374-412), so issuing it on the
+	// motion itself pays ~23 ms for a cursor position the user has already left.
+	// This is the cost that reappears the frame camera mode (the camera key,
+	// `CameraEnable` = <Alt> in assets/editor/qed/qedkeybindings.qsc) is
+	// released: while it is held - and while WASD moves the camera - picking is
+	// suppressed, so the view moves smoothly, and only after the release does the
+	// per-motion pick resume and stall the frame. The movement math itself is
+	// identical in both states (App::ProcessInput; viewer_s::clip_to_z_ is never
+	// set after construction), so there is no smoothing/delta term to reset here.
+	if (IsEditorInputActive()) {
+		const int64_t pick_now_ms = Sys_Milliseconds();
 		if (camMode || cameraNavigating || overPanel) {
 			hover_object_index_ = -1;
 			last_pick_x_ = mouse_state_.prior_x_;
 			last_pick_y_ = mouse_state_.prior_y_;
-			last_hover_pick_ms_ = Sys_Milliseconds();
-		} else if (igi::ShouldPickSceneHover(pointer_changed,
-			mouse_state_.left_button_down_, Sys_Milliseconds(), last_hover_pick_ms_)) {
+			last_hover_pick_ms_ = pick_now_ms;
+		} else if (igi::ShouldPickSceneHoverOnSettle(pointer_changed,
+			mouse_state_.left_button_down_, pick_now_ms, last_pointer_motion_ms_,
+			last_hover_pick_ms_)) {
 			const auto editor_t_pick = profile_frame_break ? FrameBreakClock::now()
 			                                               : FrameBreakClock::time_point{};
 			hover_object_index_ = PickObjectAtScreenPos(mouse_state_.prior_x_, mouse_state_.prior_y_);
@@ -1547,7 +1579,7 @@ void App::Frame(float delta_seconds) {
 			if (hover_object_index_ >= Renderer::kAttaPickBase) hover_object_index_ = -1; // ATTA hovered (clickable; promote on click)
 			last_pick_x_ = mouse_state_.prior_x_;
 			last_pick_y_ = mouse_state_.prior_y_;
-			last_hover_pick_ms_ = Sys_Milliseconds();
+			last_hover_pick_ms_ = pick_now_ms;
 		}
 	}
 	const auto frame_pre_t1pick = profile_frame_break ? FrameBreakClock::now()

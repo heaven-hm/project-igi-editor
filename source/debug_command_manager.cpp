@@ -15,16 +15,27 @@
 #include <sstream>
 #include <iostream>
 #include <chrono>
+#if defined(_WIN32)
 #include <direct.h>
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+// MSVC spellings used by the capture path; POSIX equivalents.
+#define _unlink unlink
+#define _popen  popen
+#define _pclose pclose
+#endif
 #include <cstdio>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <map>
+#if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#endif
 
 DebugCommandManager::DebugCommandManager(App* app) 
     : app_(app), running_(false), commands_file_path_("editor/tools/debug-command.txt") {
@@ -187,6 +198,7 @@ void DebugCommandManager::DeleteModel(const DebugCommand& cmd) {
 
 
 static std::string FindFFmpegBin() {
+#if defined(_WIN32)
     static const char* kCandidates[] = {
         "D:\\henv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v7.1.exe",
         "ffmpeg.exe",
@@ -202,6 +214,12 @@ static std::string FindFFmpegBin() {
         }
     }
     return "ffmpeg.exe";
+#else
+    // macOS: ffmpeg is not part of the OS and is looked up on PATH by popen.
+    // Note that GetShortPathName was only ever needed for spaces in Win32
+    // command lines; POSIX shells handle quoted paths.
+    return "ffmpeg";
+#endif
 }
 
 static std::string JsonStr(const std::string& s) {
@@ -484,7 +502,11 @@ void DebugCommandManager::CaptureModel(const DebugCommand& cmd) {
         " boundRadius=" + std::to_string(boundRadius) + " near=" + std::to_string(captureNearPlane));
 
     // Output paths
+#if defined(_WIN32)
     _mkdir("screenshots");
+#else
+    ::mkdir("screenshots", 0755);
+#endif
     char donePath[256], evidPath[256];
     snprintf(donePath, sizeof(donePath),  "screenshots/Level%02d_Model%s_Done.txt",
              cmd.level, cmd.modelId.c_str());
@@ -798,9 +820,16 @@ void DebugCommandManager::CaptureModel(const DebugCommand& cmd) {
             glDeleteBuffers(2, pbos);
 
             int exitCode = _pclose(pipe); // blocks until FFmpeg finishes encoding
+#if defined(_WIN32)
             DWORD attr = GetFileAttributesA(videoPath);
             orbitOk = (exitCode == 0) ||
                       (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY));
+#else
+            std::error_code vec;
+            orbitOk = (exitCode == 0) ||
+                      (std::filesystem::exists(videoPath, vec) &&
+                       !std::filesystem::is_directory(videoPath, vec));
+#endif
             Logger::Get().Log(LogLevel::INFO, "[CaptureModel] FFmpeg exit=" +
                 std::to_string(exitCode) + (orbitOk ? " MP4 ok" : " MP4 missing"));
         }

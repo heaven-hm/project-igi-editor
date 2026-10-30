@@ -19,7 +19,7 @@ std::string GetExePath();
 // waits up to timeoutMs milliseconds. Returns true on exit code 0.
 // On failure, `err` is populated with a human-readable reason and (when
 // available) the captured stdout/stderr of the tool.
-bool Run(const std::string& args, std::string& err, DWORD timeoutMs = 120000);
+bool Run(const std::string& args, std::string& err, unsigned long timeoutMs = 120000);
 
 // ── High-level helpers ──────────────────────────────────────────────────────
 // Each one constructs the right `igi1conv <cmd>` invocation and either

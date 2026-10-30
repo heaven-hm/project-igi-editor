@@ -9,6 +9,12 @@
 #include "runtime/pickup_rules.h"
 #include "runtime/rail_source.h"
 #include "runtime/smoke.h"
+#include "runtime/statgun_mount.h"
+// The AIStationaryGunHolder detection volume, ported from AIView_Contains
+// (HOOK 0x489960, IGI-RE src/levelflow/aidetect.c:282-305) and the gun it
+// carries (AIStationaryGun 0x46EAE0, src/binocular/stationarygun.c:123-155).
+// Host-tested in tests/test_props_wire_interactables.cpp.
+#include "runtime/gunholder_view.h"
 
 #include <cstring>
 
@@ -565,6 +571,155 @@ void Renderer_Objects::DrawAttachedMesh(const std::string& modelId, bool isBuild
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+}
+
+// ─── DrawMountedStationaryGuns ───────────────────────────────────────────────
+// A placed `StationaryGun` is not only its holder model: the engine creates a
+// Gun task for the authored `weapon` string and mounts it at the muzzle
+// (StationaryGun_Changed 0x474980 -> WeaponType_Find 0x413BD0 -> Gun_New
+// 0x477C50 -> StationaryGun_Aim 0x474420; IGI-RE src/statgun/statgun.c:310-339,
+// :225-272). StationaryGun_Aim composes
+//
+//     obj.matrix = baseMatrix * RotZ(outYaw)
+//     e          = obj.matrix * Matrix_SetEuler(outPitch, 0, PI)
+//     Weapon_Move(w, &p, &e)
+//     o->muzzlePos = p; o->muzzleMatrix = e;
+//
+// and Gun_MoveHandler assigns both verbatim (`g->o.matrix = *msg->matrix;`,
+// src/guncasing/gun.c:519), so `e`/`p` ARE the weapon's world transform. The
+// arithmetic lives in igi::statgun::ComposeWeaponMount (runtime/statgun_mount.h)
+// with the per-line citations; this function is only the draw call.
+//
+// The gun has no user in the editor, so outYaw/outPitch are the values
+// StationaryGun_Changed left (statgun.c:318-321): zero. A user-driven preview
+// would read them from StationaryGun_RunHandler (statgun.c:166-171), which the
+// editor does not simulate.
+//
+// The muzzle POSITION is the gun model's point 1 (statgun.c:246-249), taken
+// through Model_GetPoint (0x414E20, src/game/misc.c:192-200) = the mesh-local
+// XTVM point scaled by 40.96 (mesh-local -> engine units) and by the object's
+// own `scale`, then rotated by the gun matrix. The shipped M2HB mount model
+// `123_02_1` has exactly one point, so the engine's index-1 lookup is out of
+// range and returns zero: the weapon sits at the gun's position (see
+// tests/test_statgun_mount.cpp, which reads that count from the shipped .mef).
+//
+// The weapon is its own object: RigidDynCubeObj_Init sets its scale factors to
+// 1 (src/magicobj/magicobj.c:340-342), so it is drawn at the editor's plain
+// 40.96 model scale -- the gun's own scale does not propagate to it.
+void Renderer_Objects::DrawMountedStationaryGuns(const std::vector<LevelObject>& objects,
+                                                 int draw_parts, GLuint ubo_mats) {
+    const int DRAW_OBJECTS = 4;
+    const int DRAW_PROPS = 32;
+    if ((draw_parts & (DRAW_OBJECTS | DRAW_PROPS)) == 0) return;
+
+    for (const auto& obj : objects) {
+        if (obj.deleted || obj.type != "StationaryGun") continue;
+        if (obj.mountedWeaponModelId.empty()) continue;
+
+        // The authored orientation is the task's `baseMatrix`
+        // (ParamReal32x9_Parse 0x4EFBA0 -> Matrix_SetEuler, paramops.c:423-435).
+        const igi::statgun::Mat3 base =
+            igi::statgun::SetEuler(obj.rot.x, obj.rot.y, obj.rot.z);
+
+        // Model point 1 of the GUN's model, in mesh-local units. GetOrLoadMesh
+        // returns the LOD-0 mesh's XTVM points (model.cpp:34-36); the engine's
+        // Model_GetPoint reads LOD 0 too (mesh3d.c:505-509 -> m->lods[0]), so
+        // the muzzle point does not follow the drawn LOD.
+        const std::vector<glm::vec3> points = GetModelMagicVertices(obj.modelId, obj.isBuilding);
+        igi::statgun::Vec3 point{};
+        if (points.size() > 1) point = {points[1].x, points[1].y, points[1].z};
+
+        const double scale = (obj.scale > 0.0f) ? (double)obj.scale : 1.0;
+        // Mesh-local -> engine units is 40.96 (renderer/model.cpp:19-36); the
+        // engine additionally multiplies the point by the object's scale
+        // (Mesh3D_GetWorldVertex, src/lod/mesh3d.c:434-436).
+        const double pointScale = 40.96 * scale;
+
+        const igi::statgun::WeaponMount mount = igi::statgun::ComposeWeaponMount(
+            igi::statgun::Vec3{obj.pos.x, obj.pos.y, obj.pos.z}, base,
+            /*outPitch=*/0.0, /*outYaw=*/0.0, point, pointScale);
+
+        // Engine row-major `Matrix::m` (world = M * local) -> glm column-major.
+        glm::mat4 world(1.0f);
+        for (int row = 0; row < 3; ++row) {
+            for (int col = 0; col < 3; ++col) {
+                world[col][row] = (float)mount.rotation.m[row * 3 + col];
+            }
+        }
+        world = glm::translate(glm::mat4(1.0f),
+                               glm::vec3((float)mount.position.x, (float)mount.position.y,
+                                         (float)mount.position.z)) * world;
+        world = glm::scale(world, glm::vec3(40.96f));
+        DrawAttachedMesh(obj.mountedWeaponModelId, false, world, ubo_mats);
+    }
+}
+
+// ─── DrawSCameraLenses ───────────────────────────────────────────────────────
+// An SCamera is TWO engine objects: the holder/body task (its own `model`, QSC
+// arg 7) and an SCameraLens CHILD that SCamera_Create always creates —
+// `c->lens = Task_New(c, gLensType, NULL)` (IGI-RE src/scamera/scamera.c:204,
+// SCamera_Create HOOK 0x4423F0). The child's model is the camera's authored
+// "Camera Model" (arg 10, `FIELD(lens_model)`, scamera.c:122), which
+// SCameraLens_ParamsChanged loads and places (HOOK 0x4420D0,
+// src/scamera/scameralens.c:393-419):
+//
+//     if (model) RigidDynCubeObj_SetModel(l, model);          // :400-401
+//     Model_GetPoint(&p, l->camera, 0); p += c->o.pos;         // :403-406
+//     Matrix_SetEuler(&l->o.matrix, c->pitch, 0,
+//                     c->yaw + c->yaw_offset);                 // :414
+//
+// Model_GetPoint (HOOK 0x414E20, src/game/misc.c:192-200) returns the LOD-0
+// XTVM point scaled by 40.96 and the object's scale, rotated by the object's
+// matrix but NOT translated (Mesh3D_GetWorldVertex, src/lod/mesh3d.c:429-440),
+// which is why the engine adds the camera position afterwards. The holder body
+// itself is placed with Matrix_SetRotZ(c->yaw) (scamera.c:242), so its frame is
+// pure yaw; the LENS frame additionally carries the authored yaw offset
+// (scamera.c:121, arg 9). The editor folds that offset into rot.z for display
+// and keeps it in `yawOffset`, so holderYaw = rot.z - yawOffset recovers it.
+//
+// Without this pass the editor drew only the body: 48 shipped SCameras lost
+// their rotating head, a model the game always loads.
+void Renderer_Objects::DrawSCameraLenses(const std::vector<LevelObject>& objects,
+                                         int draw_parts, GLuint ubo_mats) {
+    const int DRAW_OBJECTS = 4;
+    const int DRAW_PROPS = 32;
+    if ((draw_parts & (DRAW_OBJECTS | DRAW_PROPS)) == 0) return;
+
+    for (const auto& obj : objects) {
+        if (obj.deleted || obj.type != "SCamera") continue;
+        if (obj.lensModelId.empty()) continue;
+
+        const double holderYaw = obj.rot.z - obj.yawOffset;
+        const igi::statgun::Mat3 holder = igi::statgun::SetEuler(0.0, 0.0, holderYaw);
+
+        // Point 0 of the holder's model, mesh-local (MEF units / 40.96).
+        const std::vector<glm::vec3> points = GetModelMagicVertices(obj.modelId, obj.isBuilding);
+        igi::statgun::Vec3 point{};
+        if (!points.empty()) point = {points[0].x, points[0].y, points[0].z};
+
+        const double scale = (obj.scale > 0.0f) ? (double)obj.scale : 1.0;
+        const double pointScale = 40.96 * scale;
+        const igi::statgun::Vec3 local{point.x * pointScale, point.y * pointScale,
+                                       point.z * pointScale};
+        const igi::statgun::Vec3 offset = igi::statgun::Rotate(holder, local);
+
+        const igi::statgun::Mat3 lens =
+            igi::statgun::SetEuler(obj.rot.x, 0.0, obj.rot.z);
+
+        // Engine row-major `Matrix::m` (world = M * local) -> glm column-major.
+        glm::mat4 world(1.0f);
+        for (int row = 0; row < 3; ++row) {
+            for (int col = 0; col < 3; ++col) {
+                world[col][row] = (float)lens.m[row * 3 + col];
+            }
+        }
+        world = glm::translate(glm::mat4(1.0f),
+                               glm::vec3((float)(obj.pos.x + offset.x),
+                                         (float)(obj.pos.y + offset.y),
+                                         (float)(obj.pos.z + offset.z))) * world;
+        world = glm::scale(world, glm::vec3(40.96f));
+        DrawAttachedMesh(obj.lensModelId, obj.isBuilding, world, ubo_mats);
+    }
 }
 
 // ─── LoadAttachmentsRecursive ────────────────────────────────────────────────
@@ -1188,37 +1343,66 @@ void DrawPropsGizmos(const LevelObject& obj, GLuint ubo_mats, GLuint ubo_binding
     }
 
     // ── AIStationaryGunHolder ────────────────────────────────────────────────
-    // GunHolder_Init maps the authored args straight onto the AI view cone:
-    //   view.maxPitch = angleX * kDegToRad   (arg@10)
-    //   view.maxYaw   = angleY * kDegToRad   (arg@11)
-    //   view.range    = range  * kRangeScale (arg@12, kRangeScale = 4096 units/m)
-    // (IGI-RE src/comprun/gunholder.c:228-230, table at gunholder.c:157-165).
+    // The authored params ARE the AI detector's view (GunHolder_Changed HOOK
+    // 0x46E7F0, IGI-RE src/comprun/gunholder.c:228-230):
+    //   view.maxPitch = angleX * kDegToRad   // arg 10 "Viewcone Alpha"
+    //   view.maxYaw   = angleY * kDegToRad   // arg 11 "Viewcone Gamma"
+    //   view.range    = range  * 4096.0      // arg 12 "Viewcone Length", metres
+    // The volume is what AIView_Contains (HOOK 0x489960, src/levelflow/aidetect.c:
+    // 282-305) accepts: within `range`, |pitch| < maxPitch and |yaw| < maxYaw,
+    // where BOTH angles are measured from the object's LOCAL +Y and each is taken
+    // in one coordinate plane (Vec3d_PitchAngle HOOK 0x4148F0, src/game/misc.c:
+    // 41-57; Vec3d_YawAngle 0x414950, :59-73). It is not a circular cone around
+    // local +X, which is what this gizmo used to draw: the old pitch rays came
+    // off +X in the XZ plane, and the limits were not bounded by range at all.
+    // When both limits reach 180 deg -- every shipped holder authors 360/360 --
+    // the angle tests can never fail and the volume is a BALL of `range` metres.
+    // See source/runtime/gunholder_view.h.
     if (obj.type == "AIStationaryGunHolder") {
         const TaskSchemaNS::Props::GunHolderParams gp = obj.GunHolderParams();
         if (!gp.valid) return;
-        constexpr double kDeg = 0.017453292519943295;
-        const float maxPitch = (float)(gp.angleX * kDeg);
-        const float maxYaw   = (float)(gp.angleY * kDeg);
-        const float range    = (float)(gp.range * 4096.0);   // gunholder.c:102,230
+
+        igi::gunholder::Mat3 viewMat;
+        viewMat.m[0] = ax.x; viewMat.m[1] = ay.x; viewMat.m[2] = az.x;
+        viewMat.m[3] = ax.y; viewMat.m[4] = ay.y; viewMat.m[5] = az.y;
+        viewMat.m[6] = ax.z; viewMat.m[7] = ay.z; viewMat.m[8] = az.z;
+        const igi::gunholder::View view = igi::gunholder::MakeView(
+            igi::gunholder::Vec3{(double)obj.pos.x, (double)obj.pos.y, (double)obj.pos.z},
+            viewMat, gp.angleX, gp.angleY, gp.range);
 
         GzBatch b;
         const float arm = kGizmoRefLen * 0.25f;
         b.line(origin, origin + ax * arm);
         b.line(origin, origin + ay * arm);
         b.line(origin, origin + az * arm);
+        // The measured axis itself: the detector looks down local +Y.
+        b.line(origin, origin + ay * static_cast<float>(view.range));
         const size_t geometry = b.count();
 
-        const float yaw = std::min(maxYaw, glm::pi<float>());
-        Arc(b, origin, ax, ay, -yaw, yaw, range, 32);
-        b.line(origin, origin + (ax * std::cos(-yaw) + ay * std::sin(-yaw)) * range);
-        b.line(origin, origin + (ax * std::cos(yaw) + ay * std::sin(yaw)) * range);
-        const float pitch = std::min(maxPitch, glm::half_pi<float>());
-        b.line(origin, origin + (ax * std::cos(pitch) + az * std::sin(pitch)) * range);
-        b.line(origin, origin + (ax * std::cos(pitch) - az * std::sin(pitch)) * range);
+        if (igi::gunholder::ViewLimitsAreVacuous(view.maxPitch, view.maxYaw)) {
+            // The angular tests accept everything: the volume is the range ball.
+            // Draw three great circles through the local axes so the radius is
+            // visible from any viewpoint.
+            Arc(b, origin, ax, ay, 0.0f, glm::two_pi<float>(), static_cast<float>(view.range), 48);
+            Arc(b, origin, ay, az, 0.0f, glm::two_pi<float>(), static_cast<float>(view.range), 48);
+            Arc(b, origin, az, ax, 0.0f, glm::two_pi<float>(), static_cast<float>(view.range), 48);
+        } else {
+            // The rim of the exact region: every grid cell whose corners
+            // disagree about membership contributes its edge on the sphere of
+            // radius `range`. The membership test is the engine's own
+            // (LocalDirectionInView), so no cone is approximated.
+            const std::vector<igi::gunholder::Segment> rim =
+                igi::gunholder::ViewVolumeRim(view, /*azimuth_steps=*/48,
+                                              /*elevation_steps=*/24);
+            for (const igi::gunholder::Segment& s : rim) {
+                b.line(glm::vec3((float)s.a.x, (float)s.a.y, (float)s.a.z),
+                       glm::vec3((float)s.b.x, (float)s.b.y, (float)s.b.z));
+            }
+        }
 
         FlushGizmo(b, prog, ubo_mats, ubo_binding, geometry,
-                   glm::vec4(0.45f, 0.85f, 0.45f, 1.0f),   // base frame
-                   glm::vec4(0.85f, 0.45f, 0.95f, 1.0f));  // AI detection cone
+                   glm::vec4(0.45f, 0.85f, 0.45f, 1.0f),   // base frame + view axis
+                   glm::vec4(0.85f, 0.45f, 0.95f, 1.0f));  // AI detection volume
         return;
     }
 

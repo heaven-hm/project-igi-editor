@@ -6,9 +6,10 @@
 #include "pch.h"
 #include "utils.h"
 #include "logger.h"
+#if defined(_WIN32)
 #include <windows.h>
 #include <tlhelp32.h>
-#include <sstream>
+#endif
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -55,6 +56,7 @@ void SetLogEnabled(bool enabled) {
 }
 
 // UI message box functions
+#if defined(_WIN32)
 void ShowError(const std::string& message, const std::string& title) {
 	MessageBoxA(NULL, message.c_str(), title.c_str(), MB_OK | MB_ICONERROR);
 }
@@ -66,7 +68,9 @@ void ShowWarning(const std::string& message, const std::string& title) {
 void ShowInfo(const std::string& message, const std::string& title) {
 	MessageBoxA(NULL, message.c_str(), title.c_str(), MB_OK | MB_ICONINFORMATION);
 }
+#endif // _WIN32
 
+#if defined(_WIN32)
 struct PromptDialogState {
 	std::string title;
 	std::string label;
@@ -205,6 +209,7 @@ std::optional<std::string> PromptForText(const std::string& title, const std::st
 	if (!state.accepted) return std::nullopt;
 	return state.result;
 }
+#endif // _WIN32
 
 // Combined log + message box functions
 void LogAndShowError(const std::string& message, const std::string& title) {
@@ -213,6 +218,7 @@ void LogAndShowError(const std::string& message, const std::string& title) {
 }
 
 // Process elevation check
+#if defined(_WIN32)
 bool IsElevatedProcess() {
 	bool isElevated = false;
 	HANDLE token = NULL;
@@ -229,7 +235,9 @@ bool IsElevatedProcess() {
 	return isElevated;
 }
 
+#endif // _WIN32
 // String utilities
+#if defined(_WIN32)
 std::string GetLastErrorAsString() {
 	DWORD error = GetLastError();
 	if (error == 0)
@@ -239,6 +247,7 @@ std::string GetLastErrorAsString() {
 	ss << "Error code: " << error << " - " << std::system_category().message(error);
 	return ss.str();
 }
+#endif // _WIN32
 
 // Trim() is defined inline in utils.h so the pure-logic parsers can be compiled
 // and linked by the host-native test lane, which does not build this file.
@@ -289,6 +298,7 @@ template std::string ToString<float>(const float&);
 template std::string ToString<double>(const double&);
 
 // Key handling functions (Windows API)
+#if defined(_WIN32)
 bool HotKeysDown(const std::vector<int>& keys) {
 	if (keys.empty()) return false;
 
@@ -327,6 +337,7 @@ bool IsKeyBindingPressed(const KeyBinding& kb) {
 	if (kb.vkCode) keys.push_back(kb.vkCode);
 	return HotKeysDown(keys);
 }
+#endif // _WIN32
 
 bool ModifiersExactMatch(const KeyBinding& kb, bool ctrlDown, bool shiftDown, bool altDown) {
 	// Required modifiers must be held AND non-required modifiers must be released,
@@ -334,6 +345,7 @@ bool ModifiersExactMatch(const KeyBinding& kb, bool ctrlDown, bool shiftDown, bo
 	return kb.ctrl == ctrlDown && kb.shift == shiftDown && kb.alt == altDown;
 }
 
+#if defined(_WIN32)
 bool IsKeyBindingPressedExact(const KeyBinding& kb) {
 	// A binding with no key and no modifiers can never be "pressed".
 	if (!kb.vkCode && !kb.ctrl && !kb.shift && !kb.alt) return false;
@@ -341,13 +353,14 @@ bool IsKeyBindingPressedExact(const KeyBinding& kb) {
 	if (kb.vkCode && !down(kb.vkCode)) return false;
 	return ModifiersExactMatch(kb, down(VK_CONTROL), down(VK_SHIFT), down(VK_MENU));
 }
+#endif // _WIN32
 
 // GetExeDirectory() is defined inline in utils.h so the level-load path can be
 // compiled and linked by the host-native test lane, which does not build this file.
 
 std::string GetVersionString() {
 	std::string exeDir = GetExeDirectory();
-	std::string versionPath = exeDir + "\\version";
+	std::string versionPath = ToNativePath(exeDir + "\\version");
 	std::ifstream file(versionPath);
 	if (file.is_open()) {
 		std::string version;
@@ -366,20 +379,20 @@ std::string GetLevelQSCPath(int level_no) {
 			path = path.substr(6);
 			// In IGI, LOCAL: usually means it's relative to the game root or mission folder
 			// For the editor, we'll try to resolve it relative to the game root.
-			return GetIGIRootPath() + "\\" + path;
+			return ToNativePath(GetIGIRootPath() + "\\" + path);
 		}
 		return path;
 	}
 	std::string exeDir = GetExeDirectory();
 	std::string dir = exeDir + "\\editor\\qed\\temp";
 	std::filesystem::create_directories(dir);
-	return dir + "\\objects.qsc";
+	return ToNativePath(dir + "\\objects.qsc");
 }
 
 std::string GetLevelQVMPath(int level_no) {
 	std::string game_path = GetIGIRootPath();
 	Logger::Get().Log(LogLevel::INFO, "[Utils] GetLevelQVMPath using custom location: " + game_path);
-	return game_path + "\\missions\\location0\\level" + std::to_string(level_no) + "\\objects.qvm";
+	return ToNativePath(game_path + "\\missions\\location0\\level" + std::to_string(level_no) + "\\objects.qvm");
 }
 
 static void CopyDirExcludingQFiles(const std::filesystem::path& source, const std::filesystem::path& destination) {
@@ -442,6 +455,7 @@ bool IsUndergroundModel(const std::string& name, const std::string& modelId) {
 		matches("ANYA_HQ");
 }
 
+#if defined(_WIN32)
 void SetClipboardText(const std::string& text) {
 	if (!OpenClipboard(NULL)) return;
 	EmptyClipboard();
@@ -472,6 +486,7 @@ std::string GetClipboardText() {
 	CloseClipboard();
 	return text;
 }
+#endif // _WIN32
 
 void TrimFileInPlace(const std::string& filepath) {
 	std::ifstream inFile(filepath, std::ios::in | std::ios::binary);
@@ -517,6 +532,23 @@ std::string GetIGIRootPath() {
 			return path;
 		}
 	}
+#if defined(__APPLE__)
+	// A Finder launch inherits no shell environment, so an .app cannot rely on
+	// IGI_GAME_PATH.  The bundle ships a one-line file naming the install; it is
+	// read here so double-clicking the app finds the same tree the CLI tests use.
+	{
+		const std::string configPath =
+		    Utils::ToNativePath(GetExeDirectory() + "\\igi-game-path.txt");
+		std::ifstream in(configPath);
+		std::string line;
+		if (in.is_open() && std::getline(in, line)) {
+			line = Trim(line);
+			if (!line.empty()) {
+				return line;
+			}
+		}
+	}
+#endif
 #endif
 
 	std::string path = GetExeDirectory();
@@ -546,6 +578,7 @@ std::string GetIGIModelsPath(int level_no) {
 	return "";
 }
 
+#if defined(_WIN32)
 HANDLE FindProcess(const std::string &processName)
 {
     LogInfo("FindProcess: Trying to find process: " + processName);
@@ -759,5 +792,6 @@ DWORD GetProcessBaseAddress()
         return 0;
     }
 }
+#endif // _WIN32
 
 } // namespace Utils

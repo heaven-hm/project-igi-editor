@@ -46,6 +46,28 @@ void ClearRegisteredSchemas();
 // Returns nullptr if neither exists.
 const TaskSchema* GetSchema(const std::string& taskType);
 
+// The QSC argument index of the FIRST declared model slot, or -1 when the
+// declaration names none.
+//
+// A "model slot" is a single-token string field (String16 / String32 /
+// String256) whose authored name contains "model" case-insensitively, taken in
+// declaration order. The engine's ParamTable does the same thing structurally:
+// every task type that draws a model adds one Param_String16 field bound to its
+// `FIELD(model)` / `FIELD(holder_model)` member, and the create handler feeds
+// that member to RigidDynCubeObj_SetModel / BoneDynCubeObj_SetModel (e.g.
+// src/missile/train.c:149, src/props/wire.c:180, src/scamera/scamera.c:240).
+//
+// This is what lets LevelObjects::Load resolve the model of a task type it has
+// no hand-written branch for, exactly as the level file declares it — instead
+// of guessing from the token's shape (the old "8-character NNN_NN_N" scan,
+// which silently dropped every longer id such as AlarmLight's "1729_01_1").
+//
+// It returns the slot's index, not a value: callers decide whether an empty or
+// sentinel value ("waypoint") should be kept. Types with several model slots
+// return the first one (ExplodeObject "Model" before "Destroyed model"; Switch
+// "On model" before the other four; SCamera "Holder Model" before the lens).
+int FindDeclaredModelArg(const TaskSchema& schema);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Prop / interactable parity maths.
 //

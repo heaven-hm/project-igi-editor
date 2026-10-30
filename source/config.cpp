@@ -125,7 +125,21 @@ static KeyBinding ParseKeyBinding(const std::string& binding) {
     else if (keyPart == "MINUS" || keyPart == "SUBTRACT") kb.vkCode = VK_OEM_MINUS;
     else if (keyPart == "LEFTMOUSEBUTTON") kb.vkCode = VK_LBUTTON;
     else if (keyPart.length() == 1) {
+#if defined(_WIN32)
+#if defined(_WIN32)
         kb.vkCode = VkKeyScanA(keyPart[0]) & 0xFF;
+#else
+        // VkKeyScanA returns the VK code of a character; for the characters the
+        // config grammar allows (single alphanumerics) that is the upper-case
+        // ASCII value, which is also what the VK_* table uses.
+        kb.vkCode = static_cast<int>(static_cast<unsigned char>(toupper(static_cast<unsigned char>(keyPart[0]))));
+#endif
+#else
+        // VkKeyScanA returns the VK code of a character; for the characters the
+        // config grammar allows (single alphanumerics) that is the upper-case
+        // ASCII value, which is also what the VK_* table uses.
+        kb.vkCode = static_cast<int>(static_cast<unsigned char>(toupper(static_cast<unsigned char>(keyPart[0]))));
+#endif
     }
 
     return kb;

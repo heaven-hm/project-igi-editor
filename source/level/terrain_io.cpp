@@ -4,6 +4,7 @@
  *          Split from terrain.cpp; shares terrain_internal.h.
  *****************************************************************************/
 #include "terrain_internal.h"
+#include "terrain_ctr_rules.h"
 #include <memory>
 #include <cmath>
 
@@ -360,7 +361,56 @@ bool Terrain::LoadCTRFile(load_params_s & params) {
 
 	ctr_s ctr_file_contents = {};
 	if (!CTR_Load(filename, ctr_file_contents)) {
-		return false;
+		// Terrain_Load HOOK 0x4C6240 (src/terrain/terrain.c:128-130) loads the
+		// .ctr through Resource_Load with no existence check: a missing file
+		// yields NULL with size 0, the ctr loop runs zero times, and the level
+		// keeps loading.  The collision entry points guard on a NULL ctr
+		// (src/coll/coll.c:171: `if (!(flags & 0x80000000) || !t->ctr)`).
+		// So a .ctr problem is never fatal in the engine, and it must not be
+		// fatal here either: aborting Terrain::Load() leaves hmp_ null, and
+		// Terrain::Save then refuses to write the height map (the level-14
+		// session in the user's log lost the terrain exactly this way).
+		Logger::Get().Log(LogLevel::WARNING,
+			"[Terrain] terrain.ctr is missing or empty for level " +
+			std::to_string(params.level_no_) +
+			"; loading the terrain without a collision tree (engine: Terrain_Load 0x4C6240, "
+			"src/terrain/terrain.c:128-130)");
+		return true;
+	}
+
+	// The engine validates nothing and would happily build pointers out of
+	// garbage (src/terrain/terrain.c:142-143).  The editor dereferences the tree
+	// (RecursiveGetZ, GenerateRenderCube, Level::GetDynCube), so the invariants
+	// the engine merely assumes are checked here - see terrain_ctr_rules.h for
+	// the four places they come from.
+	const igi::ctr_violation_s violation = igi::ValidateCtrNodes(
+		ctr_file_contents.head_, ctr_file_contents.num_item_, cmd_sz_);
+	if (violation.node_ >= 0) {
+		if (violation.child_) {
+			Logger::Get().Log(LogLevel::ERR,
+				"[Terrain] CTR child index out of bounds: node " +
+				std::to_string(violation.node_) + " mask=0x" +
+				std::to_string((int)ctr_file_contents.head_[violation.node_].children_mask_) +
+				" child[" + std::to_string(violation.slot_) + "]=" +
+				std::to_string((int)violation.value_) + " (node count " +
+				std::to_string(ctr_file_contents.num_item_) + ")");
+		} else {
+			Logger::Get().Log(LogLevel::ERR,
+				"[Terrain] CTR cmd_offset out of bounds: node " +
+				std::to_string(violation.node_) + " leaf=" +
+				std::to_string(violation.value_) + " but terrain.cmd is " +
+				std::to_string(cmd_sz_) + " bytes (file has " +
+				std::to_string(ctr_file_contents.num_item_) + " 32-byte records)");
+		}
+		Logger::Get().Log(LogLevel::WARNING,
+			"[Terrain] keeping level " + std::to_string(params.level_no_) +
+			" without a collision tree: the .ctr does not hold the engine's 32-byte "
+			"CollNode records (Terrain_Load 0x4C6240, src/terrain/terrain.c:142-143; "
+			"CollNode src/coll/colltypes.h:95-101)");
+
+		CTR_Free(ctr_file_contents);
+		SAFE_FREE(ctr_);
+		return true;	// engine rule: a bad/missing ctr never fails the terrain load
 	}
 
 	ctr_ = (ctr_node_s*)MEM_ALLOC(sizeof(ctr_node_s) * ctr_file_contents.num_item_);
@@ -372,11 +422,6 @@ bool Terrain::LoadCTRFile(load_params_s & params) {
 	for (int i = 0; i < ctr_file_contents.num_item_; ++i) {
 		const ctr_item_s* src = ctr_file_contents.head_ + i;
 		ctr_node_s* dst = ctr_ + i;
-
-		if ((int)src->cmd_offset_ >= cmd_sz_) {
-			Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "CTR cmd_offset out of bounds\n");
-			return false;
-		}
 
 		memcpy(dst, src, sizeof(*src));
 

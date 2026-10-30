@@ -43,14 +43,8 @@ Level::~Level() {
 }
 
 static std::string GetExeDirectory() {
-	char exePath[MAX_PATH];
-	GetModuleFileNameA(NULL, exePath, MAX_PATH);
-	std::string exeDir(exePath);
-	size_t lastSlash = exeDir.find_last_of("\\/");
-	if (lastSlash != std::string::npos) {
-		exeDir = exeDir.substr(0, lastSlash);
-	}
-	return exeDir;
+	// One portable implementation lives in utils.h; see the .app note there.
+	return Utils::GetExeDirectory();
 }
 
 static void CleanDirectory(const std::string& dirPath) {
@@ -99,7 +93,7 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 	// Verify terrain folder exists in game directory
 	try {
 		std::string terrainPath = Utils::GetIGIRootPath() + "\\missions\\location0\\level" + std::to_string(params.level_no_) + "\\terrain";
-		if (!std::filesystem::exists(terrainPath)) {
+		if (!std::filesystem::exists(Utils::ToNativePath(terrainPath))) {
 			Logger::Get().Log(LogLevel::ERR, "[Level] FATAL: ERROR Missing terrain folder at: " + terrainPath);
 			return false;
 		}
@@ -122,7 +116,7 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 	DecompileObjects(params.level_no_);
 	Str_SPrintf(filename, 1024, "%s\\editor\\qed\\temp\\objects.qsc", exeDir.c_str());
 
-	qsc_path_ = filename;
+	qsc_path_ = Utils::ToNativePath(filename);
 
 	if (!File_Exists(filename)) {
 		Logger::Get().Log(LogLevel::ERR, "[Level] FATAL: ERROR Missing 'objects.qsc' file at: " + qsc_path_);
@@ -186,8 +180,12 @@ void Level::DecompileObjects(int levelNo) {
 
 	std::string exeDir = GetExeDirectory();
 	char destPath[1024];
-	std::filesystem::create_directories(exeDir + "\\editor\\qed\\temp");
+	std::filesystem::create_directories(Utils::ToNativePath(exeDir + "\\editor\\qed\\temp"));
 	Str_SPrintf(destPath, 1024, "%s\\editor\\qed\\temp\\objects.qsc", exeDir.c_str());
+	// The decompiler and TrimFileInPlace both open this path directly, so make
+	// it native here rather than patching each consumer.
+	const std::string nativeDest = Utils::ToNativePath(destPath);
+	std::snprintf(destPath, sizeof(destPath), "%s", nativeDest.c_str());
 
 	try {
 		// Use internal C++ decompiler
@@ -715,6 +713,20 @@ void Level::LoadFlatSkyLayersInfo(const QSC* qsc_objects, IRenderResLoader* rend
 // if not exists then allocate a cube
 dyn_cube_s* Level::GetDynCube(const double pos[3], int cube_lod_level, glm::ivec3& cube_ctr) {
 	const Terrain::ctr_node_s* ctr_head = terrain_.GetCtr();
+
+	// DynCube_Add -> DynCube_Move (src/terrain/dyncube.c:141-147, HOOK 0x4C6940)
+	// only descends the *terrain* quad tree to pick a cube; when the level has no
+	// collision tree the engine's own walks are skipped too - QCube_Begin tests
+	// `if (w->ctr && full)` (src/lod/qcube.c:366) and the collision entry points
+	// guard on a NULL ctr (src/coll/coll.c:171).  Terrain::LoadCTRFile leaves
+	// ctr_ null for a .ctr that is missing or is not the engine's 32-byte
+	// CollNode array (terrain_ctr_rules.h), so place into the root cube and stop
+	// instead of reading ctr_head + 1.
+	if (!ctr_head) {
+		cube_ctr = glm::ivec3(0);
+		return root_dyn_cube_;
+	}
+
 	const Terrain::ctr_node_s* ctr_node = ctr_head + 1;	// + 1: root node
 	int cube_half_size = root_dyn_cube_->cube_half_size_;
 	int lod_bit_shift = 30;

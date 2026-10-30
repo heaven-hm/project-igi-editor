@@ -133,7 +133,7 @@ static std::vector<ModelEntry> LoadAllModelsFromJson() {
 	std::vector<ModelEntry> entries;
 	std::string jsonPath = Utils::GetExeDirectory() + "\\editor\\tools\\IGIModels.json";
 
-	if (!std::filesystem::exists(jsonPath)) {
+	if (!std::filesystem::exists(Utils::ToNativePath(jsonPath))) {
 		Logger::Get().Log(LogLevel::ERR, "[App] IGIModels.json not found in executable directory: " + jsonPath);
 	} else {
 		Logger::Get().Log(LogLevel::INFO, "[App] Loading model database from: " + jsonPath);
@@ -220,7 +220,7 @@ void App::SearchModelById(std::optional<std::string> query) {
 		}
 	}
 	
-	MessageBoxA(NULL, resultMessage.c_str(), "IGIModels.json Search Results", MB_OK | MB_ICONINFORMATION);
+	Utils::ShowInfo(resultMessage, "IGIModels.json Search Results");
 }
 
 void App::SearchModelByName(std::optional<std::string> query) {
@@ -261,7 +261,7 @@ void App::SearchModelByName(std::optional<std::string> query) {
 		}
 	}
 	
-	MessageBoxA(NULL, resultMessage.c_str(), "IGIModels.json Search Results", MB_OK | MB_ICONINFORMATION);
+	Utils::ShowInfo(resultMessage, "IGIModels.json Search Results");
 }
 
 std::vector<int> App::GetVisibleTreeNodes() {

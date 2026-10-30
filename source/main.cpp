@@ -568,7 +568,7 @@ int main(int argc, char **argv) {
 
   // Initialize logger early (handles both GUI and Headless modes)
   std::string exeDir = Utils::GetExeDirectory();
-  Logger::Get().Init(exeDir + "\\igi1ed.log");
+  Logger::Get().Init(Utils::ToNativePath(exeDir + "\\igi1ed.log"));
 
   // Initialize config first (before Folders_Init which uses Config)
   Config::Init();
@@ -596,7 +596,7 @@ int main(int argc, char **argv) {
 
   // Check if the game executable (igi.exe) exists in the configured game path
   std::string igiRoot = Utils::GetIGIRootPath();
-  std::string igiExePath = igiRoot + "\\igi.exe";
+  std::string igiExePath = Utils::ToNativePath(igiRoot + "\\igi.exe");
   if (!std::filesystem::exists(igiExePath)) {
     std::string errorMsg = "Fatal Error: 'igi.exe' not found in game directory:\n" + igiRoot +
                            "\n\nPlease make sure the editor is placed in the main Project IGI game directory next to 'igi.exe'.";
@@ -608,7 +608,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  std::string contentPath = exeDir + "\\editor";
+  std::string contentPath = Utils::ToNativePath(exeDir + "\\editor");
   if (!std::filesystem::exists(contentPath) || !std::filesystem::is_directory(contentPath)) {
     std::string errorMsg = "Fatal Error: 'editor' directory not found in:\n" + exeDir +
                            "\n\nPlease make sure the 'editor' directory is present next to the editor executable.";
@@ -626,8 +626,11 @@ int main(int argc, char **argv) {
       "\\editor\\tools\\igi1conv\\igi1conv.exe",
     };
     for (const auto& rel : requiredEditorPaths) {
-      if (!std::filesystem::exists(exeDir + rel)) {
-        std::string errorMsg = "Fatal Error: Required editor file missing:\n" + exeDir + rel +
+      // The relative fragments are written with Windows separators; convert at
+      // the filesystem boundary so the same list serves both platforms.
+      const std::string requiredPath = Utils::ToNativePath(exeDir + rel);
+      if (!std::filesystem::exists(requiredPath)) {
+        std::string errorMsg = "Fatal Error: Required editor file missing:\n" + requiredPath +
                                "\n\nPlease reinstall or restore the 'editor' directory.";
 #if defined(_WIN32)
         Utils::LogAndShowError(errorMsg, "IGI Editor - Launch Error");

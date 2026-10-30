@@ -243,6 +243,12 @@ private:
   int last_pick_x_ = -9999;
   int last_pick_y_ = -9999;
   int64_t last_hover_pick_ms_ = -1;
+  // Time of the last editor mouse-motion event. Hover picking is deferred until
+  // the pointer has been still for a settle window, because one hover pick is a
+  // whole extra scene pass plus a synchronous glReadPixels
+  // (renderer/renderer_objects_picking.cpp:374-412). See
+  // runtime/editor_hover_policy.h and App::Frame.
+  int64_t last_pointer_motion_ms_ = -1;
   bool show_hud_;
   // Alt+H: gameplay HUD overlay (crosshair/health/weapon readout). Hidden by
   // default until the vanilla presentation is finished.

@@ -6,6 +6,8 @@
 #include "app_internal.h"
 #include "renderer/igi_transform.h"
 #include "runtime/editor_camera_start.h"
+#include "level/collision_drop_rules.h"
+#include "level/collision_world.h"
 #include "level/terrain_snap_rules.h"
 #include <unordered_set>
 
@@ -488,6 +490,88 @@ void App::SnapObjectsToTerrain() {
     auto& objects = level_.GetLevelObjects().GetObjects();
     Logger::Get().Log(LogLevel::INFO, "[App] Snapping " + std::to_string(objects.size()) + " objects to terrain...");
 
+    // ── Build the OBJECT half of the engine's ground query ────────────────────
+    // The engine's drop is not terrain-only.  Coll_Drop HOOK 0x4CABF0 body
+    // (src/coll/coll.c:575-614) runs Coll_LinesEx over the same vertical segment
+    // (:577) and then lets the object hit and the terrain hit compete on
+    // |z - probe| (:593-594); the object hit wins a tie.  Coll_LinesEx
+    // HOOK 0x4CDB20 (src/model/coll.c:497-505) walks dynamic-cube trees 0, 1, 4
+    // and 5 -- the rigid objects and the sector objects (buildings) -- and every
+    // one answers with RigidDynCubeObj_LineHit HOOK 0x4C1840
+    // (src/qasm/rigidhit.c:104-470), i.e. the model's HSMC collision set
+    // (Direct3DRender_LoadModel HOOK 0x49FB10, src/bonemesh/d3drender.c:245-260).
+    //
+    // The human probe asks for collision set 1: Human_ProbeGround passes 1 as
+    // Coll_DropPointsEx's last argument (src/humanbase/human.c:1759,1771), which
+    // Coll_Drop forwards to Coll_LinesEx as `q->mesh` (src/coll/coll.c:577,
+    // src/model/coll.c:515).  Set 1 is the walkable/human set: the invisible
+    // colbox volumes carry their box only in set 1 (measured on the shipped
+    // COMMON/MODELS/models/colbox*.mef), while a building's set 1 is the coarse
+    // one-surface mesh and set 0 is the multi-material bullet/LOS mesh.
+    //
+    // Bone objects (humans) live in trees 2/3, which Coll_LinesEx skips, so they
+    // are not part of this world; their models also carry no set-1 collision.
+    igi::CollisionWorld collision_world;
+    {
+        // Only humans are dropped by this pass, and only humans query the object
+        // world, so a level with no human placement pays nothing here.  (The
+        // engine builds its cubes either way; this is a load-time shortcut with
+        // no effect on the answer.)
+        bool any_human = false;
+        for (const LevelObject& o : objects) {
+            if (!o.deleted && (o.type == "HumanSoldier" || o.type == "HumanSoldierFemale")) {
+                any_human = true;
+                break;
+            }
+        }
+        std::unordered_map<std::string, const igi::CollisionMesh*> mesh_by_model;
+        std::vector<uint8_t> mef_bytes;
+        if (any_human) {
+            for (std::size_t i = 0; i < objects.size(); ++i) {
+                const LevelObject& obj = objects[i];
+                if (obj.deleted || obj.modelId.empty()) continue;
+                // An ATTA proxy is a sub-record of its parent model: the parent's
+                // instance already covers the world-space geometry.
+                if (obj.isAttaProxy) continue;
+                // BoneDynCubeObj (human) collision is not in the queried trees.
+                if (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale" ||
+                    obj.type == "HumanPlayer") {
+                    continue;
+                }
+                // Wires and spline objects are NOT drawn with
+                // T(pos) * R(rot) * S(scale): a wire is stretched between its two
+                // anchors (Wire_ParamsChanged 0x43F3D0, src/props/wire.c:160-191)
+                // and a spline draws per-span matrices.  An instance at the
+                // authored pose would be a wrong surface, so leave them out
+                // rather than invent one.
+                if (obj.isWire || obj.isSplineContainer || obj.isSplineWaypoint) continue;
+                const igi::CollisionMesh* mesh = nullptr;
+                auto cached = mesh_by_model.find(obj.modelId);
+                if (cached != mesh_by_model.end()) {
+                    mesh = cached->second;
+                } else {
+                    if (renderer_.GetModelMefBytes(obj.modelId, obj.isBuilding, mef_bytes)) {
+                        igi::CollisionMesh parsed;
+                        if (igi::ParseCollisionMeshSet(mef_bytes.data(), mef_bytes.size(), 1, parsed)) {
+                            mesh = collision_world.InternMesh(obj.modelId, std::move(parsed));
+                        }
+                    }
+                    mesh_by_model.emplace(obj.modelId, mesh);
+                }
+                if (mesh == nullptr) continue;  // no set-1 collision: the engine has none either
+                float matrix[9];
+                igi::CollisionMatrixFromEuler(obj.rot.x, obj.rot.y, obj.rot.z, matrix);
+                const double pos[3] = {obj.pos.x, obj.pos.y, obj.pos.z};
+                collision_world.AddInstance((int)i, mesh, pos, matrix, obj.scale);
+            }
+        }
+        Logger::Get().Log(LogLevel::INFO, "[App] Collision world: " +
+            std::to_string(collision_world.instance_count()) + " objects, " +
+            std::to_string(collision_world.mesh_count()) + " meshes, " +
+            std::to_string(collision_world.triangle_count()) + " triangles, " +
+            std::to_string(collision_world.byte_size()) + " bytes");
+    }
+
     int snapped = 0;
     int skipped = 0;
     int no_terrain = 0;
@@ -597,13 +681,59 @@ void App::SnapObjectsToTerrain() {
         const bool isHuman = (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale");
         const double zDelta = obj.original_pos.z - (double)terrainZ;
 
-        // The rule itself is igi::DecideTerrainSnap (level/terrain_snap_rules.h),
+        // ── The engine's ground query, both halves ────────────────────────────
+        // Coll_Drop HOOK 0x4CABF0 body (src/coll/coll.c:575-614) asks the objects
+        // (Coll_LinesEx over the vertical segment, :577) AND the terrain
+        // (Coll_VerticalHit, :591), then keeps whichever hit is nearest to the
+        // probe point (:593-594); the object hit wins a tie.  It probes DOWN with
+        // the caller's dz first, and Human_ProbeGround (HOOK 0x462390,
+        // src/humanbase/human.c:1754-1772) repeats with +kFarUp only when that
+        // whole query found nothing.
+        //
+        // The probe starts at the AUTHORED QSC Z (obj.original_pos.z), not at
+        // obj.pos.z: obj.pos.z may already hold a previous snap, and a previous
+        // snap to the terrain below a building would hide the building floor
+        // (which is above the probe) from a DOWN probe.
+        igi::DropHit object_hit;
+        igi::DropHit terrain_hit;
+        igi::DropHit chosen_hit;
+        if (isHuman) {
+            const double probe_z = obj.original_pos.z;
+            const igi::CollisionProbeHit object_down = collision_world.ProbeVertical(
+                obj.pos.x, obj.pos.y, probe_z, /*up=*/false, igi::kHumanProbeDistance);
+            if (object_down.found) {
+                object_hit.found = true;
+                object_hit.z = object_down.z;
+            }
+            if (terrainFound) {
+                terrain_hit = igi::TerrainDropCandidate(probe_z, (double)terrainZ,
+                                                        -igi::kHumanProbeDistance);
+            }
+            chosen_hit = igi::ChooseNearestDropHit(probe_z, object_hit, terrain_hit);
+            if (!chosen_hit.found) {
+                const igi::CollisionProbeHit object_up = collision_world.ProbeVertical(
+                    obj.pos.x, obj.pos.y, probe_z, /*up=*/true, igi::kHumanProbeDistance);
+                igi::DropHit up_object;
+                if (object_up.found) {
+                    up_object.found = true;
+                    up_object.z = object_up.z;
+                }
+                igi::DropHit up_terrain;
+                if (terrainFound) {
+                    up_terrain = igi::TerrainDropCandidate(probe_z, (double)terrainZ,
+                                                           igi::kHumanProbeDistance);
+                }
+                chosen_hit = igi::ChooseNearestDropHit(probe_z, up_object, up_terrain);
+            }
+        }
+
+        // The rule itself is igi::DecideCollisionSnap (level/terrain_snap_rules.h),
         // shared with its host-lane test.  In short: props always keep their
-        // authored QSC Z and a query miss never moves anything, but a human WITH
-        // a terrain hit always snaps -- the engine has no distance band:
-        // Game_DropToGround (HOOK 0x4149B0, src/game/misc.c:82,88-95) probes 400 m
-        // down, then 400 m up, then keeps the pose only on a second miss.
-        if (igi::DecideTerrainSnap(terrainFound, isHuman) ==
+        // authored QSC Z and a query miss never moves anything, but a human WITH a
+        // hit always snaps -- the engine has no distance band: Human_ProbeGround
+        // reaches 1000 m each way (src/humanbase/human.c:192-193) and
+        // Game_DropToGround 400 m (src/game/misc.c:82).
+        if (igi::DecideCollisionSnap(chosen_hit.found, isHuman) ==
             igi::TerrainSnapDecision::SnapToTerrain) {
             // The engine puts the human's FOOT on the hit, not the mesh's lowest
             // vertex: Human_ProbeGround HOOK 0x462390 ends with
@@ -623,17 +753,20 @@ void App::SnapObjectsToTerrain() {
             // Lifting by `-min_p.z` therefore floated every soldier by that
             // amount; the human's placement has no such offset.
             obj.snap_z_offset = 0.0;
-            obj.pos.z = (double)terrainZ;
+            obj.pos.z = chosen_hit.z;
             // INFO, with the ARITHMETIC, not just the result: a soldier that
-            // still renders off the ground is either a wrong terrainZ or a snap
-            // that never ran, and printing the terms makes the next run decide
-            // instead of guess.
+            // still renders off the ground is either a wrong hit or a snap that
+            // never ran, and printing the terms makes the next run decide instead
+            // of guess.
             Logger::Get().Log(LogLevel::INFO, "[App] Snapped human " + obj.modelId +
                 " authoredZ=" + std::to_string(obj.original_pos.z) +
+                " objectHitZ=" + std::to_string(object_hit.found ? object_hit.z : 0.0) +
+                " objectHit=" + (object_hit.found ? "yes" : "no") +
                 " terrainZ=" + std::to_string(terrainZ) +
+                " terrainCandidate=" + (terrain_hit.found ? "yes" : "no") +
                 " zDelta=" + std::to_string(zDelta) +
                 " -> Z=" + std::to_string(obj.pos.z) +
-                " (foot on the collision hit, no pivot->feet lift)");
+                " (foot on the nearest collision hit, no pivot->feet lift)");
             snapped++;
         } else {
             // Keep the authored QSC Z.  This is the engine's own answer to every case
@@ -657,11 +790,15 @@ void App::SnapObjectsToTerrain() {
                 // (source/level/terrain_query.cpp:315).  Normal for interiors,
                 // helipads and lift shafts, so this is information, not a warning.
                 no_terrain++;
-                Logger::Get().Log(LogLevel::INFO, "[App] No terrain under " + obj.modelId + " at (" + std::to_string(obj.pos.x) + ", " + std::to_string(obj.pos.y) + "); keeping authored Z " + std::to_string(obj.original_pos.z));
+                Logger::Get().Log(LogLevel::INFO, "[App] No terrain under " + obj.modelId +
+                    (isHuman ? std::string(" and no object collision either")
+                             : std::string(" (not a human; objects are not queried for it)")) +
+                    " at (" + std::to_string(obj.pos.x) + ", " + std::to_string(obj.pos.y) +
+                    "); keeping authored Z " + std::to_string(obj.original_pos.z));
             } else {
                 // A non-human whose authored Z is authoritative.  A HUMAN can no
-                // longer reach this branch: with a terrain hit it always snaps
-                // above, and a miss was handled by the branch above.
+                // longer reach this branch: with any hit it always snaps above,
+                // and a miss was handled by the branch above.
                 skipped++;
             }
         }

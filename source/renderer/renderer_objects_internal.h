@@ -26,6 +26,10 @@
 #include "model_texture_resolution.h"
 #include "../level/qvm_parser.h"
 #include "../level/qvm_decompiler.h"
+// The engine's own placement/bounds for a `Wire` (Wire_ParamsChanged
+// 0x43F3D0, IGI-RE src/props/wire.c:160-191), shared by the draw and pick
+// passes so they cannot disagree -- see source/runtime/props_preview.h.
+#include "../runtime/props_preview.h"
 #include "dat_writer.h"
 #include "res_compiler.h"
 #include "../level/mtp_writer.h"

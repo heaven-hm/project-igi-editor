@@ -95,6 +95,52 @@ TEST(EditorHoverPolicyTest, SkipsScenePickingWhileCameraIsNavigating) {
     EXPECT_FALSE(igi::ShouldPickSceneHover(true, false, 200, 0, 33, true));
 }
 
+// The reported defect: "pressing ALT to change camera view lags when released and
+// used WASD it works smoothly".  A hover pick is a second full scene pass plus a
+// synchronous glReadPixels (renderer/renderer_objects_picking.cpp:374-412), so it
+// must not be issued while the pointer is in flight.  These are the three states
+// the app is in around the camera key (`CameraEnable` = <Alt>):
+//   camera held      -> camMode suppresses the pick entirely;
+//   WASD held         -> cameraNavigating suppresses it too;
+//   key released      -> this policy decides, and it must wait for a settled
+//                        pointer before spending a pick.
+TEST(EditorHoverPolicyTest, DefersHoverPickUntilThePointerSettles) {
+    constexpr int64_t kSettle = 120;
+    constexpr int64_t kThrottle = 33;
+
+    // Motion event just arrived, pointer moved since the last pick: NOT now.
+    EXPECT_FALSE(igi::ShouldPickSceneHoverOnSettle(
+        /*pointerMovedSinceLastPick=*/true, /*leftButtonDown=*/false,
+        /*nowMs=*/1000, /*lastMotionMs=*/1000, /*lastPickMs=*/-1, kSettle, kThrottle));
+    // Still inside the settle window.
+    EXPECT_FALSE(igi::ShouldPickSceneHoverOnSettle(true, false, 1119, 1000, -1, kSettle, kThrottle));
+    // The pointer has been still long enough: pick once.
+    EXPECT_TRUE(igi::ShouldPickSceneHoverOnSettle(true, false, 1120, 1000, -1, kSettle, kThrottle));
+    // ... and never again for the same pointer position.
+    EXPECT_FALSE(igi::ShouldPickSceneHoverOnSettle(false, false, 1200, 1000, 1120, kSettle, kThrottle));
+}
+
+TEST(EditorHoverPolicyTest, SettledHoverPickKeepsTheExistingSuppressions) {
+    constexpr int64_t kSettle = 120;
+    // Left button down (object drag) - no pick.
+    EXPECT_FALSE(igi::ShouldPickSceneHoverOnSettle(true, true, 5000, 0, -1, kSettle));
+    // Camera navigation - no pick, even long after the last motion.
+    EXPECT_FALSE(igi::ShouldPickSceneHoverOnSettle(true, false, 5000, 0, -1, kSettle, 33, true));
+    // Throttle still applies between two settled picks.
+    EXPECT_FALSE(igi::ShouldPickSceneHoverOnSettle(true, false, 5010, 0, 5000, kSettle));
+    EXPECT_TRUE(igi::ShouldPickSceneHoverOnSettle(true, false, 5033, 0, 5000, kSettle));
+    // No motion recorded yet (fresh start): settled by definition.
+    EXPECT_TRUE(igi::ShouldPickSceneHoverOnSettle(true, false, 10, -1, -1, kSettle));
+}
+
+TEST(EditorHoverPolicyTest, SettleWindowRestartsAtEveryMotionEvent) {
+    // Motion at 0, 60, 110, then quiet: the pick waits for 110 + settle, not for
+    // 0 + settle.  This is what stops a moving cursor from being picked at all.
+    EXPECT_FALSE(igi::ShouldPickSceneHoverOnSettle(true, false, 130, 110, -1));
+    EXPECT_FALSE(igi::ShouldPickSceneHoverOnSettle(true, false, 229, 110, -1));
+    EXPECT_TRUE(igi::ShouldPickSceneHoverOnSettle(true, false, 230, 110, -1));
+}
+
 TEST(EditorHoverPolicyTest, ResolvesMissingSceneModelsOnlyOnDemand) {
     EXPECT_TRUE(igi::ShouldResolveMissingSceneModel(false, false, false));
     EXPECT_TRUE(igi::ShouldResolveMissingSceneModel(true, true, false));

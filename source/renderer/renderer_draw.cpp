@@ -803,7 +803,17 @@ void Renderer::Draw(const draw_params_s &params,
         result += "F" + std::to_string(kb.vkCode - VK_F1 + 1);
       } else {
         // For regular keys, use the character
+#if defined(_WIN32)
+#if defined(_WIN32)
         char key = MapVirtualKeyA(kb.vkCode, MAPVK_VK_TO_CHAR) & 0xFF;
+#else
+        // VK codes for letters and digits are their upper-case ASCII values.
+        char key = (kb.vkCode >= 0x30 && kb.vkCode <= 0x5A) ? static_cast<char>(kb.vkCode) : 0;
+#endif
+#else
+        // VK codes for letters and digits are their upper-case ASCII values.
+        char key = (kb.vkCode >= 0x30 && kb.vkCode <= 0x5A) ? static_cast<char>(kb.vkCode) : 0;
+#endif
         if (key) {
           result += std::string(1, toupper(key));
         } else {
@@ -2341,6 +2351,24 @@ void Renderer::Draw(const draw_params_s &params,
       if (sel < (int)objects.size()) {
         const auto& obj = objects[sel];
         const TaskSchema* scp = GetSchema(obj.type);
+        if (!scp) {
+          // Types the engine gives NO parameters have no Task_DeclareParameters line
+          // and no builtin schema, so GetSchema returns null and the panel used to be
+          // skipped entirely (this `if`). That left 1464 shipped placements that can
+          // be selected but not even renamed: Container (527; the engine registers it
+          // with TaskType_New and never adds a ParamTable — src/editcam/container.c:31,
+          // HOOK 0x505C90), Static (296) and Dynamic (14) (bare 0x20-byte tasks with no
+          // params — src/physobj/paramops.c:215-216), and PatrolPath (627; the engine's
+          // own gPatrolPathParams is NULL — src/patrol/path.c:154-155 and
+          // PatrolPath_GetParams @:172-174).
+          //
+          // BuildLayout always emits the type header and the QTask Note box before it
+          // looks at the schema, so an EMPTY schema renders exactly the universal part
+          // and invents no rows — the faithful representation of a type whose engine
+          // parameter table is empty.
+          static const TaskSchema kNoDeclaredParams;
+          scp = &kNoDeclaredParams;
+        }
         if (scp) {
           const TaskSchema& schema = *scp;
           int vh = params.view_define_->viewport_height_;

@@ -30,7 +30,7 @@ std::string AssetExtractor::ReadFileTimestamp(const std::string& path) {
     std::error_code ec;
     auto t = fs::last_write_time(path, ec);
     if (ec) return "";
-    return std::to_string(t.time_since_epoch().count());
+    return std::to_string(static_cast<long long>(t.time_since_epoch().count()));
 }
 
 // Extract all entries from res_path into out_dir.

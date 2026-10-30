@@ -92,7 +92,7 @@ void App::Input_OnSpecial(int key, int x, int y) {
 	// not reported, so fall back to GetAsyncKeyState for Shift+arrow
 	// selection in the AI Script editor.
 	const bool shiftDown = (glutGetModifiers() & GLUT_ACTIVE_SHIFT) != 0 ||
-	                       (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+	                       Utils::IsKeyPressed(VK_SHIFT);
 
 	// Autocomplete task picker navigation
 	if (ac_task_picker_open_) {
@@ -509,7 +509,7 @@ void App::Input_OnSpecial(int key, int x, int y) {
 
 			// Shift+F11: wider radius framing (CameraSnapToObjectWithRadius)
 			const bool shiftHeld = (glutGetModifiers() & GLUT_ACTIVE_SHIFT) != 0 ||
-			                       (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+			                       Utils::IsKeyPressed(VK_SHIFT);
 
 			const GraphCameraPose pose = MakeF11ObjectCameraPose(
 				cameraTarget, boundRadius, glm::dvec3(viewer_.forward_), shiftHeld);
@@ -789,11 +789,11 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	}
 
 	bool ctrlDown = (glutGetModifiers() & GLUT_ACTIVE_CTRL) != 0 ||
-	                (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+	                Utils::IsKeyPressed(VK_CONTROL);
 	bool shiftDown = (glutGetModifiers() & GLUT_ACTIVE_SHIFT) != 0 ||
-	                 (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+	                 Utils::IsKeyPressed(VK_SHIFT);
 	bool altDown = (glutGetModifiers() & GLUT_ACTIVE_ALT) != 0 ||
-	               (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+	               Utils::IsKeyPressed(VK_MENU);
 
 	// GLUT reports Ctrl+letter as the ASCII control character (Ctrl+A=1,
 	// Ctrl+W=23). The normal configurable binding path samples

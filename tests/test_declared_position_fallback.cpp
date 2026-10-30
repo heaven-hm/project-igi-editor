@@ -181,3 +181,132 @@ TEST(DeclaredPositionFallbackTest, PositionNotAtArg3DoesNotCount) {
     EXPECT_EQ(later[1].argOffset, 4);
     EXPECT_FALSE(TaskDeclarationHasPositionAt3(later));
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Declared-model fallback (the second pass in LevelObjects::Load)
+//
+// LoadRecursive reads a model only for the task types the editor models by hand.
+// Every engine type that DRAWS a model registers one Param_String16 slot bound to
+// its `FIELD(model)` member and feeds that member to RigidDynCubeObj_SetModel
+// (src/missile/train.c:149, src/props/wire.c:180, src/scamera/scamera.c:240,
+// src/camera/explodeobject.c:279). The level file mirrors those ParamTables entry
+// for entry in Task_DeclareParameters, so `FindDeclaredModelArg` recovers the slot
+// from the level itself — no per-type branch, and no guess at the token's shape.
+//
+// The shipped type this was missing for is PlaceExplosiveTBA: it extends
+// GenericTBA -> ExplodeObject, GenericTBA_Create runs the ExplodeObject create
+// handler (src/glass/tba.c:99-100), and that handler installs the authored model.
+// The old isMissingGeneric scan also gated on an 8-character NNN_NN_N shape, which
+// is why AlarmLight needed a hand-written exception for "1729_01_1".
+//
+// The declarations below are the retail ones (the prefix shown is verbatim from
+// the decompiled OBJECTS.QVM; fields after the model slots are elided where the
+// case does not depend on them).
+// ═════════════════════════════════════════════════════════════════════════════
+
+namespace {
+
+struct ModelCase {
+    const char* typeName;
+    const char* args;
+    int expectedArg;
+};
+
+const ModelCase kDeclaredModelSlots[] = {
+    // LEVEL6 "PlaceExplosiveTBA" — the type this fallback was added for.
+    {"PlaceExplosiveTBA",
+     "\"PlaceExplosiveTBA\", \"Position\", \"ObjectPos\", \"Orientation\", \"Real32x9\", "
+     "\"Model\", \"String16\", \"Destroyed model\", \"String16\", \"Damage scale\", \"Real32\", "
+     "\"Explosion radius\", \"Real32\", \"Explosion falloff radius\", \"Real32\", "
+     "\"Explosion damage scale\", \"Real32\", \"Explosion delay\", \"Real32\", "
+     "\"Explosion fragments\", \"Int32\", \"Explosion fireballs\", \"Int32\", "
+     "\"Explosion expression\", \"VarString\", \"Explosion sound\", \"String16\", "
+     "\"Explodable\", \"bool8\", \"On Expression\", \"VarString\", "
+     "\"Activate Anim\", \"Int16\", \"Activate Time (s)\", \"Real32\", "
+     "\"Click to select sprite\", \"DropDownCombo\", \"Activate radius (meters)\", \"Real32\", "
+     "\"Task ID to place\", \"Int32\"",
+     9},
+    // LEVEL14 — "Holder model" is the third entry, arg 9 (gunholder.c:158-165).
+    {"AIStationaryGunHolder",
+     "\"AIStationaryGunHolder\", \"Position\", \"ObjectPos\", \"Orientation\", \"Real32x9\", "
+     "\"Holder model\", \"String16\", \"Viewcone Alpha\", \"Degrees\", "
+     "\"Viewcone Gamma\", \"Degrees\", \"Viewcone Length\", \"Real32\", "
+     "\"On expression\", \"VarString\", \"Team expression\", \"VarString\"",
+     9},
+    // "Model" at arg 9, before "Destroyed model": the first slot is the drawn one.
+    {"Siren",
+     "\"Siren\", \"Position\", \"ObjectPos\", \"Orientation\", \"Real32x9\", "
+     "\"Model\", \"String16\", \"Destroyed model\", \"String16\", \"Damage scale\", \"Real32\"",
+     9},
+    // Five model slots; "On model" (arg 11) is the one the engine installs at Create.
+    {"Switch",
+     "\"Switch\", \"Position\", \"ObjectPos\", \"Orientation\", \"Real32x9\", "
+     "\"On\", \"VarString\", \"Initial on\", \"bool8\", \"On model\", \"String16\", "
+     "\"On pressed model\", \"String16\", \"Off model\", \"String16\", "
+     "\"Off pressed model\", \"String16\", \"Destroyed model\", \"String16\", "
+     "\"Destructable\", \"bool8\"",
+     11},
+    // SCamera's HOLDER model (arg 7) is the body it draws; the lens (arg 10) belongs
+    // to the SCameraLens child the engine creates at runtime (scamera.c:204).
+    {"SCamera",
+     "\"SCamera\", \"Holder Position\", \"ObjectPos\", \"Holder Gamma\", \"Angle\", "
+     "\"Holder Model\", \"String16\", \"Camera Alpha\", \"Angle\", \"Camera Gamma\", \"Angle\", "
+     "\"Camera Model\", \"String16\", \"Camera Destroyed Model\", \"String16\"",
+     7},
+    // AlarmLight's first model-named slot ("On model", arg 10) is NOT what the engine
+    // installs: alarm.c:113 wires the authored "Off model" slot to onModel, which is
+    // arg 11 and which the explicit LoadRecursive branch reads. This expectation
+    // pins that difference — it is why the generic pass skips AlarmLight.
+    {"AlarmLight",
+     "\"AlarmLight\", \"Position\", \"ObjectPos\", \"Orientation\", \"Real32x9\", "
+     "\"On expression\", \"VarString\", \"On model\", \"String16\", \"Off model\", \"String16\", "
+     "\"Destroyde model\", \"String16\", \"On sound\", \"String16\", \"Explode sound\", \"String16\"",
+     10},
+    // SplineObjWaypoint's slot is the engine waypoint marker ("waypoint"/empty),
+    // which LoadRecursive deliberately clears and renderer_splines.cpp replaces with
+    // the gizmo — so it is also skipped by the generic pass.
+    {"SplineObjWaypoint",
+     "\"SplineObjWaypoint\", \"Orientation\", \"Real32x9\", \"Position\", \"ObjectPos\", "
+     "\"Waypoint Model\", \"String16\", \"Segment Model\", \"String16\", \"NumAreas\", \"Int32\", "
+     "\"Align\", \"bool8\", \"Flip\", \"bool8\", \"Automatic Orientation\", \"bool8\"",
+     9},
+};
+
+// Declarations with NO model slot must yield -1: the pass must not invent one.
+const char* kNoModelSlotDecls[] = {
+    // GunPickup's third parameter is a weapon ENUM, not a model (pickup.c:477-479).
+    "\"GunPickup\", \"Position\", \"ObjectPos\", \"Orientation\", \"Real32x9\", \"ID\", \"EnumString32\"",
+    // No model at all.
+    "\"GuardGenerator\", \"Generate guards\", \"VarString\", \"Max spawns\", \"Int32\"",
+    // PatrolPath declares no fields (gPatrolPathParams is NULL, patrol/path.c:154).
+    "\"PatrolPath\"",
+    // A model-shaped NAME whose declared type is an expression, not a fixed string:
+    // the engine never feeds a VarString slot to VirModel_Find.
+    "\"SomeTask\", \"Model\", \"VarString\"",
+    // An unrelated fixed string is not a model either.
+    "\"SomeTask\", \"On sound\", \"String16\", \"Explode sound\", \"String16\"",
+};
+
+}  // namespace
+
+TEST(DeclaredModelFallbackTest, ModelSlotOfRealDeclarations) {
+    for (const auto& c : kDeclaredModelSlots) {
+        const auto schema = SchemaFrom(c.args);
+        ASSERT_FALSE(schema.empty()) << c.typeName;
+        EXPECT_EQ(TaskSchemaNS::FindDeclaredModelArg(schema), c.expectedArg)
+            << c.typeName << " declares its drawn model at arg " << c.expectedArg;
+    }
+}
+
+TEST(DeclaredModelFallbackTest, NoModelSlotIsNeverGuessed) {
+    for (const char* decl : kNoModelSlotDecls) {
+        const auto schema = SchemaFrom(decl);
+        EXPECT_EQ(TaskSchemaNS::FindDeclaredModelArg(schema), -1) << decl;
+    }
+}
+
+// The empty schema the property panel now renders for parameter-less engine types
+// has no model slot either.
+TEST(DeclaredModelFallbackTest, EmptySchemaHasNoModelSlot) {
+    EXPECT_EQ(TaskSchemaNS::FindDeclaredModelArg(TaskSchemaNS::TaskSchema{}), -1);
+}

@@ -71,7 +71,10 @@ bool LoadLevelObjects(const std::string& igiPath, int levelNo, const std::string
                       LevelObjects& out, std::string& error) {
     const std::string qvmPath = igiPath + "\\missions\\location0\\level" +
                                 std::to_string(levelNo) + "\\objects.qvm";
-    if (!fs::exists(qvmPath)) {
+    // The engine writes its separators as "\\"; on POSIX those are ordinary
+    // filename characters, so the probe (and the parse that follows) must see
+    // the native form.  Identity on Windows.
+    if (!fs::exists(Utils::ToNativePath(qvmPath))) {
         error = "objects.qvm not found: " + qvmPath;
         return false;
     }

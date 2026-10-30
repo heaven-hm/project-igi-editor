@@ -38,6 +38,7 @@
  * chunk 16-byte header + 4-byte padded body; last BODY next == 0).
  *****************************************************************************/
 
+#include "utils.h"   // Utils::ToNativePath
 #include "res_writer.h"
 #include "../logger.h"
 #include <atomic>
@@ -84,7 +85,8 @@ enum { RES_MEMBER = 1, RES_PATH = 4 };
 class ResFileSource {
 public:
     bool Open(const std::string& path, std::string& error) {
-        file_.open(path, std::ios::binary | std::ios::ate);
+        // Paths arrive with Windows separators from the level/res code.
+        file_.open(Utils::ToNativePath(path), std::ios::binary | std::ios::ate);
         if (!file_.is_open()) {
             error = "Could not open file: " + path;
             return false;
@@ -483,7 +485,13 @@ std::vector<uint8_t> RES_ReadEntry(const std::string& filepath, const ResEntryIn
     if (ResReadCountingEnabled()) {
         g_res_entry_reads.fetch_add(1, std::memory_order_relaxed);
     }
-    std::ifstream file(filepath, std::ios::binary);
+    // `filepath` is the archive path the caller indexed, which the level and res
+    // code builds with the engine's "\\" separators (ResFileSource::Open above
+    // converts for the same reason).  On POSIX a backslash is an ordinary
+    // filename character, so an unconverted path opens nothing and this read
+    // returned empty for every model and texture member — the viewport loaded
+    // terrain and no objects.  Identity on Windows.
+    std::ifstream file(Utils::ToNativePath(filepath), std::ios::binary);
     if (!file.is_open()) return buf;
     file.seekg(static_cast<std::streamoff>(info.data_offset), std::ios::beg);
     buf.resize(info.data_size);

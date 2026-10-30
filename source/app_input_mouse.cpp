@@ -607,6 +607,12 @@ void App::Input_OnMotion(int x, int y) {
 	if (enableCameraMode && (dx != 0 || dy != 0))
 		camera_mode_moved_ = true;
 
+	// Timestamp every editor motion event: the hover pick is deferred until the
+	// pointer has been still for a settle window (see
+	// runtime/editor_hover_policy.h and App::Frame). Camera look counts as
+	// motion, so the settle clock restarts when the camera key is released.
+	last_pointer_motion_ms_ = Sys_Milliseconds();
+
 	// Always update mouse coordinates for hover tooltip/interaction
 	mouse_state_.prior_x_ = x;
 	mouse_state_.prior_y_ = y;

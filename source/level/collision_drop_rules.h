@@ -86,6 +86,10 @@ struct DropTriangle {
 // (kFarDown/kFarUp, src/humanbase/human.c:192-193).
 inline constexpr double kDropProbeDistance = 1638400.0;
 
+// Human_ProbeGround's reach, used for BOTH of its calls: kFarDown = -4096000
+// (src/humanbase/human.c:192, :1754) and kFarUp = +4096000 (:193, :1768).
+inline constexpr double kHumanProbeDistance = 4096000.0;
+
 // Coll_LeafHit's kTenth (src/coll/coll.c:15): the only tolerance the vertical
 // query has.  A surface up to this far on the wrong side of the probe start is
 // still a hit of that direction (coll.c:321,324).
@@ -162,6 +166,52 @@ inline DropHit DropToGround(const std::vector<DropTriangle>& tris, double x, dou
     DropHit hit = DropOntoTriangles(tris, x, y, -kDropProbeDistance, probe_z);
     if (hit.found) return hit;
     return DropOntoTriangles(tris, x, y, kDropProbeDistance, probe_z);
+}
+
+// ---------------------------------------------------------------------------
+// The object half vs the terrain half of Coll_Drop
+//
+// The engine's drop is ONE query with two halves (Coll_Drop HOOK 0x4CABF0 body,
+// src/coll/coll.c:575-614):
+//   * the task/object half: Coll_LinesEx over the vertical segment, which asks
+//     every rigid object's collision mesh for its nearest hit (:577);
+//   * the terrain half: Coll_VerticalHit over the terrain octree (:591);
+// then the two compete:
+//         if (r->found && !(Abs(p.z - h.pos.z) < Abs(p.z - r->pos.z)))
+//             continue;                                   // :593-594
+// `r` is the object hit and `h` the terrain hit, so the TERRAIN only replaces
+// the object hit when it is STRICTLY nearer to the probe; a tie keeps the
+// object.  A miss on both halves is a miss.
+// ---------------------------------------------------------------------------
+
+// The terrain answer, placed into the same probe frame the object hit uses.
+// The editor's terrain query returns the surface's Z (Level::GetTerrainZ, the
+// same .ctr leaf triangles Coll_LeafHit reads); the DIRECTION and REACH rules
+// are the engine's: DOWN accepts a surface at or below probe_z + 0.1, UP one at
+// or above probe_z - 0.1 (Coll_LeafHit, src/coll/coll.c:320-326,466-471), and a
+// surface farther than |dz| is rejected (Coll_VerticalHit, :706-707).
+inline DropHit TerrainDropCandidate(double probe_z, double terrain_z, double dz) {
+    DropHit out;
+    if (dz == 0.0) return out;
+    const double local = terrain_z - probe_z;
+    if (dz < 0.0) {
+        if (!(local <= kDropSurfaceSlop)) return out;
+    } else {
+        if (!(local >= -kDropSurfaceSlop)) return out;
+    }
+    if (std::fabs(local) > std::fabs(dz)) return out;
+    out.found = true;
+    out.z = terrain_z;
+    return out;
+}
+
+// Coll_Drop :593-594, verbatim: the object hit is kept unless the terrain hit is
+// strictly nearer to the probe point.
+inline DropHit ChooseNearestDropHit(double probe_z, const DropHit& object, const DropHit& terrain) {
+    if (!terrain.found) return object;
+    if (!object.found) return terrain;
+    if (!(std::fabs(probe_z - terrain.z) < std::fabs(probe_z - object.z))) return object;
+    return terrain;
 }
 
 // ---------------------------------------------------------------------------

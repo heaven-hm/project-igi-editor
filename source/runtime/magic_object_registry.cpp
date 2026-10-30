@@ -30,6 +30,60 @@ bool ReadNextQuotedString(
     return true;
 }
 
+// Everything after the task-type token, split on top-level commas and trimmed.
+// A quoted string keeps no quotes (`Script_GetArgString` returns the text), and
+// the call's closing `)` plus any trailing `,`/`;` is dropped. Nested calls are
+// not expected in a DefineMagicObj body and stay one opaque token if they appear.
+std::vector<std::string> SplitTrailingArgs(const std::string& line, size_t start) {
+    std::vector<std::string> out;
+    std::string current;
+    int depth = 0;
+    bool in_quotes = false;
+
+    auto trim = [](std::string s) {
+        size_t b = 0;
+        while (b < s.size() && (s[b] == ' ' || s[b] == '\t' || s[b] == '\r' || s[b] == '\n')) ++b;
+        size_t e = s.size();
+        while (e > b && (s[e - 1] == ' ' || s[e - 1] == '\t' || s[e - 1] == '\r' || s[e - 1] == '\n')) --e;
+        return s.substr(b, e - b);
+    };
+    auto flush = [&]() {
+        std::string token = trim(current);
+        current.clear();
+        if (token.empty()) return;
+        if (token.size() >= 2 && token.front() == '"' && token.back() == '"') {
+            token = token.substr(1, token.size() - 2);
+        }
+        out.push_back(std::move(token));
+    };
+
+    for (size_t i = start; i < line.size(); ++i) {
+        const char c = line[i];
+        if (in_quotes) {
+            current += c;
+            if (c == '"') in_quotes = false;
+            continue;
+        }
+        if (c == '"') {
+            in_quotes = true;
+            current += c;
+        } else if (c == '(') {
+            ++depth;
+            current += c;
+        } else if (c == ')') {
+            if (depth == 0) break;
+            --depth;
+            current += c;
+        } else if (c == ',' && depth == 0) {
+            flush();
+        } else {
+            current += c;
+        }
+    }
+    flush();
+    return out;
+}
+
 } // namespace
 
 bool MagicObjectRegistry::LoadDecompiledSource(std::string_view decompiled_source) {
@@ -58,6 +112,13 @@ bool MagicObjectRegistry::LoadDecompiledSource(std::string_view decompiled_sourc
         definition.task_type_name = line.substr(
             type_start,
             type_end == std::string::npos ? std::string::npos : type_end - type_start);
+
+        // The DefineMagicObj data block, in order after the type token
+        // (src/magicobj/magicobj.c:189-220 hands the type's own handlers
+        // `args` + `index = 3`). Only stored; each consumer interprets it.
+        if (type_end != std::string::npos) {
+            definition.data_args = SplitTrailingArgs(line, type_end);
+        }
 
         if (definition_index_by_name_.find(definition.attachment_name) !=
             definition_index_by_name_.end()) {

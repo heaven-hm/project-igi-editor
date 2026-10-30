@@ -18,14 +18,9 @@
 
 // ── shared helpers ──────────────────────────────────────────────────────────
 inline std::string GetExeDirectory() {
-	char exePath[MAX_PATH];
-	GetModuleFileNameA(NULL, exePath, MAX_PATH);
-	std::string exeDir(exePath);
-	size_t lastSlash = exeDir.find_last_of("\\/");
-	if (lastSlash != std::string::npos) {
-		exeDir = exeDir.substr(0, lastSlash);
-	}
-	return exeDir;
+	// Was a Win32 GetModuleFileNameA copy; Utils::GetExeDirectory() is the one
+	// portable implementation (and resolves the .app bundle on macOS).
+	return Utils::GetExeDirectory();
 }
 
 inline std::string GetTerrainDir(int level_no) {

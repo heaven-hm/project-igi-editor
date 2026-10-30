@@ -15,11 +15,14 @@
 #include "runtime/weather_mode.h"
 #include "runtime/pause_menu_state.h"
 #include "runtime/editor_camera_start.h"
+#if defined(_WIN32)
 #include <mmsystem.h>
+#endif
 #include <chrono>
 #include <future>
 #include <set>
 
+#if defined(_WIN32)
 bool App::PlayLevelMusic(int level_no) {
     igi::AudioSystem::SetActiveLevel(level_no);
     StopLevelMusic();
@@ -121,6 +124,25 @@ void App::StopLevelMusic() {
     music_playing_ = false;
     Logger::Get().Log(LogLevel::INFO, "[Music] Stopped");
 }
+#else  // !_WIN32
+
+// Level music uses the Windows Media Control Interface (mciSendStringA).  macOS
+// has no MCI; the retail .wav also has to be converted by igi1conv.exe, which is
+// a Windows PE.  Playback is therefore unavailable in this build: the functions
+// keep their contract (music_playing_ stays false) and say so once per level
+// instead of pretending to play.
+bool App::PlayLevelMusic(int level_no) {
+    Logger::Get().Log(LogLevel::WARNING,
+        "[Music] Level music is unavailable in the native macOS build (Windows MCI); "
+        "level " + std::to_string(level_no) + " will be silent.");
+    return false;
+}
+
+void App::CheckMusicLoop() {}
+
+void App::StopLevelMusic() { music_playing_ = false; }
+
+#endif  // _WIN32
 
 void App::ToggleMusic() {
     if (music_playing_) {
@@ -408,16 +430,26 @@ void App::LoadLevel(int level_no) {
 			}
 		}
 
-		for (auto& obj : objects) {
-			if (obj.modelId == "000_01_1") continue; // Skip Player Jones
-			if (obj.type == "HumanSoldier" || obj.type == "HumanAI" || obj.type.find("AITYPE") == 0) {
-				obj.rot.x = 0.0;           // PITCH = 0
-				obj.rot.y = 0.0;           // ROLL = 0
-				// Preserve existing rotation if it's already set, otherwise default to a full circle
-				if (obj.rot.z == 0.0) obj.rot.z = 6.28318;
-				Logger::Get().Log(LogLevel::INFO, "[App] Applied AI rotation override (horizontal only) for " + obj.name + " (" + obj.type + ")");
-			}
-		}
+		// NOTE: there used to be an "AI rotation override (horizontal only)" loop
+		// here that, for every HumanSoldier / HumanAI / AITYPE task, forced
+		// rot.x = rot.y = 0 and wrote rot.z = 6.28318 whenever the authored Gamma
+		// was 0, logging "[App] Applied AI rotation override (horizontal only)".
+		// The engine has no such step. A human's transform is built from its
+		// authored Gamma alone: Human_SetYaw HOOK 0x463220
+		// (src/viewcam/human.c:328-335) stores baseZ/rotZ and calls
+		// Matrix_SetRotZ -- there is no Alpha/Beta term to "override", and no
+		// pitch or roll is ever applied to a human. Feeding a yaw of 0 and 2*pi
+		// to Matrix_SetRotZ is the same transform, so the default it invented was
+		// not a fix for anything either.
+		//
+		// The loop was destructive in a way the engine never is: `objects` is the
+		// document that UpdateCoordinatesInLine / SaveCurrentLevel write back to
+		// the level's objects.qsc, so zeroing rot.x/rot.y rewrote authored data,
+		// and the 2*pi default replaced an authored 0 with a different number.
+		// Removed rather than re-scoped. If the viewport should ever *display* a
+		// human yaw-only, that projection belongs at draw time and must not touch
+		// the loaded object (renderer/* still applies the full Rz*Ry*Rx to every
+		// task, all three axes).
 
 		// Resolve the level's real sun direction/color from its Dirlight/DirlightKeyframe
 		// task (Task_DeclareParameters("DirlightKeyframe","Beta","Angle","Gamma","Angle",

@@ -749,6 +749,23 @@ std::string Renderer_Objects::GetOrExtractMefTemp(const std::string& modelId, bo
     return tmpPath;
 }
 
+bool Renderer_Objects::GetModelMefBytes(const std::string& modelId, bool isBuilding,
+                                        std::vector<uint8_t>& out) {
+    out.clear();
+    if (modelId.empty()) return false;
+    // 1. The in-memory .res index: the engine's own path (Mesh_Load asks for
+    //    "LOCAL:models/%s.mef", src/model/model.c:364) and no disk write.
+    out = FindMeshData(modelId);
+    if (!out.empty()) return true;
+    // 2. The draw path's full resolution: the cross-level archives, then a loose
+    //    .mef (GetOrExtractMefTemp, renderer_objects_mesh.cpp:689-734).  It may
+    //    materialise a temp copy, exactly as the draw does for the same model.
+    const std::string path = GetOrExtractMefTemp(modelId, isBuilding);
+    if (path.empty()) return false;
+    out = ReadFileBytes(path);
+    return !out.empty();
+}
+
 const ParsedGeometry* Renderer_Objects::GetOrLoadParsedGeometry(const std::string& modelId, bool isBuilding) {
     FillLevelModelKey(level_model_key_scratch_, current_level_, isBuilding, modelId);
     auto it = parsed_geometry_cache_.find(level_model_key_scratch_);

@@ -4,6 +4,11 @@
  *****************************************************************************/
 
 #pragma once
+// Self-contained: LMP_Load's signature names pics_s, which lives in common.h.
+// Without this the header only compiles when its includer happened to pull
+// common.h in first -- which is exactly how tests/test_terrain_ctr_rules.cpp
+// failed with "unknown type name 'pics_s'".
+#include "../common.h"
 
 /*
 ================================================================================

@@ -5,6 +5,19 @@
 
 #pragma once
 
+// MAX_PATH is a Win32 constant; macOS/libc++ and Linux have no such thing, which made
+// common.cpp fail to COMPILE with the host clang (12 errors, at HEAD too -- not a
+// regression).  That matters beyond the build: common.cpp is in the host archive, and
+// when it does not compile its object is missing and the archive carries an undefined
+// _RENDER_Z_NEAR, so 54 suites abort at load with
+//   dyld: symbol not found in flat namespace '_RENDER_Z_NEAR'
+// -- one missing object masquerading as 54 broken suites.
+// 1024 is the size the Str_* buffers in common.cpp actually use; any value >= those
+// arrays is safe, and 4096 is the conventional POSIX PATH_MAX slack.
+#if !defined(_WIN32) && !defined(MAX_PATH)
+#  define MAX_PATH 4096
+#endif
+
 #include <cstdint>
 
 #include <glm/glm.hpp>

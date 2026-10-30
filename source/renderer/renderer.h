@@ -744,6 +744,13 @@ public:
     const ParsedGeometry*   GetOrLoadSkinGeometry(const std::string& modelId, bool isBuilding) {
         return objects_.GetOrLoadSkinGeometry(modelId, isBuilding);
     }
+    // Raw .mef bytes through the draw path's own resolution; the collision world
+    // reads only its HSMC collision chunks (Renderer_Objects::GetModelMefBytes,
+    // source/renderer/renderer_objects_mesh.cpp).
+    bool                    GetModelMefBytes(const std::string& modelId, bool isBuilding,
+                                             std::vector<uint8_t>& out) {
+        return objects_.GetModelMefBytes(modelId, isBuilding, out);
+    }
     // Draws one static prop mesh at an arbitrary world matrix in the normal scene
     // pass — used to attach a weapon mesh to a live bone transform (an AI's hand).
     void                    DrawAttachedMesh(const std::string& modelId, bool isBuilding, const glm::mat4& worldMat) {

@@ -34,7 +34,8 @@ std::string MakeTempPath(const std::string& suffix) {
     return ss.str();
 }
 
-bool Run(const std::string& args, std::string& err, DWORD timeoutMs) {
+#if defined(_WIN32)
+bool Run(const std::string& args, std::string& err, unsigned long timeoutMs) {
     const std::string exe = GetExePath();
     if (!fs::exists(exe)) {
         err = "igi1conv.exe not found: " + exe;
@@ -74,7 +75,7 @@ bool Run(const std::string& args, std::string& err, DWORD timeoutMs) {
 // into `stdoutOut`. Needed for `lightmap resolve`/`lightmap list`, which
 // have no -o flag — their only output is stdout text.
 static bool RunCaptureStdout(const std::string& args, std::string& stdoutOut,
-                             std::string& err, DWORD timeoutMs = 120000) {
+                             std::string& err, unsigned long timeoutMs = 120000) {
     const std::string exe = GetExePath();
     if (!fs::exists(exe)) {
         err = "igi1conv.exe not found: " + exe;
@@ -146,6 +147,27 @@ static bool RunCaptureStdout(const std::string& args, std::string& stdoutOut,
 	}
     return true;
 }
+
+#else  // !_WIN32
+
+// The bundled converter (assets/editor/tools/igi1conv/igi1conv.exe) is a Windows
+// PE.  macOS cannot execute it without an external Wine installation, so every
+// conversion helper reports the real reason instead of failing obscurely.
+// Nothing here pretends to convert: Run() returns false and the caller's error
+// path runs, exactly as it would if the tool were missing on Windows.
+bool Run(const std::string& args, std::string& err, unsigned long) {
+    err = "igi1conv.exe is a Windows executable and cannot run in the native macOS "
+          "build (args: " + args + ")";
+    return false;
+}
+
+static bool RunCaptureStdout(const std::string& args, std::string& stdoutOut,
+                             std::string& err, unsigned long = 120000) {
+    stdoutOut.clear();
+    return Run(args, err, 120000);
+}
+#endif  // _WIN32
+
 
 // ─── lightmap / olm ───────────────────────────────────────────────────────
 

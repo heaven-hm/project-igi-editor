@@ -38,16 +38,18 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
     // declare ("Position","ObjectPos") as their first parameter. Types that merely happen
     // to have three numbers at args 3/4/5 (LightmapInfo, Dirlight, FlatSky, PatrolPathCommand,
     // AddAmmo, Binocular, LODSettings, ...) declare something else there and are reverted.
-    {
-        std::map<std::string, TaskSchemaNS::TaskSchema> declared;
-        for (const auto& obj : objects_) {
-            if (obj.type != "Task_DeclareParameters" || obj.argTokens.size() < 3) continue;
-            std::string typeName = obj.argTokens[0];
-            if (typeName.size() >= 2 && typeName.front() == '"' && typeName.back() == '"')
-                typeName = typeName.substr(1, typeName.size() - 2);
-            declared[typeName] = TaskSchemaNS::ParseDeclaration(obj.argTokens);
-        }
+    // The level's own Task_DeclareParameters lines are the layout oracle for BOTH
+    // fallbacks below (declared position, then declared model), so parse them once.
+    std::map<std::string, TaskSchemaNS::TaskSchema> declared;
+    for (const auto& obj : objects_) {
+        if (obj.type != "Task_DeclareParameters" || obj.argTokens.size() < 3) continue;
+        std::string typeName = obj.argTokens[0];
+        if (typeName.size() >= 2 && typeName.front() == '"' && typeName.back() == '"')
+            typeName = typeName.substr(1, typeName.size() - 2);
+        declared[typeName] = TaskSchemaNS::ParseDeclaration(obj.argTokens);
+    }
 
+    {
         int placed = 0, reverted = 0;
         for (auto& obj : objects_) {
             if (!obj.declaredPositionCandidate) continue;
@@ -70,6 +72,55 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
         Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Declared-position fallback: " +
             std::to_string(placed) + " object(s) placed from Task_DeclareParameters, " +
             std::to_string(reverted) + " candidate(s) reverted (type declares no Position@3).");
+    }
+
+    // ── Declared-model fallback for task types with no explicit model branch ─────
+    // LoadRecursive reads a model only for the types the editor models by hand, and
+    // its catch-all branch reads none at all. Every engine task type that draws a
+    // model names that model in ONE Param_String16 slot of its ParamTable, and the
+    // level file mirrors the ParamTable entry-for-entry in Task_DeclareParameters,
+    // so the declaration is enough to resolve the model without a per-type branch.
+    // The concrete shipped type this was missing for is PlaceExplosiveTBA (2
+    // placements in LEVEL6): it extends GenericTBA -> ExplodeObject, and
+    // GenericTBA_Create runs the ExplodeObject create handler
+    // (`HANDLER(0, ExplodeObject_GetType())(t, arg)`, src/glass/tba.c:99-100), which
+    // installs the authored model via RigidDynCubeObj_SetModel
+    // (src/camera/explodeobject.c:279/334). The editor dropped it, so a
+    // PlaceExplosiveTBA with a model authored would be invisible.
+    //
+    // It also closes the shape-based hole in the isMissingGeneric scan above: that
+    // scan accepts only ids shaped NNN_NN_N in 8 characters, which is why AlarmLight
+    // needed its own hand-written exception for "1729_01_1" (see the comment there).
+    // Here the VALUE is unconstrained; only the declared slot matters.
+    //
+    // Deliberately excluded, because the declared "first model slot" is NOT what the
+    // engine installs for them:
+    //   SplineObjWaypoint — the slot holds the engine's waypoint marker ("waypoint")
+    //     or is empty; renderer_splines.cpp draws the waypoint gizmo instead, and
+    //     LoadRecursive already clears it on purpose (level_objects.cpp:397).
+    //   AlarmLight — the engine installs `onModel`, which its ParamTable fills from
+    //     the AUTHORED "Off model" slot (src/fxobj/alarm.c:113 + the field wiring in
+    //     src/elevator/alarmlight.c:98); "On model" is not that. The explicit branch
+    //     already reads arg 11, so this pass must not second-guess it.
+    {
+        int from_decl = 0;
+        for (auto& obj : objects_) {
+            if (!obj.modelId.empty() || obj.isSplineWaypoint) continue;
+            if (obj.type == "SplineObjWaypoint" || obj.type == "AlarmLight") continue;
+            const auto it = declared.find(obj.type);
+            if (it == declared.end()) continue;
+            const int arg = TaskSchemaNS::FindDeclaredModelArg(it->second);
+            if (arg < 0 || arg >= static_cast<int>(obj.argTokens.size())) continue;
+            std::string value = obj.argTokens[arg];
+            if (value.size() >= 2 && value.front() == '"' && value.back() == '"')
+                value = value.substr(1, value.size() - 2);
+            if (value.empty()) continue;
+            obj.modelId = value;
+            obj.modelIdArgIdx = arg;
+            ++from_decl;
+        }
+        Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Declared-model fallback: " +
+            std::to_string(from_decl) + " object(s) resolved from Task_DeclareParameters.");
     }
 
     // Fallback: If a Task_New's task note/name is empty, query its child's model name in IGIModels.json

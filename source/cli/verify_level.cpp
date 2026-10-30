@@ -17,8 +17,10 @@
 #include <chrono>
 #include <thread>
 
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -57,6 +59,7 @@ static std::string JsonEsc(const std::string& s) {
 // Launch editor, wait for exit or timeout
 // ---------------------------------------------------------------------------
 
+#if defined(_WIN32)
 static bool LaunchEditor(const std::string& exePath, const std::string& workDir,
                          int levelNo, int timeoutSec) {
     if (!fs::exists(exePath)) {
@@ -107,6 +110,17 @@ static bool LaunchEditor(const std::string& exePath, const std::string& workDir,
     CloseHandle(pi.hThread);
     return true;
 }
+
+#else  // !_WIN32
+
+// Launch-and-wait is Win32 process management (CreateProcess + console
+// isolation).  The native macOS build does not provide the live launch path;
+// the headless verification modes that do not spawn a child still work.
+static bool LaunchEditor(const std::string&, const std::string&, int, int) {
+    std::cerr << "  [ERROR] live editor launch is a Windows-only feature in this build\n";
+    return false;
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Console report

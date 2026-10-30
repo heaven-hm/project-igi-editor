@@ -85,16 +85,16 @@ inline bool IsCollisionProxyModelId(const std::string& modelId) {
            modelId == "colbox4" || modelId == "colbox66";
 }
 
-// What the terrain snap must do with one placement once the terrain query has
+// What the snap must do with one placement once the engine's drop query has
 // answered.
 enum class TerrainSnapDecision {
     KeepAuthoredZ,   // leave obj.pos.z as the QSC authored it (snap_z_offset = 0)
-    SnapToTerrain,   // human soldier on the surface: feet on terrainZ
+    SnapToTerrain,   // human soldier on the surface: feet on the collision hit
 };
 
 // The rule, in the order App::SnapObjectsToTerrain applies it:
-//   1. no terrain under (x, y) -> keep.  The engine never invents a Z for a
-//      miss (Game_DropToGround HOOK 0x4149B0, src/game/misc.c:88-95).
+//   1. no hit at all -> keep.  The engine never invents a Z for a miss
+//      (Game_DropToGround HOOK 0x4149B0, src/game/misc.c:88-95).
 //   2. not a human -> keep.  Props, trees, buildings, fences and vehicles have
 //      authoritative QSC Z values; the engine's load path drops humans through
 //      Human_ProbeGround, not furniture, and dropping props destroys elevated
@@ -104,10 +104,22 @@ enum class TerrainSnapDecision {
 //      (src/game/misc.c:82,88-92), and Human_ProbeGround reaches 1000 m
 //      (src/humanbase/human.c:192-193).  The old 100-unit (2.4 cm) band here was
 //      an editor invention and is gone.
-inline TerrainSnapDecision DecideTerrainSnap(bool terrainFound, bool isHuman) {
-    if (!terrainFound) return TerrainSnapDecision::KeepAuthoredZ;
+//
+// `hitFound` is the result of the engine's WHOLE drop query, not the terrain
+// alone: Coll_Drop HOOK 0x4CABF0 body (src/coll/coll.c:575-614) queries the
+// rigid objects AND the terrain and keeps the nearest hit, so a human standing
+// on a building floor/roof over a DiscardTerrain hole still has a hit.
+inline TerrainSnapDecision DecideCollisionSnap(bool hitFound, bool isHuman) {
+    if (!hitFound) return TerrainSnapDecision::KeepAuthoredZ;
     if (!isHuman) return TerrainSnapDecision::KeepAuthoredZ;
     return TerrainSnapDecision::SnapToTerrain;
 }
+
+// The terrain-only subset, kept for callers/tests that have only the terrain
+// answer; the terrain is one of the two halves Coll_Drop compares.
+inline TerrainSnapDecision DecideTerrainSnap(bool terrainFound, bool isHuman) {
+    return DecideCollisionSnap(terrainFound, isHuman);
+}
+
 
 }  // namespace igi

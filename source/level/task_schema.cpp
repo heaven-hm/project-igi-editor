@@ -1,5 +1,6 @@
 #include "level/task_schema.h"
 
+#include <cctype>
 #include <cmath>
 
 // The authored parameter tables of the two retail FX task types (issue #43).
@@ -448,6 +449,27 @@ const TaskSchema* GetSchema(const std::string& taskType) {
     auto it = reg.find(taskType);
     if (it != reg.end()) return &it->second;
     return GetBuiltinSchema(taskType);
+}
+
+int FindDeclaredModelArg(const TaskSchema& schema) {
+    for (const auto& f : schema) {
+        // Every engine model slot is ONE script token: Param_String16 (or the
+        // String32/String256 variants) bound to a char[] member. Multi-token
+        // fields (ObjectPos, Real32x9, RGB) can never be a model slot.
+        if (f.argCount != 1) continue;
+        if (f.typeName != "String16" && f.typeName != "String32" &&
+            f.typeName != "String256") {
+            continue;
+        }
+        std::string lower;
+        lower.reserve(f.name.size());
+        for (char c : f.name) {
+            lower.push_back(static_cast<char>(
+                std::tolower(static_cast<unsigned char>(c))));
+        }
+        if (lower.find("model") != std::string::npos) return f.argOffset;
+    }
+    return -1;
 }
 
 // ─── Prop / interactable parity maths (see task_schema.h) ────────────────────
