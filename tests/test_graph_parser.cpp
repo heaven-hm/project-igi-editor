@@ -15,8 +15,16 @@
 //  Path: <exe_dir>\missions\location0\level1\graph1.dat
 // ============================================================
 
+// The retail data is addressed with Windows separators, which the engine expects
+// verbatim.  On POSIX a backslash is an ordinary filename character, so the path
+// must be converted at the OS boundary -- Utils::ToNativePath is the project's
+// one conversion point (source/utils.h:131) and is the identity on Windows.
+static std::string GamePath(const std::string& relative_to_root) {
+    return Utils::ToNativePath(Utils::GetIGIRootPath() + relative_to_root);
+}
+
 static std::string GraphPath() {
-    return Utils::GetIGIRootPath() + "\\missions\\location0\\level1\\graphs\\graph1.dat";
+    return GamePath("\\missions\\location0\\level1\\graphs\\graph1.dat");
 }
 
 class GraphParserTest : public ::testing::Test {
@@ -66,7 +74,7 @@ static std::string TempOut(const char* name) {
 // with several nodes so "other nodes unchanged" is meaningful. graph7.dat in the
 // same folder has 11 node records.
 static std::string GraphPathMulti() {
-    return Utils::GetIGIRootPath() + "\\missions\\location0\\level1\\graphs\\graph7.dat";
+    return GamePath("\\missions\\location0\\level1\\graphs\\graph7.dat");
 }
 
 TEST_F(GraphParserTest, SaveRoundTripPersistsModifiedPosition) {
@@ -251,8 +259,7 @@ TEST_F(GraphParserTest, WriteAdjacencyMatchesEdges) {
 }
 
 TEST_F(GraphParserTest, WriteUnchangedIsByteIdentical) {
-    const std::string src = Utils::GetIGIRootPath() +
-        "\\editor\\backup\\level1\\graphs\\graph8.dat";
+    const std::string src = GamePath("\\editor\\backup\\level1\\graphs\\graph8.dat");
     GraphFile g = GRAPH_Parse(src);
     if (!g.valid) GTEST_SKIP() << "no pristine backup graph8";
 
@@ -279,8 +286,7 @@ TEST_F(GraphParserTest, WriteUnchangedIsByteIdentical) {
 
 TEST_F(GraphParserTest, WriteReproducesOriginalRoutingTable) {
     // Pristine backup so the adjacency reflects the game's own routing table.
-    const std::string src = Utils::GetIGIRootPath() +
-        "\\editor\\backup\\level1\\graphs\\graph8.dat";
+    const std::string src = GamePath("\\editor\\backup\\level1\\graphs\\graph8.dat");
     GraphFile g = GRAPH_Parse(src);
     if (!g.valid) GTEST_SKIP() << "no pristine backup graph8";
 
@@ -324,7 +330,7 @@ TEST_F(GraphParserTest, WriteReproducesOriginalRoutingTable) {
 //  These files have no magic (first byte 0x05) and use 1-byte tags.
 // ------------------------------------------------------------
 static std::string GraphPathLegacy() {
-    return Utils::GetIGIRootPath() + "\\missions\\location0\\level8\\graphs\\graph1.dat";
+    return GamePath("\\missions\\location0\\level8\\graphs\\graph1.dat");
 }
 
 TEST_F(GraphParserTest, LegacyFormatParsesValid) {

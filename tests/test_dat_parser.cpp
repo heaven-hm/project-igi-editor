@@ -10,8 +10,12 @@
 //  Game files must be co-located with igi_tests.exe.
 // ============================================================
 
+// The retail data is addressed with Windows separators.  On POSIX a backslash is
+// an ordinary filename character, so convert at the OS boundary; ToNativePath is
+// the identity on Windows (source/utils.h:131).
 static std::string DatPath() {
-    return Utils::GetIGIRootPath() + "\\missions\\location0\\level1\\level1.dat";
+    return Utils::ToNativePath(Utils::GetIGIRootPath() +
+                               "\\missions\\location0\\level1\\level1.dat");
 }
 
 class DatParserTest : public ::testing::Test {

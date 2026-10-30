@@ -36,6 +36,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <vector>
 
 namespace {
@@ -80,6 +81,29 @@ int LevelCmdSize(int level) {
     std::error_code ec;
     const uintmax_t size = std::filesystem::file_size(path, ec);
     return ec ? 0 : (int)size;
+}
+
+// The whole terrain.cmd, for the "does this leaf offset land on a module?"
+// check below.  A cmd leaf module starts with a packed cmd_item_s whose
+// vertex_offset_ is num_triangle_ * 4 (source/level/terrain_files.h:55-60).
+std::vector<char> ReadCmd(int level) {
+    const char* root = std::getenv("IGI_GAME_PATH");
+    if (root == nullptr || *root == '\0') return {};
+    const auto path = std::filesystem::path(root) / "MISSIONS" / "location0" /
+                      ("LEVEL" + std::to_string(level)) / "TERRAIN" / "TERRAIN.CMD";
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) return {};
+    std::ifstream file(path, std::ios::binary);
+    if (!file) return {};
+    return std::vector<char>(std::istreambuf_iterator<char>(file),
+                             std::istreambuf_iterator<char>());
+}
+
+bool LandsOnCmdModule(const std::vector<char>& cmd, uint32_t offset) {
+    if (offset > cmd.size() || cmd.size() - offset < sizeof(cmd_item_s)) return false;
+    cmd_item_s item;
+    std::memcpy(&item, cmd.data() + offset, sizeof(item));
+    return item.vertex_offset_ == (uint16_t)(item.num_triangle_ * 4u);
 }
 
 } // namespace
@@ -189,11 +213,16 @@ TEST(TerrainCtrRulesCorpus, RetailLevel14CtrIsNotTheEngineFormat) {
     EXPECT_EQ(bad.value_, 0xFFFFFFFFu);
 
     // ... and it stays broken: the 44-byte-record layout means only 802 of 15202
-    // 32-byte slots carry a leaf that exists in .cmd.  Count them, so a future
-    // "fix" that merely skips the first bad node cannot pass this test.
+    // 32-byte slots carry a leaf that actually lands on a cmd leaf module.
+    // Count them, so a future "fix" that merely skips the first bad node cannot
+    // pass this test.  The offset must be read as unsigned (the field is
+    // uint32_t, terrain_files.h:32): casting 0xFFFFFFFF to int makes it -1,
+    // which then compares as "inside" a 469644-byte .cmd.
+    const std::vector<char> cmd = ReadCmd(14);
+    ASSERT_EQ((int)cmd.size(), cmd_size);
     int leaves_in_cmd = 0;
     for (const ctr_item_s& node : nodes) {
-        if ((int)node.cmd_offset_ < cmd_size) ++leaves_in_cmd;
+        if (LandsOnCmdModule(cmd, node.cmd_offset_)) ++leaves_in_cmd;
     }
     EXPECT_EQ(leaves_in_cmd, 802);
 }

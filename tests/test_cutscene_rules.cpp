@@ -34,7 +34,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -895,6 +897,27 @@ bool CorpusMissing(int level) {
     return !fs::is_regular_file(LevelDir(level) / "OBJECTS.QVM");
 }
 
+// Whether two values agree at the precision the authored QSC format carries.
+//
+// The format's own numbers are 7 significant digits: ArgTokenFromArg
+// re-serialises a line with %.7g "to match the source format"
+// (source/level/fog_qsc.h:52).  The two installed artifacts this suite compares
+// are NOT bit-identical.  Measured on the installed tree: objects.qsc:1120
+// holds 14.299994468688965 (float bits 0x4164CCC7) for level 1's first scene
+// duration, while OBJECTS.QVM+157138 holds 0x4164CCC2 =
+// 14.299989700317383 -- five float ULPs apart, beyond EXPECT_FLOAT_EQ's
+// four-ULP window.  (The .qsc carries the exact decimal of a float, i.e. it is
+// a decompilation, and its mtime is older than the .qvm's.)  Comparing at
+// authored precision keeps the check meaningful -- a misaligned token moves a
+// value by whole units -- where bit equality is not achievable from the data.
+bool SameAuthoredNumber(float left, float right) {
+    char left_text[32];
+    char right_text[32];
+    std::snprintf(left_text, sizeof(left_text), "%.7g", static_cast<double>(left));
+    std::snprintf(right_text, sizeof(right_text), "%.7g", static_cast<double>(right));
+    return std::strcmp(left_text, right_text) == 0;
+}
+
 }  // namespace
 
 TEST(CutSceneRulesCorpus, TheRetailCutSceneDeclarationMatchesTheParameterTable) {
@@ -1029,8 +1052,11 @@ TEST(CutSceneRulesCorpus, TheQvmAndTheDecompiledQscAgreeOnLevelOnesTimeline) {
             EXPECT_NEAR(from_qvm[i].keys[key].start_time, from_qsc[i].keys[key].start_time, 1e-4);
             EXPECT_DOUBLE_EQ(from_qvm[i].keys[key].params.position[0],
                              from_qsc[i].keys[key].params.position[0]);
-            EXPECT_FLOAT_EQ(from_qvm[i].keys[key].params.duration,
-                            from_qsc[i].keys[key].params.duration);
+            EXPECT_TRUE(SameAuthoredNumber(from_qvm[i].keys[key].params.duration,
+                                           from_qsc[i].keys[key].params.duration))
+                << "scene " << from_qvm[i].task_id << " key " << key << " qvm "
+                << from_qvm[i].keys[key].params.duration << " qsc "
+                << from_qsc[i].keys[key].params.duration;
         }
     }
 }

@@ -1448,10 +1448,23 @@ TEST(SoundRulesCorpus, RetailEmittersExtractParseAndValidate) {
 
 // One authored value, normalised so that a QVM float and its .qsc decimal text
 // compare equal: numbers go through float, everything else stays verbatim.
+//
+// The comparison is at the authored format's precision -- 7 significant digits,
+// which is what ArgTokenFromArg re-serialises with "to match the source format"
+// (source/level/fog_qsc.h:52) -- not at %.9g.  The two installed artifacts are
+// not bit-identical: level 1's "wind behind" half extent is 32.158935546875
+// (float 0x4200A2C0) at objects.qsc:1184 but 0x4200A2C1 = 32.158939361572266
+// at OBJECTS.QVM+166087, one ULP apart.  At authored precision the two agree; a
+// wrong token or argument position still changes the value by far more than the
+// seventh digit.
 std::string CanonicalArg(const std::string& token) {
     char* end = nullptr;
     const float value = std::strtof(token.c_str(), &end);
-    if (end != token.c_str() && *end == '\0') return FormatFloat(value);
+    if (end != token.c_str() && *end == '\0') {
+        char buffer[64];
+        std::snprintf(buffer, sizeof(buffer), "%.7g", static_cast<double>(value));
+        return buffer;
+    }
     return token;
 }
 

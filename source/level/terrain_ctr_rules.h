@@ -66,8 +66,12 @@ inline ctr_violation_s ValidateCtrNodes(const ctr_item_s* nodes, int count, int 
 
 		/* The engine adds the .cmd base to this offset and dereferences it
 		   (Terrain_Load 0x4C6240, src/terrain/terrain.c:142-143).  Offset 0 is
-		   legal and is what interior records use in the retail levels. */
-		if ((int)node.cmd_offset_ >= cmd_size) {
+		   legal and is what interior records use in the retail levels.
+		   The field is an unsigned byte offset (ctr_item_s::cmd_offset_ is
+		   uint32_t, terrain_files.h:32), so the comparison must be unsigned:
+		   casting to int turns the retail level-14 value 0xFFFFFFFF into -1,
+		   which then reads as "inside" a 469644-byte .cmd and is not reported. */
+		if (cmd_size < 0 || node.cmd_offset_ >= static_cast<uint32_t>(cmd_size)) {
 			bad.node_ = i;
 			bad.child_ = false;
 			bad.value_ = node.cmd_offset_;

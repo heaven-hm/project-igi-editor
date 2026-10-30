@@ -18,7 +18,17 @@
 #  define MAX_PATH 4096
 #endif
 
+// This header is self-contained: it names size_t, va_list, FILE and
+// std::exception in its declarations, so it must include the headers that
+// define them.  It used to rely on its includers having pulled those in first,
+// which made any translation unit that includes common.h first fail to compile
+// (tests/test_terrain_ctr_rules.cpp did exactly that: "expected class name" at
+// the quit_exception declaration below).
+#include <cstdarg>
+#include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <exception>
 
 #include <glm/glm.hpp>
 

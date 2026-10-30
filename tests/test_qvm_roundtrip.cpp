@@ -25,28 +25,37 @@
 
 namespace {
 
-// Returns path to a file in the fixtures/ directory next to the exe.
-// Fixtures are copied there by CMake post-build so tests work from any CWD.
+// Returns path to a file in the fixtures/ directory.
 //
-// Two candidate directories, because the two lanes lay the tree out
-// differently.  On Windows CMake copies `tests/fixtures` next to igi_tests.exe
-// (CMakeLists.txt:655-660), so `<exeDir>/fixtures` is the answer.  The
-// host-native lane runs the binary with `GetExeDirectory()` == the repository
-// root, where the fixtures are at `tests/fixtures`; before this search the
-// suite built a literal `\fixtures\<name>` path there, which is one filename on
-// POSIX, so every fixture-backed test failed.  The scratch files the round-trip
-// tests write land in whichever directory is chosen, so this picks a directory
-// (not an existing file) and falls back to the Windows layout.
+// Two layouts, because the two lanes lay the tree out differently.  On Windows
+// CMake copies `tests/fixtures` next to igi_tests.exe (CMakeLists.txt:655-660),
+// so `<exeDir>/fixtures` is the answer.  On the host-native lane the suite
+// binary lives under `<repo>/build-mingw/host-tests/bin`, and `GetExeDirectory()`
+// resolves the executable itself (source/utils.h:101-122), so the fixtures are
+// an ancestor's `tests/fixtures` rather than a child of the executable.  Walk
+// the ancestors instead of assuming a fixed depth, because IGI_HOST_OUT_DIR can
+// move the binary.
+//
+// The scratch files the round-trip tests write land in the chosen directory, so
+// it is created if no fixture directory exists at all (otherwise `ofstream`
+// silently fails to open and the round trip reports "cannot open tmp").
 std::string FixturePath(const std::string& name) {
     const std::filesystem::path exeDir(Utils::GetExeDirectory());
-    const std::filesystem::path dirs[] = {
+    const std::filesystem::path direct[] = {
         exeDir / "fixtures",
         exeDir / "tests" / "fixtures",
     };
-    for (const std::filesystem::path& dir : dirs) {
+    for (const std::filesystem::path& dir : direct) {
         if (std::filesystem::is_directory(dir)) return (dir / name).string();
     }
-    return (dirs[0] / name).string();
+    for (std::filesystem::path up = exeDir; !up.empty(); up = up.parent_path()) {
+        const std::filesystem::path dir = up / "tests" / "fixtures";
+        if (std::filesystem::is_directory(dir)) return (dir / name).string();
+        if (up == up.root_path()) break;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(direct[0], ec);
+    return (direct[0] / name).string();
 }
 
 // The installed retail game tree.  Mirrors `Utils::GetIGIRootPath()`
