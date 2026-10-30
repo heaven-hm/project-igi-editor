@@ -287,6 +287,17 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
         }
         model = glm::scale(model, glm::vec3(BASE_SCALE * obj.scale));
 
+        // A human the level authors inside a vehicle is DRAWN with the engine's
+        // object origin (the pelvis) at the authored position, not with the mesh's
+        // feet: the pick pass must place it identically or the user clicks where
+        // the human is not. See renderer/human_seat_frame.h.
+        if (igi::HumanSitsInVehicle(objects, i)) {
+            const ParsedGeometry* seat_geo = GetOrLoadSkinGeometry(obj.modelId, obj.isBuilding);
+            const glm::vec3 seat_origin = igi::StaticModelOriginMetres(
+                seat_geo != nullptr ? &seat_geo->bones : nullptr, /*engine_origin_frame=*/true);
+            if (seat_origin != glm::vec3(0.0f)) model = glm::translate(model, seat_origin);
+        }
+
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
         glUniform1i(loc_id, i + 1); // ID 0 = background
 
@@ -565,6 +576,15 @@ Renderer_Objects::VisualEvidence Renderer_Objects::CaptureObjectVisualEvidence(
     // No pickup-specific turn -- see renderer_objects.cpp for the engine citation
     // (Direct3DRender_DrawRigidMesh HOOK 0x49DF60, src/render/render.c:965-966).
     model = glm::scale(model, glm::vec3(40.96f * obj.scale));
+
+    // Same seat frame as the visual pass for a human the level authors inside a
+    // vehicle — see renderer/human_seat_frame.h.
+    if (igi::HumanSitsInVehicle(objects, target_object_index)) {
+        const ParsedGeometry* seat_geo = GetOrLoadSkinGeometry(obj.modelId, obj.isBuilding);
+        const glm::vec3 seat_origin = igi::StaticModelOriginMetres(
+            seat_geo != nullptr ? &seat_geo->bones : nullptr, /*engine_origin_frame=*/true);
+        if (seat_origin != glm::vec3(0.0f)) model = glm::translate(model, seat_origin);
+    }
     glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
 
     int next_part_id = 1;

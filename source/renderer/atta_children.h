@@ -60,26 +60,40 @@ inline glm::mat3 IgiAttaLocalRotation(const float m[9]) {
 }
 
 // ─── Engine Matrix -> GLM world rotation ────────────────────────────────────
-// The engine rotates a vector with the matrix's ROWS:
+// The engine stores its 3x3 ROW-major and rotates a COLUMN vector with it:
 //
-//     v_j = sum_i v_i * m[3i + j]
+//     out_j = sum_i m[3j + i] * v_i          (row j of the stored array, dotted with v)
 //
-// — `Heli_Control`'s start velocity (`src/heli/heli.c:390-392`), `Body_Integrate`'s
+// — `Mesh3D_GetWorldVertex` HOOK 0x4D0A50 (`src/lod/mesh3d.c:434-436`:
+// `r0 = z*m[2] + y*m[1] + x*m[0]`), `part_place` (`src/vehicle/parts.c:81-90`),
+// `Heli_Control`'s start velocity (`src/heli/heli.c:390-392`), `Body_Integrate`'s
 // force-to-velocity step (`src/animtrig/body.c:218-220`) and `PhysicsObj_Collide`'s
-// position step (`src/graphtask/physobj.c:423-425`) are all written that way. The
-// engine's render path agrees: `Direct3D_MakeMatrix` (`src/d3d/direct3d.c:1211-1237`)
-// "transposes a 3x3 rotation" by setting `_11 = rot[0]`, `_12 = rot[3]`,
-// `_13 = rot[6]`, which is exactly that product in D3D's row-vector convention.
+// position step (`src/graphtask/physobj.c:423-425`) are all written that way.
 //
-// GLM fills COLUMNS, so passing the file's `m[0..8]` in order stores the array as
-// the columns of the GLM matrix, and `glm::mat3 * v` then reproduces
-// `v_j = sum_i v_i * m[3i+j]` exactly. The conversion is the identity on the
-// array, and a POST-multiply `R * local` rotates about the object's own axis —
-// which is what `IgiRotorSpinMatrix` and `Heli_Move`'s nose pitch both do.
+// The image of the local X axis is therefore the array's first COLUMN,
+// (m[0], m[3], m[6]). Two more engine sites say the same thing independently:
+// `Direct3D_MakeMatrix` HOOK 0x4950F0 (`src/d3d/direct3d.c:1211-1237`) "transposes
+// a 3x3 rotation" by setting `_11 = rot[0]`, `_12 = rot[3]`, `_13 = rot[6]` — and
+// D3D9 applies `v * M`, so its first ROW, i.e. the image of X, is exactly that
+// column; and `HumanPlayer_Use34Enter` HOOK 0x40CB90
+// (`src/humanstate/humanstate.c:880-882`) turns the local offset `(0, side, -up)`
+// into `side * (m[1], m[4], m[7]) - up * (m[2], m[5], m[8])`, i.e. side times
+// column 1 minus up times column 2.
+//
+// GLM fills COLUMNS, so the array's first column must become GLM's first column:
+// `glm::mat3 * v` then reproduces `out_j = sum_i m[3j+i] * v_i` exactly, and a
+// POST-multiply `R * local` rotates about the object's own axis — which is what
+// `IgiRotorSpinMatrix` and `Heli_Move`'s nose pitch both do.
+//
+// (This conversion used to be the identity on the array, which is the TRANSPOSE
+// of the product above: it mapped local X to (m[0], m[1], m[2]). `IgiAttaLocalRotation`
+// three functions up was already the other way round — it transposes, because
+// `rigidcoll.c:419-436` builds the child frame with the record's columns as its
+// rows — so the two could not both be right, and the engine sites above decide it.)
 inline glm::mat3 IgiEngineMatrixToGlm(const float m[9]) {
-    return glm::mat3(m[0], m[1], m[2],
-                     m[3], m[4], m[5],
-                     m[6], m[7], m[8]);
+    return glm::mat3(m[0], m[3], m[6],
+                     m[1], m[4], m[7],
+                     m[2], m[5], m[8]);
 }
 
 // The same basis as a translation-free world transform, for the draw path.

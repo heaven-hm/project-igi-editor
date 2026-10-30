@@ -1837,10 +1837,20 @@ void App::Frame(float delta_seconds) {
             // static mesh, i.e. under the terrain. `PosedObjectMatrix` is the one
             // place that decision lives; tests/test_skinned_static_parity.cpp
             // asserts the two paths agree through it.
+            //
+            // A human the level authors INSIDE a vehicle is the one case where the
+            // ENGINE's own object origin is what the authored position means: the
+            // terrain snap never touches such a human, so the feet-rebased frame
+            // would draw it one pivot->feet lift (3990.4 raw units, 0.974 m) above
+            // its seat. See renderer/human_seat_frame.h for the citations
+            // (`BoneObj_Update` 0x4D38C0, `BoneDynCubeObj_EnterHandler` 0x5124C0,
+            // `Human_ProbeGround` 0x462390) and tests/test_seated_human.cpp.
             const ParsedGeometry* skinGeo =
                 renderer_.GetOrLoadSkinGeometry(obj.modelId, obj.isBuilding);
+            const bool seat_frame = igi::HumanSitsInVehicle(objs, idx);
             const glm::mat4 objMat = igi::PosedObjectMatrix(
-                obj.pos, obj.rot, obj.scale, skinGeo != nullptr ? &skinGeo->bones : nullptr);
+                obj.pos, obj.rot, obj.scale, skinGeo != nullptr ? &skinGeo->bones : nullptr,
+                seat_frame);
             // The mesh is skinned by the engine's own BoneMesh_Skin 0x49B700
             // over these same bone records (raw `Bone::matrix` + `Bone::pos`),
             // which is what `Direct3DRender_DrawBoneMesh` 0x49F700 does.
@@ -2290,11 +2300,17 @@ void App::TogglePauseMenu() {
 		// What the menu shows, in the editor's own words: the only evidence a run on
 		// this host can give (Wine maps no visible window here).
 		LogPauseMenuDrawnText();
-		// The menu is mouse-driven: the pointer must be visible. Gameplay
-		// motion handlers return early while paused, so nothing else would
-		// restore the cursor here — an invisible pointer made the menu
-		// unusable in play mode.
-		glutSetCursor(GLUT_CURSOR_INHERIT);
+		// The menu's pointer is the GAME's, not the platform's: load
+		// `LOCAL:menusystem/pointer.spr` out of the retail archive now (the GL
+		// context is current here) so the very first menu frame draws it, and
+		// keep the platform cursor hidden unless that sprite could not be read.
+		// The game never shows the system cursor in a menu - `MenuManager_Update`
+		// HOOK 0x417CF0 points its own `Cursor` task at the sprite
+		// (src/menu/menumanager.c:233) and `Cursor_Draw` HOOK 0x424C40 blits it
+		// (src/widget/cursor.c:38-41).
+		EnsureRetailPointerCursor();
+		glutSetCursor(HasRetailPointerCursor() ? GLUT_CURSOR_NONE
+		                                       : GLUT_CURSOR_INHERIT);
 	} else {
 		// Closing pause menu: reset mouse state so no stale drag occurs
 		Logger::Get().Log(LogLevel::INFO, "pause menu: closed");

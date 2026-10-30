@@ -13,6 +13,7 @@
 
 #include "renderer/atta_children.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -288,6 +289,68 @@ TEST(AttaChildren, RotorSpinPostMultipliesLocalXAndKeepsShaftAndPosition) {
     }
 }
 
+// ─── The world frame is NOT the transpose: a negative control ───────────────
+// `IgiReChildFrame` states the oracle's world frame as the matrix product
+// `P = M * R`. That is the correct reading, but expressing it as a product makes
+// it re-derivable — and the obvious-looking re-derivation is WRONG. The nine
+// assignments in `src/magicobj/rigidcoll.c:440-448` index BOTH operands flat
+// (`P[0] = R[3]*M[1] + R[6]*M[2] + R[0]*M[0]`), which reads like a transpose, and
+// the sibling product in `src/shadow/sector.c:610-630` is easy to conflate with
+// it. "Correcting" the product into `R^T * M^T` (equivalently `(M*R)^T`) yields
+// the INVERSE rotation: every ATTA child — rotors, wheels, doors, hatches — would
+// be drawn wrongly rotated while its position stayed correct, which is exactly
+// the shape of the "attached part is upside down" class of report.
+//
+// So this test pins the transpose as a NEGATIVE control. The basis used is the
+// shipped `709_01_1.mef` main rotor, which is not symmetric, so the control has
+// teeth: if someone transposes `IgiAttaChildWorld`'s product, this fails loudly
+// instead of quietly changing every attachment's orientation.
+TEST(AttaChildren, ChildWorldFrameIsNotTheTransposeOfTheOracleProduct) {
+    double wantPos[3], wantP[9];
+    IgiReChildFrame(kParentM, kParentO, kMainRotor.pos, kMainRotor.m, wantPos, wantP);
+
+    const glm::mat4 child = igi::IgiAttaChildWorld(
+        ParentFromRowMajor(kParentM, kParentO), kMainRotor.pos, kMainRotor.m);
+
+    // The helper must still match the oracle (no regression from this test).
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            EXPECT_NEAR(Element(child, i, j), wantP[i * 3 + j], 1e-5) << "row " << i << " col " << j;
+        }
+    }
+
+    // The control only means something if the two differ for this record.
+    double maxTransposeDelta = 0.0;
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            maxTransposeDelta = std::max(maxTransposeDelta,
+                                         std::abs(wantP[i * 3 + j] - wantP[j * 3 + i]));
+        }
+    }
+    EXPECT_GT(maxTransposeDelta, 0.1)
+        << "the shipped main-rotor basis is (near) symmetric, so this control cannot "
+           "distinguish the frame from its transpose";
+
+    // Compare as WHOLE matrices, not element by element: a diagonal entry of a
+    // rotation is shared with its transpose, so per-element "must differ"
+    // assertions are false for (0,0), (1,1), (2,2) on a near-diagonal basis.
+    double maxDistanceFromOracle = 0.0;
+    double maxDistanceFromTranspose = 0.0;
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            maxDistanceFromOracle = std::max(maxDistanceFromOracle,
+                                             std::abs(Element(child, i, j) - wantP[i * 3 + j]));
+            maxDistanceFromTranspose = std::max(maxDistanceFromTranspose,
+                                                std::abs(Element(child, i, j) - wantP[j * 3 + i]));
+        }
+    }
+    EXPECT_LT(maxDistanceFromOracle, 1e-5)
+        << "the helper must reproduce the oracle's P = M * R (rigidcoll.c:440-448)";
+    EXPECT_GT(maxDistanceFromTranspose, 0.1)
+        << "the helper matches the TRANSPOSE of the oracle's world frame; "
+           "rigidcoll.c:440-448 is P = M * R, not (M*R)^T";
+}
+
 // A rotor's children inherit the UNSPUN frame: `src/rotor/rotor.c:180-181`
 // passes `o->obj.matrix` to the child draw, not the spun drawing copy.
 TEST(AttaChildren, RotorSpinDoesNotLeakIntoTheChildFrame) {
@@ -307,4 +370,50 @@ TEST(AttaChildren, RotorSpinDoesNotLeakIntoTheChildFrame) {
             EXPECT_NEAR(blade[c][r], hub[c][r], 1e-5) << "col " << c << " row " << r;
         }
     }
+}
+
+// The vehicle-preview root and the ATTA composition must use ONE convention.
+//
+// `renderer_objects.cpp` feeds the helicopter flight preview's engine matrix
+// through `igi::IgiEngineMatrixToGlm4` and then hands that mat4 to
+// `IgiAttaChildWorld` as the parent frame (the rotors hang off the preview pose,
+// because `Heli_Move` broadcasts the move event with `&h->v.pos`/`&h->v.matrix`
+// every tick — src/heli/heli.c:502-507, and `Rotor_Move` re-places the rotor
+// from the owner's matrix, src/rotor/rotor.c:265-290).  If that conversion were
+// the transpose of the engine's matrix, the hull would be drawn with the inverse
+// of the rotation its own children are composed against.
+//
+// The oracle is the engine's own product: the image of the local X axis under
+// `Matrix.m` is its first COLUMN, (m[0], m[3], m[6]) — `Mesh3D_GetWorldVertex`
+// HOOK 0x4D0A50 (src/lod/mesh3d.c:434-436), `part_place`
+// (src/vehicle/parts.c:81-90), `Heli_Control` (src/heli/heli.c:390-392) and
+// `Direct3D_MakeMatrix` HOOK 0x4950F0 (src/d3d/direct3d.c:1211-1237, whose D3D
+// row-vector matrix takes that column as its first ROW).
+TEST(AttaChildren, ThePreviewRootConversionAgreesWithTheChildComposition) {
+    float M[9];
+    for (int i = 0; i < 9; ++i) M[i] = static_cast<float>(kParentM[i]);
+
+    // The same frame built two ways: the literal row-major conversion the oracle
+    // uses, and the engine-matrix conversion the preview path uses.
+    const glm::mat4 literal = ParentFromRowMajor(kParentM, kParentO);
+    const glm::mat4 converted = igi::IgiEngineMatrixToGlm4(M);
+    glm::mat4 with_pos = converted;
+    with_pos[3] = glm::vec4(static_cast<float>(kParentO[0]), static_cast<float>(kParentO[1]),
+                            static_cast<float>(kParentO[2]), 1.0f);
+    for (int c = 0; c < 3; ++c) {
+        for (int r = 0; r < 3; ++r) {
+            EXPECT_NEAR(Element(with_pos, r, c), Element(literal, r, c), 1e-6)
+                << "the conversion must reproduce the engine's product, not its transpose";
+        }
+    }
+
+    // The engine's image of the local X axis, straight from the stored array
+    // (w = 0: a direction, so the translation is not added).
+    const glm::vec4 x_axis = with_pos * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+    EXPECT_NEAR(x_axis.x, kParentM[0], 1e-6);
+    EXPECT_NEAR(x_axis.y, kParentM[3], 1e-6);
+    EXPECT_NEAR(x_axis.z, kParentM[6], 1e-6);
+
+    // And the child frame composed on it is the oracle's child frame.
+    ExpectMatchesIgiRe(with_pos, kParentM, kParentO, kMainRotor.pos, kMainRotor.m);
 }

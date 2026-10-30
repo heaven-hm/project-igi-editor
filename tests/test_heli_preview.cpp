@@ -782,18 +782,33 @@ TEST(HeliPreview, TheClockRunsAtTheEnginesThirtyHertz) {
 // The engine Matrix -> GLM conversion the draw path uses
 // ===========================================================================
 
-TEST(HeliPreview, TheEngineMatrixMapsToTheGlmBasisWithoutTransposing) {
-    // The engine rotates a vector as `v_j = sum_i v_i * m[3i+j]` (heli.c:390-392,
-    // body.c:218-220, and Matrix_SetRotX/SetRotZ themselves), i.e. it treats the
-    // 3x3 as ROW-major and the image of the local X axis is the first ROW
-    // (m[0], m[1], m[2]). `Direct3D_MakeMatrix` transposes that into D3D's
-    // row-vector convention (`_11 = rot[0]`, `_12 = rot[3]`, `_13 = rot[6]`,
-    // src/d3d/direct3d.c:1211-1237), which is the same product.
+TEST(HeliPreview, TheEngineMatrixMapsToTheGlmBasisWithTheArraysColumnsAsColumns) {
+    // The engine stores its 3x3 ROW-major and rotates a COLUMN vector with it:
+    // `out_j = sum_i m[3j+i] * v_i` — row j of the stored array dotted with v.
+    // `Heli_Control`'s start velocity is written exactly that way
+    // (`v.x = m[2]*sv.z + m[1]*sv.y + sv.x*m[0]`, src/heli/heli.c:390-392), as are
+    // `Mesh3D_GetWorldVertex` HOOK 0x4D0A50 (src/lod/mesh3d.c:434-436),
+    // `part_place` (src/vehicle/parts.c:81-90) and `Body_Integrate`
+    // (src/animtrig/body.c:218-220).
     //
-    // GLM fills COLUMNS, so passing m[0..8] in order stores that same array as
-    // the columns of the GLM matrix, and `glm::mat3 * v` then reproduces
-    // `v_j = sum_i v_i * m[3i+j]` exactly. The conversion is therefore the
-    // identity on the array, and the image of the local X axis is the first row.
+    // The image of the local X axis is therefore the array's first COLUMN,
+    // (m[0], m[3], m[6]). Two independent engine sites agree: `Direct3D_MakeMatrix`
+    // HOOK 0x4950F0 sets the D3D row-vector matrix's first ROW to
+    // (rot[0], rot[3], rot[6]) (`_11 = rot[0]`, `_12 = rot[3]`, `_13 = rot[6]`,
+    // src/d3d/direct3d.c:1211-1237), and D3D9 applies `v * M`, so that row is the
+    // image of X; and `HumanPlayer_Use34Enter` HOOK 0x40CB90 turns the local
+    // offset (0, side, -up) into `side*(m[1],m[4],m[7]) - up*(m[2],m[5],m[8])`
+    // (src/humanstate/humanstate.c:880-882) — side times column 1 minus up times
+    // column 2.
+    //
+    // GLM fills COLUMNS, so the array's first column must become GLM's first
+    // column for `glm::mat3 * v` to reproduce that product. (An earlier revision
+    // of this conversion was the identity on the array — the TRANSPOSE of the
+    // product, mapping X to (m[0], m[1], m[2]) — which drew a previewed vehicle
+    // with the INVERSE of its engine rotation and left its ATTA children composed
+    // against the wrong root. `IgiAttaLocalRotation` already transposed, because
+    // the ATTA record's columns are its child frame's rows
+    // (src/magicobj/rigidcoll.c:419-436); the two now agree.)
     //
     // (The angle is built from acos(0) rather than a decimal literal: the double
     // pi/2 rounds UP to the nearest float, which lands just past the pole and
@@ -804,12 +819,28 @@ TEST(HeliPreview, TheEngineMatrixMapsToTheGlmBasisWithoutTransposing) {
     EXPECT_NEAR(rotZ[1], -1.0f, 1e-6);
 
     const glm::mat3 glm_rot = igi::IgiEngineMatrixToGlm(rotZ);
-    const glm::vec3 engine_x(rotZ[0], rotZ[1], rotZ[2]);   // the matrix's first ROW
+    // The engine's own product for the local X axis: row 0 of the stored array
+    // dotted with (1,0,0) is m[0], row 1 gives m[3], row 2 gives m[6].
+    const glm::vec3 engine_x(rotZ[0], rotZ[3], rotZ[6]);   // the matrix's first COLUMN
     const glm::vec3 mapped_x = glm_rot * glm::vec3(1.0f, 0.0f, 0.0f);
     EXPECT_NEAR(mapped_x.x, engine_x.x, 1e-6);
     EXPECT_NEAR(mapped_x.y, engine_x.y, 1e-6);
     EXPECT_NEAR(mapped_x.z, engine_x.z, 1e-6);
-    EXPECT_NEAR(mapped_x.y, -1.0f, 1e-6);
+    // A +90-degree Z turn takes +X to +Y (`Matrix_SetRotZ`, src/math/matrix.c:148-164).
+    EXPECT_NEAR(mapped_x.y, 1.0f, 1e-6);
+    EXPECT_NEAR(mapped_x.x, 0.0f, 1e-6);
+
+    // The same product for the local Y and Z axes, so a transpose cannot pass.
+    const glm::vec3 engine_y(rotZ[1], rotZ[4], rotZ[7]);
+    const glm::vec3 mapped_y = glm_rot * glm::vec3(0.0f, 1.0f, 0.0f);
+    EXPECT_NEAR(mapped_y.x, engine_y.x, 1e-6);
+    EXPECT_NEAR(mapped_y.y, engine_y.y, 1e-6);
+    EXPECT_NEAR(mapped_y.z, engine_y.z, 1e-6);
+    const glm::vec3 engine_z(rotZ[2], rotZ[5], rotZ[8]);
+    const glm::vec3 mapped_z = glm_rot * glm::vec3(0.0f, 0.0f, 1.0f);
+    EXPECT_NEAR(mapped_z.x, engine_z.x, 1e-6);
+    EXPECT_NEAR(mapped_z.y, engine_z.y, 1e-6);
+    EXPECT_NEAR(mapped_z.z, engine_z.z, 1e-6);
 
     // The identity maps to the identity.
     float identity[9];
@@ -819,14 +850,23 @@ TEST(HeliPreview, TheEngineMatrixMapsToTheGlmBasisWithoutTransposing) {
     EXPECT_NEAR(id_x.x, 1.0f, 1e-6);
     EXPECT_NEAR(id_x.y, 0.0f, 1e-6);
 
+    // The same conversion as a translation-free world transform, which is what
+    // the draw path and the ATTA recursion actually consume.
+    const glm::mat4 glm_rot4 = igi::IgiEngineMatrixToGlm4(rotZ);
+    const glm::vec4 mapped_x4 = glm_rot4 * glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+    EXPECT_NEAR(mapped_x4.x, engine_x.x, 1e-6);
+    EXPECT_NEAR(mapped_x4.y, engine_x.y, 1e-6);
+    EXPECT_NEAR(mapped_x4.z, engine_x.z, 1e-6);
+    EXPECT_NEAR(mapped_x4.w, 1.0f, 1e-6);
+
     // A post-multiply about the object's own X stays a local-X rotation: after
-    // the Z turn, the object's local X is the world -Y, and a local-X spin leaves
+    // the Z turn, the object's local X is the world +Y, and a local-X spin leaves
     // it there.
     const glm::mat3 local_x =
         glm::mat3(glm::rotate(glm::mat4(1.0f), 0.5f, glm::vec3(1.0f, 0.0f, 0.0f)));
     const glm::mat3 spun = glm_rot * local_x;
     const glm::vec3 spun_x = spun * glm::vec3(1.0f, 0.0f, 0.0f);
-    EXPECT_NEAR(spun_x.y, -1.0f, 1e-6) << "the local X axis is what a local-X spin leaves alone";
+    EXPECT_NEAR(spun_x.y, 1.0f, 1e-6) << "the local X axis is what a local-X spin leaves alone";
 }
 
 // ===========================================================================

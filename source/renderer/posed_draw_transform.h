@@ -33,6 +33,7 @@
 
 #include <glm/glm.hpp>
 
+#include "human_seat_frame.h"
 #include "igi_transform.h"
 #include "mef_native.h"
 
@@ -40,10 +41,16 @@ namespace igi {
 
 // `rig` is the model's parsed rig (`ParsedGeometry::bones`); null (or a rig with
 // no root) means "no origin to add", i.e. the object matrix alone.
+//
+// `engine_origin_frame` is the seat case: a human the level authors inside a
+// vehicle is drawn with the ENGINE's object origin (the skeleton's root, the
+// pelvis) at `pos`, so no rig-origin term is added.  See
+// `renderer/human_seat_frame.h` for the citations; the static draw applies the
+// matching term (`StaticModelOriginMetres`) so the two paths still agree.
 inline glm::mat4 PosedObjectMatrix(const glm::dvec3& pos, const glm::dvec3& rot, float scale,
-                                   const std::vector<BoneInfo>* rig) {
-    const glm::vec3 origin_metres =
-        (rig != nullptr) ? RigRootOriginRaw(*rig) * kMefNativeScale : glm::vec3(0.0f);
+                                   const std::vector<BoneInfo>* rig,
+                                   bool engine_origin_frame = false) {
+    const glm::vec3 origin_metres = PosedModelOriginMetres(rig, engine_origin_frame);
     return IgiObjectMatrixAtModelOrigin(pos, rot, 40.96f * scale, origin_metres);
 }
 
