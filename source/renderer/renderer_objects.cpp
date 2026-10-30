@@ -130,6 +130,32 @@ uniform vec4  u_baseColor;
 uniform vec3  u_tint;
 uniform float u_glassMin;
 uniform float u_gamma;
+// The level's OBJECT fog (issue: "the fog ... should be exactly how the level is").
+// Retail fogs objects with a different GlobalLight set from the terrain's:
+//   set_fog()  src/render/render.c:773-785 reads gFogColor / gFogDensity
+//   polylist.c:243-245 reads the same two globals
+// and gFogColor == gFogColors[1], gFogDensity == gFogDensities[1] -- i.e. "Fog color
+// object category 1" / "Fog density object category 1". The aliasing is proven by
+// address arithmetic in source/runtime/mission_fog.h (kObjectLightSet).
+//
+// The falloff is the engine's exponential, the same expression the terrain uses
+// (src/glowmesh/terraind3d.c:164, `1 / exp(vz * gWorldScale * gTerrainFogScale)`),
+// with `vz` the view-space z in game units -- here dot(v_fragPos - u_cameraPos,
+// u_viewDir), both in world units (4096/m). u_fogFar is the e-folding distance,
+// 2e6 / authored_density world units, i.e. 1 / (gWorldScale * gFogDensity).
+//
+// The engine could not do that in D3D7: it sets FOGVERTEXMODE = D3DFOG_LINEAR
+// (render.c:781) and linearises per batch with Fog_SetRange HOOK 0x49B2D0
+// (d3drender.c:108-131), which solves for the ramp that passes through the
+// exponential's value at the near and far side of a sphere around the object. The
+// exponential below is what that ramp approximates, without the approximation; the
+// ported FogSetRangeForDepth (source/runtime/mission_fog.cpp) is the engine's
+// linearisation and its tests pin the two together at the sphere's edges.
+uniform vec3  u_fogColor;      // set 1's "Fog color object category 1"
+uniform float u_fogFar;        // e-folding distance in world units; <= 0 = no fog
+uniform vec3  u_cameraPos;     // world units
+uniform vec3  u_viewDir;       // camera forward, world space, unit length
+uniform int   u_fogEnabled;
 out vec4 fragColor;
 
 void main() {
@@ -196,6 +222,19 @@ void main() {
     if (u_lm_authentic == 0) {
         litColor = pow(max(litColor, 0.0), vec3(u_gamma));
     }
+
+    // Atmospheric fog, AFTER the gamma curve: in the engine the gamma is a texture
+    // filter (Texture_SetColorParams, src/animcam/globallight.c:329-336) while the
+    // fog is a D3D render state applied to the finished pixel (render.c:773-785),
+    // so the fog colour is never gamma-corrected.
+    if (u_fogEnabled != 0 && u_fogFar > 0.0) {
+        float viewDepth = dot(v_fragPos - u_cameraPos, u_viewDir);
+        if (viewDepth > 0.0) {
+            float fogA = 1.0 - exp(-viewDepth / u_fogFar);
+            litColor = mix(litColor, u_fogColor, clamp(fogA, 0.0, 1.0));
+        }
+    }
+
     fragColor = vec4(litColor, finalAlpha);
 
     if (u_glassMin <= 0.0 && u_alpha >= 0.99 && texA < 0.75) discard;
@@ -298,6 +337,14 @@ uniform vec4  u_baseColor;
 uniform vec3  u_tint;
 uniform float u_glassMin;
 uniform float u_gamma;
+// The level's OBJECT fog; see the GLSL 3.30 copy above for the oracle citations
+// (render.c:773-785, polylist.c:243-245, mission_fog.h kObjectLightSet,
+// terraind3d.c:164).
+uniform vec3  u_fogColor;
+uniform float u_fogFar;
+uniform vec3  u_cameraPos;
+uniform vec3  u_viewDir;
+uniform int   u_fogEnabled;
 
 void main() {
     vec3 N = normalize(v_normal);
@@ -352,6 +399,16 @@ void main() {
     if (u_lm_authentic == 0) {
         litColor = pow(max(litColor, 0.0), vec3(u_gamma));
     }
+
+    // Atmospheric fog, after the gamma curve -- see the GLSL 3.30 copy above.
+    if (u_fogEnabled != 0 && u_fogFar > 0.0) {
+        float viewDepth = dot(v_fragPos - u_cameraPos, u_viewDir);
+        if (viewDepth > 0.0) {
+            float fogA = 1.0 - exp(-viewDepth / u_fogFar);
+            litColor = mix(litColor, u_fogColor, clamp(fogA, 0.0, 1.0));
+        }
+    }
+
     gl_FragColor = vec4(litColor, finalAlpha);
 
     if (u_glassMin <= 0.0 && u_alpha >= 0.99 && texA < 0.75) discard;
@@ -1078,13 +1135,28 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     glUniform4f(loc_baseColor, 1.0f, 1.0f, 1.0f, 1.0f); // default: white
     glUniform3f(loc_tint, 1.0f, 1.0f, 1.0f); // default: no tint
 
-    // Fog is terrain-only — objects/buildings are never fogged.
-
-    EnsurePortalDistancesLoaded();
-
+    // The level's object fog (fog_color_ / fog_far_ / fog_enabled_, published by
+    // Renderer::ApplyFogIntensity from GlobalLight set 1). This was dead state and
+    // the comment here used to read "Fog is terrain-only — objects/buildings are
+    // never fogged"; retail fogs them (render.c:773-785), so it is applied now.
+    // u_fogFar <= 0 is the engine's "no fog" state (a keyframe with density 0).
     glm::vec3 cameraFwd(0.0f);
     const float cameraFwdLen = glm::length(camera_forward);
     if (cameraFwdLen > 0.01f) cameraFwd = camera_forward / cameraFwdLen;
+    {
+        GLint loc_fogColor   = glGetUniformLocation(shader_program_, "u_fogColor");
+        GLint loc_fogFar     = glGetUniformLocation(shader_program_, "u_fogFar");
+        GLint loc_camPos     = glGetUniformLocation(shader_program_, "u_cameraPos");
+        GLint loc_viewDir    = glGetUniformLocation(shader_program_, "u_viewDir");
+        GLint loc_fogEnabled = glGetUniformLocation(shader_program_, "u_fogEnabled");
+        glUniform3f(loc_fogColor, fog_color_.r, fog_color_.g, fog_color_.b);
+        glUniform1f(loc_fogFar, (fog_enabled_ && fog_far_ > 0.0f) ? fog_far_ : -1.0f);
+        glUniform3f(loc_camPos, camera_pos.x, camera_pos.y, camera_pos.z);
+        glUniform3f(loc_viewDir, cameraFwd.x, cameraFwd.y, cameraFwd.z);
+        glUniform1i(loc_fogEnabled, fog_enabled_ ? 1 : 0);
+    }
+
+    EnsurePortalDistancesLoaded();
 
     const bool skipSkinned = skip_static_draw_indices && !skip_static_draw_indices->empty();
     const auto lightmapMode = igi::ObjectLightmapManager::Get().GetRenderMode();
@@ -1240,7 +1312,20 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         // reset puts the helicopter back at exactly the authored pose
         // (heli.c:370-376), and from then on `v.pos`/`v.matrix` are the flight.
         // Until the first tick the authored pose is what the editor shows.
-        {
+        // ONLY the selected or hovered helicopter flies.  The preview used to be applied to
+        // EVERY placed Heli, which flies each one away from its authored placement as soon as
+        // the level loads -- and the level's own layout is authored data.  A human the level
+        // places inside the vehicle is a separate task-tree child drawn at its own authored
+        // world position (retail authors it that way: MISSIONS/location0/level1/objects.qsc:913
+        // Heli and :926 its HumanSoldier, ~1 m apart; and Vehicle_NewParts HOOK 0x4F4800
+        // src/vehbase/vehicle.c:251-256 builds v->attached from the MODEL's ATTA list only, so a
+        // script child never receives the move event).  So the occupant does NOT follow, and the
+        // aircraft flying off is what the user sees as the passenger drifting out of its seat.
+        // Gating the preview on selection keeps the authored level intact and still previews the
+        // flight on the one object being worked on.
+        const bool previewThisHeli = (objIndex == selected_object_index) ||
+                                     (objIndex == hover_object_index);
+        if (previewThisHeli) {
             HeliPreviewCacheEntry pose;
             GetHeliPreviewPose(objIndex, obj.type, obj.argTokens, &pose);
             if (pose.pose_valid) {
@@ -1308,6 +1393,33 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         }
         if (!wire_placed)
             model = glm::scale(model, glm::vec3(total_scale));
+
+        // ── A human the level authors INSIDE a vehicle (the seat frame) ───────
+        // The engine draws such a human with its OBJECT ORIGIN at the authored
+        // position, and that origin is the skeleton's ROOT (the pelvis): the pose
+        // places the root bone at `pos = {0,0,0}` of the object's frame
+        // (`BoneObj_Update` HOOK 0x4D38C0, src/boneobj/boneobj.c:371-419;
+        // `BoneObj_UpdateBone` HOOK 0x4D3A90, :434-439) and the draw uses
+        // `obj->pos` unchanged (`BoneDynCubeObj_EnterHandler` HOOK 0x5124C0,
+        // src/glowmesh/bonedynd3d.c:41-42). `Human_ProbeGround` HOOK 0x462390
+        // puts that origin at `foot[2] + groundZ` (:1816, :1693), i.e. the
+        // floor plus bone 0's animated height — never at the mesh's feet.
+        //
+        // The editor's static bake is re-based to the FEET
+        // (`SkinSkinnedVertices` sums the rig's root pivot, (0,0,3990.4), into
+        // every vertex) and `App::SnapObjectsToTerrain` compensates for a human
+        // standing on the ground. Neither reaches a passenger, so the authored
+        // position keeps the engine's meaning and the bake's lift must be undone
+        // here: one model-local translation of -rig_origin, INSIDE the scale,
+        // which is exactly `IgiObjectMatrixAtModelOrigin`'s origin term.
+        // See renderer/human_seat_frame.h and tests/test_seated_human.cpp.
+        if (igi::HumanSitsInVehicle(objects, objIndex)) {
+            const ParsedGeometry* seat_geo = GetOrLoadSkinGeometry(obj.modelId, obj.isBuilding);
+            const glm::vec3 seat_origin = igi::StaticModelOriginMetres(
+                seat_geo != nullptr ? &seat_geo->bones : nullptr, /*engine_origin_frame=*/true);
+            if (seat_origin != glm::vec3(0.0f))
+                model = glm::translate(model, seat_origin);
+        }
 
         // Native MEF geometry is already authored in the game's coordinate space.
         // Do not apply the legacy OBJ Y-up -> Z-up correction here or buildings/AI
