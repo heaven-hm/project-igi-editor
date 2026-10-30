@@ -18,7 +18,7 @@ static bool TextureIdHasAlpha(const std::string& texId) {
 }
 
 std::string Renderer_Objects::GetLevelTexturesPath() const {
-    return Utils::GetExeDirectory() + "\\editor\\textures\\level" + std::to_string(current_level_);
+    return Utils::ToNativePath(Utils::GetExeDirectory() + "\\editor\\textures\\level" + std::to_string(current_level_));
 }
 
 std::string Renderer_Objects::GetLevelTextureDatPath() const {
@@ -69,7 +69,7 @@ void Renderer_Objects::EnsureGlobalTextureMapLoaded() const {
 
     for (int lvl = 1; lvl <= 14; ++lvl) {
         // Try local extracted DAT first, then game path
-        std::string localDat = exeDir + "\\editor\\textures\\level" + std::to_string(lvl) +
+        std::string localDat = Utils::ToNativePath(exeDir + "\\editor\\textures\\level" + std::to_string(lvl)) +
                                "\\level" + std::to_string(lvl) + ".dat";
         std::string gameDat  = igiRoot + "\\missions\\location0\\level" + std::to_string(lvl) +
                                "\\level" + std::to_string(lvl) + ".dat";
@@ -274,7 +274,7 @@ std::string Renderer_Objects::FindTextureFile(const std::string& textureId) cons
 
     // 2. Fall back to the game's own texture directory for this level
     const std::string igiTexDir = Utils::GetIGIRootPath() +
-        "\\missions\\location0\\level" + std::to_string(current_level_) + "\\textures";
+        Utils::ToNativePath("\\missions\\location0\\level" + std::to_string(current_level_) + "\\textures");
     result = searchDir(std::filesystem::path(igiTexDir));
     if (!result.empty()) {
         Logger::Get().Log(LogLevel::DEBUG,
@@ -283,7 +283,7 @@ std::string Renderer_Objects::FindTextureFile(const std::string& textureId) cons
     }
 
     // 3. Extracted common location0 textures (from location0.res)
-    const std::string commonLocalTexDir = Utils::GetExeDirectory() + "\\editor\\textures\\common";
+    const std::string commonLocalTexDir = Utils::ToNativePath(Utils::GetExeDirectory() + "\\editor\\textures\\common");
     result = searchDir(std::filesystem::path(commonLocalTexDir));
     if (!result.empty()) {
         Logger::Get().Log(LogLevel::DEBUG,
@@ -292,7 +292,7 @@ std::string Renderer_Objects::FindTextureFile(const std::string& textureId) cons
     }
 
     // 4. Game common/shared textures folder (shared across all levels)
-    const std::string igiCommonTexDir = Utils::GetIGIRootPath() + "\\textures";
+    const std::string igiCommonTexDir = Utils::ToNativePath(Utils::GetIGIRootPath() + "\\textures");
     result = searchDir(std::filesystem::path(igiCommonTexDir));
     if (!result.empty()) {
         Logger::Get().Log(LogLevel::DEBUG,
@@ -322,9 +322,9 @@ std::string Renderer_Objects::FindTextureFile(const std::string& textureId) cons
     const std::string igiRoot2 = Utils::GetIGIRootPath();
     for (int lvl = 1; lvl <= 14; ++lvl) {
         if (lvl == current_level_) continue;
-        result = searchDir(exeDir2 + "\\editor\\textures\\level" + std::to_string(lvl));
+        result = searchDir(Utils::ToNativePath(exeDir2 + "\\editor\\textures\\level" + std::to_string(lvl)));
         if (!result.empty()) return result;
-        result = searchDir(igiRoot2 + "\\missions\\location0\\level" + std::to_string(lvl) + "\\textures");
+        result = searchDir(Utils::ToNativePath(igiRoot2 + "\\missions\\location0\\level" + std::to_string(lvl) + "\\textures"));
         if (!result.empty()) return result;
     }
 
@@ -359,9 +359,9 @@ std::string Renderer_Objects::FindTextureFileInLevel(const std::string& textureI
         result = searchDir(Utils::GetIGIRootPath() + "\\missions\\location0\\level" + level + "\\textures");
         if (!result.empty()) return result;
     } else {
-        std::string result = searchDir(Utils::GetExeDirectory() + "\\editor\\textures\\common");
+        std::string result = searchDir(Utils::ToNativePath(Utils::GetExeDirectory() + "\\editor\\textures\\common"));
         if (!result.empty()) return result;
-        result = searchDir(Utils::GetIGIRootPath() + "\\textures");
+        result = searchDir(Utils::ToNativePath(Utils::GetIGIRootPath() + "\\textures"));
         if (!result.empty()) return result;
         result = searchDir(Utils::GetIGIRootPath() + "\\missions\\location0\\common\\textures");
         if (!result.empty()) return result;
@@ -591,14 +591,33 @@ GLuint Renderer_Objects::GetOrLoadTexture(const std::string& textureId, int owne
         texturePath = FindTextureFile(strippedId);
     }
     if (texturePath.empty()) {
-        Logger::Get().Log(LogLevel::WARNING, "[TEX] Texture NOT FOUND: " + textureId);
+        Logger::Get().Log(LogLevel::WARNING, "[TEX] Texture NOT FOUND: " + textureId +
+            " (cached as missing: one resolution attempt, not one per frame)");
+        // Memoize the MISS like a loaded texture. Without this, every frame that
+        // draws a submesh referencing an unresolved id repeats the whole search
+        // (FindTextureFile over the level/editor/common directories, plus the
+        // archive-index probe above) and re-logs this line -- a per-frame
+        // filesystem storm for every missing texture, and the "[TEX] ... NOT FOUND"
+        // line repeated once per frame in the log. The cache has the same lifetime
+        // as the successful entries (Renderer_Objects::ClearCaches drops it on a
+        // level switch / game-path change), and ClearCaches' glDeleteTextures is
+        // already guarded by `if (pair.second)`, so a cached 0 is inert.
+        //
+        // This is an editor-side memoization, NOT an engine claim: the engine's
+        // Resource_Load has no such cache, it simply returns a null resource each
+        // time it is asked.
+        texture_cache_[cacheKey] = 0;
         return 0;
     }
 
     pics_s pics{};
     if (!Tex_Load(texturePath.c_str(), pics) || !pics.pics_ || pics.num_pic_ <= 0) {
-        Logger::Get().Log(LogLevel::ERR, "[TEX] Failed to decode: " + texturePath);
+        Logger::Get().Log(LogLevel::ERR, "[TEX] Failed to decode: " + texturePath +
+            " (cached as missing: one decode attempt, not one per frame)");
         Pic_FreePics(pics);
+        // Same memoization as the NOT-FOUND branch above: a file that will not
+        // decode must not be re-read and re-decoded once per frame per submesh.
+        texture_cache_[cacheKey] = 0;
         return 0;
     }
 

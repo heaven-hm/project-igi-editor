@@ -680,6 +680,18 @@ void Renderer_Objects::RefreshTextureResCache() {
     lod_chain_cache_.clear();
     mesh_header_radius_cache_.clear();
     lod0_mesh_header_cache_.clear();
+    // Cached texture MISSES (value 0, see GetOrLoadTexture) are dropped here too:
+    // the archives this call re-indexes are exactly what a miss was a statement
+    // about, and the import path rewrites them (AddModelToLevelRes appends the
+    // model's textures to the level archive and refreshes through here). Loaded
+    // textures keep their GL names and stay cached.
+    for (auto it = texture_cache_.begin(); it != texture_cache_.end();) {
+        if (it->second == 0) {
+            it = texture_cache_.erase(it);
+        } else {
+            ++it;
+        }
+    }
     LoadResCache(current_level_, Utils::GetIGIRootPath());
     Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Refreshed texture and model .res index for level " +
         std::to_string(current_level_));
@@ -1261,8 +1273,31 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         // one the animation pose set shares (source/runtime/anim_pose_set.h):
         // reject only a bounding sphere wholly behind the eye plane, or outside a
         // cone of half-angle atan(1/2) widened by the radius.
-        const glm::vec3 toObject = glm::vec3(obj.pos) - camera_pos;
-        const float boundRadius = glm::length(mesh.halfExtents) * 40.96f * std::max(obj.scale, 0.001f);
+        //
+        // The sphere is the one the ENGINE keeps for the object. For a Wire that
+        // is NOT a sphere at `obj.pos`: Wire_ParamsChanged centres it on the
+        // anchor MIDPOINT and grows it by the stretched Y scale
+        // (`DynCube_Move(world, w, &mid, VirModel_GetRadius(model) * max_scale)`,
+        // HOOK 0x43F3D0, IGI-RE src/props/wire.c:187-189). `obj.pos` is only the
+        // start anchor, and the model is drawn stretched from it to the end
+        // anchor, so testing the unstretched bound at the start anchor culled the
+        // whole wire whenever that one end left the view -- the "Wire missing
+        // models" symptom. igi::props::WireDrawBounds is that engine rule.
+        glm::vec3 boundCenter((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z);
+        float boundRadius = glm::length(mesh.halfExtents) * 40.96f * std::max(obj.scale, 0.001f);
+        if (obj.isWire) {
+            glm::dvec3 wa, wb;
+            if (obj.WireAnchors(wa, wb)) {
+                const igi::props::WireDrawSphere wireBounds =
+                    igi::props::WireDrawBounds(wa, wb, glm::length(mesh.halfExtents),
+                                               obj.scale, obj.scale);
+                boundCenter = glm::vec3((float)wireBounds.center.x,
+                                        (float)wireBounds.center.y,
+                                        (float)wireBounds.center.z);
+                boundRadius = (float)wireBounds.radius;
+            }
+        }
+        const glm::vec3 toObject = boundCenter - camera_pos;
         const float distSq = glm::dot(toObject, toObject);
         if (!keepVisible &&
             !igi::PassesEditorViewCone(toObject, boundRadius, cameraFwd, cameraFwdLen)) {
@@ -1366,29 +1401,14 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         bool wire_placed = false;
         if (obj.isWire) {
             glm::dvec3 wa, wb;
-            if (obj.WireAnchors(wa, wb)) {
-                const TaskSchemaNS::Props::WireSpan span = TaskSchemaNS::Props::ComputeWireSpan(
-                    TaskSchemaNS::Props::Vec3(wa.x, wa.y, wa.z),
-                    TaskSchemaNS::Props::Vec3(wb.x, wb.y, wb.z));
-                if (span.valid) {
-                    const TaskSchemaNS::Props::Basis basis =
-                        TaskSchemaNS::Props::YAxisBasis(span.dir);
-                    const glm::mat3 frame(
-                        glm::vec3((float)basis.x.x, (float)basis.x.y, (float)basis.x.z),
-                        glm::vec3((float)basis.y.x, (float)basis.y.y, (float)basis.y.z),
-                        glm::vec3((float)basis.z.x, (float)basis.z.y, (float)basis.z.z));
-                    model = glm::translate(glm::mat4(1.0f),
-                        glm::vec3((float)span.mid.x, (float)span.mid.y, (float)span.mid.z));
-                    model = model * glm::mat4(frame);
-                    // Y = length in metres (length * kWireScale) through the same
-                    // 40.96 * scale convention as every other object, so
-                    // obj.scale keeps its 1:1 meaning: 40.96 * length/4096 = length/100.
-                    model = glm::scale(model, glm::vec3(
-                        total_scale,
-                        (float)(span.length * TaskSchemaNS::Props::kWireScale) * base_scale,
-                        total_scale));
-                    wire_placed = true;
-                }
+            glm::mat4 wireModel(1.0f);
+            if (obj.WireAnchors(wa, wb) &&
+                igi::props::WireModelMatrix(wa, wb, obj.scale, &wireModel)) {
+                // The whole placement is Wire_ParamsChanged (0x43F3D0,
+                // src/props/wire.c:160-191) in one host-tested function
+                // (source/runtime/props_preview.h), shared with the pick pass.
+                model = wireModel;
+                wire_placed = true;
             }
         }
         if (!wire_placed)
@@ -1844,6 +1864,25 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
     // Unbind shader
     glUseProgram(0);
+
+    // The weapon a placed StationaryGun mounts (IGI-RE StationaryGun_Aim
+    // 0x474420, src/statgun/statgun.c:241-258). Drawn here, once per frame and
+    // after both object passes, because it is its own Gun task in the engine
+    // and because DrawAttachedMesh changes GL state that the object loop's
+    // shader/uniform bindings must not inherit.
+    DrawMountedStationaryGuns(objects, draw_parts, ubo_mats);
+
+    // The mounted WEAPON of every AIStationaryGunHolder (Level 14's sentry
+    // guns): the holder's ATTA turret mounts a Gun task for the definition's
+    // weapon key, whose model the ATTA pass cannot reach (AIStationaryGun_Create
+    // 0x46EAE0, IGI-RE src/binocular/stationarygun.c:145-147;
+    // AIStationaryGun_PlaceWeapon 0x470050, :464-487).
+    DrawMountedSentryGuns(objects, draw_parts, ubo_mats);
+
+    // The SCameraLens child every SCamera task creates at runtime
+    // (SCamera_Create, IGI-RE src/scamera/scamera.c:204). Same post-object-pass
+    // placement as the mounted weapons above, for the same GL-state reason.
+    DrawSCameraLenses(objects, draw_parts, ubo_mats);
 
     if (show_magic_obj_spheres) {
         DrawMagicObjSpheres(objects, ubo_mats);

@@ -52,5 +52,29 @@ std::map<std::string, std::string> LoadWeaponModelRoster(const std::string& game
 std::string FindWeaponModelForEnum(const std::string& game_root,
                                    const std::string& enum_name);
 
+// The engine's OTHER way into the same table, which is the one the AI sentry
+// gun uses: `WeaponType_FindByKey` (HOOK 0x413C00, src/weapon/weapontype.c:
+// 134-146) linearly scans the loaded type table and returns the first entry
+// whose `key` field `strcmp`s equal to the query, or NULL. `key` is
+// DefineWeaponType argument 29 (HOOK 0x413F90, src/weapon/weapontype.c:
+// 335-337), and in this call it is both the lookup key AND the model id:
+// `AIStationaryGun_Create` runs
+//     Gun_New(g, 0, *WeaponType_FindByKey(g->def->weapon), g->def->ammo, 0);
+// (HOOK 0x46EAE0, src/binocular/stationarygun.c:145-147) and
+// `Gun_ParamChangedHandler` then loads `VirModel_Find(wt->key)`
+// (HOOK 0x4789C0, src/guncasing/gun.c:493-506). So the model to draw is the
+// matched type's own `key`, NOT its enum name.
+//
+// A caller holding a key -- the first data argument of a
+// `TASKTYPE_AISTATIONARYGUN` DefineMagicObj, e.g. "456_13_1" for the sentry --
+// must use THIS function. Handing that key to FindWeaponModelForEnum asks a
+// different question and answers empty, because that roster is keyed by the
+// DefineWeaponType constant name ("WEAPON_ID_SENTRY").
+//
+// Returns empty when no shipped weapon type carries that key. The engine would
+// then dereference NULL, so mounting nothing is the faithful editor behaviour.
+std::string FindWeaponModelForKey(const std::string& game_root,
+                                  const std::string& weapon_type_key);
+
 }  // namespace weapons
 }  // namespace igi

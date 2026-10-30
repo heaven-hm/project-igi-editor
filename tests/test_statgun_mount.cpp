@@ -39,6 +39,9 @@
 
 #include "level/task_schema.h"
 #include "lod/mef_mesh_header.h"
+#include "renderer/mef_native.h"
+#include "renderer/res_writer.h"
+#include "runtime/magic_object_registry.h"
 #include "runtime/statgun_mount.h"
 #include "runtime/weapon_config.h"
 #include "runtime/weapon_model_lookup.h"
@@ -48,6 +51,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -553,4 +557,120 @@ TEST(StatGunMountCorpus, TheShippedPlacementComposesTheShippedWeapon) {
     EXPECT_DOUBLE_EQ(mount.position.x, ToDouble(rec.args[3]));
     EXPECT_DOUBLE_EQ(mount.position.y, ToDouble(rec.args[4]));
     EXPECT_DOUBLE_EQ(mount.position.z, ToDouble(rec.args[5]));
+}
+
+// ===========================================================================
+// 4. The AI sentry gun -- the OTHER caller of the same WeaponType table
+// ===========================================================================
+//
+// A `TASKTYPE_AISTATIONARYGUN` magic object does not hold a `WEAPON_ID_*`
+// constant; it holds a WeaponType KEY ("456_13_1"). The engine resolves it with
+// `WeaponType_FindByKey` (HOOK 0x413C00, src/weapon/weapontype.c:134-146), a
+// linear `strcmp(query, wt->key)` scan, and then loads `wt->key` as the Gun
+// model (Gun_ParamChangedHandler HOOK 0x4789C0, src/guncasing/gun.c:493-506).
+// Asking the enum-name roster about a KEY is a different question and answers
+// empty -- that is exactly how the sentry's mounted weapon stopped being drawn
+// (source/renderer/renderer_objects_atta.cpp, DrawMountedSentryGuns).
+TEST(StatGunMountCorpus, TheSentryWeaponKeyResolvesThroughWeaponTypeFindByKey) {
+    const std::string root = GameRoot();
+    if (root.empty()) GTEST_SKIP() << "set IGI_GAME_PATH to a retail install to run this test";
+    const std::string qvm = root + "/WEAPONS/SENTRYGUN/WEAPON.QVM";
+    if (!FileExists(qvm)) GTEST_SKIP() << qvm << " not found";
+
+    // The shipped type: constant WEAPON_ID_SENTRY, key/model 456_13_1
+    // (argument 29; argument 30 is the CASING model "138_01_1").
+    const igi::weapons::CallArgs call =
+        igi::weapons::ReadCallArgsFromQvmFile(qvm, "DefineWeaponType");
+    ASSERT_TRUE(call.found) << qvm << ": " << call.error;
+    const igi::weapons::WeaponTypeConfig cfg = igi::weapons::ParseWeaponTypeArgs(call.args);
+    EXPECT_EQ(cfg.Name(), "WEAPON_ID_SENTRY");
+    EXPECT_EQ(cfg.Model(), "456_13_1");
+
+    // The key lookup the engine performs, and the model it yields.
+    EXPECT_EQ(igi::weapons::FindWeaponModelForKey(root, "456_13_1"), "456_13_1");
+    // The two confusions this pins: a KEY is not a constant name, and a constant
+    // name is not a key.
+    EXPECT_EQ(igi::weapons::FindWeaponModelForEnum(root, "456_13_1"), "");
+    EXPECT_EQ(igi::weapons::FindWeaponModelForKey(root, "WEAPON_ID_SENTRY"), "");
+    // An unknown key: the engine's FindByKey returns NULL for it.
+    EXPECT_EQ(igi::weapons::FindWeaponModelForKey(root, "456_99_9"), "");
+
+    // The reverse table is the roster's own values: every key the shipped data
+    // defines resolves, to itself (the model the Gun task loads is `wt->key`).
+    const std::map<std::string, std::string> roster =
+        igi::weapons::LoadWeaponModelRoster(root);
+    ASSERT_FALSE(roster.empty());
+    for (const auto& entry : roster) {
+        EXPECT_EQ(igi::weapons::FindWeaponModelForKey(root, entry.second), entry.second)
+            << entry.first;
+    }
+}
+
+// The whole shipped Level-14 sentry assembly, read from the retail archives:
+// holder 456_11_1 -> its one ATTA record 456_12_1 -> MAGICOBJ.QVM's
+// TASKTYPE_AISTATIONARYGUN definition -> its weapon key 456_13_1 -> the model
+// WeaponType_FindByKey resolves, which the level's model archive carries.
+TEST(StatGunMountCorpus, TheShippedLevel14SentryAssemblyIsHolderTurretWeapon) {
+    const std::string root = GameRoot();
+    if (root.empty()) GTEST_SKIP() << "set IGI_GAME_PATH to a retail install to run this test";
+
+    const std::string magic = root + "/MAGICOBJ/MAGICOBJ.QVM";
+    const std::string res = root + "/MISSIONS/location0/LEVEL14/MODELS/LEVEL14.RES";
+    if (!FileExists(magic)) GTEST_SKIP() << magic << " not found";
+    if (!FileExists(res)) GTEST_SKIP() << res << " not found";
+
+    // MAGICOBJ.QVM: the definition the holder's ATTA record names.
+    igi::MagicObjectRegistry registry;
+    ASSERT_TRUE(registry.LoadQvmFile(magic)) << magic;
+    const igi::MagicObjectDefinition* def = registry.Find("456_12_1");
+    ASSERT_NE(def, nullptr) << "MAGICOBJ.QVM has no 456_12_1 definition";
+    EXPECT_EQ(def->task_type_name, "TASKTYPE_AISTATIONARYGUN");
+    EXPECT_EQ(def->model_id, "456_12_1");   // the turret the ATTA pass draws
+    ASSERT_FALSE(def->data_args.empty());
+    // AIStationaryGun_ParseDef (HOOK 0x46FA50, stationarygun.c:395-411): data[0]
+    // is `weapon`, the WeaponType key the Gun task is created for.
+    EXPECT_EQ(def->data_args[0], "456_13_1");
+
+    // The three models the assembly needs, out of the level's own archive.
+    std::map<std::string, std::vector<uint8_t>> mefs;
+    std::string error;
+    ASSERT_TRUE(RES_ForEachEntry(
+        res,
+        [&](const std::string& name, const uint8_t* data, size_t size) {
+            for (const char* id : {"456_11_1", "456_12_1", "456_13_1"}) {
+                if (name.find(std::string(id) + ".mef") != std::string::npos) {
+                    mefs[id] = std::vector<uint8_t>(data, data + size);
+                }
+            }
+        },
+        error)) << res << ": " << error;
+    ASSERT_TRUE(mefs.count("456_11_1") == 1) << "holder 456_11_1 not in " << res;
+    ASSERT_TRUE(mefs.count("456_12_1") == 1) << "turret 456_12_1 not in " << res;
+    ASSERT_TRUE(mefs.count("456_13_1") == 1) << "weapon 456_13_1 not in " << res;
+
+    // The holder's ONE attachment is the turret, so the weapon is not reachable
+    // through any ATTA walk: it is mounted by the gun task, which is why the
+    // editor needs the explicit weapon pass.
+    const ParsedGeometry holder = ParseMefFileFromMemory(mefs["456_11_1"], "456_11_1");
+    ASSERT_EQ(holder.mefAttachments.size(), 1u);
+    EXPECT_EQ(std::string(holder.mefAttachments[0].name,
+                          strnlen(holder.mefAttachments[0].name, 16)),
+              "456_12_1");
+
+    // The weapon the definition names is the model the key lookup returns, and it
+    // is present in the same archive with its own render geometry.
+    const std::string weapon = igi::weapons::FindWeaponModelForKey(root, def->data_args[0]);
+    ASSERT_EQ(weapon, "456_13_1");
+    const ParsedGeometry gun = ParseMefFileFromMemory(mefs[weapon], weapon);
+    EXPECT_TRUE(gun.fromRenderMesh);
+    EXPECT_FALSE(gun.renderBlocks.empty());
+    EXPECT_FALSE(gun.vertices.empty());
+    EXPECT_FALSE(gun.triangles.empty());
+
+    // And the turret itself carries no XTVM point (measured), so the engine's
+    // Model_GetPoint(gun, 1) in AIStationaryGun_PlaceWeapon is the out-of-range
+    // zero (src/game/misc.c:192-200) and the weapon sits at the ATTA world
+    // position -- which is what DrawMountedSentryGuns composes.
+    const ParsedGeometry turret = ParseMefFileFromMemory(mefs["456_12_1"], "456_12_1");
+    EXPECT_TRUE(turret.xtvmVerts.empty());
 }

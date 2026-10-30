@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <mutex>
 #include <system_error>
+#include <utility>
 
 namespace igi {
 namespace weapons {
@@ -82,6 +83,38 @@ std::string FindWeaponModelForEnum(const std::string& game_root,
     }
     const auto found = roster->find(enum_name);
     return (found == roster->end()) ? std::string() : found->second;
+}
+
+std::string FindWeaponModelForKey(const std::string& game_root,
+                                  const std::string& weapon_type_key) {
+    if (game_root.empty() || weapon_type_key.empty()) return std::string();
+
+    // The roster is (constant name -> key). WeaponType_FindByKey compares the
+    // query against the KEY (weapontype.c:141), so build the reverse relation
+    // from the same scan and answer with the matched key: Gun tests
+    //     `key == key`, and the model the gun loads is `wt->key`
+    // (gun.c:495-497). The first match wins, which is the engine's scan order
+    // (the roster is a std::map over directory names; a duplicate key is not
+    // shipped -- measured: 24 constants, 24 distinct keys).
+    static std::mutex cache_mutex;
+    static std::map<std::string, std::map<std::string, std::string>> cache;
+
+    const std::string root = NormalizeRoot(game_root);
+    std::map<std::string, std::string>* by_key = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        auto it = cache.find(root);
+        if (it == cache.end()) {
+            std::map<std::string, std::string> built;
+            for (const auto& entry : LoadWeaponModelRoster(root)) {
+                built.emplace(entry.second, entry.second);
+            }
+            it = cache.emplace(root, std::move(built)).first;
+        }
+        by_key = &it->second;
+    }
+    const auto found = by_key->find(weapon_type_key);
+    return (found == by_key->end()) ? std::string() : found->second;
 }
 
 }  // namespace weapons

@@ -6,6 +6,13 @@
  *****************************************************************************/
 #include "renderer_objects_internal.h"
 #include "../runtime/magic_object_registry.h"
+// The AIStationaryGun definition's first data argument is a WeaponType key, and
+// that type's `key` field is the weapon model (WEAPONS/<NAME>/WEAPON.QVM,
+// DefineWeaponType arg 29). See DrawMountedSentryGuns.
+#include "../runtime/weapon_model_lookup.h"
+#if !defined(_WIN32)
+#include <unistd.h>   // getpid(), used to name the import staging directory
+#endif
 
 // ─── Rotor attachment classification (TASKTYPE_ROTOR) ────────────────────────
 // Every ATTA record name is a magic-object name: the game walks a model's ATTA
@@ -75,6 +82,128 @@ static std::string MagicObjectModelId(const std::string& attachmentName) {
     const igi::MagicObjectDefinition* def = MagicObjectTable().Find(attachmentName);
     if (def == nullptr || def->model_id.empty()) return attachmentName;
     return def->model_id;
+}
+
+// ─── DrawMountedSentryGuns ──────────────────────────────────────────────────
+// A placed `AIStationaryGunHolder` is not one model. GunHolder_Changed
+// (HOOK 0x46E7F0, IGI-RE src/comprun/gunholder.c:223-224) gives it an attached
+// MagicObjContainer built from the holder MODEL's ATTA records
+// (RigidDynCubeObj_CreateMagicObjs 0x4C4950, src/magicobj/rigidcoll.c:381-434:
+// each record's NAME is looked up in the DefineMagicObj table and a task of that
+// definition's type, with the definition's MODEL, is created at the record's
+// transform). For Level 14's sentry gun the holder model `456_11_1` has exactly
+// one ATTA record, `456_12_1`, and MAGICOBJ.QVM:372 defines it:
+//
+//     DefineMagicObj("456_12_1", "456_12_1", TASKTYPE_AISTATIONARYGUN,
+//                    "456_13_1", 361, -10, -90, 10000, 60, 60,
+//                    "tank_turret", 45, 0.2);
+//
+// The generic ATTA pass already draws the turret `456_12_1`. It cannot draw the
+// WEAPON that AIStationaryGun_Create mounts on it
+// (`Gun_New(g, 0, *WeaponType_FindByKey(g->def->weapon), g->def->ammo, 0)`,
+// src/binocular/stationarygun.c:145-147), because the weapon is not an
+// attachment of anything: `g->def->weapon` is the definition's first data
+// argument, "456_13_1", which is a WEAPON TYPE KEY -- WEAPONS/SENTRYGUN/
+// WEAPON.QVM sets `WeaponType.key` (DefineWeaponType arg 29, HOOK 0x413F90,
+// src/weapon/weapontype.c:335-337) to "456_13_1", and `key` is the model the Gun
+// task loads. So the full assembly is holder 456_11_1 + turret 456_12_1 +
+// weapon 456_13_1, and the editor drew the first two.
+//
+// THE LOOKUP DIRECTION IS THE WHOLE BUG (fixed here). The engine's call is
+// `WeaponType_FindByKey(def->weapon)` (HOOK 0x413C00, weapontype.c:134-146):
+// a strcmp of the query against each type's `key`, returning the matched TYPE,
+// whose `key` -- the same string -- `Gun_ParamChangedHandler` hands to
+// `VirModel_Find` (HOOK 0x4789C0, gun.c:493-506). This pass used to ask the
+// roster the OPPOSITE question, `FindWeaponModelForEnum("456_13_1")`, i.e. "is
+// there a weapon whose CONSTANT NAME is 456_13_1"; there is not (the constant is
+// WEAPON_ID_SENTRY), so the lookup answered empty and the `continue` below
+// skipped the weapon on every sentry in every frame. Measured on the retail
+// data: FindWeaponModelForEnum("456_13_1") = "", FindWeaponModelForEnum(
+// "WEAPON_ID_SENTRY") = "456_13_1", FindWeaponModelForKey("456_13_1") =
+// "456_13_1". tests/test_statgun_mount.cpp pins all three.
+//
+// The rest pose is AIStationaryGun_PlaceWeapon (HOOK 0x470050,
+// src/binocular/stationarygun.c:464-487):
+//     Model_GetPoint(&pos, g, 1);  pos += g->obj.pos;
+//     Matrix_SetEuler(&r, g->pitch, 0, g->yaw);
+//     mat_mul(&m, &g->owner->matrix, &r, 0, 1, 0);   // owner = the HOLDER
+// with pitch = yaw = 0 (AIStationaryGun_Create, stationarygun.c:143-144) and the
+// gun's position = the ATTA world position CreateMagicObjs computed
+// (rigidcoll.c:399-412). `456_12_1` carries no XTVM point array (measured: MVTX
+// chunk size 0), so Model_GetPoint is the out-of-range zero and the weapon sits
+// at the gun's position with the holder's matrix. `igi::gunholder::
+// AttachmentWorldPos` is that create-time position.
+void Renderer_Objects::DrawMountedSentryGuns(const std::vector<LevelObject>& objects,
+                                             int draw_parts, GLuint ubo_mats) {
+    const int DRAW_OBJECTS = 4;
+    const int DRAW_PROPS = 32;
+    if ((draw_parts & (DRAW_OBJECTS | DRAW_PROPS)) == 0) return;
+
+    const std::string gameRoot = Utils::GetIGIRootPath();
+    static int logged_mounts = 0;
+    for (const auto& obj : objects) {
+        if (obj.deleted || obj.type != "AIStationaryGunHolder") continue;
+        const std::vector<AttachInfo> attaches = GetModelAttachments(obj.modelId, obj.isBuilding);
+        if (attaches.empty()) continue;
+
+        const glm::mat4 holderWorld =
+            glm::translate(glm::mat4(1.0f),
+                           glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z)) *
+            igi::IgiEulerRotationMatrix(obj.rot);
+        const glm::mat3 holderRot(holderWorld);
+
+        for (const AttachInfo& att : attaches) {
+            const igi::MagicObjectDefinition* def = MagicObjectTable().Find(att.modelId);
+            if (def == nullptr || def->task_type_name != "TASKTYPE_AISTATIONARYGUN") continue;
+            if (def->data_args.empty()) continue;   // no weapon key: nothing is mounted
+
+            // AIStationaryGun_ParseDef (HOOK 0x46FA50, stationarygun.c:400):
+            // the first data argument is `def->weapon`, the WeaponType KEY.
+            // WeaponType_FindByKey compares it against `WeaponType.key`
+            // (HOOK 0x413C00, src/weapon/weapontype.c:134-146), and the model the
+            // mounted Gun task loads is that same `key`
+            // (Gun_ParamChangedHandler HOOK 0x4789C0, src/guncasing/gun.c:493-506).
+            const std::string weaponKey = def->data_args[0];
+            const std::string weaponModel =
+                igi::weapons::FindWeaponModelForKey(gameRoot, weaponKey);
+            // An unresolved key means WeaponType_FindByKey returns NULL and the
+            // engine's `*NULL` kills the frame; the editor mounts nothing, matching
+            // PlaceWeapon's `if (!w) return;` (stationarygun.c:165-166).
+            if (weaponModel.empty()) continue;
+
+            const std::string gunModel = def->model_id.empty() ? att.modelId : def->model_id;
+            const float attPos[3] = {att.px, att.py, att.pz};
+            const float attMat[9] = {att.r[0], att.r[1], att.r[2],
+                                     att.r[3], att.r[4], att.r[5],
+                                     att.r[6], att.r[7], att.r[8]};
+            const glm::mat4 gunWorld = igi::IgiAttaChildWorld(holderWorld, attPos, attMat);
+
+            // Model_GetPoint(gun, 1): the gun's muzzle point, scaled mesh-local
+            // -> world (40.96) and rotated by the gun's own matrix
+            // (Mesh3D_GetWorldVertex, src/lod/mesh3d.c:420-441). Zero when the
+            // model has fewer than two points, which is the shipped sentry turret.
+            glm::vec3 muzzleOffset(0.0f);
+            const std::vector<glm::vec3> gunPoints = GetModelMagicVertices(gunModel, false);
+            if (gunPoints.size() > 1) {
+                muzzleOffset = glm::mat3(gunWorld) * (gunPoints[1] * 40.96f);
+            }
+            const glm::vec3 weaponPos = glm::vec3(gunWorld[3]) + muzzleOffset;
+
+            // Stationarygun.c:475-476 with pitch = yaw = 0: the weapon matrix is
+            // the HOLDER's matrix (mat_mul(&m, &g->owner->matrix, &r, ...)).
+            glm::mat4 world = glm::translate(glm::mat4(1.0f), weaponPos) *
+                              glm::mat4(holderRot) *
+                              glm::scale(glm::mat4(1.0f), glm::vec3(40.96f));
+            DrawAttachedMesh(weaponModel, false, world, ubo_mats);
+            if (logged_mounts < 3) {
+                Logger::Get().Log(LogLevel::INFO,
+                    "[Renderer_Objects] AIStationaryGunHolder " + obj.taskId + " mounts " +
+                    weaponKey + " -> weapon model " + weaponModel + " (gun model " +
+                    gunModel + ")");
+            }
+            ++logged_mounts;
+        }
+    }
 }
 
 std::string Renderer_Objects::AttaOccupancyKey(const std::string& modelId, const glm::vec3& worldPos) {
@@ -298,6 +427,7 @@ static bool StemInFamily(const std::string& stem, const std::string& prefix) {
 // reproduces the original game .mtp byte-for-byte, whereas an in-process
 // incremental MTP write corrupted the model→texture mapping (transparent /
 // wrong textures in-game and after reload). Returns true on exit code 0.
+#if defined(_WIN32)
 static bool RunIgi1conv(const std::string& args, std::string& err) {
     const std::string exe = Utils::GetExeDirectory() + "\\editor\\tools\\igi1conv\\igi1conv.exe";
     if (!std::filesystem::exists(exe)) {
@@ -327,6 +457,15 @@ static bool RunIgi1conv(const std::string& args, std::string& err) {
     if (code != 0) { err = "igi1conv exit code " + std::to_string(code); return false; }
     return true;
 }
+#else  // !_WIN32
+
+// The bundled converter is a Windows PE; without an external Wine install there
+// is nothing to spawn.  Report the real reason so the caller's error path runs.
+static bool RunIgi1conv(const std::string&, std::string& err) {
+    err = "igi1conv.exe is a Windows executable and cannot run in the native macOS build";
+    return false;
+}
+#endif  // _WIN32
 
 struct StagedImportFile {
     std::string staged;
@@ -623,7 +762,11 @@ bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId,
     }
     stagedDat = persistent_dat_;
 
+    #if defined(_WIN32)
     const auto stageId = std::to_string(GetCurrentProcessId()) + "-" +
+#else
+    const auto stageId = std::to_string(::getpid()) + "-" +
+#endif
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     const std::filesystem::path stagingDir = std::filesystem::path(levelDir) /
         (".igi-import-staging-" + stageId);
