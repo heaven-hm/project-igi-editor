@@ -359,6 +359,16 @@ TEST(SeatedHuman, TheShippedPassengersSitUprightAtTheirAuthoredPosition) {
         EXPECT_NEAR(raw[0].pos[1], 0.0f, 1e-3f) << c.model;
         EXPECT_NEAR(raw[0].pos[2], 0.0f, 1e-3f) << c.model;
 
+        // NOTE (measured, not asserted): `Human_ProbeGround` puts the engine's
+        // object origin at `ground + foot[2]` where foot[2] is bone 0's height
+        // plus the clip's root motion (human.c:1693, :1816). On the skeleton-1
+        // stand clip (000_01_1) that root motion is 3990.4 raw units, exactly
+        // the editor rig's pivot->feet lift `RigRootOriginRaw`; on the skeleton-0
+        // clip (021_01_1) it is 521.2. The editor's own frame is the one the
+        // snap relies on -- `TheGroundedFrameSoleIsAtTheModelOrigin` measures the
+        // soles at the object origin on every shipped human -- so the placement
+        // rule below does not depend on which of the two the clip carries.
+
         const std::vector<glm::vec3> skinned = SkinnedVerticesMetres(geo, raw);
         ASSERT_FALSE(skinned.empty()) << c.model;
 
@@ -404,5 +414,81 @@ TEST(SeatedHuman, TheShippedPassengersSitUprightAtTheirAuthoredPosition) {
     }
     if (checked == 0) {
         GTEST_SKIP() << "no retail seated human (model + cached BEF clip) found under " << root;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// THE GROUNDED FRAME'S SOLE, measured on the shipped human meshes.
+//
+// This is the corpus half of App::SnapObjectsToTerrain's placement rule. The
+// editor's static bake puts the model's FEET at `obj.pos`
+// (source/renderer/posed_draw_transform.h:24-30), and the engine puts the FOOT
+// on the collision hit (`to[2] = foot[2] + hits[0].pos.z`, Human_ProbeGround
+// HOOK 0x462390, src/humanbase/human.c:1816). So a grounded human's Z IS the
+// hit z: no pivot->feet lift may be added.
+//
+// The lift the snap used to add was `-min_p.z` over the whole mesh
+// (source/renderer/model.cpp:311 -> source/app_view.cpp). These models show why
+// that is wrong: the lowest vertex belongs to upper-leg/arm geometry, tenths of
+// a metre BELOW the origin, while the vertices bound to the foot/toe bones sit
+// within 2 cm of it. `-min_p.z` therefore floats the sole by 0.26..0.65 m.
+//
+// UNITS: `ParsedGeometry::vertices[].pos` is raw/40.96, and 1 such unit is
+// 1 cm (raw/4096 m). The thresholds below are centimetres.
+// ---------------------------------------------------------------------------
+
+TEST(SeatedHuman, TheGroundedFrameSoleIsAtTheModelOrigin) {
+    const char* root = CorpusRoot();
+    if (root == nullptr || !fs::exists(root)) {
+        GTEST_SKIP() << "Set IGI_GAME_PATH to an IGI install root to enable this suite";
+    }
+    const fs::path rootp(root);
+
+    // Shipped human models reachable as loose .mef files in the retail tree.
+    const char* models[] = {"000_01_1", "001_01_1", "009_02_1", "015_01_1", "021_01_1"};
+    int checked = 0;
+    for (const char* model : models) {
+        const std::string path = FindModel(rootp, model);
+        if (path.empty()) continue;
+        const ParsedGeometry geo = ParseMefFile(path);
+        if (geo.bones.empty() || geo.vertices.empty()) continue;
+
+        // The sole: the lowest vertex the skin binds to a foot/toe bone. The bone
+        // name is the rig's own ("left foot", "right toe", ...).
+        bool has_foot_bone = false;
+        for (const BoneInfo& bone : geo.bones) {
+            if (bone.name.find("foot") != std::string::npos ||
+                bone.name.find("toe") != std::string::npos) {
+                has_foot_bone = true;
+            }
+        }
+        ASSERT_TRUE(has_foot_bone) << model << ": no foot/toe bone in the parsed rig";
+
+        float mesh_min_z = geo.vertices[0].pos.z;
+        float sole_z = 1e30f;
+        for (const RenderVertex& v : geo.vertices) {
+            mesh_min_z = std::min(mesh_min_z, v.pos.z);
+            if (v.boneIndex >= geo.bones.size()) continue;
+            const std::string& name = geo.bones[v.boneIndex].name;
+            if (name.find("foot") == std::string::npos && name.find("toe") == std::string::npos) {
+                continue;
+            }
+            sole_z = std::min(sole_z, v.pos.z);
+        }
+
+        EXPECT_LT(sole_z, 2.0f)
+            << model << ": the sole is not within 2 cm of the object origin (feet frame)";
+        EXPECT_GT(sole_z, -2.0f)
+            << model << ": the sole is more than 2 cm BELOW the object origin (feet frame)";
+
+        // The mesh's lowest vertex is not the sole: -min_p.z would lift the body
+        // by the gap between the two, which is the reported float.
+        EXPECT_LT(mesh_min_z, sole_z - 20.0f)
+            << model << ": the lowest vertex should be leg/arm geometry well below the sole; "
+            << "-min_p.z would then float the sole by " << (sole_z - mesh_min_z) << " cm";
+        ++checked;
+    }
+    if (checked == 0) {
+        GTEST_SKIP() << "no retail human .mef found under " << root;
     }
 }

@@ -597,34 +597,43 @@ void App::SnapObjectsToTerrain() {
         const bool isHuman = (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale");
         const double zDelta = obj.original_pos.z - (double)terrainZ;
 
-        // The rule itself is igi::DecideTerrainSnap (level/terrain_snap_rules.h), shared
-        // with its host-lane test.  In short: props always keep their authored QSC Z,
-        // humans snap only when they are within the surface band, and a query miss never
-        // moves anything.
-        if (igi::DecideTerrainSnap(terrainFound, isHuman, zDelta) ==
+        // The rule itself is igi::DecideTerrainSnap (level/terrain_snap_rules.h),
+        // shared with its host-lane test.  In short: props always keep their
+        // authored QSC Z and a query miss never moves anything, but a human WITH
+        // a terrain hit always snaps -- the engine has no distance band:
+        // Game_DropToGround (HOOK 0x4149B0, src/game/misc.c:82,88-95) probes 400 m
+        // down, then 400 m up, then keeps the pose only on a second miss.
+        if (igi::DecideTerrainSnap(terrainFound, isHuman) ==
             igi::TerrainSnapDecision::SnapToTerrain) {
-            // Human soldiers within 100 units of terrain surface: snap to terrain.
-            // Apply the mesh Z-offset (pivot→feet) so feet rest on the ground, matching
-            // the manual Snap-to-ground in UpdateMarkerManipulation (was: bare terrainZ,
-            // which left models floating/sunk by their pivot offset).
-            float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
-            obj.snap_z_offset = (double)(zOffset * 40.96f * obj.scale);
-            obj.pos.z = (double)terrainZ + obj.snap_z_offset;
-            // INFO, with the ARITHMETIC, not just the result.  The drawn Z is
-            // terrainZ + (mainZOffset * 40.96 * scale), where mainZOffset is the
-            // mesh's own `-min_p.z` (model.cpp:311) -- the pivot->feet lift.  A
-            // soldier that still renders half-buried is therefore either a wrong
-            // terrainZ, a wrong mainZOffset, or a snap that never ran, and those
-            // three are indistinguishable from the final Z alone.  Printing the
-            // terms is what makes the next run decide instead of guess.
+            // The engine puts the human's FOOT on the hit, not the mesh's lowest
+            // vertex: Human_ProbeGround HOOK 0x462390 ends with
+            // `to[2] = foot[2] + hits[0].pos.z` (src/humanbase/human.c:1816).
+            // The editor's human mesh is baked into a FEET frame -- the bind-pose
+            // bake sums the rig's root pivot into every vertex
+            // (SkinSkinnedVertices, source/renderer/mef_native.cpp), which is
+            // why the static and the posed draw both put the soles at obj.pos
+            // (source/renderer/posed_draw_transform.h:24-30) -- so the engine's
+            // rule here is exactly obj.pos.z = hit z.
+            //
+            // The old `-min_p.z` lift (source/renderer/model.cpp:311) measured
+            // LEG geometry, not the sole.  Measured on the shipped human models,
+            // the lowest vertex is upper-leg/arm geometry 0.27..0.67 m below the
+            // origin, while the foot/toe vertices sit within 0.02 m of it
+            // (tests/test_seated_human.cpp, TheGroundedFrameSoleIsAtTheModelOrigin).
+            // Lifting by `-min_p.z` therefore floated every soldier by that
+            // amount; the human's placement has no such offset.
+            obj.snap_z_offset = 0.0;
+            obj.pos.z = (double)terrainZ;
+            // INFO, with the ARITHMETIC, not just the result: a soldier that
+            // still renders off the ground is either a wrong terrainZ or a snap
+            // that never ran, and printing the terms makes the next run decide
+            // instead of guess.
             Logger::Get().Log(LogLevel::INFO, "[App] Snapped human " + obj.modelId +
                 " authoredZ=" + std::to_string(obj.original_pos.z) +
                 " terrainZ=" + std::to_string(terrainZ) +
                 " zDelta=" + std::to_string(zDelta) +
-                " mainZOffset=" + std::to_string(zOffset) +
-                " scale=" + std::to_string(obj.scale) +
-                " snapZOffset=" + std::to_string(obj.snap_z_offset) +
-                " -> Z=" + std::to_string(obj.pos.z));
+                " -> Z=" + std::to_string(obj.pos.z) +
+                " (foot on the collision hit, no pivot->feet lift)");
             snapped++;
         } else {
             // Keep the authored QSC Z.  This is the engine's own answer to every case
@@ -649,24 +658,10 @@ void App::SnapObjectsToTerrain() {
                 // helipads and lift shafts, so this is information, not a warning.
                 no_terrain++;
                 Logger::Get().Log(LogLevel::INFO, "[App] No terrain under " + obj.modelId + " at (" + std::to_string(obj.pos.x) + ", " + std::to_string(obj.pos.y) + "); keeping authored Z " + std::to_string(obj.original_pos.z));
-            } else if (zDelta < igi::kSnapDeepUnderground) {
-                Logger::Get().Log(LogLevel::INFO, "[App] Deep underground, preserving Z for " + obj.modelId + " (" + obj.name + ") Z=" + std::to_string(obj.pos.z));
-                skipped++;
             } else {
-                // Non-human prop, or a human on a platform above the surface band:
-                // the authored Z is authoritative.  A HUMAN that lands here is the
-                // interesting case -- it is a soldier the rule deliberately did not
-                // move -- so log its arithmetic too, otherwise "kept" and "should
-                // have snapped" look identical in the log.
-                if (isHuman) {
-                    Logger::Get().Log(LogLevel::INFO, "[App] Kept human " + obj.modelId +
-                        " (above the surface band, standing on something): authoredZ=" +
-                        std::to_string(obj.original_pos.z) +
-                        " terrainZ=" + std::to_string(terrainZ) +
-                        " zDelta=" + std::to_string(zDelta) +
-                        " mainZOffset=" + std::to_string(renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding)) +
-                        " -> Z=" + std::to_string(obj.pos.z));
-                }
+                // A non-human whose authored Z is authoritative.  A HUMAN can no
+                // longer reach this branch: with a terrain hit it always snaps
+                // above, and a miss was handled by the branch above.
                 skipped++;
             }
         }

@@ -6,43 +6,60 @@
  *          lane (tests/test_terrain_snap_rules.cpp).
  *
  * WHY THIS EXISTS
- *   The snap pass logged "[WARN] [App] Snap FAILED for <id> at (x, y). Outside
- *   terrain?" 24 times in one play session, for objects that are perfectly
- *   valid: colbox2/colbox3 collision proxies and props (Heli, Building) that the
- *   pass never moves anyway, plus HumanSoldiers whose position the terrain query
- *   misses.  Two of the three rules below were implicit in the App code; making
- *   them explicit and testable is what stops the warning from coming back.
+ *   The snap pass used to gate a terrain hit on an editor-invented 100-unit band
+ *   (`zDelta > 100 || zDelta < 0 -> keep`).  The engine has no such band, and the
+ *   user's log shows what the gate did on a real level:
  *
- * ENGINE BASIS — a terrain height query is a drop query, and a miss is not an
- * error:
- *   * Coll_DropPointsMat (HOOK 0x4CB9F0, src/coll/coll.c:813-818) -> Coll_Drop
- *     (src/coll/coll.c:518-616) -> Coll_VerticalHit (HOOK 0x4CB050,
- *     src/coll/coll.c:626-774) sets results[i].found only when a terrain
- *     triangle is actually hit; a miss leaves found == 0.
+ *       [App] Snap complete. snapped=0 skipped=1843 no_terrain=26
+ *
+ *   -- not one placed AI was moved, so every soldier kept the authored QSC Z,
+ *   which is the one value the engine never draws a human from.
+ *
+ * ENGINE BASIS — the engine's ground query, and why a hit IS the placement
  *   * Game_DropToGround (HOOK 0x4149B0, src/game/misc.c:75-97) is the engine's
- *     canonical "put this on the ground": it probes DOWN (dz = -1638400), then
- *     UP (-dz), and if both miss it returns with `pos` untouched:
- *         if (!hit.found) { dz = -dz; Coll_DropPoints(...);
- *                           if (!hit.found) return; }
- *         memcpy(&pos->z, &hit.pos.z, sizeof(double));
- *     There is NO clamp, no default Z, no error — the authored pose stands.
- *   * Lightmap placement does the same: `if (hit.found) p.z = hit.pos.z;`
- *     (src/graphnode/lightmap.c:325-333, Coll_DropPointsMat).
+ *     canonical "put this on the ground": probe DOWN by 1,638,400 units (400 m,
+ *     :82 -> Coll_DropPoints :87); if that misses, probe UP by the same distance
+ *     (:88-92); on a second miss `return` with `pos` untouched (:92-93); on a
+ *     hit write exactly `hit.pos.z` (:95).  There is NO distance band, no clamp
+ *     and no default Z.
+ *   * The direction rule and its only tolerance live in Coll_LeafHit
+ *     (HOOK 0x4CA010, src/coll/coll.c:290-516): DOWN keeps the highest triangle
+ *     at or below `p.z + 0.1` (:15 kTenth, :321, :466-468); UP keeps the lowest
+ *     at or above `p.z - 0.1` (:324, :469-471).  Coll_VerticalHit
+ *     (HOOK 0x4CB050, src/coll/coll.c:626-774) rejects a hit farther than |dz|
+ *     (:706-707).
+ *   * The human's drawn Z is that hit, applied to the FOOT: Human_ProbeGround
+ *     (HOOK 0x462390, src/humanbase/human.c:1674-1857) probes from
+ *     `to + kWallMid - foot[2]` and, on a hit, sets
+ *     `to[2] = foot[2] + hits[0].pos.z` (:1816).  So a placed human stands ON
+ *     the collision surface; the authored QSC Z only seeds the fall.
  *
- * ENGINE BASIS — why the query legitimately misses under a building:
+ * ENGINE BASIS — why the query legitimately misses under a building
  *   * A "DiscardTerrain" cube is a dynamic-cube tree node that "tells the qcube
  *     walk to drop the terrain inside it, and takes collision points that fall
  *     inside it away from the terrain" (src/terredit/discard.c:10-12).
  *     DiscardTerrain_Visit (HOOK 0x52C0B0, src/terredit/discard.c:113-117) sets
  *     gQCubeSkipCells = 1 while the cube walk is inside the box, and
- *     DiscardTerrain_CollQuery (HOOK 0x52BF00, src/terredit/discard.c:75-87)
- *     clears active[] for every point inside it.  So "no terrain under (x, y)"
- *     is a DESIGNED state for interiors/helipads/lifts, which is exactly where
- *     the failing objects sit.
+ *     DiscardTerrain_CollQuery (HOOK 0x52BF00, :75-87) clears active[] for every
+ *     point inside it.  So "no terrain under (x, y)" is a DESIGNED state for
+ *     interiors/helipads/lifts.
  *   * The editor's own query honours the same flag: Terrain::RecursiveGetZ
  *     skips a child whose CUBE_FLAG_DISCARD_TERRAIN is set unless ignore_discard
  *     is passed (source/level/terrain_query.cpp:315), and App::SnapObjectsToTerrain
  *     calls Level::GetTerrainZ(..., ignore_discard = false).
+ *
+ * WHAT THE EDITOR'S HIT IS, AND WHAT IT IS NOT
+ *   Level::GetTerrainZ -> Terrain::RecursiveGetZ reads the SAME terrain.ctr leaf
+ *   modules the engine's Coll_LeafHit reads, at the same leaf level
+ *   (LEAF_CUBE_LOD_LEVEL = 16, source/level/terrain.h:86, vs Coll_LeafHit's
+ *   shift 16, src/coll/coll.c:705) and with the same packed-vertex scale
+ *   (1 << (27 - 16) / 3 == 0x40000000 >> 16 / 24).  For the single-valued terrain
+ *   height field the engine's down-then-up search therefore reduces to "the
+ *   surface in the column", which is exactly what the editor's query returns.
+ *   It does NOT include the rest of the engine's collision world -- the objects'
+ *   XTVC/ECFC collision meshes, dynamic cubes and colboxes -- so an AI standing
+ *   on a building floor or a colbox is placed against the terrain below it
+ *   unless the earlier parent-building rule already owns it.
  *****************************************************************************/
 #pragma once
 
@@ -75,41 +92,21 @@ enum class TerrainSnapDecision {
     SnapToTerrain,   // human soldier on the surface: feet on terrainZ
 };
 
-// The surface band in world units within which a human soldier is considered to
-// be standing on the terrain rather than on a platform above it (or below it).
-inline constexpr double kSnapSurfaceBandAbove = 100.0;
-// "Far below terrain" (e.g. ANYA_HQ at ~-13M).  NOTE: unreachable while
-// kSnapSurfaceBandAbove is checked first, because every value below
-// -1000000 is also < 0; kept because it documents the authored intent and
-// App::SnapObjectsToTerrain still logs it.
-inline constexpr double kSnapDeepUnderground = -1000000.0;
-
 // The rule, in the order App::SnapObjectsToTerrain applies it:
 //   1. no terrain under (x, y) -> keep.  The engine never invents a Z for a
 //      miss (Game_DropToGround HOOK 0x4149B0, src/game/misc.c:88-95).
 //   2. not a human -> keep.  Props, trees, buildings, fences and vehicles have
-//      authoritative QSC Z values; dropping them destroys elevated platforms,
-//      embedded foundations and stacked props.
-//   3. human above the surface band, or below the terrain -> keep (standing on
-//      a platform/building, or in an underground bunker).
-//   4. otherwise -> snap the human to the terrain.
-inline TerrainSnapDecision DecideTerrainSnap(bool terrainFound, bool isHuman, double zDelta) {
+//      authoritative QSC Z values; the engine's load path drops humans through
+//      Human_ProbeGround, not furniture, and dropping props destroys elevated
+//      platforms, embedded foundations and stacked props.
+//   3. otherwise -> snap the human.  A hit is a hit: the engine's probe reaches
+//      400 m down and 400 m up with no window around the authored Z
+//      (src/game/misc.c:82,88-92), and Human_ProbeGround reaches 1000 m
+//      (src/humanbase/human.c:192-193).  The old 100-unit (2.4 cm) band here was
+//      an editor invention and is gone.
+inline TerrainSnapDecision DecideTerrainSnap(bool terrainFound, bool isHuman) {
     if (!terrainFound) return TerrainSnapDecision::KeepAuthoredZ;
     if (!isHuman) return TerrainSnapDecision::KeepAuthoredZ;
-    // RESTORED to the rule that shipped for months before this branch touched it
-    // (source/app_view.cpp at 6cef506f^, the pre-Oct-28 form):
-    //
-    //     // Human soldiers: snap to terrain unless they are elevated (on a
-    //     // platform/building) or below terrain (underground bunker).
-    //     if (zDelta > 100.0 || zDelta < 0.0) { keep }
-    //
-    // An earlier commit on this branch dropped the `zDelta < 0.0` half on the
-    // reasoning that Game_DropToGround (HOOK 0x4149B0, src/game/misc.c:75-97)
-    // probes down AND up, so a soldier below the surface should be lifted onto it.
-    // That reasoning is still defensible against the engine, but it changed what
-    // the user saw -- the AI ended up below the ground -- and the user's report is
-    // the authority on what the editor should do here.  Restored verbatim.
-    if (zDelta > kSnapSurfaceBandAbove || zDelta < 0.0) return TerrainSnapDecision::KeepAuthoredZ;
     return TerrainSnapDecision::SnapToTerrain;
 }
 

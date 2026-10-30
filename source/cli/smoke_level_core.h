@@ -219,11 +219,15 @@ SmokeRunTotals SummarizeSmokeRun(const std::vector<SmokeTotals>& perLevel);
 //   numbers has never been measurable headlessly, and every attempt to fix it
 //   has been reasoning instead of measurement.
 //
-//   A soldier's drawn Z is  terrainZ + mainZOffset * 40.96 * scale,  where
-//   mainZOffset is the mesh's own -min_p.z (model.cpp:311, the pivot->feet lift)
-//   and terrainZ comes from Level::GetTerrainZ.  A soldier that renders
-//   half-buried is therefore one of: a query MISS, a wrong terrainZ, or a wrong
-//   lift -- and printing the terms separates them instead of guessing.
+//   A soldier's drawn Z is now exactly terrainZ (the FEET frame -- the human
+//   mesh is baked so its soles sit at the object origin), and terrainZ comes
+//   from Level::GetTerrainZ, which is the engine's terrain triangle crossing.
+//   A soldier that still renders off the ground is therefore either a query
+//   MISS or a wrong terrainZ -- printing the terms separates them instead of
+//   guessing.  The terms used to include `mainZOffset * 40.96 * scale`
+//   (-min_p.z, model.cpp:311); that lift was measured to be leg/arm geometry,
+//   not the sole, and is gone from the snap (tests/test_seated_human.cpp,
+//   TheGroundedFrameSoleIsAtTheModelOrigin).
 //
 // ENGINE BASIS
 //   * The drop: Game_DropToGround HOOK 0x4149B0 (src/game/misc.c:75-97) probes

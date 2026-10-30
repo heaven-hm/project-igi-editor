@@ -2,35 +2,39 @@
 // App::SnapObjectsToTerrain runs on (source/app_view.cpp), extracted into
 // source/level/terrain_snap_rules.h so they can be proven in the host lane.
 //
-// WHY: one play session logged 24 "[WARN] [App] Snap FAILED for <id> at (x, y).
-// Outside terrain?" lines for objects that are not failures at all --
-// colbox2/colbox3 collision proxies (which the pass must never touch) and
-// props/humans whose authored Z the engine itself keeps when a drop query
-// misses.  The rules below pin both halves down.
+// WHY: the pass used to gate a terrain hit on an editor-invented 100-unit band
+// (`zDelta > 100 || zDelta < 0 -> keep`).  The engine has no such band, and on a
+// real level the gate left every placed AI unsnapped -- the report's own log:
+//     [App] Snap complete. snapped=0 skipped=1843 no_terrain=26
 //
 // ORACLE (IGI-RE, read-only):
+//   game/misc.c:75-97      Game_DropToGround HOOK 0x4149B0: probe DOWN by
+//                          1,638,400 units (:82, :87), then UP (:88-92), then
+//                          `return` with pos untouched on a second miss (:92-95).
+//                          No band, no clamp, no default Z.
+//   coll/coll.c:626-774    Coll_VerticalHit HOOK 0x4CB050: a hit farther than
+//                          |dz| is rejected (:706-707).
+//   coll/coll.c:290-516    Coll_LeafHit HOOK 0x4CA010: DOWN keeps the highest
+//                          triangle at or below p.z + kTenth (0.1, :15, :321,
+//                          :466-468); UP keeps the lowest at or above p.z - 0.1
+//                          (:324, :469-471).
+//   humanbase/human.c:1674-1857  Human_ProbeGround HOOK 0x462390: probes 1000 m
+//                          (:192-193, :1754-1772) and puts the FOOT on the hit
+//                          (`to[2] = foot[2] + hits[0].pos.z`, :1816).
 //   coll/coll.c:813-818    Coll_DropPointsMat HOOK 0x4CB9F0 (drop query)
-//   coll/coll.c:518-616    Coll_Drop: a miss leaves results[i].found == 0
-//   coll/coll.c:626-774    Coll_VerticalHit HOOK 0x4CB050 (terrain triangle hit)
-//   game/misc.c:75-97      Game_DropToGround HOOK 0x4149B0: probe down, then up,
-//                          and on a second miss `return` with pos untouched --
-//                          the engine NEVER clamps or invents a Z
-//   graphnode/lightmap.c:325-333  lightmap placement moves p.z only if (hit.found)
-//   terredit/discard.c:10-12      DiscardTerrain: "tells the qcube walk to drop the
-//                          terrain inside it, and takes collision points that fall
-//                          inside it away from the terrain"
-//   terredit/discard.c:113-117    DiscardTerrain_Visit HOOK 0x52C0B0 sets
-//                          gQCubeSkipCells while the walk is inside the box
-//   terredit/discard.c:75-87      DiscardTerrain_CollQuery HOOK 0x52BF00 clears
-//                          active[] for points inside the box
-//   renderer/mef_native.cpp:677-684  a colbox MEF's only geometry is the collision
-//                          mesh (empty REND and XTRV); the engine never renders it
+//   graphnode/lightmap.c:325-333  lightmap placement moves p.z only if hit.found
+//   terredit/discard.c:10-12, :75-87, :113-117  DiscardTerrain: a designed
+//                          "no terrain here" hole, which is the normal state
+//                          under interiors/helipads (and the reason a miss is
+//                          information, not a failure).
+//   renderer/mef_native.cpp:677-684  a colbox MEF's only geometry is the
+//                          collision mesh; the engine never renders it.
 //
-// The placement ids used below are the ones from the reported play log; they are
-// real level-1 placements (retail <IGI>/editor/qed/temp/objects.qsc): 018_01_1 is
-// a HumanSoldier, 700_01_1 a Heli, 432_03_1 / 470_01_1 Buildings (lifts and a
-// helipad), and colbox2 / colbox3 are EditRigidObj collision proxies co-located
-// with the Barracks and the EkksHQLift / WinchHouseLift buildings respectively.
+// The placement ids used below are real level-1 placements (retail
+// <IGI>/editor/qed/temp/objects.qsc): 018_01_1 is a HumanSoldier, 700_01_1 a
+// Heli, 432_03_1 / 470_01_1 Buildings (lifts and a helipad), and colbox2 /
+// colbox3 are EditRigidObj collision proxies co-located with the Barracks and
+// the EkksHQLift / WinchHouseLift buildings respectively.
 
 #include "../source/level/terrain_snap_rules.h"
 
@@ -68,16 +72,9 @@ TEST(TerrainSnapRules, QueryMissNeverMovesAnything) {
     // the engine returns with the pose untouched.  So a miss keeps the authored Z
     // for a human exactly as it does for a prop -- the old code treated the human
     // case as a failure and warned.
-    const double authoredZ = 179656496.0;  // 018_01_1 in level 1
-    const double zDeltaOnMiss = authoredZ - 0.0;  // GetTerrainZ leaves z = 0 on a miss
-
-    EXPECT_EQ(igi::DecideTerrainSnap(false, /*isHuman=*/true, zDeltaOnMiss),
+    EXPECT_EQ(igi::DecideTerrainSnap(/*terrainFound=*/false, /*isHuman=*/true),
               igi::TerrainSnapDecision::KeepAuthoredZ);
-    EXPECT_EQ(igi::DecideTerrainSnap(false, /*isHuman=*/false, zDeltaOnMiss),
-              igi::TerrainSnapDecision::KeepAuthoredZ);
-    EXPECT_EQ(igi::DecideTerrainSnap(false, /*isHuman=*/true, 0.0),
-              igi::TerrainSnapDecision::KeepAuthoredZ);
-    EXPECT_EQ(igi::DecideTerrainSnap(false, /*isHuman=*/true, -13000000.0),
+    EXPECT_EQ(igi::DecideTerrainSnap(/*terrainFound=*/false, /*isHuman=*/false),
               igi::TerrainSnapDecision::KeepAuthoredZ);
 }
 
@@ -85,63 +82,19 @@ TEST(TerrainSnapRules, PropsAlwaysKeepTheirAuthoredZ) {
     // 700_01_1 (Heli), 432_03_1 and 470_01_1 (Buildings): non-humans keep the QSC Z
     // even when the terrain query succeeds, because dropping them destroys elevated
     // platforms, embedded foundations and stacked props.
-    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/false, 0.0),
-              igi::TerrainSnapDecision::KeepAuthoredZ);
-    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/false, 1000000.0),
-              igi::TerrainSnapDecision::KeepAuthoredZ);
-    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/false, -500000.0),
+    EXPECT_EQ(igi::DecideTerrainSnap(/*terrainFound=*/true, /*isHuman=*/false),
               igi::TerrainSnapDecision::KeepAuthoredZ);
 }
 
-TEST(TerrainSnapRules, HumansOnTheSurfaceSnap) {
-    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, 0.0),
+// THE BAND IS GONE.  The engine's drop reaches 1,638,400 units down and the same
+// up (game/misc.c:82,88-92) and Human_ProbeGround 4,096,000 units
+// (humanbase/human.c:192-193); a hit anywhere in that reach is the ground.  The
+// old rule kept every |zDelta| > 100 units -- 100 units is 2.4 cm at the
+// engine's 4096 units/m (humanbase/human.c:165 kUnitsToMeters) -- and that is
+// why the shipped AI was never snapped.  Every former band case now snaps:
+// 0, +-0.5, 100, 100.0001, +-4096 and the +-13,000,000 "deep underground" value
+// all end on the same branch, because the decision no longer takes a distance.
+TEST(TerrainSnapRules, AHitSnapsTheHumanAtAnyDistance) {
+    EXPECT_EQ(igi::DecideTerrainSnap(/*terrainFound=*/true, /*isHuman=*/true),
               igi::TerrainSnapDecision::SnapToTerrain);
-    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, 1.0),
-              igi::TerrainSnapDecision::SnapToTerrain);
-    // The band is inclusive at 100: the original kept only `zDelta > 100`.
-    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, 100.0),
-              igi::TerrainSnapDecision::SnapToTerrain);
-    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, 100.5),
-              igi::TerrainSnapDecision::KeepAuthoredZ);
-}
-
-TEST(TerrainSnapRules, HumansOffTheSurfaceKeepTheirAuthoredZ) {
-    // Above the surface band: standing on a platform/building.
-    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, 100.0001),
-              igi::TerrainSnapDecision::KeepAuthoredZ);
-    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, 4096.0),
-              igi::TerrainSnapDecision::KeepAuthoredZ);
-}
-
-// A NEGATIVE delta SNAPS.  This is the engine's own answer for a sunk placement:
-// Game_DropToGround (HOOK 0x4149B0, src/game/misc.c:88-95) probes DOWN first and,
-// when that misses, probes UP (`dz = -dz`) before giving up, so an object below the
-// terrain surface is lifted onto it.  The old rule kept the authored Z for every
-// negative delta, which left half-buried soldiers exactly where the QSC put them --
-// the reported "some part above ground some below it".
-// The shipped rule: a soldier BELOW the terrain keeps its authored Z (the
-// pre-Oct-28 behaviour of source/app_view.cpp, restored).  An earlier commit on
-// this branch snapped a negative delta instead, on the engine's up-probe
-// reasoning, and the AI ended up below the ground in the editor.
-TEST(TerrainSnapRules, HumansBelowTheSurfaceKeepTheirAuthoredZ) {
-    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, -0.5),
-              igi::TerrainSnapDecision::KeepAuthoredZ);
-    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, -4096.0),
-              igi::TerrainSnapDecision::KeepAuthoredZ);
-    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, -13000000.0),
-              igi::TerrainSnapDecision::KeepAuthoredZ);
-    // The boundaries: 0 snaps, and just above the band still keeps.
-    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, 0.0),
-              igi::TerrainSnapDecision::SnapToTerrain);
-    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, 100.0),
-              igi::TerrainSnapDecision::SnapToTerrain);
-    EXPECT_EQ(igi::DecideTerrainSnap(true, /*isHuman=*/true, 100.0001),
-              igi::TerrainSnapDecision::KeepAuthoredZ);
-}
-
-TEST(TerrainSnapRules, MissIsDecidedBeforeTheElevationBand) {
-    EXPECT_EQ(igi::DecideTerrainSnap(/*terrainFound=*/false, /*isHuman=*/true, 179656496.0),
-              igi::TerrainSnapDecision::KeepAuthoredZ);
-    EXPECT_EQ(igi::DecideTerrainSnap(/*terrainFound=*/true, /*isHuman=*/true, 179656496.0),
-              igi::TerrainSnapDecision::KeepAuthoredZ);
 }
