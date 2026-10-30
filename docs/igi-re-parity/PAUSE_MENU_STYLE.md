@@ -80,6 +80,7 @@ changed.
 | title colour | `TEXT_WHITE` (128,128,128) → **1.0** after `gColorScale` 1/128 | `gMenuColors` DATA 0x53B778 |
 | item colour | `TEXT_GREEN` (0,128,0) → **(0,1,0)** | `gMenuColors` DATA 0x53B778 |
 | focused item | c·0.5 + 64 → **(0.5,1,0.5)** plus a glow at c·0.2 | `DRAW_LABEL` `:203-205`, `:227-228` |
+| menu pointer | the **platform** cursor (`GLUT_CURSOR_INHERIT` while paused) — the user's choice; the game's `pointer.spr` and the editor's `pointer.anm` are both analysed in §8b | user, asked directly: "just revert as it was 1 month ago cursor and pointer got it"; reverts `d58a0af2`, `79739217` |
 
 ## 1. The load path — how the game loads the menu
 
@@ -310,6 +311,23 @@ present (`PauseMenuTitleBandHeight`), and the editor keeps the text inside the
 panel (line 0's origin is the panel top) rather than overhanging it by a pixel.
 With one title line the band is exactly retail's 21.
 
+**The rule follows the band.** In retail the rule is not decoration: it is the line
+the first item starts on. `MenuScreen_DrawFrame` draws it at `y0 + 20` with
+`y0 = frameY0 + 1` (:175-179) — panel top + 21 — and `MenuWindow_Arrange` places the
+item frame's first child at `frame.y + spacingY` (:225-229), which with the item frame
+at panel top + 17 (`ingamemenu.qvm` screen 900: frame Y 97, panel Y 80) and Y-Spacing 4
+is panel top + 21 as well. That is why `kRetailTitleRuleOffset == kRetailFirstRowOffset`
+is a `static_assert`, and why the layout's `title_rule_y` is `menu_top + title_band` for
+**any** number of title lines.
+
+The renderer did not use that field: it drew the rule at the retail 20-px drop
+(`kRetailTitleRuleDrop`) whatever the band was. With the editor's **two** title lines
+that is 25 px too high — the rule cut between "IGI EDITOR" and "PAUSED" instead of
+sitting on the first row's line — while the layout, the row positions and
+`tests/test_pause_menu_style.cpp` all said 46. The renderer now draws
+`pause_layout.title_rule_y`, so the rule is the first row's line for any band (and is
+byte-for-byte the retail 21 when there is one title line).
+
 ## 8. What the editor keeps, and why
 
 | editor value | why it is not retail |
@@ -323,14 +341,14 @@ With one title line the band is exactly retail's 21.
 | spinner boxes | the editor's own widgets. Their outline takes the retail window outline colour (`MenuWindow_DrawEnd` HOOK 0x424980, `src/widget/menuwindow.c:379-387`: idle `r = b = 0`, `g = 1`) and their text the retail item colour |
 | border / rule line width | no engine oracle (see §5) |
 
-## 8b. The keys that drive it, and the pointer it draws
+## 8b. The keys that drive it, and the pointer
 
 Two things about the menu are the engine's, not the editor's, and both were wrong
-before this pass. They are the subject of
-`source/runtime/pause_menu_input_policy.h` and
-`source/runtime/retail_pointer_sprite.h`, and
-`tests/test_pause_menu_input.cpp` (13 host tests, 4 of them corpus-backed) holds
-them.
+before this pass. The keys are the subject of
+`source/runtime/pause_menu_input_policy.h` and `tests/test_pause_menu_input.cpp`
+(7 host tests). The pointer is a **user-facing choice** between three different
+resources, not a bug; the section below records what each of them is, what the user
+chose, and what the code draws today.
 
 ### Which keys drive the menu
 
@@ -380,54 +398,95 @@ F11's camera snap is the single deliberate exception and is unchanged: it is an
 editor feature, not a menu key, and `ShouldProcessF11WhilePaused`
 (source/runtime/graph_camera_target.h:52) is where that decision is recorded.
 
-### The pointer is the GAME's sprite
+### The pointer: what the editor's own file is, and what is drawn
 
-Retail never shows the platform cursor in a menu. Every menu manager owns a
-`Cursor` task and points it at an archive member:
+Three pointers have been proposed for the pause menu, and all three are different
+resources, so this section records each of them and what happened to it:
 
-```c
-/* MenuManager_Update HOOK 0x417CF0, src/menu/menumanager.c:233 */
-Cursor_SetSprite(mm->pointer, MenuManager_FindSprite(mm, "pointer.spr"));
+* the **platform** cursor — what the editor draws today, and what the user chose when
+  asked directly: *"just revert as it was 1 month ago cursor and pointer got it."*
+* *"resources of main menu should be exactly from game even from the Cursor, the fonts
+  pointer everything"* — the game's `LOCAL:menusystem/pointer.spr` out of
+  `menusystem/ingamemenu.res`. Implemented (`App::EnsureRetailPointerCursor` /
+  `DrawRetailPointerCursor`, `source/runtime/retail_pointer_sprite.{h,cpp}`) and reverted
+  by `d58a0af2`.
+* *"use pointer.spr from editor folder not from game mouse cursor from editor folder in
+  same folder its there"* — the **editor's own folder**, i.e. `editor/qed/pointer.anm`.
+  Implemented and reverted by `79739217`; `reports/editor-pointer-item1-recovery.md`
+  carries it.
+
+There is no `pointer.spr` in `editor/qed/`; the file that is there is
+**`editor/qed/pointer.anm`** (10556 bytes, md5 `5ae04c4b0c02f5da31e7b633d543db27`,
+byte-identical in the install and in this repo's `assets/editor/qed/`), and it is what
+QED's cursor is. The other `.spr` files in that folder are the editor's **tool** art
+(`TerrainEditIcon_*`, `activetool`, `inactivetool`, `highlighttool`, `editor_camera`,
+`editor_move` — the twelve `App::LoadAllCursors` already draws as tool cursors; two of
+them, `TerrainEditIcon_Flatten.spr` and `TerrainEditIcon_Soften.spr`, have no opaque
+pixels at all, which no cursor can be and a toolbar icon can).
+
+**What `pointer.anm` is.** A LOOP **v9** container — the same container `.spr` uses, with
+the extension QED gave an animation — carrying **five frames of different sizes**, each
+with its own record:
+
+```
+header   LOOP v9, nframes 5, header w 64 h 64 format 2, charmap 10452
+frame 0  pixels 212,  format 2, stride 128, 64 x 64   <- the arrow cursor
+frame 1  pixels 8404, format 2, stride 32,  16 x 16
+frame 2  pixels 8916, format 2, stride 32,  16 x 16
+frame 3  pixels 9428, format 2, stride 32,  16 x 16
+frame 4  pixels 9940, format 2, stride 32,  16 x 16
 ```
 
-`MenuManager_FindSprite` HOOK 0x418DE0 (:810-818) matches that basename against
-the sprites `MenuManager_LoadResources` HOOK 0x417D50 (:238-257) collected with
-`Resource_ForEach` HOOK 0x4B5D80, and `Cursor_Draw` HOOK 0x424C40
-(src/widget/cursor.c:38-41) blits it at the pointer with `128.0f, 128.0f,
-128.0f` — which is **full** intensity, because `DrawSprite` multiplies by
-`COLOR_SCALE` = 1/128 (src/math/draw.c:12, :124-126).
+The records are `LoopFrame9` (src/res/sprite.c:129-146: `pixels`, `format`, `a` = bytes
+per row, `w`, `h`, …) and the engine reads them one by one — `Sprite_Load` HOOK 0x4B6720,
+v9 branch (src/res/sprite.c:246-260):
 
-The member is `LOCAL:menusystem/pointer.spr`, 1884 bytes, LOOP v9, one frame,
-format 3 (ARGB8888), **20 × 22** pixels. It is in both menu archives
-(`ingamemenu.res` and `menusystem.res`), and the editor reads it from the same
-one it already reads `font3.fnt` from.
+```c
+LoopFrame9 *f = (LoopFrame9 *)(d + sizeof(LoopHeader));
+for (i = 0; i < h->nframes; i++, f++)
+    Sprite_LoadTexture(s, i, d + f->pixels, f->a, f->w, f->h, f->format, h->unk12, f->unk1C);
+```
 
-**What the editor used to do wrong.** The pause menu called
-`glutSetCursor(GLUT_CURSOR_INHERIT)` and showed the *Windows* arrow. Its own
-`DrawCustomCursor` was explicitly disabled while paused
-(`ShouldDrawCustomCursor` returned false), so the game's sprite was never drawn
-at all. The editor's 12 tool cursors (`editor/qed/*.spr`) are the QED editor's
-own art and are unrelated to this.
+The pixel format is the engine's per-frame `format` word, converted by the table
+`D3DTex_DownloadTexture` HOOK 0x50AD10 selects (src/sysmisc/d3dtex.c:411-432): format 2 →
+`Pixel_1555To32` HOOK 0x517C90 (src/terrdraw/pixel.c:59-83), 3/4/0x43 → `Pixel_Copy32`
+HOOK 0x517F00 (:112-124), 5 → `Pixel_565To32` HOOK 0x517DD0 (:85-109). Every frame here
+is format **2 = ARGB1555**, so frame 0's background is genuinely transparent (alpha = bit
+15) and its arrow is black-outlined and white-filled: 125 opaque pixels, bounding box
+(0, 0)–(11, 20), tip at **(0, 0)**. No chroma key is needed or used.
 
-The fix loads `pointer.spr` out of `menusystem/ingamemenu.res`
-(`igi::LoadRetailPointerSprite`, source/runtime/retail_pointer_sprite.cpp) and
-draws it while the menu is up, keeping the platform cursor hidden — with the
-platform cursor as the fallback only when the archive or member cannot be read,
-so the menu stays usable on an incomplete install.
+**The hotspot.** There is **no oracle for QED's own anchor**: QED's binary is not part of
+IGI-RE (that is `IGI.exe`) and is not in the install, and `editor/qed/QED.doc` — the
+retail editor's own manual — documents the mouse buttons, the camera control and the text
+dialog but says nothing about the pointer's art or its anchor. What fixes it is the
+editor's own draw convention plus the art: `App::DrawCustomCursor` blits a cursor sprite
+with the **bitmap's top-left on the pointer** (that is how all twelve tool cursors are
+drawn), and frame 0's arrow tip is its first opaque pixel at (0, 0), so **(0, 0)** is the
+hotspot that puts the tip exactly on the pointer.
 
-Two things about the sprite have **no trustworthy engine oracle** and are
-recorded rather than papered over:
+**Why a second reader is needed for it.** The editor's shared v7/v9 reader (`ParseV7or9`,
+source/renderer/tex_parser.cpp) sizes **every** frame from the header's `w`/`h`/`format`
+and skips a fixed 32-byte record per frame. For this file that is five 64 × 64 format-2
+bitmaps from offset `0x34 + 5 * 0x20 = 212`, i.e. 40960 bytes read out of a 10556-byte
+file: it cannot read `pointer.anm` at all (it fails with `short bitmap 0`). That is not a
+guess — the test `EditorPointer.TheSharedUniformFrameReaderCannotReadThisFile` reproduced
+the arithmetic from the shipped file's own header and asserted it runs past the end.
 
-* the hotspot. `Cursor_CreateHandler` HOOK 0x424C10 (src/widget/cursor.c:25-36)
-  seeds `hotX = -2, hotY = 0`, and `Draw_Sprite` adds the frame's own `x`/`y`.
-  The arrow's tip is the pixel at (2, 0) of the 20 × 22 bitmap, so −2,0 puts the
-  drawn tip exactly on the pointer. That is an inference from the bitmap's shape,
-  not a decompiled constant.
-* the frame-record boundary inside the LOOP v9 file. The bitmap sits at offset
-  0x50 and runs to the member's end, which is where the editor's reader lands,
-  but the field-by-field layout in the decompiled `LoopHeader` / `LoopFrame9`
-  (src/res/sprite.c:113-146) does not reproduce that offset. The editor therefore
-  takes the bitmap from its own reader rather than re-deriving the struct.
+**The decision, and it is the user's.** Three candidates were put to the user — the
+platform cursor, the game's `pointer.spr`, and the editor's own `pointer.anm` — and the
+answer was *"just revert as it was 1 month ago cursor and pointer got it."* The pause menu
+therefore draws **the platform cursor**: `glutSetCursor(GLUT_CURSOR_INHERIT)` while the
+menu is up, `ShouldDrawCustomCursor(pauseMenuVisible)` false and the one-argument
+`ShouldUseNativeCursor(pauseMenuVisible)` true while paused
+(source/runtime/pause_menu_cursor.h), which is exactly the behaviour before any of this
+work started. The editor-pointer implementation was written, tested green (8 host tests,
+the Windows suite, e2e) and then reverted by commit `79739217`; the retail-pointer
+implementation was reverted by `d58a0af2`. Nothing above is wasted: the analysis is what
+identifies the two resources, their formats and their different hotspots (the game's is
+`hotX = -2, hotY = 0`, `Cursor_CreateHandler` HOOK 0x424C10, src/widget/cursor.c:25-36;
+the editor's is (0, 0)), and `reports/editor-pointer-item1-recovery.md` carries the
+reverted reader, its tests and the exact call-site edits, so re-applying it costs nothing
+if the user ever changes their mind.
 
 ### The fonts and the background
 
@@ -468,17 +527,26 @@ pass in the Windows suite, which is where the FNT parser is exercised.
 `LodChainCorpusTest`'s corpus test — the one the project notes as a pre-existing
 failure on this install — passed in these runs.
 
-### §8b's checks (the input contract and the game's pointer)
+### §8b's checks (the input contract and the editor's own pointer)
 
 | check | command | result |
 | --- | --- | --- |
-| key contract + retail pointer (host) | `IGI_HOST_TESTS=tests/test_pause_menu_input.cpp bash scripts/run-host-tests.sh` | **exit 0** — 13 passed, 0 failed |
-| key contract + retail pointer (Windows) | `wine bin/igi_tests.exe --gtest_filter='PauseMenuInput.*'` with `IGI_GAME_PATH` and `WINEPATH` set | **exit 0** — 13 passed, 0 failed |
-| full host lane | `IGI_HOST_NO_CACHE=1 bash scripts/run-host-tests.sh` | 4 suites fail with **14 pre-existing corpus failures** (below); every other suite passes, including the new one |
-| Windows suite | `wine bin/igi_tests.exe '--gtest_filter=-*VerifyLevel*:MenuQvm.OperandLayoutsPinnedByTheRetailBytes'` | 2035 ran, **2008 passed, 15 failed** — all 15 corpus damage, see below |
-| build integrity | `bash scripts/check-build-integrity.sh` | **PASS** — 397 objects consistent |
-| headless end-to-end (`--fast`) | `IGI_E2E_STAGE=$PWD/scratch/e2e-menu bash scripts/e2e-headless.sh --fast` | **exit 0** — smoke + 278/278 native assertions, levels 1–14 |
-| the real loader, on the real install | `LoadRetailPointerSprite("/Users/haseeb-mir/Downloads/IGI")` in a host program | **ok** — 20×22, 1760 bytes RGBA, arrow tip at x=2 |
+| key contract (host) | `IGI_HOST_TESTS=tests/test_pause_menu_input.cpp bash scripts/run-host-tests.sh` | **exit 0** — 7 passed, 0 failed |
+| editor pointer, container + decode + hotspot (host) — **removed from the tree by the concurrent pointer change; re-apply from `reports/editor-pointer-item1-recovery.md`** | `IGI_HOST_TESTS=tests/test_editor_pointer.cpp bash scripts/run-host-tests.sh` | **exit 0** — 8 passed, 0 failed (5 corpus-backed) when it was present |
+| pause-menu style + rule line (host) | `IGI_HOST_TESTS=tests/test_pause_menu_style.cpp bash scripts/run-host-tests.sh` | **exit 0** — 23 passed, 0 failed (4 corpus-backed) |
+| full host lane | `IGI_HOST_NO_CACHE=1 bash scripts/run-host-tests.sh` | **exit 0** — 1616 tests passed in 90 suites, 0 failed |
+| Windows suite | `wine bin/igi_tests.exe '--gtest_filter=-*VerifyLevel*'` with `IGI_GAME_PATH` and `WINEPATH` set | **exit 0** — 2085 ran, **2073 passed, 0 failed**, 12 skipped; the 4 `PauseMenuRetailStyleCorpus` tests and (at that moment) the 8 `EditorPointer` tests among them |
+| build | `cmake --build build-mingw --target igi_tests igi-editor --parallel` | **exit 0** |
+| build integrity | `bash scripts/check-build-integrity.sh` | **PASS** — 404 objects consistent |
+| headless end-to-end (`--fast`) | `IGI_E2E_STAGE=$PWD/scratch/e2e-ui bash scripts/e2e-headless.sh --fast` | **exit 0** — E2E PASS, 7 assertions, levels 1–14, the known level-7 retail defect only |
+| the reader on the *install's* file | the same suite with `IGI_GAME_PATH` unset, so it reads `assets/editor/qed/pointer.anm` | 8 passed — the two copies are byte-identical, so both paths are covered |
+| the reader on the shipped file | `igi::LoadEditorPointerSprite("assets/editor/qed/pointer.anm", …)` in a host program | **ok** — 64×64, 5 frames, frame 0, format 2, 16384 RGBA bytes, tip (0,0), 125 opaque, bbox (0,0)-(11,20) |
+| the shipped .anm's identity | `md5 assets/editor/qed/pointer.anm /Users/haseeb-mir/Downloads/IGI/editor/qed/pointer.anm` | both `5ae04c4b0c02f5da31e7b633d543db27` — the editor reads the same bytes the install ships |
+
+The install's menu containers are **back to the shipped bytes** as of this pass
+(`menusystem/ingamemenu.qvm` md5 `76f112a1ae25a91cc2f05ebe41ea9921`, 11308 bytes — equal
+to `ingamemenu.qvm.orig`), which is why the corpus-backed suites now pass rather than
+reporting the overwrite damage the earlier table in this document records.
 
 **The 15 Windows failures (and the host lane's 14) are NOT from this change.** They
 are all in suites that read the *installed* `menusystem/ingamemenu.qvm` /
