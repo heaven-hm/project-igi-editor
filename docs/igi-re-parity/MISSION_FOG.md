@@ -796,3 +796,149 @@ the `fog_color_` member it wrote) is gone rather than left dead.
 observed one. The engine's rule is unambiguous (an explicit `FOGENABLE = 0`), which
 is what makes the change safe to make blind.
 
+
+## 20. The level START was at 200 % of the authored fog (2026-10-30)
+
+The report: *"Fog starting of level is not matching the game its too much intensity
+in settings i changed it manually for each level so match that with from IGI-RE every
+level fog and smoke and weather exactly"*.
+
+### 20.1 The engine's arithmetic, proved at the instruction level
+
+The decompiled formula in §3.3/§17 is now confirmed against the retail binary
+(`igi.exe`, the file the user's install runs). `TerrainMesh_DrawD3D` is `HOOK
+0x512C30`, and the fog factor it packs into the vertex specular alpha is:
+
+```
+0x00513462  fld   dword [esp + 0xa0]     ; vz, the view-space z in game units
+0x00513469  fmul  dword [0x00bcabec]     ; * gWorldScale        (0.001f, direct3d.c:532)
+0x0051346f  fmul  dword [0x00a7da18]     ; * gTerrainFogScale
+0x00513475  fldl2e / fmulp / fld / frndint / fxch / fsub / f2xm1 / fld1 / faddp / fscale
+0x0051348b  fdivr dword [0x005333e0]     ; 1.0f / exp(...)      <- kOne / x87_exp
+0x00513491  fcom  dword [0x005333ec]     ; clamp the result up to 0
+0x005134a6  fmul  dword [0x005336d4]     ; * 255.0f             -> the specular alpha
+```
+
+So, term for term:
+
+| Term | Value | Source |
+|---|---|---|
+| `gWorldScale` | `0.001f` | `src/d3d/direct3d.c:532`; `0x00BCABEC` |
+| `gTerrainFogScale` | `clamp(authored "Fog density terrain" × 0.0005, 0, 16384)` | `globallight.c:115,125`; `terrainmesh.c:302-320`; `0x00A7DA18` |
+| kFixed (units per metre) | `4096` | `mathvars.h:7`; `0x005333B8` (read from the binary) |
+| fog factor | `T = 1/exp(vz × gWorldScale × gTerrainFogScale)` | `terraind3d.c:164-167` |
+| blend | `C = C_obj × T + C_fog × (1 − T)` | the convention `Fog_SetRange` proves (`d3drender.c:108-131`) |
+
+**Why the specular alpha is the live fog factor.** The terrain's vertex buffer is
+`D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX1`
+(`terrdraw.c:125`) — pre-transformed vertices, so Direct3D does no vertex
+processing and cannot compute a vertex fog of its own. Microsoft's "Vertex Fog"
+states the rule for exactly that case: *"If your application does not use Direct3D
+for transformation and lighting, the application must perform fog calculations. In
+this case, place the fog factor that is computed in the alpha component of the
+specular color for each vertex … Direct3D uses the supplied fog factor to
+interpolate across the face of each polygon. As a result, such an application need
+only enable fog blending and set the fog color."* The engine does precisely that:
+`Terrain_SetBlendMode` sets `FOGENABLE = gFogEnable` and `FOGCOLOR =
+gTerrainFogColorD3D` (`terrdraw.c:31-38`), `terraind3d.c:303` sets
+`FOGTABLEMODE = D3DFOG_NONE`, and the clipper interpolates the factor
+perspective-correctly (`clip.c:130,164,249-261`). (This is a Direct3D API
+semantic, not a game-behaviour source; the game behaviour is IGI-RE's code, which
+computes that factor by hand. The `FOGVERTEXMODE = D3DFOG_LINEAR` write at
+`terraind3d.c:304` and the fixed `FOGSTART/FOGEND = 10000/30000` at `:306-307` are
+therefore inert for these vertices — under them the terrain would have no fog at
+all within 2.4 km, which would make the per-level authored density a no-op.)
+
+**Level start.** `GlobalLight_ParamsChanged` (`HOOK 0x528180`, `globallight.c:337`)
+calls `GlobalLight_SetTime(0.0f)`, and `GlobalLight_Apply` (`HOOK 0x527520`,
+`globallight.c:153-215`) then takes the smallest-`Time` keyframe — the daytime one
+on all fourteen shipped levels (§6). There is no other fog state at level start.
+
+### 20.2 The deviation: the Fog Intensity default, not the formula
+
+The editor's shader coefficient is algebraically the engine's `gTerrainFogScale`
+(§17), but it is scaled by a preview multiplier that IGI-RE does not have:
+
+```
+Renderer::ApplyFogIntensity:  scale = 2 × 0.5^(fog_intensity/100)
+                              coefficient = 1 / (base_far × scale × 0.001)
+```
+
+`scale` is `1` at 100 % — the authored density, i.e. retail — and **`2` at 0 %**,
+which halves the density. `ConfigData::fogIntensity` defaulted to **200**, i.e.
+`scale = 0.5`, i.e. **every level started with TWICE the fog retail has** (the
+exponent doubled, not merely "a bit more"). The user's own `qedconfig.qsc` had
+`QEDFogIntensity(0)` — the opposite end, half the authored fog — because they had
+been dialling the spinner per level trying to match the game.
+
+Fix: `igi::kFogIntensityLevelDefault = 100` is now the config default **and**
+`App::LoadLevel` resets the multiplier to it before the level's fog is applied, so
+a level always *starts* at its authored fog; the spinner remains a live preview
+that a level load does not inherit.
+
+### 20.3 The per-level table
+
+Printed by `MissionFogCorpusTest.LevelStartFogMatchesTheEngineOnEveryLevel`
+(host lane), from each level's shipped `OBJECTS.QVM`. `coeff@100%` is what the
+terrain fragment shader multiplies its view depth by after the fix; `ratio` is that
+coefficient over the engine's `gTerrainFogScale`; `coeff@200%` is what the old
+default produced.
+
+```
+  level  authored   engine scale   e-fold(m)   editor far@100%   editor coeff@100%   ratio   coeff@200%   fog@100m  @300m   @1km
+      1     1.890    0.00094500      258.3            258.3        0.000945000   1.000    0.001890     32.1%   68.7%   97.9%
+      2     0.180    0.00009000     2712.7           2712.7        0.000090000   1.000    0.000180      3.6%   10.5%   30.8%
+      3     4.790    0.00239500      101.9            101.9        0.002395000   1.000    0.004790     62.5%   94.7%  100.0%
+      4     1.200    0.00060000      406.9            406.9        0.000600000   1.000    0.001200     21.8%   52.2%   91.4%
+      5     0.120    0.00006000     4069.0           4069.0        0.000060000   1.000    0.000120      2.4%    7.1%   21.8%
+      6     0.180    0.00009000     2712.7           2712.7        0.000090000   1.000    0.000180      3.6%   10.5%   30.8%
+      7     0.790    0.00039500      618.1            618.1        0.000395000   1.000    0.000790     14.9%   38.5%   80.2%
+      8     0.400    0.00020000     1220.7           1220.7        0.000200000   1.000    0.000400      7.9%   21.8%   55.9%
+      9     3.000    0.00150000      162.8            162.8        0.001500000   1.000    0.003000     45.9%   84.2%   99.8%
+     10     0.180    0.00009000     2712.7           2712.7        0.000090000   1.000    0.000180      3.6%   10.5%   30.8%
+     11     0.115    0.00005750     4245.9           4245.9        0.000057500   1.000    0.000115      2.3%    6.8%   21.0%
+     12     0.400    0.00020000     1220.7           1220.7        0.000200000   1.000    0.000400      7.9%   21.8%   55.9%
+     13     0.600    0.00030000      813.8            813.8        0.000300000   1.000    0.000600     11.6%   30.8%   70.7%
+     14     9.500    0.00475000       51.4             51.4        0.004750000   1.000    0.009500     85.7%   99.7%  100.0%
+```
+
+Read it as: **at 100 % the editor's exponent is the engine's, on every level**
+(`ratio` = 1.000); **at the old default of 200 % it was double on every level**
+(`coeff@200%` = 2 × `engine scale`). Before the fix the user's saved 0 % put every
+level at half density (e.g. LEVEL1 at 17.6 % fog at 100 m instead of 32.1 %), which
+is *lighter* than retail — so the arithmetic alone does not explain "too much" for
+that particular setting; see §20.4.
+
+The object pass reads light set 1 and is subject to the same multiplier; on all
+fourteen shipped levels set 1 carries the same colour and density as set 0 (§16), so
+there is no double application there either.
+
+### 20.4 What this does and does not establish
+
+* **Established:** the engine's terrain and object fog is the exponential above,
+  with the level's authored density and nothing else, at level start; the editor's
+  shader coefficient equals `gTerrainFogScale` at 100 % on all 14 levels; the level
+  now starts there; the per-level numbers are pinned by a corpus test.
+* **Not established:** the *appearance*. No frame was rendered (the GUI needs
+  OpenGL 4.1 and this host offers 2.1), so "matches the game" here means the
+  arithmetic and the per-level numbers match, not that the picture does.
+* **Not examined, and named as such:** the three other per-level terms the report
+  names. The authored weather IS resolved per level (`RainEffect` →
+  `ResolveLevelWeather`, `app_level.cpp:569-580`, with `weatherMode = 0 = Default`
+  meaning "the level's own"), and the authored `Smoke` emitters are too
+  (`renderer_draw.cpp:540-558`); the `FlatSky` ground-fog band is drawn by
+  `source/level/flat_sky_layer.cpp` and its alpha runs 1 at `fog_start` to 0 at
+  `Distance`, the same direction as `FlatSky_Render` (`flatsky.c:126-128`). None of
+  those three was verified against a rendered frame or re-derived term by term in
+  this pass, and none was changed.
+* If the fog still reads thicker than the user's retail build after this, the
+  remaining candidate is *not* the density arithmetic: their install runs retail
+  through the dgVoodoo wrappers (`D3D8.dll`/`D3D9.dll`/`D3DImm.dll`/`DDraw.dll` in
+  the game folder), and the terrain's fog depends on the D3D7 rule that a
+  pre-transformed vertex's specular alpha *is* the fog factor. A D3D7→D3D11
+  wrapper that does not replicate that rule would show no terrain fog at all in the
+  game — which would look exactly like "the editor is too foggy". That is a
+  hypothesis about the wrapper, not a claim about the engine, and it is untested
+  here.
+
+

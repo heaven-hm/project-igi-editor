@@ -216,6 +216,32 @@ static_assert(kEFoldingMetresPerAuthoredDensity * kEditorWorldUnitsPerMetre == 2
 float LinearFogFarMetresForAuthoredDensity(float authored_density, float fallback_metres);
 
 // ---------------------------------------------------------------------------
+// The editor's Fog Intensity preview multiplier
+// ---------------------------------------------------------------------------
+
+// 100 == the level's OWN authored fog, i.e. the engine's density. This is the
+// value a level must START at: the engine has no fog-intensity control anywhere
+// (no GlobalLight field, no viewport field, nothing in IGI-RE), so a level's
+// level-start density is its authored "Fog density terrain" times kFogScale and
+// nothing else -- TerrainMesh_SetFog stores exactly that in gTerrainFogScale
+// (globallight.c:115,125 -> terrainmesh.c:302-320) and td_project exponentiates
+// it (terraind3d.c:164-167; proved at the instruction level in the retail
+// binary, where the two `fmul` operands at IGI.exe 0x513469 and 0x51346F are
+// gWorldScale and gTerrainFogScale).
+constexpr int kFogIntensityLevelDefault = 100;
+
+// The factor applied to the level's authored e-folding distance for a Fog
+// Intensity percentage, clamped to the 0..1000 range the pause-menu spinner
+// allows. 100 -> exactly 1.0, so the shader coefficient is the engine's
+// gTerrainFogScale; larger percentages shrink the distance (thicker fog).
+//
+// This is the editor's own preview control, NOT an engine rule: there is no
+// fog-intensity field anywhere in IGI-RE. It exists so a level can be previewed
+// with thicker or thinner haze than it authors, and 100 is the only value that
+// reproduces retail.
+float FogIntensityDistanceScale(int intensity);
+
+// ---------------------------------------------------------------------------
 // Fog_SetRange: how the engine fogs OBJECTS
 // ---------------------------------------------------------------------------
 

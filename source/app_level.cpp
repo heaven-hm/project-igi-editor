@@ -11,6 +11,7 @@
 #include "runtime/audio_system.h"
 #include "runtime/level_weather.h"
 #include "runtime/loading_bar_style.h"
+#include "runtime/mission_fog.h"
 #include "runtime/weather_mode.h"
 #include "runtime/pause_menu_state.h"
 #include "runtime/editor_camera_start.h"
@@ -222,6 +223,17 @@ void App::LoadLevel(int level_no) {
 		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
 		Logger::Get().Log(LogLevel::INFO, "[App] LoadLevel() START for level " + std::to_string(level_no));
 		Logger::Get().Log(LogLevel::INFO, "[App] ==========================================");
+
+		// A LEVEL STARTS AT ITS OWN AUTHORED FOG. The Fog Intensity spinner is a
+		// live preview multiplier and a level load must not inherit a stale one:
+		// retail has no such control anywhere, so the level-start density is the
+		// authored "Fog density terrain" x kFogScale and nothing else
+		// (TerrainMesh_SetFog, HOOK 0x50FD20, src/glowmesh/terrainmesh.c:302-320;
+		// publish() at src/animcam/globallight.c:115,125). Resetting here, before
+		// Level::LoadFogInfo calls SetupFog, is what makes every level start match
+		// the game; the spinner still previews thicker/thinner fog afterwards.
+		Config::Get().fogIntensity = igi::kFogIntensityLevelDefault;
+		renderer_.SetFogIntensity(igi::kFogIntensityLevelDefault);
 
 		// ── Loading overlay ──────────────────────────────────────────────────
 		// Staged progress: the load is synchronous, so the bar is redrawn and

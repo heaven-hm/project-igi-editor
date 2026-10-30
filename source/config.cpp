@@ -8,6 +8,7 @@
 #include "level/qvm_parser.h"
 #include "level/qvm_decompiler.h"
 #include "runtime/log_policy.h"
+#include "runtime/mission_fog.h"
 #include "runtime/weather_mode.h"
 #include <fstream>
 #include <iostream>
@@ -175,7 +176,12 @@ void Config::CreateDefault() {
     data_.enableLOD = true;
     data_.enableLightmaps = false;
     data_.enableFog = true;
-    data_.fogIntensity = 200;
+    // 100 == the level's authored fog, which is the engine's own density: the
+    // default was 200, i.e. every level started with TWICE the fog retail has
+    // (the exponent is doubled). The engine has no fog-intensity control at all
+    // (igi::kFogIntensityLevelDefault, runtime/mission_fog.h), so 100 is the only
+    // default that matches the game at level start.
+    data_.fogIntensity = igi::kFogIntensityLevelDefault;
     data_.musicEnabled = true;
     data_.weatherEnabled = true;
     data_.weatherMode = 0;

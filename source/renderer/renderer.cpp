@@ -1,4 +1,5 @@
 #include "renderer_internal.h"
+#include "runtime/mission_fog.h"
 #include <cmath>
 
 /*
@@ -209,12 +210,13 @@ void Renderer::SetFogIntensity(int intensity) {
 }
 
 void Renderer::ApplyFogIntensity() {
-  // fog_intensity_ is a percentage (0-1000); 100% = level default fog distance,
-  // 0% = 2x the distance (thin), higher percentages exponentially shrink the
-  // distance (thicker fog). Exponential decay keeps 0%/100% matching the old
-  // linear formula's values while extending smoothly out to 1000% instead of
-  // saturating at a hard floor around 200%.
-  float scale = std::max(0.001f, 2.0f * std::pow(0.5f, fog_intensity_ / 100.0f));
+  // The Fog Intensity preview multiplier, from the host-portable rule in
+  // runtime/mission_fog.h (igi::FogIntensityDistanceScale, pinned by
+  // MissionFogTest.FogIntensityScaleIsOneAtTheLevelDefault). 100 == the level's
+  // authored fog, i.e. the engine's own density; there is no such control in
+  // IGI-RE, so 100 is the only value that reproduces retail and it is the value a
+  // level starts at (App::LoadLevel resets it).
+  const float scale = igi::FogIntensityDistanceScale(fog_intensity_);
   float effective_far = fog_base_far_ * scale;
   float effective_object_far = object_fog_base_far_ * scale;
 

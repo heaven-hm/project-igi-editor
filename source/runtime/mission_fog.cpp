@@ -107,6 +107,15 @@ float LinearFogFarMetresForAuthoredDensity(float authored_density, float fallbac
     return (1.0f / authored_density) * kEFoldingMetresPerAuthoredDensity;
 }
 
+float FogIntensityDistanceScale(int intensity) {
+    // Renderer::ApplyFogIntensity's own curve, moved here so the host lane can
+    // pin it. The clamp is the pause-menu spinner's range (0..1000); the floor
+    // of 0.001 keeps the reciprocal Renderer::ApplyFogIntensity takes finite.
+    const int clamped = intensity < 0 ? 0 : (intensity > 1000 ? 1000 : intensity);
+    const float scale = 2.0f * std::pow(0.5f, static_cast<float>(clamped) / 100.0f);
+    return scale > 0.001f ? scale : 0.001f;
+}
+
 // Fog_SetRange HOOK 0x49B2D0 (src/dxinit/d3drender.c:108-131). See the header for
 // the full transcription and for why the returned units are the ones a GL
 // `gl_Position.w` carries in this editor.

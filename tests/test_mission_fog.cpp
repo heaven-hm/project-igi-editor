@@ -127,6 +127,54 @@ TEST(MissionFogTest, EFoldingDistanceIsTheEngineFogDistance) {
     EXPECT_EQ(igi::ExponentialFogDistanceForFraction(unit_scale, 1.0f), 0.0f);
 }
 
+TEST(MissionFogTest, FogIntensityScaleIsOneAtTheLevelDefault) {
+    // The Fog Intensity spinner is the editor's OWN preview control -- IGI-RE has
+    // no fog-intensity field anywhere -- so the one value that reproduces retail is
+    // 100, and a level must start there (App::LoadLevel resets it; the default was
+    // 200, i.e. TWICE retail's density, because the exponent is doubled).
+    EXPECT_FLOAT_EQ(igi::FogIntensityDistanceScale(igi::kFogIntensityLevelDefault), 1.0f);
+    EXPECT_EQ(igi::kFogIntensityLevelDefault, 100);
+
+    // The level-start identity, stated the way the shader sees it: at 100 the
+    // coefficient Renderer::ApplyFogIntensity writes is the engine's own
+    // gTerrainFogScale (the value TerrainMesh_SetFog stored, terrainmesh.c:302-320),
+    // so the exponent is `depth * gTerrainFogScale` with no multiplier at all.
+    constexpr float kModelScaleDown = 0.001f;   // source/common.h:54, == gWorldScale
+    for (float density : {0.115f, 0.12f, 0.4f, 1.2f, 1.89f, 3.0f, 4.79f, 9.5f}) {
+        const float far_metres =
+            igi::LinearFogFarMetresForAuthoredDensity(density, 30000.0f) *
+            igi::FogIntensityDistanceScale(igi::kFogIntensityLevelDefault);
+        const float coefficient =
+            1.0f / (far_metres * igi::kEditorWorldUnitsPerMetre * kModelScaleDown);
+        EXPECT_NEAR(coefficient, density * igi::kGlobalLightFogScale,
+                    density * igi::kGlobalLightFogScale * 1e-5f)
+            << "density " << density;
+    }
+
+    // The curve itself: 100 = authored, 200 = twice the density (half the
+    // distance), 300 = four times, and the low end approaches 2x the distance.
+    EXPECT_FLOAT_EQ(igi::FogIntensityDistanceScale(200), 0.5f);
+    EXPECT_FLOAT_EQ(igi::FogIntensityDistanceScale(300), 0.25f);
+    EXPECT_FLOAT_EQ(igi::FogIntensityDistanceScale(0), 2.0f);
+    EXPECT_FLOAT_EQ(igi::FogIntensityDistanceScale(50), 2.0f * std::sqrt(0.5f));
+
+    // Monotone: a larger percentage is never a longer distance (never thinner fog).
+    for (int i = 0; i < 1000; i += 25) {
+        EXPECT_GE(igi::FogIntensityDistanceScale(i), igi::FogIntensityDistanceScale(i + 25))
+            << "intensity " << i;
+    }
+
+    // The spinner's range is 0..1000 and the result is always a usable divisor
+    // (Renderer::ApplyFogIntensity divides by it).
+    EXPECT_FLOAT_EQ(igi::FogIntensityDistanceScale(-1), igi::FogIntensityDistanceScale(0));
+    EXPECT_FLOAT_EQ(igi::FogIntensityDistanceScale(99999), igi::FogIntensityDistanceScale(1000));
+    for (int i = -10; i <= 1010; i += 10) {
+        const float scale = igi::FogIntensityDistanceScale(i);
+        EXPECT_TRUE(std::isfinite(scale)) << "intensity " << i;
+        EXPECT_GE(scale, 0.001f) << "intensity " << i;
+    }
+}
+
 TEST(MissionFogTest, FogComputeIsTheLog2ShapeDividedBy65536) {
     // light.c:55-72. depth is scaled by fov*0.83 + 0.17 when that is below 1.
     const float scale = 1.89f * igi::kGlobalLightFogScale;
@@ -413,6 +461,71 @@ TEST(MissionFogCorpusTest, AllFourteenLevelsHaveAuthoredFog) {
         EXPECT_EQ(fog.keyframe_count, 2) << "level " << level;
         EXPECT_LT(fog.time_seconds, 100.0f) << "level " << level;
     }
+}
+
+TEST(MissionFogCorpusTest, LevelStartFogMatchesTheEngineOnEveryLevel) {
+    // The level-start contract, per shipped level: what the engine stores and
+    // exponentiates, and what the editor hands its shader at the Fog Intensity the
+    // level now starts at (100 == the authored value, igi::kFogIntensityLevelDefault).
+    //
+    //   engine:  gTerrainFogScale = authored "Fog density terrain" * 0.0005, clamped
+    //            0..16384 by TerrainMesh_SetFog (globallight.c:115,125;
+    //            terrainmesh.c:302-320), exponentiated as
+    //            1/exp(vz * gWorldScale * gTerrainFogScale) (terraind3d.c:164-167).
+    //   editor:  coefficient = 1 / (far_world * RENDERER_MODEL_SCALE_DOWN) with
+    //            far_world = (488.28125 / density) * 4096 world units
+    //            (Renderer::ApplyFogIntensity, source/renderer/renderer.cpp).
+    //
+    // The two must be the same number: at intensity 100 the editor's coefficient IS
+    // gTerrainFogScale, which is why the exponential is identical term for term.
+    // The `@200%` column is what the OLD default (200) produced -- twice the
+    // exponent, i.e. twice retail's fog -- so a reader can see the defect's size.
+    if (!fs::is_regular_file(LevelDir(1) / "OBJECTS.QVM")) {
+        GTEST_SKIP() << "retail IGI not found at " << GameRoot().string()
+                     << " (set IGI_GAME_PATH to point at it)";
+    }
+
+    constexpr float kModelScaleDown = 0.001f;   // source/common.h:54 == gWorldScale
+    std::printf("\n  level  authored   engine scale   e-fold(m)   editor far@100%%   editor coeff@100%%"
+                "   ratio   coeff@200%%   fog@100m  @300m   @1km\n");
+    int levels = 0;
+    for (int level = 1; level <= 14; ++level) {
+        const fs::path path = LevelDir(level) / "OBJECTS.QVM";
+        if (!fs::is_regular_file(path)) continue;
+        ++levels;
+
+        const QVMFile qvm = QVM_Parse(path.string());
+        ASSERT_TRUE(qvm.valid) << "LEVEL" << level << ": " << qvm.error;
+        const igi::MissionFog fog =
+            igi::ResolveMissionFog(KeyframesAsFogTasks(ExtractKeyframes(qvm)));
+        ASSERT_TRUE(fog.authored) << "LEVEL" << level;
+
+        const float density = fog.sets[0].density;
+        const float engine_scale = fog.terrain_fog_scale();
+        const float efolding_m = igi::ExponentialFogEFoldingDistance(engine_scale) / kFixed;
+
+        // What Level::LoadFogInfo -> Renderer::SetupFog hands over at 100%.
+        const float far_m = igi::LinearFogFarMetresForAuthoredDensity(density, 30000.0f) *
+                            igi::FogIntensityDistanceScale(igi::kFogIntensityLevelDefault);
+        const float far_world = far_m * igi::kEditorWorldUnitsPerMetre;
+        const float coeff_100 = 1.0f / (far_world * kModelScaleDown);
+        const float coeff_200 = coeff_100 / igi::FogIntensityDistanceScale(200);
+
+        const float at_100m = igi::ExponentialFogAmount(100.0f * kFixed, engine_scale) * 100.0f;
+        const float at_300m = igi::ExponentialFogAmount(300.0f * kFixed, engine_scale) * 100.0f;
+        const float at_1km = igi::ExponentialFogAmount(1000.0f * kFixed, engine_scale) * 100.0f;
+
+        std::printf("  %5d  %8.3f  %12.8f  %9.1f  %15.1f  %17.9f  %6.3f  %10.6f  %7.1f%%  %5.1f%%  %5.1f%%\n",
+                    level, density, engine_scale, efolding_m, far_m, coeff_100,
+                    coeff_100 / engine_scale, coeff_200, at_100m, at_300m, at_1km);
+
+        // THE LEVEL-START CONTRACT: at the intensity a level starts at, the editor's
+        // shader coefficient is the engine's own gTerrainFogScale.
+        EXPECT_NEAR(coeff_100, engine_scale, engine_scale * 1e-5f) << "LEVEL" << level;
+        EXPECT_GT(efolding_m, 1.0f) << "LEVEL" << level;
+        EXPECT_GT(at_100m, 1.0f) << "LEVEL" << level;
+    }
+    EXPECT_EQ(levels, 14) << "the corpus must be all fourteen shipped levels";
 }
 
 TEST(MissionFogCorpusTest, Level1AndLevel4MatchTheDecompiledText) {

@@ -88,7 +88,12 @@ struct ConfigData {
     bool enableLOD; // Portal/attachment distance culling for buildings
     bool enableLightmaps; // Apply calculated "Calculate Lightmap" textures during render (Escape menu checkbox)
     bool enableFog; // Terrain/object atmospheric fog — toggle in Terrain Settings panel
-    int fogIntensity; // 0-200 (%), step 10; 100 = level default, higher = thicker fog
+    // Fog Intensity PREVIEW multiplier, 0..1000 (%) in steps of 100 from the pause
+    // menu. 100 (igi::kFogIntensityLevelDefault) = the level's authored fog, which
+    // is the engine's own density; a level ALWAYS STARTS at 100 (App::LoadLevel
+    // resets it, because retail has no such control), so this value only carries a
+    // preview adjustment from one level to the next.
+    int fogIntensity;
     bool musicEnabled; // Escape-menu Music checkbox preference — persists across level loads/game launches
     bool weatherEnabled; // Authored rain/snow visibility — toggle in the pause menu
     int  weatherMode;    // 0 = Default (Authored), 1 = Rain (Forced), 2 = Snow (Forced), 3 = Off
