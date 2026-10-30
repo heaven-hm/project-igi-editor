@@ -22,8 +22,9 @@ namespace TaskSchemaNS {
 
 int TypeArgCount(const std::string& t) {
     // "ObjectPos" is an alias of "Real64x3" in the game (IGI-RE
-    // src/physobj/paramops.c:183 — kParamAliases {"ObjectPos", &gParamObjectPos,
-    // &gParamReal64x3}); both consume three script args (Param_Three, paramops.c:143).
+    // src/physobj/paramops.c:185 — kParamAliases {"ObjectPos", &gParamObjectPos,
+    // &gParamReal64x3}); both consume three script args (Param_Three op,
+    // paramops.c:150).
     if (t == "ObjectPos" || t == "Real64x3" || t == "Real32x9" || t == "RGB" ||
         t == "Real32x3"  || t == "Colour")   return 3;
     return 1;   // String16, VarString, Real32, Int32, Bool, …
@@ -94,7 +95,7 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
         // zipline, which is a sloped Wire) could not be authored or previewed.
         //
         // The End anchor is declared "Real64x3" (the type ObjectPos aliases,
-        // paramops.c:183) rather than "ObjectPos": the editor's position drag
+        // paramops.c:185) rather than "ObjectPos": the editor's position drag
         // (App::ApplyPropPositionDrag) treats EVERY ObjectPos field as the
         // object's own position and writes obj.pos, so a second ObjectPos field
         // would move the start anchor instead of the end one. Real64x3 renders as
@@ -360,8 +361,8 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
         // (HOOK 0x437510, src/fxobj/smoke.c:166-187), which agree entry for entry
         // with Task_DeclareParameters("Smoke", ...) in the retail data
         // (MISSIONS/location0/LEVEL2/objects.qsc:59-61): 25 script arguments,
-        // because "Position" is ObjectPos (3 args, paramops.c:183-185) and
-        // "Colour" is RGB (3 args, paramops.c:180).
+        // because "Position" is ObjectPos (3 args, paramops.c:185,150) and
+        // "Colour" is RGB (3 args, paramops.c:182).
         //
         // There is deliberately no "Orientation" row: Smoke has no Real32x9
         // slot, which is why Smoke is not in the placement-matrix group above.
@@ -415,10 +416,42 @@ TaskSchema ParseDeclaration(const std::vector<std::string>& declArgs) {
     TaskSchema schema;
     if (declArgs.size() < 3) return schema; // need TypeName + at least one (name,type)
     int off = 3; // id, type, note occupy 0..2; first declared field starts at 3
+
+    // In the editor, "ObjectPos" is not a passive type name: it is the widget the
+    // property panel binds to the TASK'S OWN transform (the 2D pad, the Z slider,
+    // the snap buttons, and the commits that write obj.pos -- see
+    // App::ApplyPropPositionDrag, source/app_input_mouse.cpp, and
+    // App::CommitPropTextEdit, source/app_editor.cpp). A task can declare several
+    // ObjectPos parameters that are NOT its transform, and the retail levels do:
+    //
+    //   Task_DeclareParameters("Wire", "Start position", "ObjectPos",
+    //                          "Stop position", "ObjectPos", "Model", "String16");
+    //   MISSIONS/location0/level1/objects.qsc:69
+    //
+    // which mirrors the engine's own table -- Wire_Open HOOK 0x43EFF0
+    // (IGI-RE src/props/wire.c:108-111) adds Param_ObjectPos(start),
+    // Param_ObjectPos(end), Param_String16(model) in that order. Only the start
+    // anchor is the task position the editor mirrors in `LevelObject::pos`; the
+    // stop anchor is just three doubles (Param_ObjectPos is an alias of
+    // Param_Real64x3, src/physobj/paramops.c:185, and both parse through
+    // Param_Three, :150). Declaring it "ObjectPos" here made the runtime schema
+    // -- which takes precedence over the builtin one (GetSchema, below) -- mask
+    // the builtin Wire schema's "End" row (Real64x3, :103-105): dragging the inspector's Stop
+    // position pad wrote obj.pos and then UpdateCoordinatesInLine wrote that back
+    // to the START anchor's args 3-5, so the wire's stop anchor could not be
+    // authored and any attempt moved its start.
+    //
+    // Demote every ObjectPos after the first to Real64x3: type-identical to the
+    // engine (same alias, same three tokens), but rendered as three numeric boxes
+    // that commit to argTokens at the declared offset. The first ObjectPos stays
+    // as it is -- that is the placement the task itself is drawn at.
+    int object_pos_fields = 0;
     for (size_t i = 1; i + 1 < declArgs.size(); i += 2) {
         FieldDef f;
         f.name      = Unquote(declArgs[i]);
         f.typeName  = Unquote(declArgs[i + 1]);
+        if (f.typeName == "ObjectPos" && object_pos_fields++ > 0)
+            f.typeName = "Real64x3";   // ObjectPos alias, paramops.c:185
         f.argCount  = TypeArgCount(f.typeName);
         f.argOffset = off;
         off += f.argCount;

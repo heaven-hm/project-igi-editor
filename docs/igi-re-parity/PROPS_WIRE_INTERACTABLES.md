@@ -187,6 +187,91 @@ because `Wire_ParamsChanged` overrides the object's placement
 
 ---
 
+### 1.6 Two editor-side behaviours resolved (Wire task, follow-up campaign)
+
+The shipped level script declares the wire itself, and that runtime declaration is
+what `TaskSchemaNS::GetSchema("Wire")` returns (registered schemas take precedence
+over builtins). It is verbatim:
+
+```
+Task_DeclareParameters("Wire", "Start position", "ObjectPos",
+                       "Stop position", "ObjectPos", "Model", "String16");
+MISSIONS/location0/level1/objects.qsc:69
+```
+
+**(a) The runtime declaration masked the fixed `End` row — fixed.** §1.5 added the
+builtin `Wire` schema's `End` field as `Real64x3` precisely so
+`App::ApplyPropPositionDrag` (source/app_input_mouse.cpp) and
+`App::CommitPropTextEdit` (source/app_editor.cpp) — which bind every `ObjectPos`
+field to `obj.pos` — could not write the stop anchor into the start anchor's args
+3-5. But the level's own declaration re-declared `"Stop position"` as `ObjectPos`,
+so the row that was actually loaded was the broken one; the builtin was never
+consulted on level 1. `TaskSchemaNS::ParseDeclaration` (source/level/task_schema.cpp)
+now demotes every `ObjectPos` after the first to `Real64x3`, the type the engine
+aliases it to (`src/physobj/paramops.c:185`; both use `Param_Three`,
+`paramops.c:150`). The token count and offsets are unchanged (3 start, 3 stop,
+1 model — `Wire_Open` HOOK 0x43EFF0, `src/props/wire.c:108-111`); only the editor
+widget changes, from a position pad that writes `obj.pos` to three numeric boxes
+that commit to `argTokens[6..8]`. The first `ObjectPos` of any declaration is
+untouched, so all other task types keep their position pad.
+
+**(b) "Snapping Wire to original QSC Z" — removed.** The log line came from
+`App::SnapObjectsToTerrain` (source/app_view.cpp), which included `obj.isWire` in a
+group that "restored" `obj.pos.z = obj.original_pos.z` whenever the object was not
+modified. There is no such engine step, and there is no Z parameter on a Wire:
+
+* `Wire_Open` HOOK 0x43EFF0 (`src/props/wire.c:89-113`) installs three parameters
+  only: start `ObjectPos`, end `ObjectPos`, model `String16`.
+* `Wire_Create` HOOK 0x43F1F0 (`wire.c:115-131`) only adds the task to the world's
+  dynamic-cube list; it never calls `Coll_Drop` or any terrain query.
+* `Wire_ParamsChanged` HOOK 0x43F3D0 (`wire.c:160-191`) derives the object's
+  position as `(start + end) / 2` and its matrix from the anchor direction. That is
+  the only thing that ever sets it.
+
+The restore was also a no-op on a freshly parsed level (`obj.pos.z` already equals
+`original_pos.z`, and the branch skips the snap below it), so the log claimed a
+snap that neither the engine nor the editor performed. The branch now skips a Wire
+outright and leaves both authored anchors untouched.
+
+**What the wire model itself contains — there is nothing to spawn.** Measured on
+the shipped `level1` copy of `320_01_1`
+(`MISSIONS/location0/level1/MODELS/models/320_01_1.mef`, 1792 bytes, md5
+`aa70a4125ee4a6c4a48edd05713192ba`, the same bytes inside `LEVEL1.RES` /
+`LEVEL1_unpacked`):
+
+* the `MESH` chunk's payload is 156 bytes, `attach_count` at +0x7E is **0**;
+* the `ATTA` chunk is present but its header size word is **0** — no records;
+* the render stream is `XTRV` — **18 vertices**, stride 32 — and `DNER` is one
+  group of 24 indices (8 triangles), `primType` (RD3D +0x00) = **4**
+  (D3DPT_TRIANGLELIST). The editor's format-0 path parses exactly this
+  (`ParseRigidVertices` + `WalkGroups`, mef_native.cpp), so the rod is drawable;
+* the render vertices span local `y = -2048 .. +2048` (1 m at 4096 units/m), a
+  narrow prism with `|x| ≤ 54.91`, `z ≤ 127.99` world units;
+* `MVTX` (the "model points" `Model_GetPoint` reads — the 16-byte records with a
+  trailing magic type) holds **2 points**, at local `y = -2048` and `y = +2048`,
+  `x ≈ 17.5847`, `z ≈ 121.514`. Those are the two ends `Wire_GetMatrix`
+  (`wire.c:289-301`) and `Wire_Use` (`wire.c:200-226`) address as points 0 and 1.
+
+So the wire's ±2048 Y extent is exactly what `obj.scale[1] = len/4096` maps onto
+the two anchors. `Wire_Create` never calls `RigidDynCubeObj_CreateMagicObjs`
+(contrast `PhysicsMagicObj_Create`, `src/editobj/physmagic.c:79-83`), so the engine
+draws one model and spawns no posts, insulators or extra pieces. "Wire missing
+models" can only be the editor failing to draw that one model, never a missing
+child; §1.5's stretch implements the engine's placement, and the smoke run
+resolves the model (§6).
+
+**(c) "AI rotation override (horizontal only)" — not in the current tree; it was
+already removed and its absence is correct.** The engine builds a human's transform
+from its authored yaw alone: `Human_SetYaw` HOOK 0x463220
+(`src/viewcam/human.c:328-335`) stores `baseZ`/`rotZ` and calls `Matrix_SetRotZ`;
+`Human_ParamChangedHandler` HOOK 0x45F890 (`src/humanbase/human.c:449-462`) does the
+same for a parameter change. There is no Alpha/Beta term on a human and no
+horizontal-only override anywhere in the oracle. The removed loop also mutated the
+document (it wrote `rot.x`/`rot.y`/`rot.z`, which `UpdateCoordinatesInLine` saves),
+so replaying it would corrupt authored data. The code now carries only the note at
+source/app_level.cpp:433-461; `grep -rn "rotation override" source/` matches
+comments only.
+
 ## 2. (b) Stationary machinegun — IGI-RE evidence
 
 ### 2.1 `StationaryGun` (the player-mannable machinegun)
@@ -358,6 +443,17 @@ Fence constants for reference (`src/props/fence.c:304-310`): `kSparkBase = 1.5`,
 `source/renderer/renderer_objects.cpp` (Lead's file) now carries the two applied
 hunks: `:845-882` (wire stretch) and `:891-892` (gizmo call).
 
+### 5.1 Follow-up campaign (§1.6)
+
+| File | Change |
+| --- | --- |
+| `source/level/task_schema.cpp` | `ParseDeclaration` demotes every ObjectPos after the first to `Real64x3` (the engine alias) so the level's own `Wire` declaration cannot mask the builtin `End` row; nearby `paramops.c` line citations corrected to `:185` (alias) / `:150` (Param_Three) |
+| `source/app_view.cpp` | `SnapObjectsToTerrain`: Wire is skipped on its own, with the engine citations; the dead "restore original QSC Z" and its misleading log are gone |
+| `tests/test_props_wire_interactables.cpp` | +3 tests: retail Wire declaration, first-ObjectPos guard, three shipped level-1 wire spans |
+| `docs/igi-re-parity/PROPS_WIRE_INTERACTABLES.md` | this section + verification status |
+
+No file was added to `CMakeLists.txt`: the test file was already registered.
+
 ---
 
 ## 6. Verification status
@@ -365,7 +461,10 @@ hunks: `:845-882` (wire stretch) and `:891-892` (gizmo call).
 Proved:
 
 * **Unit tests pass.** `IGI_HOST_TESTS=tests/test_props_wire_interactables.cpp bash scripts/run-host-tests.sh`
-  → `[  PASSED  ] 29 tests.` / `OK: 29 tests passed in 1 suites` / exit 0.
+  → `[  PASSED  ] 29 tests.` / `OK: 29 tests passed in 1 suites` / exit 0. The
+  follow-up campaign (§1.6) added three tests — the retail `Wire` declaration, the
+  "first ObjectPos stays" guard, and the three shipped level-1 wire spans — and the
+  suite is now `OK: 32 tests passed in 1 suites`, exit 0.
 * **Compiles for every target that builds each TU** — `python3 tools/igi-re-parity/tu-check.py <file>`
   replays the real cross-build commands from `build-mingw/compile_commands.json`
   (i686-w64-mingw32-g++): `task_schema.cpp` OK ×3 (igi-editor, igi_tests, igi_mcp),
@@ -373,9 +472,23 @@ Proved:
   `renderer_objects.cpp` OK ×1 — `checked N translation unit(s), 0 failed` in each case.
   (Header-only files have no compile-command entry of their own; they are covered by
   the TUs that include them.)
-* **The whole host suite passes on the merged tree**:
-  `bash scripts/run-host-tests.sh` → `OK: 343 tests passed in 32 suites`, exit 0,
-  including the 29 new tests and the previously failing `test_mcp_domain_tools`.
+* **The whole host suite passes on the merged tree** (at the time this document was
+  written): `bash scripts/run-host-tests.sh` → `OK: 343 tests passed in 32 suites`,
+  exit 0. On today's tree the full lane is NOT green for reasons unrelated to these
+  files: 5 suites fail on missing fixtures / Windows-style corpus paths
+  (`test_qvm_roundtrip`, `test_dat_parser`, `test_graph_parser`,
+  `test_cutscene_rules`, `test_sound_rules`) and `test_terrain_ctr_rules` fails to
+  compile on `source/level/../common.h:97`. Every host suite that exercises
+  `ParseDeclaration` (including `test_declared_position_fallback` and
+  `test_spline_task_tree`) passes.
+* **Follow-up campaign (§1.6) evidence.** MinGW
+  `cmake --build build-mingw --target igi-editor --parallel 1` → exit 0 (compiled
+  `app_view.cpp`, `task_schema.cpp`, linked `bin/Release/igi1ed.exe`). Headless
+  level-1 smoke under Wine (`--smoke-level --level 1 --smoke-verbose`): 1416 tasks,
+  523 placements examined, 85 distinct models, **0 missing**, with
+  `320_01_1 (object) <- .../level1/models/level1.res [this level, level 1]` — the
+  wire model is resolved from the owning level archive, as `VirModel_Find` does
+  (`src/model/model.c`; `Wire_ParamsChanged`, `wire.c:180`).
 
 Not verified (honest list):
 
@@ -383,14 +496,18 @@ Not verified (honest list):
   applied and compiles, and its maths is unit-tested, but no editor session was run
   to look at a stretched wire on screen. Same for the gizmos: the call site exists
   and compiles, but their on-screen geometry is unverified.
-* ⏳ **No retail QSC data was available to validate authored values.** The only
-  fixture, `tests/fixtures/level01_simple.qsc`, has 2 lines and contains no
-  `Wire`, `StationaryGun` or `AIStationaryGunHolder`. Every default/offset is
-  derived from the oracle's param tables, not from a real level script.
-* ⏳ **No MinGW cross build was run by me** (`build-gate` owns `build-mingw`).
+* ✅ **Retail QSC data is now validated.** `tests/fixtures/level01_simple.qsc`
+  still has no Wire, but the shipped scripts were available all along under
+  `MISSIONS/location0/`; §1.6 now pins the three real level-1 wire records
+  (`level1/objects.qsc:888-890`) and the retail `Task_DeclareParameters("Wire", …)`
+  line (`:69`) in tests. The level is loaded by the shipped binary's smoke mode,
+  which resolves `320_01_1` from `level1/models/level1.res`.
+* ✅ **MinGW cross build was run** for the follow-up: exit 0 for `igi-editor`.
 * ⏳ **No runtime/editor session was run**, so the inspector rendering of the new
   `Degrees` / `String32` / `VarString` / `Real64x3` fields was verified only by
-  reading `source/renderer/renderer_draw.cpp:2498-2712`, not by clicking them.
+  reading `source/renderer/renderer_draw.cpp:2498-2712`, not by clicking them. In
+  particular the fixed Wire inspector — Stop position as three numeric boxes at
+  args 6-8 instead of a pad that moves the start anchor — needs the user's eyes.
 * ⚠️ **`tools/igi-re-parity/tu-check.py` is currently unreliable**: the PCH in
   `build-mingw/CMakeFiles/{igi-editor,igi_tests}.dir/cmake_pch.hxx` predates these
   header edits and GCC does not reject it, so it reports bogus

@@ -389,7 +389,7 @@ TEST(BuiltinSchema, WireExposesBothAnchors) {
 }
 
 // The End anchor uses Real64x3 (the type ObjectPos aliases, IGI-RE
-// src/physobj/paramops.c:183) so the editor's ObjectPos position-drag — which
+// src/physobj/paramops.c:185) so the editor's ObjectPos position-drag — which
 // always writes obj.pos — cannot be triggered on it.
 TEST(BuiltinSchema, WireEndIsAThreeComponentField) {
     const TaskSchema* sc = GetBuiltinSchema("Wire");
@@ -460,5 +460,104 @@ TEST(BuiltinSchema, InteractablesAreNotGeneric) {
         const TaskSchema* sc = GetBuiltinSchema(t);
         ASSERT_NE(sc, nullptr) << t;
         EXPECT_GT(sc->size(), 3u) << t;
+    }
+}
+
+// ── Runtime schema (Task_DeclareParameters) — the one the level actually loads ─
+
+// The retail level declares Wire itself, and a registered schema takes precedence
+// over the builtin (GetSchema, source/level/task_schema.cpp):
+//
+//   Task_DeclareParameters("Wire", "Start position", "ObjectPos",
+//                          "Stop position", "ObjectPos", "Model", "String16");
+//   MISSIONS/location0/level1/objects.qsc:69
+//
+// Before the fix, that runtime schema replaced the builtin's Real64x3 "End" row
+// with a second ObjectPos. ObjectPos is the widget bound to the task's OWN
+// transform (App::ApplyPropPositionDrag writes obj.pos, and
+// UpdateCoordinatesInLine then writes obj.pos to args 3-5), so on level 1 — the
+// level that has the authored wires — the Stop position pad moved the START
+// anchor instead of the stop anchor. ParseDeclaration now demotes every ObjectPos
+// after the first to Real64x3, the type ObjectPos aliases
+// (src/physobj/paramops.c:185); the three tokens and their offset are unchanged.
+TEST(RuntimeSchema, WireDeclarationKeepsTheStopAnchorOutOfObjectPos) {
+    const TaskSchema sc = ParseDeclaration(
+        {"Wire", "Start position", "ObjectPos",
+         "Stop position", "ObjectPos", "Model", "String16"});
+    ASSERT_EQ(sc.size(), 3u);
+    EXPECT_EQ(sc[0].name, "Start position");
+    EXPECT_EQ(sc[0].typeName, "ObjectPos");   // the task's own position @3-5
+    EXPECT_EQ(sc[0].argOffset, 3);
+    EXPECT_EQ(sc[0].argCount, 3);
+    EXPECT_EQ(sc[1].name, "Stop position");
+    EXPECT_EQ(sc[1].typeName, "Real64x3");     // NOT ObjectPos: no obj.pos binding
+    EXPECT_EQ(sc[1].argOffset, 6);
+    EXPECT_EQ(sc[1].argCount, 3);
+    EXPECT_EQ(sc[2].name, "Model");
+    EXPECT_EQ(sc[2].typeName, "String16");
+    EXPECT_EQ(sc[2].argOffset, 9);
+
+    // And that is what GetSchema returns once a level has loaded, since the
+    // registered schema shadows the builtin one.
+    RegisterSchema("Wire", sc);
+    const TaskSchema* live = GetSchema("Wire");
+    ASSERT_NE(live, nullptr);
+    ASSERT_EQ(live->size(), 3u);
+    EXPECT_EQ((*live)[1].typeName, "Real64x3");
+    ClearRegisteredSchemas();
+}
+
+// A declaration whose ONLY ObjectPos is not the first field (ConditionalSound,
+// objects.qsc:78: Condition, SoundDef, Position) must keep that ObjectPos: the
+// demotion is about a SECOND position parameter, not about its field index.
+TEST(RuntimeSchema, FirstObjectPosStaysRegardlessOfItsIndex) {
+    const TaskSchema sc = ParseDeclaration(
+        {"ConditionalSound", "Condition", "VarString", "SoundDef", "String32",
+         "Position", "ObjectPos", "Simple", "bool8"});
+    ASSERT_EQ(sc.size(), 4u);
+    EXPECT_EQ(sc[2].typeName, "ObjectPos");
+    EXPECT_EQ(sc[2].argOffset, 5);   // 3 + 1 + 1
+}
+
+// ── Shipped data (level 1 is the retail level that authors objects.qsc Wires) ─
+
+// MISSIONS/location0/level1/objects.qsc:888-890, verbatim:
+//   Task_New(3500, "Wire", "", 24631402.0, -56199400.0, 174434752.0,
+//                                 24760932.0, -56297984.0, 174434752.0, "320_01_1")
+//   Task_New(3501, "Wire", "", 24649340.0, -55968532.0, 174500528.0,
+//                                 24441788.0, -56251736.0, 174470384.0, "320_01_1")
+//   Task_New(3502, "Wire", "", 24472610.0, -55944580.0, 174442496.0,
+//                                 24446002.0, -56045108.0, 174433600.0, "320_01_1")
+//
+// Every value below is Wire_ParamsChanged (0x43F3D0, src/props/wire.c:160-191)
+// applied to those tokens: mid = (start+end)/2, length = |end-start|,
+// yScale = length/4096 (kWireScale, wire.c:320-321). Wire 3500 is level (dz = 0),
+// so Wire_IsSloped (wire.c:304-317) is false and it is a hand-over wire; 3501 and
+// 3502 descend, so their Matrix_SetYAxis X-Euler is > 2 degrees and they are the
+// ziplines HumanPlayer_StartAction case 9 rides (humanstate.c:958-963).
+TEST(ShippedWires, LevelOneWiresResolveToTheEngineSpan) {
+    struct Case {
+        double s[3], e[3];
+        double length, yScale;
+        bool zipline;
+    };
+    const Case cases[] = {
+        {{24631402.0, -56199400.0, 174434752.0},
+         {24760932.0, -56297984.0, 174434752.0}, 162778.45667040831, 39.740834148048904, false},
+        {{24649340.0, -55968532.0, 174500528.0},
+         {24441788.0, -56251736.0, 174470384.0}, 352407.43331547367, 86.036971024285563, true},
+        {{24472610.0, -55944580.0, 174442496.0},
+         {24446002.0, -56045108.0, 174433600.0}, 104369.55142185866, 25.480847515102212, true},
+    };
+    for (const Case& c : cases) {
+        const WireSpan w = ComputeWireSpan(Vec3(c.s[0], c.s[1], c.s[2]),
+                                           Vec3(c.e[0], c.e[1], c.e[2]));
+        ASSERT_TRUE(w.valid);
+        EXPECT_NEAR(w.length, c.length, 1e-6);
+        EXPECT_NEAR(w.yScale, c.yScale, 1e-9);
+        EXPECT_NEAR(w.mid.x, (c.s[0] + c.e[0]) / 2.0, 1e-9);
+        EXPECT_NEAR(w.mid.y, (c.s[1] + c.e[1]) / 2.0, 1e-9);
+        EXPECT_NEAR(w.mid.z, (c.s[2] + c.e[2]) / 2.0, 1e-9);
+        EXPECT_EQ(w.isZipline, c.zipline);
     }
 }

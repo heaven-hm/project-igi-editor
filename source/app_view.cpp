@@ -657,6 +657,25 @@ void App::SnapObjectsToTerrain() {
             skipped++;
             continue;
         }
+        // A Wire is not a placed object at all: the engine derives its position
+        // from two AUTHORED anchors and never queries the ground for it.
+        //   Wire_Open   HOOK 0x43EFF0 (src/props/wire.c:89-113) declares the
+        //     params start/end/model; there is no Z or "snap" parameter.
+        //   Wire_Create HOOK 0x43F1F0 (wire.c:115-131) only adds the task to the
+        //     world's DynCube list -- no Coll_Drop, no terrain lookup.
+        //   Wire_ParamsChanged HOOK 0x43F3D0 (wire.c:160-191) then derives the
+        //     object's position as (start + end) / 2 and its matrix from the
+        //     anchor direction; nothing else ever moves it.
+        // So the editor must leave BOTH anchors exactly as authored.  The old
+        // branch here included Wire in the "restore original QSC Z" group and
+        // logged "[App] Snapping Wire to original QSC Z": that restore was a no-op
+        // on a freshly parsed object (obj.pos.z already equals original_pos.z and
+        // the snap below never runs for this branch) and the log claimed a snap
+        // that neither the engine nor this pass performs.  Skip it outright.
+        if (obj.isWire) {
+            skipped++;
+            continue;
+        }
         // Skip snapping for Cameras, Terminals, Trains and Spline Waypoints
         // Terminals sit on interior floors at their exact QSC Z, not outdoor terrain.
         // AI soldiers do NOT fall through to the terrain drop any more: their Z
@@ -666,7 +685,7 @@ void App::SnapObjectsToTerrain() {
         if (obj.type == "SCamera" || obj.type == "SCameraControl" || obj.type == "AlarmControl" ||
             obj.type == "AIStationaryGunHolder" || obj.type == "StationaryGun" ||
             obj.type == "Door" || obj.type == "Terminal" || obj.type == "SplineObjWaypoint" ||
-            obj.type == "AmbientArea" || obj.type == "Elevator" || obj.isWire || obj.type == "Train") {
+            obj.type == "AmbientArea" || obj.type == "Elevator" || obj.type == "Train") {
             
             // Only restore original Z if the object has NOT been moved/modified by the user
             // or by its parent building. This allows hierarchical movement to stick.
