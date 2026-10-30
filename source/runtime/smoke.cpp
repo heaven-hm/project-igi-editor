@@ -444,7 +444,7 @@ void SmokeEmitVelocity(const float dir[3], float spread, float speed_a, float sp
 }
 
 bool SmokeParticleTick(SmokeParticleState& p, const float gravity[3], float grow, int frame_delay,
-                       int animated_frames) {
+                       int last_frame) {
     // particle.c:280-285.
     if (gravity != nullptr) {
         for (int i = 0; i < 3; ++i) p.vel[i] = p.vel[i] + gravity[i];
@@ -453,10 +453,16 @@ bool SmokeParticleTick(SmokeParticleState& p, const float gravity[3], float grow
     // particle.c:286-287.
     p.angle = p.spin + p.angle;
     p.scale = grow + p.scale;
-    // particle.c:288-292: only an animated sprite advances its frame.
-    if (animated_frames > 0 && ++p.frame_timer >= frame_delay) {
+    // particle.c:288-292, verbatim:
+    //   if (last && ++p->frameTimer >= t->frameDelay) {
+    //       p->frameTimer = 0;
+    //       if (p->frame < last) p->frame++;
+    //   }
+    // `last` is the map's cols - 1 (particle.c:271-272), so `p->frame` tops out
+    // at `last`, not at `last - 1`: a 7-column map reaches frame 6.
+    if (last_frame > 0 && ++p.frame_timer >= frame_delay) {
         p.frame_timer = 0;
-        if (p.frame < animated_frames - 1) ++p.frame;
+        if (p.frame < last_frame) ++p.frame;
     }
     // particle.c:293-304.
     if (p.delay != 0) {
@@ -523,6 +529,45 @@ void SmokeGroupColour(const SmokeParams& params, float out_colour[3]) {
     // smoke.c:398-400: `scale = unk104 * kScale`.
     if (out_colour == nullptr) return;
     for (int i = 0; i < 3; ++i) out_colour[i] = params.colour[i] * kSmokeColourScale;
+}
+
+void SmokeParticleColour(const float group_colour[3], std::uint32_t flags, float level,
+                         float out_rgba[4]) {
+    // Particle2D_Draw's colour block, verbatim (particle.c:194-203):
+    //
+    //   if (t->flags) {
+    //       if (t->flags & 0x80000) alpha = p->level;
+    //       else { alpha = kOne.f; r = t->color.x * p->level; g = ...; b = ...; }
+    //   }
+    //
+    // `r`, `g`, `b` start as the group's colour (particle.c:117-133) and
+    // `alpha` starts at 0 with no flags ("the original leaves alpha unset when
+    // there are no flags", particle.c:110) -- so a group with zero flags draws
+    // nothing, which is the engine's own outcome, not a fallback.
+    //
+    // The colour is in the engine's SPRITE-COLOUR scale, not bytes:
+    // QVertex_DrawQuadEx multiplies by gColorScale (qvertex.c:79-84), and
+    // `DATA(534AB0) const float gColorScale INIT(0.0078125f)` (qvertex.c:189) is
+    // 1/128 -- an authored "Colour" of (2,2,2) becomes 126 -> 0.98. The alpha is
+    // NOT scaled (QVertex_DrawQuadEx passes `a` through, qvertex.c:81-84) and
+    // D3DQVertex_Emit packs the strip alpha with *255 (d3d.c:392).
+    constexpr float kColorScale = 0.0078125f;  // gColorScale, src/res/qvertex.c:189
+    constexpr std::uint32_t kLevelIsAlpha = 0x80000u;
+    if (out_rgba == nullptr) return;
+
+    out_rgba[0] = group_colour[0] * kColorScale;
+    out_rgba[1] = group_colour[1] * kColorScale;
+    out_rgba[2] = group_colour[2] * kColorScale;
+    out_rgba[3] = 0.0f;
+    if (flags == 0) return;                 // particle.c:194 `if (t->flags)`
+    if (flags & kLevelIsAlpha) {
+        out_rgba[3] = level;                // particle.c:195-196
+        return;
+    }
+    out_rgba[0] *= level;                   // particle.c:198-202
+    out_rgba[1] *= level;
+    out_rgba[2] *= level;
+    out_rgba[3] = 1.0f;
 }
 
 float SmokeGroupGrow(const SmokeParams& params) {

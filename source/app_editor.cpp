@@ -753,6 +753,7 @@ void App::CalculateLightmapsForAllObjects() {
 		// ~100 lightmap textures) its virtual address space runs out well before this
 		// loop's own bad_alloc catch below fires elsewhere in the frame — bail out with
 		// headroom to spare instead of racing the process toward a hard crash.
+#if defined(_WIN32)
 		MEMORYSTATUSEX memStatus{};
 		memStatus.dwLength = sizeof(memStatus);
 		if (GlobalMemoryStatusEx(&memStatus) && memStatus.ullAvailVirtual < 300ull * 1024 * 1024) {
@@ -761,6 +762,7 @@ void App::CalculateLightmapsForAllObjects() {
 				": process is low on virtual address space (32-bit build).");
 			break;
 		}
+#endif
 		LevelObject& obj = objects[targets[n]];
 		DrawProgressOverlay("Calculating Lightmaps",
 			2 + static_cast<int>(98 * (n + 1) / targets.size()),
@@ -975,6 +977,15 @@ void App::CommitPropTextEdit() {
 		level_.GetLevelObjects().ResolveSoldierWeapon(obj.parentIndex);
 	} else {
 		level_.GetLevelObjects().ResolveSoldierWeapon(oi);
+	}
+
+	// A StationaryGun's "Weapon" field (ParamTable slot 3, arg@10) selects the
+	// weapon model the engine mounts on the gun (StationaryGun_Changed 0x474980,
+	// IGI-RE src/statgun/statgun.c:331-336 -> WeaponType_Find 0x413BD0 ->
+	// `wt->key` at gun.c:506). Re-resolve on commit so the viewport shows the
+	// newly authored weapon immediately instead of after a reload.
+	if (obj.type == "StationaryGun") {
+		level_.GetLevelObjects().ResolveMountedWeapon(oi);
 	}
 
 	// Live-sync the graph overlay offset when the user moves the AIGraph
@@ -1396,6 +1407,18 @@ void App::DecompileFromGame(int level_no) {
 }
 
 void App::LaunchGame() {
+#if !defined(_WIN32)
+	// Launching IGI is Win32 process management end to end: CreateProcess on
+	// igi.exe, OpenProcess + CreateThread to monitor it, EnumWindows/PostMessage
+	// for a graceful close, and RegisterHotKey to toggle back.  A macOS build
+	// cannot start a Windows PE, so the feature is reported as unavailable
+	// rather than silently doing nothing.
+	Utils::LogAndShowError(
+	    "Launching the game (igi.exe) is a Windows-only feature and is not "
+	    "available in the native macOS build.",
+	    "IGI Editor");
+	return;
+#else
 	if (game_process_.running) {
 		// ── Toggle OFF: stop the running game ──────────────────────────────────
 		Logger::Get().Log(LogLevel::INFO, "[ToggleGame] Game is running (PID=" +
@@ -1526,6 +1549,7 @@ void App::LaunchGame() {
 	// Iconify via GLUT so its internal state stays consistent (raw ShowWindow breaks the idle loop)
 	glutIconifyWindow();
 	Logger::Get().Log(LogLevel::INFO, "[ToggleGame] Editor iconified — game is now active");
+#endif  // _WIN32 (LaunchGame)
 }
 
 void App::SaveAndCompile() {

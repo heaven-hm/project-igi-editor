@@ -63,7 +63,17 @@ void SmokeSimulation::RebuildGroup(SmokeEmitterState& e) {
     e.group.flags = SmokeBlendFlags(e.params.fade_mode) | 0x40000u;  // particle.c:515
     e.group.capacity = std::max(0, e.params.count);
     e.group.frame_delay = 0;                          // smoke.c:403
-    e.group.animated_frames = 0;                      // no sprite map in the editor
+    // Particle2D_New's `animated` is `sprite->map != NULL` (particle.c:519-520)
+    // and Particle2D_Run takes its last frame from `map->cols - 1`
+    // (particle.c:271-272). The columns come from the loaded .spr
+    // (SetSpriteColumns); with no sprite loaded the map is absent and the frame
+    // stays 0, which is the same outcome a 1-column map has.
+    e.group.sprite_index = e.params.sprite_index;
+    const int slot = (e.params.sprite_index >= 0 && e.params.sprite_index <= 2)
+                         ? e.params.sprite_index
+                         : 3;  // smoke.c:380-393's default arm
+    const int cols = sprite_columns_[slot];
+    e.group.last_frame = cols > 1 ? cols - 1 : 0;
     e.group.particles.clear();
     if (e.group.capacity > 0) e.group.particles.reserve(static_cast<std::size_t>(e.group.capacity));
 }
@@ -117,6 +127,29 @@ void SmokeSimulation::SetEmitters(const std::vector<SmokeParams>& emitters) {
     }
 
     emitters_.swap(next);
+}
+
+void SmokeSimulation::SetSpriteColumns(const int cols[kSmokeSpriteCount]) {
+    for (int i = 0; i < kSmokeSpriteCount; ++i) {
+        sprite_columns_[i] = cols ? cols[i] : 0;
+    }
+    // Re-derive the groups already built so a reload of the pack (or a first
+    // load that happened after SetEmitters) takes effect without waiting for a
+    // parameter edit: the engine reads `t->sprite->map` every tick, so its
+    // frame count is never stale (Particle2D_Run, particle.c:271-272).
+    for (SmokeEmitterState& e : emitters_) {
+        const int slot = (e.params.sprite_index >= 0 && e.params.sprite_index <= 2)
+                             ? e.params.sprite_index
+                             : 3;
+        const int c = sprite_columns_[slot];
+        e.group.last_frame = c > 1 ? c - 1 : 0;
+        e.group.sprite_index = e.params.sprite_index;
+    }
+}
+
+int SmokeSimulation::SpriteColumns(int slot) const {
+    if (slot < 0 || slot >= kSmokeSpriteCount) return 0;
+    return sprite_columns_[slot];
 }
 
 void SmokeSimulation::TranslateParticles(int emitter, const double delta[3]) {
@@ -208,7 +241,7 @@ void SmokeSimulation::Tick() {
         if (!g.exists) continue;
         std::size_t i = 0;
         while (i < g.particles.size()) {
-            if (SmokeParticleTick(g.particles[i], g.gravity, g.grow, g.frame_delay, g.animated_frames)) {
+            if (SmokeParticleTick(g.particles[i], g.gravity, g.grow, g.frame_delay, g.last_frame)) {
                 ++i;
             } else {
                 // Particle2D_Remove (particle.c:422-433): the last particle is

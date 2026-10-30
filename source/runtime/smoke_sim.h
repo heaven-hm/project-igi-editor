@@ -64,6 +64,7 @@
 #include <vector>
 
 #include "runtime/smoke.h"
+#include "runtime/smoke_sprite.h"
 
 namespace igi {
 
@@ -79,7 +80,8 @@ struct SmokeParticleGroup {
     std::uint32_t flags = 0;           // SmokeBlendFlags | 0x40000
     int capacity = 0;                  // == the authored "Number of Particles"
     int frame_delay = 0;               // smoke.c:403 passes 0
-    int animated_frames = 0;           // 0: the editor loads no .spr, so no frame map
+    int last_frame = 0;                // Particle2D_Run's `last` == the sprite map's cols - 1
+    int sprite_index = 3;              // Smoke.sprite -> which of the four .spr
     // The engine's pool: `list[0..count-1]`, and Particle2D_Remove swaps the
     // last particle into the hole (particle.c:422-433). Same order, same swap.
     std::vector<SmokeParticleState> particles;
@@ -114,6 +116,26 @@ public:
     // new pool because that is a rebuild.
     void SetEmitters(const std::vector<SmokeParams>& emitters);
     void Clear();
+
+    // The char-map column count of each of the four sprites Smoke_Init interns
+    // (smoke.c:189-192), indexed the way Smoke_Changed picks them (smoke.c:
+    // 380-393): 0 fireball.spr, 1 blood1.spr, 2 smoke2.spr, 3 smoke1.spr.
+    //
+    // Particle2D_New sets `animated` when the sprite has a char map at all
+    // (particle.c:519-520) and Particle2D_Run takes `last = map->cols - 1`
+    // (particle.c:271-272), so the column count is ALL the simulation needs to
+    // advance a particle's FRAME exactly as the engine does: one frame per tick
+    // for a 7-column map (blood1.spr, frameDelay is 0 for Smoke) and never for a
+    // 1-column one (smoke1/smoke2/fireball, measured in the shipped pack).
+    // `cols <= 1` (including 0 = no sprite loaded at all) leaves the frame at 0,
+    // which is what the engine does in both of those cases. The group stores
+    // `cols - 1`, i.e. Particle2D_Run's own `last` (see smoke.h's
+    // SmokeParticleTick), so a 7-column sprite's particles reach frame 6.
+    // Takes effect immediately: the engine reads the sprite's map every tick.
+    void SetSpriteColumns(const int cols[kSmokeSpriteCount]);
+
+    // The column count last set for a slot (0 when none).
+    int SpriteColumns(int slot) const;
 
     // One engine tick for every emitter: Smoke_Run then the group's
     // Particle2D_Run (see "EMITTER BEFORE GROUP" above).
@@ -156,6 +178,7 @@ private:
     std::vector<SmokeEmitterState> emitters_;
     SmokeRandom smoke_rng_;
     SmokeRandom particle_rng_;
+    int sprite_columns_[kSmokeSpriteCount] = {0, 0, 0, 0};
     std::uint64_t ticks_ = 0;
 };
 

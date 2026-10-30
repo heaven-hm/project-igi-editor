@@ -1,4 +1,13 @@
 #pragma once
+// A classic guard as well as `#pragma once`, and it is load-bearing: tests include
+// headers as "../source/..." while the library includes them as "source/...", and
+// `#pragma once` dedupes by FILE IDENTITY -- so the same header reached by two
+// spellings is two files to it.  This header hit exactly that:
+// tests/test_door_params.cpp and tests/test_level_weather.cpp include it as
+// "../source/level/level_objects.h", which produced `redefinition of 'struct
+// LevelObject'` and friends.  Same fix as renderer_objects.h in 7c60c87e.
+#ifndef IGI_LEVEL_OBJECTS_H
+#define IGI_LEVEL_OBJECTS_H
 // This header must NOT include ../pch.h. pch.h pulls in level.h, and level.h
 // includes this header back (it holds a LevelObjects by value), so including
 // pch.h here makes the pair order-dependent: when level_objects.h is the entry
@@ -52,6 +61,15 @@ struct LevelObject {
     int aiGraphTaskId = -1;  // HumanAI: arg@4, the AIGraph task this AI patrols (-1 = none)
     std::string weaponEnumId;  // Weapon-child task (type starts with "Gun"): its WEAPON_ID_* arg@3
     std::string weaponModelId; // HumanSoldier: resolved real model id for its weapon child, held in hand (empty = no weapon / excluded)
+    // StationaryGun: the MODEL of the weapon this gun mounts, resolved from the
+    // authored "Weapon ID" string (arg@10, default "WEAPON_ID_M2HB"). The engine
+    // creates that Gun task as a child and mounts it at
+    // `baseMatrix * Matrix_SetEuler(outPitch, 0, PI)` -- StationaryGun_Aim
+    // 0x474420, IGI-RE src/statgun/statgun.c:241-258, with the weapon type's
+    // model from `WeaponType_Find(id)->key` (src/guncasing/gun.c:506,
+    // DefineWeaponType arg 29). Empty = no weapon resolved; the renderer then
+    // draws no weapon (it never substitutes one).
+    std::string mountedWeaponModelId;
     glm::dvec3 pos = glm::dvec3(0.0);
     glm::dvec3 original_pos = glm::dvec3(0.0);  // Original position from QSC for fallback matching
     // Set by LoadRecursive for task types it has no explicit branch for, after reading
@@ -227,6 +245,15 @@ public:
     // cutscene exclusion. Called once per soldier at load and again after a live
     // property edit so the weapon shown in the editor updates immediately.
     void ResolveSoldierWeapon(int soldierIndex);
+    // (Re)compute the mounted-weapon model id of the StationaryGun at the given
+    // index: the authored "Weapon ID" string (arg@10, default WEAPON_ID_M2HB) is
+    // resolved to the weapon TYPE's model exactly as the engine does it
+    // (WeaponType_Find 0x413BD0 -> `wt->key`, DefineWeaponType arg 29, loaded by
+    // VirModel_Find at src/guncasing/gun.c:506). Called for every placed
+    // StationaryGun at load and again after a live property edit of that field;
+    // an unresolvable value leaves `mountedWeaponModelId` empty (no weapon is
+    // drawn rather than a wrong one).
+    void ResolveMountedWeapon(int index);
     const std::map<std::string, std::string>& GetModelNamesMap() const { return modelNames_; }
     void SaveToQSC(const std::string& qscPath);
     // Write ONLY the subtree rooted at idx (the task + its descendants) as a proper
@@ -252,3 +279,5 @@ private:
     void LoadRecursive(const QSC* qsc, const QSC::func_s* func, int parentIdx);
     static std::string SerializeObjectRecursive(const std::vector<LevelObject>& objects, int idx);
 };
+
+#endif  // IGI_LEVEL_OBJECTS_H

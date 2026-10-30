@@ -346,8 +346,12 @@ void SmokeEmitVelocity(const float dir[3], float spread, float speed_a, float sp
 // 0, 1 - 60*(1/60) does not).
 //
 // `frame`/`frameTimer` advance only for an animated sprite (`t->animated` is
-// `sprite->map != NULL`, particle.c:519-520); the editor does not load the
-// retail .spr at all, so a particle's frame stays 0 here.
+// `sprite->map != NULL`, particle.c:519-520). `last_frame` is that map's
+// `cols - 1` -- exactly Particle2D_Run's local `last` (:271-272), NOT a count:
+// the engine advances while `p->frame < last` (:291-292), so a 7-column map
+// (blood1.spr) tops out at frame 6 and a 1-column map at frame 0. The editor
+// takes the columns from the retail .spr itself (runtime/smoke_sprite.h,
+// SmokeSimulation::SetSpriteColumns).
 struct SmokeParticleState {
     double pos[3] = {0.0, 0.0, 0.0};
     float vel[3] = {0.0f, 0.0f, 0.0f};
@@ -365,9 +369,10 @@ struct SmokeParticleState {
 // false when the particle is removed this tick (the engine's
 // Particle2D_Remove, particle.c:422-433). `gravity`, `grow` and `frame_delay`
 // are the group's (Particle2D_New) fields; Smoke's gravity is (0,0,0) and its
-// frameDelay is 0 (smoke.c:403).
+// frameDelay is 0 (smoke.c:403). `last_frame` is Particle2D_Run's `last`, i.e.
+// the sprite map's `cols - 1` (0 when the sprite has no char map or one column).
 bool SmokeParticleTick(SmokeParticleState& p, const float gravity[3], float grow, int frame_delay,
-                       int animated_frames);
+                       int last_frame);
 
 // The `frames`/`delay` arguments (smoke.c:331-332):
 //   delay = round_int(fadeDelay * kRate)          -- authored "Life Time"
@@ -409,6 +414,24 @@ const char* SmokeSpriteFile(int sprite_index);
 //   gravity          = (0, 0, 0), frameDelay = 0, light = 0
 float SmokeGroupSize(const SmokeParams& params);
 void SmokeGroupColour(const SmokeParams& params, float out_colour[3]);
+
+// The quad's vertex colour and alpha, i.e. what Particle2D_Draw hands
+// QVertex_DrawQuadEx for one particle (particle.c:194-203), already scaled the
+// way the engine scales it: `gColorScale = 1/128` (qvertex.c:189), NOT 1/255.
+// `group_colour` is SmokeGroupColour's output (the authored "Colour" * 63).
+//
+//   flags == 0            -> rgb = colour/128, a = 0   (drawn invisible: the
+//                            engine leaves `alpha` at 0 -- particle.c:110)
+//   flags & 0x80000       -> rgb = colour/128, a = level   (fade mode 0)
+//   otherwise             -> rgb = colour/128 * level, a = 1 (fade modes 1, 2)
+//
+// The values are left UNCLAMPED. D3DQVertex_Emit packs `v->r * -255` into a
+// byte (d3d.c:415-421), so the engine truncates and, above 1.0, wraps rather
+// than clamps; this port keeps the float and lets the framebuffer clamp, which
+// differs only for an authored "Colour" above 128/63 (D3D would show a wrapped
+// channel where GL shows white).
+void SmokeParticleColour(const float group_colour[3], std::uint32_t flags, float level,
+                         float out_rgba[4]);
 float SmokeGroupGrow(const SmokeParams& params);
 
 // Smoke_Move: pos = anchor_pos + anchor_matrix * local (smoke.c:197-209).

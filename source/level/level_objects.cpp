@@ -1,4 +1,5 @@
 #include "level_objects_internal.h"
+#include "runtime/weapon_model_lookup.h"
 
 std::pair<int, int> ResolveSoldierAnimationDefaults(const std::string& type,
                                                      int declaredHierarchy,
@@ -127,6 +128,14 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
 
     // Resolve each HumanSoldier-family AI's held weapon (see ResolveSoldierWeapon).
     for (int i = 0; i < (int)objects_.size(); ++i) ResolveSoldierWeapon(i);
+
+    // Resolve each placed StationaryGun's MOUNTED weapon (see ResolveMountedWeapon):
+    // a StationaryGun creates a Gun task for its authored "Weapon ID" and mounts it
+    // (StationaryGun_Changed 0x474980, IGI-RE src/statgun/statgun.c:310-339), so the
+    // editor must draw that weapon model rather than only the holder.
+    for (int i = 0; i < (int)objects_.size(); ++i) {
+        if (objects_[i].type == "StationaryGun") ResolveMountedWeapon(i);
+    }
 
     // Only generate qscLine for objects that didn't get a raw line from the parser
     for (int i = 0; i < (int)objects_.size(); ++i) {
@@ -706,7 +715,7 @@ void LevelObjects::LoadModelNames() {
     // logging) — only the stdio wrappers changed.
     std::snprintf(jsonPath, sizeof(jsonPath), "%s\\editor\\tools\\IGIModels.json", exeDir.c_str());
 
-    if (!std::filesystem::exists(jsonPath)) {
+    if (!std::filesystem::exists(Utils::ToNativePath(jsonPath))) {
         Logger::Get().Log(LogLevel::ERR, "[LevelObjects] IGIModels.json not found in executable directory: " + std::string(jsonPath));
     }
 
@@ -869,6 +878,55 @@ void LevelObjects::ResolveSoldierWeapon(int soldierIndex) {
     obj.weaponModelId = resolvedModelId;
     Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Weapon attached for soldier task " + obj.taskId +
         ": " + weaponEnumId + " -> " + resolvedModelId);
+}
+
+// The model of a placed StationaryGun's MOUNTED weapon.
+//
+// The engine's chain, and nothing beyond it:
+//   * the authored field is the ParamTable's String32 `weapon`, default
+//     "WEAPON_ID_M2HB" (StationaryGun_CreateHandler 0x473D30,
+//     src/statgun/statgun.c:114 and StationaryGun_Open 0x473ED0, :146);
+//   * StationaryGun_Changed (0x474980, statgun.c:331-337) evaluates it,
+//     `WeaponType_Find(id)` resolves the type, and `Gun_New` creates the gun
+//     only `if (WeaponType_Find(id))` -- an unresolvable weapon mounts NOTHING;
+//   * the model drawn for that gun is the weapon type's `key`, argument 29 of
+//     DefineWeaponType, loaded by `VirModel_Find(wt->key)`
+//     (Gun_ParamChangedHandler 0x4789C0, src/guncasing/gun.c:506).
+// The editor resolves the same string to the same model from the shipped
+// WEAPONS/<NAME>/WEAPON.QVM roster (runtime/weapon_model_lookup.cpp). It falls back
+// to the editor's own IGIModels.json mapping -- which is generated from that
+// same roster and is already used for pickups -- only when the install is not
+// reachable. If neither resolves, the field stays empty and the renderer draws
+// no weapon at all, matching the engine's `if (WeaponType_Find(id))` guard.
+void LevelObjects::ResolveMountedWeapon(int index) {
+    if (index < 0 || index >= (int)objects_.size()) return;
+    LevelObject& obj = objects_[index];
+    obj.mountedWeaponModelId.clear();
+    if (obj.type != "StationaryGun" || obj.deleted) return;
+
+    // `weapon` default when the authored record omits arg 10
+    // (ParamTable_Add(..., &g.weapon, Param_String32(), ...) statgun.c:146).
+    const TaskSchemaNS::Props::StationaryGunParams gun = obj.StatGunParams();
+    if (!gun.valid) return;
+    const std::string weaponEnum = gun.weapon.empty()
+        ? std::string(TaskSchemaNS::Props::kStatGunDefaultWeapon)
+        : gun.weapon;
+
+    std::string model = igi::weapons::FindWeaponModelForEnum(Utils::GetIGIRootPath(), weaponEnum);
+    if (model.empty()) {
+        const std::string mapped = ResolvePickupModelId(weaponEnum);
+        if (mapped != weaponEnum) model = mapped;
+    }
+    if (model.empty()) {
+        Logger::Get().Log(LogLevel::WARNING,
+            "[LevelObjects] StationaryGun task " + obj.taskId + ": weapon '" + weaponEnum +
+            "' does not resolve to a weapon type model; no weapon will be drawn");
+        return;
+    }
+    obj.mountedWeaponModelId = model;
+    Logger::Get().Log(LogLevel::INFO,
+        "[LevelObjects] StationaryGun task " + obj.taskId + " mounts " + weaponEnum +
+        " -> weapon model " + model);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
