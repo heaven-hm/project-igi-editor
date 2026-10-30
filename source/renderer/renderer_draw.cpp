@@ -1905,8 +1905,20 @@ void Renderer::Draw(const draw_params_s &params,
         const float frame_y_bottom =
             static_cast<float>(viewport_h - (pause_panel.y + pause_panel.h +
                                              igi::kRetailFrameInset));
-        // line = y0 + 20 (:179): the title rule, 20 px below the inset top edge.
-        const float rule_y = frame_y_top - static_cast<float>(igi::kRetailTitleRuleDrop);
+        // `line = y0 + 20` (:179) puts the rule at panel top + 21 -- and that is
+        // the line the first row starts on, because MenuWindow_Arrange places the
+        // item frame's first child at frame.y + spacingY (:225-229) and the item
+        // frame starts at panel top + 17, so `kRetailTitleRuleOffset ==
+        // kRetailFirstRowOffset` (a static_assert in
+        // source/runtime/pause_menu_style.h).  The editor's own screen carries TWO
+        // title lines, and its band -- and with it the rule -- is one retail line
+        // plus one retail spacing lower (`PauseMenuTitleBandHeight`), which is what
+        // the layout's `title_rule_y` already is (`menu_top + title_band`).  Taking
+        // the retail 20-px drop here instead would draw the rule 25 px too high, cut
+        // through the title block and break the rule/first-row invariant the layout
+        // and tests/test_pause_menu_style.cpp (`DrawnTextLandsOnTheRetailRowLines`)
+        // both pin.
+        const float rule_y = static_cast<float>(viewport_h - pause_layout.title_rule_y);
         const float frame_fade = igi::kRetailFadeSettled;
 
         // The green-to-black wash (:215-223) and, with no background picture, the
@@ -2007,12 +2019,21 @@ void Renderer::Draw(const draw_params_s &params,
         // QVertex_DrawQuad HOOK 0x4B51F0 sets a = 1.0f, src/res/qvertex.c:63-80).
         // The editor does not resolve retail sprites, so the same quad is filled
         // rather than textured; its geometry and colour are retail's.
-        auto draw_row_glow = [&](int row_y, int label_w) {
+        //
+        // The anchor is the label WINDOW's top-left and its height: `w.x`/`w.y` are
+        // the window's position -- which `MenuWindow_Place` has already centred in
+        // the parent (:179-181) -- and `w.h` is `Text_GetHeight`, i.e. the font's
+        // line height for a one-row label (MAKE_LABEL, src/menuscreen/menutext.c:126-149;
+        // Grid_Height HOOK 0x4B7C20, src/res/grid.c:209-213).  The editor's rows are
+        // DRAWN at `row_top + kRetailTextLineLift` (section 8 of pause_menu_style.h),
+        // so the caller passes the row's top, not the y the text is drawn at -- with
+        // the drawn y the quad would sit half a line too low.
+        auto draw_row_glow = [&](int label_left, int row_top, int label_w) {
           const float line_h = static_cast<float>(pause_font_metrics.lineHeight);
-          const float label_x = static_cast<float>(menu_x + (menu_w - label_w) / 2);
-          const float top = static_cast<float>(row_y) - line_h * 0.5f;
-          const float gx0 = label_x - static_cast<float>(label_w) * igi::kRetailGlowInsetX;
-          const float gy0 = top - line_h * igi::kRetailGlowInsetY;
+          const float gx0 = static_cast<float>(label_left) -
+                            static_cast<float>(label_w) * igi::kRetailGlowInsetX;
+          const float gy0 = static_cast<float>(row_top) -
+                            line_h * igi::kRetailGlowInsetY;
           const float gx1 = static_cast<float>(label_w) * igi::kRetailGlowWidthScale + gx0;
           const float gy1 = line_h * igi::kRetailGlowHeightScale + gy0;
           glEnable(GL_BLEND);
@@ -2105,7 +2126,10 @@ void Renderer::Draw(const draw_params_s &params,
             if (hovered) {
               // A focused label is brightened and gets the glow (DRAW_LABEL
               // :203-205, :227-228), which is the only focus cue a text window has.
-              draw_row_glow(rect.y + rect.h / 2, pause_text_width(text.c_str()));
+              // The label window's own top-left is the anchor: `rect.x`/`rect.y`
+              // are the model's window position (retail's `w.x`/`w.y`), and the
+              // label's width is the text's own (`MAKE_LABEL`).
+              draw_row_glow(rect.x, rect.y, pause_text_width(text.c_str()));
               colour = igi::RetailFocusedColour(colour);
             }
             draw_pause_text(rect.x, rect.y + igi::kRetailTextLineLift, text.c_str(),
@@ -2177,17 +2201,22 @@ void Renderer::Draw(const draw_params_s &params,
 
           // A plain editor row, centred in the panel.
           const int text_w = pause_text_width(label.c_str());
+          const int text_x = menu_x + (menu_w - text_w) / 2;
           if (hovered) {
-            draw_row_glow(screen_btn_y, text_w);
+            // The glow is anchored at the row's WINDOW top-left, which for an
+            // editor row is the row's top: `screen_btn_y` is the y the text is
+            // drawn at (`PauseMenuRowCenter` = the retail row top plus the
+            // editor's baseline lift), and the label is one font line tall.
+            draw_row_glow(text_x, screen_btn_y - igi::kRetailTextLineLift, text_w);
           }
           if (dim) {
-            draw_pause_text(menu_x + (menu_w - text_w) / 2, screen_btn_y, label.c_str(),
+            draw_pause_text(text_x, screen_btn_y, label.c_str(),
                             row_idle.r, row_idle.g, row_idle.b, igi::kRetailDimAlpha);
           } else if (state_on) {
-            draw_pause_text(menu_x + (menu_w - text_w) / 2, screen_btn_y, label.c_str(),
+            draw_pause_text(text_x, screen_btn_y, label.c_str(),
                             row_on.r, row_on.g, row_on.b);
           } else {
-            draw_pause_text(menu_x + (menu_w - text_w) / 2, screen_btn_y, label.c_str(),
+            draw_pause_text(text_x, screen_btn_y, label.c_str(),
                             row_colour.r, row_colour.g, row_colour.b);
           }
         }

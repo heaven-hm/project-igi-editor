@@ -43,19 +43,32 @@
  * (source/renderer/fnt_parser.cpp logs through Logger -> Config, neither of
  * which builds on the host).  The retail font's own metrics -- the source of
  * `kRetailFontLineHeight` and `kRetailFontSpaceAdvance` -- are pinned in
- * tests/test_fnt_parser.cpp, which already owns FNT parsing.
+ * tests/test_fnt_parser.cpp, which already owns FNT parsing.  The corpus test
+ * `TheShippedFontPinsTheRowPitch` below reads the same numbers straight out of
+ * the shipped `font3.fnt` through the ILFF chunk layer
+ * (source/renderer/res_chunks.h) and `RES_Extract`, both of which are in the
+ * host lane's pool, so the pitch is pinned against the shipped FILE and not only
+ * against the constant.
  *****************************************************************************/
 
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <string>
+#include <vector>
+
+#include "renderer/res_chunks.h"
 
 #include "menu/qvm_image.h"
+#include "renderer/res_chunks.h"
 #include "runtime/pause_menu_layout.h"
 #include "runtime/pause_menu_rows.h"
 #include "runtime/pause_menu_style.h"
+
+#include <fstream>
+#include <iterator>
 
 namespace {
 
@@ -73,6 +86,77 @@ std::filesystem::path IngameMenuQvm() {
 bool MenuCorpusAvailable() {
     std::error_code ec;
     return std::filesystem::is_regular_file(IngameMenuQvm(), ec);
+}
+
+std::vector<uint8_t> ReadWholeFile(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        return {};
+    }
+    return std::vector<uint8_t>((std::istreambuf_iterator<char>(file)),
+                                std::istreambuf_iterator<char>());
+}
+
+igi_res::ChunkHeader HeaderAt(const std::vector<uint8_t>& bytes, std::size_t offset) {
+    igi_res::ChunkHeader header;
+    if (offset + 16 > bytes.size()) {
+        return header;
+    }
+    const auto u32 = [&bytes](std::size_t at) {
+        return static_cast<uint32_t>(bytes[at]) |
+               (static_cast<uint32_t>(bytes[at + 1]) << 8) |
+               (static_cast<uint32_t>(bytes[at + 2]) << 16) |
+               (static_cast<uint32_t>(bytes[at + 3]) << 24);
+    };
+    header.id = u32(offset);
+    header.size = u32(offset + 4);
+    header.align = u32(offset + 8);
+    header.next = u32(offset + 12);
+    header.form = (offset + 20 <= bytes.size()) ? u32(offset + 16) : 0;
+    return header;
+}
+
+// A NAME/BODY pair, matched by the engine's resource identity: the NAME text
+// upper-cased with '\' folded to '/' (`Resource_Create` 0x4B59F0,
+// src/res/resource.c:65-104; `NormalizeResourceName`, source/renderer/res_chunks.h).
+// Returns the BODY bytes, empty when the member is absent.
+std::vector<uint8_t> FindMember(const std::vector<uint8_t>& bytes,
+                                const std::string& wanted) {
+    const std::string want = igi_res::NormalizeResourceName(wanted);
+    std::string pending;
+    std::size_t offset = 20;  // past "ILFF" + size/align/next + "IRES"
+    std::size_t guard = 0;
+    while (offset + 16 <= bytes.size() && guard++ < 100000) {
+        const igi_res::ChunkHeader header = HeaderAt(bytes, offset);
+        if (header.id == igi_res::kChunkIres) {
+            offset += 4;  // the form-type word that opens an ILFF body
+            continue;
+        }
+        const std::size_t body = offset + 16;
+        if (header.id == igi_res::kChunkName && body + header.size <= bytes.size()) {
+            pending.assign(reinterpret_cast<const char*>(bytes.data() + body), header.size);
+            const std::size_t nul = pending.find('\0');
+            if (nul != std::string::npos) {
+                pending.resize(nul);
+            }
+        } else if ((header.id == igi_res::kChunkBody || header.id == igi_res::kChunkCstr ||
+                    header.id == igi_res::kChunkPath) &&
+                   body + header.size <= bytes.size()) {
+            if (igi_res::NormalizeResourceName(pending) == want) {
+                return std::vector<uint8_t>(
+                    bytes.begin() + static_cast<std::ptrdiff_t>(body),
+                    bytes.begin() + static_cast<std::ptrdiff_t>(body + header.size));
+            }
+        }
+        if (header.next != 0 && offset + header.next < bytes.size()) {
+            offset += header.next;
+        } else if (header.size >= 16 && offset + 16 + header.size <= bytes.size()) {
+            offset += 16 + header.size;
+        } else {
+            break;
+        }
+    }
+    return {};
 }
 
 }  // namespace
@@ -604,4 +688,121 @@ TEST(PauseMenuRetailStyleCorpus, RetailItemRowsLandOnTheRetailLines) {
             << "retail item " << i;
         row_top += font_line + spacing;
     }
+}
+
+// ─── corpus: the shipped FONT, which is where the row pitch comes from ───────
+
+TEST(PauseMenuRetailStyleCorpus, TheShippedFontPinsTheRowPitch) {
+    if (!MenuCorpusAvailable()) {
+        GTEST_SKIP() << "no menu corpus at " << IngameMenuQvm().parent_path();
+    }
+    const std::filesystem::path archive =
+        CorpusRoot() / "menusystem" / "ingamemenu.res";
+    const std::vector<uint8_t> archive_bytes = ReadWholeFile(archive);
+    ASSERT_FALSE(archive_bytes.empty()) << "no " << archive;
+    // The archive walk is this suite's own, with the engine's chunk helpers: the
+    // editor's `RES_Extract` reads through Logger -> Config::Get()
+    // (source/renderer/res_writer.cpp) and is therefore not host-portable, which
+    // is the whole reason this suite parses the containers itself.
+    const std::vector<uint8_t> font =
+        FindMember(archive_bytes, "LOCAL:menusystem/font3.fnt");
+    ASSERT_FALSE(font.empty()) << "font3.fnt is not in " << archive;
+    ASSERT_GE(font.size(), 20u);
+
+    // `Sprite_Load`'s FONT branch (HOOK 0x4B6720, src/res/sprite.c:171-207) reads
+    // the FNTH child of the ILFF/FONT form; `FontHeader` (src/res/sprite.c:86-92)
+    // is proportional(0) nframes(4) unk8(8) advance(12) w(16) h(20).
+    igi_res::ChunkHeader root;
+    std::memcpy(&root, font.data(), 20);
+    ASSERT_EQ(root.id, igi_res::kChunkIlff);
+    ASSERT_EQ(root.form, igi_res::ChunkId('F', 'O', 'N', 'T'));
+
+    const uint8_t* fnth = nullptr;
+    std::size_t fnth_size = 0;
+    uint64_t child = igi_res::ChunkFirstChildOffset(0, root);
+    while (child != igi_res::kNoChunk && child + 20 <= font.size()) {
+        igi_res::ChunkHeader chunk;
+        std::memcpy(&chunk, font.data() + child, 20);
+        if (chunk.id == igi_res::ChunkId('F', 'N', 'T', 'H')) {
+            const uint64_t offset = igi_res::ChunkDataOffset(child, chunk, 0, root);
+            ASSERT_NE(offset, igi_res::kNoChunk);
+            ASSERT_LE(offset + chunk.size, font.size());
+            fnth = font.data() + offset;
+            fnth_size = chunk.size;
+            break;
+        }
+        child = igi_res::ChunkNextOffset(child, chunk);
+    }
+    ASSERT_NE(fnth, nullptr) << "the shipped font has no FNTH chunk";
+    ASSERT_GE(fnth_size, 24u);
+    const auto i32 = [fnth](std::size_t offset) {
+        int32_t value = 0;
+        std::memcpy(&value, fnth + offset, sizeof(value));
+        return value;
+    };
+
+    // The font is proportional (Grid_New sets `proportional = !Sprite_IsFixed`,
+    // src/res/grid.c:43) and a blank advances by `advance` (Grid_UpdateRow
+    // HOOK 0x4B7730, src/res/grid.c:93-105).
+    EXPECT_NE(i32(0), 0) << "font3.fnt is proportional";
+    EXPECT_GT(i32(4), 0) << "it declares frames";
+    EXPECT_EQ(i32(12), igi::kRetailFontSpaceAdvance);
+    // `h` is the line height: Text_GetHeight is Grid_Height x rows
+    // (HOOK 0x4B7E00, src/res/text.c:139-143; HOOK 0x4B7C20, src/res/grid.c:209-213)
+    // with one row (Text_New HOOK 0x4B6EC0), so a menu row is `h` tall and the
+    // pitch is `h` + the frame's Y-Spacing.
+    EXPECT_EQ(i32(20), igi::kRetailFontLineHeight);
+    EXPECT_EQ(igi::kRetailRowPitch, i32(20) + igi::kRetailRowSpacing);
+
+    // And the editor's live layout takes the pitch from the same number.
+    const igi::PauseMenuLayout layout =
+        igi::BuildPauseMenuLayout(1920, 1080, false, i32(20));
+    EXPECT_EQ(layout.row_height, i32(20) + igi::kRetailRowSpacing);
+    EXPECT_FLOAT_EQ(layout.text_scale, 1.0f);
+}
+
+// ─── corpus: the rule's line is a property of the shipped screen ─────────────
+
+TEST(PauseMenuRetailStyleCorpus, TheShippedScreenPutsTheRuleOnTheFirstItemLine) {
+    if (!MenuCorpusAvailable()) {
+        GTEST_SKIP() << "no menu corpus at " << IngameMenuQvm().parent_path();
+    }
+    const igi::MenuDefinition definition = igi::MenuDefinition::FromQvmFile(IngameMenuQvm().string());
+    ASSERT_TRUE(definition.ok) << definition.error;
+    const igi::MenuWidget* screen = definition.FindById(900);
+    ASSERT_NE(screen, nullptr);
+    ASSERT_EQ(screen->children.size(), 2u);
+    const igi::MenuWidget& items = screen->children[1];
+
+    // MenuScreen_DrawFrame draws the rule at `y0 + 20` with `y0 = frameY0 + 1`
+    // (:175-179); MenuWindow_Arrange puts the item frame's first child at
+    // `frame.y + spacingY` (:225-229).  The shipped screen therefore satisfies
+    //     (items.Y-Pos - panel.Y0) + items.Y-Spacing == 1 + 20
+    // -- the rule IS the first row's line, in the data, not just in the constants.
+    const int panel_x0 = static_cast<int>(screen->FieldNumber("Frame x0"));
+    const int panel_y0 = static_cast<int>(screen->FieldNumber("Frame y0"));
+    const int items_x = static_cast<int>(items.FieldNumber("X-Pos"));
+    const int items_y = static_cast<int>(items.FieldNumber("Y-Pos"));
+    const int spacing = static_cast<int>(items.FieldNumber("Y-Spacing"));
+    EXPECT_EQ((items_y - panel_y0) + spacing, igi::kRetailTitleRuleOffset);
+    EXPECT_EQ((items_x - panel_x0), igi::kRetailItemsInsetX);
+
+    // The editor's own screen keeps that invariant at its own title-line count:
+    // the rule follows the band, so it is always the line the first row starts on
+    // (source/renderer/renderer_draw.cpp draws `layout.title_rule_y`).
+    const igi::PauseMenuLayout layout =
+        igi::BuildPauseMenuLayout(1920, 1080, false, igi::kRetailFontLineHeight);
+    EXPECT_EQ(layout.title_rule_y, layout.menu_top + layout.title_band);
+    EXPECT_EQ(igi::PauseMenuRowCenter(layout, 0) - igi::kRetailTextLineLift,
+              layout.title_rule_y);
+
+    // One title line is retail's band exactly; the editor's second line adds one
+    // retail line plus one retail spacing, and the rule moves with it.
+    EXPECT_EQ(igi::PauseMenuTitleBandHeight(1, igi::kRetailFontLineHeight),
+              igi::kRetailTitleRuleOffset);
+    EXPECT_EQ(igi::PauseMenuTitleBandHeight(2, igi::kRetailFontLineHeight),
+              igi::kRetailTitleRuleOffset + igi::kRetailRowPitch);
+    EXPECT_EQ(igi::kPauseMenuTitleBand,
+              igi::PauseMenuTitleBandHeight(igi::kPauseMenuTitleLines,
+                                            igi::kRetailFontLineHeight));
 }

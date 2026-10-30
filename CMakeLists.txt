@@ -457,7 +457,6 @@ add_executable(igi_tests
     # LOOP v9 per-frame records, the engine's per-format decode (D3DTex_DownloadTexture
     # HOOK 0x50AD10 -> Pixel_1555To32 HOOK 0x517C90) and the hotspot.  Corpus-backed
     # against the shipped .anm, and the refusal paths are hand-built in memory.
-    tests/test_editor_pointer.cpp
     tests/test_loading_bar_style.cpp
     tests/test_magic_object_expand.cpp
     tests/test_mission_fog.cpp
@@ -504,6 +503,19 @@ add_executable(igi_tests
     # HOOK 0x50FAE0 (src/glowmesh/terrainmesh.c:277-292).
     tests/test_terrain_lod_settings.cpp
     tests/test_collision_drop_rules.cpp
+    # The C++/shader uniform contract (regression guard for commit 33368d7c):
+    # every uniform the C++ uploads must be declared by the shaders and every
+    # uniform the shaders declare must be uploaded, in ALL FOUR tiers, plus a
+    # byte-for-byte check that the SHIPPED copy under assets/editor/shaders --
+    # which is what the POST_BUILD step puts in <exe dir>/editor -- has not
+    # drifted from shaders/.  That divergence is what made the terrain render
+    # fully fogged on every GL 4.1 host, and the host cannot execute that tier
+    # (GL 2.1 here), so it can only be caught by reading the sources.
+    tests/test_shader_uniform_contract.cpp
+    # Every `source/...` and `tests/...` path CMakeLists.txt names must exist.
+    # Staging a CMakeLists.txt without the files it names left HEAD unable to
+    # configure four separate times.
+    tests/test_build_manifest_files.cpp
 )
 
 # Explicit runtime so igi_tests always matches igi-editor (/MDd Debug, /MD Release).
@@ -628,14 +640,6 @@ target_sources(igi_tests PRIVATE
     source/runtime/audio_asset_resolver.cpp
     source/runtime/config_qvm.cpp
     source/runtime/pause_menu_font.cpp
-    # The EDITOR's own pointer (`editor/qed/pointer.anm`): the LOOP v9 reader with
-    # the per-frame records `Sprite_Load` HOOK 0x4B6720 reads (src/res/sprite.c:246-260)
-    # and the engine's per-format decode (D3DTex_DownloadTexture HOOK 0x50AD10,
-    # src/sysmisc/d3dtex.c:411-432 -> Pixel_1555To32 HOOK 0x517C90).  Pure: no
-    # Logger, no Config, no GL, so the host lane needs it to link
-    # tests/test_editor_pointer.cpp; igi-editor picks it up through the
-    # source/runtime/*.* glob.
-    source/runtime/editor_pointer_sprite.cpp
     source/runtime/human_player_config.cpp
     source/runtime/magic_object_registry.cpp
     source/runtime/magic_object_expand.cpp
