@@ -179,20 +179,73 @@ TEST(BuildManifestFiles, NamedPathsAreAllInsideTheRepository) {
 // Reviewed, deliberate exclusions.  Every entry needs a reason; an entry that
 // is here because nobody noticed is exactly what this list exists to prevent.
 //
-// NOTE: both of these hold real TEST() cases (17 and 1) and neither has ever
-// been compiled by any lane -- `tests/` is not globbed, so a file that is not
-// named in CMakeLists.txt is simply absent from the build.  They are recorded
-// rather than registered here because registering them changes what the
-// WINDOWS suite (igi_tests) compiles, and that gate cannot be run from this
-// host.  Registering or deleting them is a deliberate follow-up, not a silent
-// side effect of adding a test.
+// NOTE: `tests/` is not globbed, so a file that is not named in CMakeLists.txt
+// is simply absent from the build and its TEST() cases never run in any lane.
+// Silence is the only symptom.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// EMPTY, AND THAT IS THE POINT -- two entries were removed on 2026-10-30 by
+// deleting the files, not by registering them.  Both had never been compiled by
+// any target in their entire history, and neither could be made to compile
+// against this tree without inventing production API:
+//
+//   tests/test_ai_behavior.cpp  (17 TESTs, added ba75efac 2026-09-03, deleted)
+//     Referenced six symbols that exist in NO revision of this repository --
+//     `AiArchetype`, `ResolveAiArchetype`, `AiSystem::SetDetectionEnabled`,
+//     `AiGuardState::Panic`, `AiGuardEntity::stationary` and
+//     `AiGuardEntity::saw_player_this_tick` (verified with
+//     `git log -S <symbol> --all`, which finds them only in the test file
+//     itself).  The report `reports/review-2026-10-30.md` (F6) read the file as
+//     merely unbuilt because `AiGuardState` does exist; that reading was wrong,
+//     and this is the correction.  It was never a regression guard for this
+//     code -- it was written against a different design.
+//
+//     It also contradicted the engine oracle, so "fix the test" would have
+//     meant adding behaviour, not repairing a test:
+//       * AITYPE_* are script CONSTANTS, not an archetype classifier.  They are
+//         a 30-entry name table, gAITypeNames AT 0x53C9C0
+//         (src/addr.c:449, src/humanai/humanai.c:1171), registered as script
+//         values by HumanAI_RegisterConstants HOOK 0x44EEB0
+//         (src/aiaction/aiaction.c:1032-1065) and read back by AIType_GetName
+//         HOOK 0x452910 (src/patrol/grid.c:45-49).  There is no
+//         civilian-vs-soldier brain split: one HumanAI_Update
+//         HOOK 0x44F410 (src/humanai/humanai.c:413-415) drives every AITYPE.
+//       * `Panic` is a QVM script action, AIAction_RunPanicking
+//         HOOK 0x44DA00 (src/aiaction/aiaction.c:595), not a C++ guard state --
+//         which is exactly the design the current source comment records
+//         ("until the alarm-driven panic state lands", source/ai_system.cpp:559).
+//       * Its stealth model was inverted against the shipped constant: the test
+//         asserted a gunshot must leave a guard in Patrol, while retail defines
+//         HUMANAI_DETECTIONEVENT_GUNSHOT_RANGE = 0x1E000 = 30 m
+//         (src/aiaction/aiaction.c:1062), which source/ai_system.cpp:440-446
+//         honours by waking the guard to Suspicious.
+//     The behaviour that IS in this tree is already pinned by
+//     tests/test_ai_patrol_port.cpp (9 TESTs, registered).
+//
+//   tests/test_debug_command_manager.cpp  (1 TEST, added e36d90b1, deleted)
+//     Constructed `DebugCommandManager` with a hand-rolled fake `class App`
+//     { GetCurLevelNo(); LoadLevel(); } whose layout does not match the real
+//     App (source/app.h:34).  It asserted that "commands.txt" in the CWD is
+//     emptied, but the manager polls `editor/tools/debug-command.txt`
+//     (source/debug_command_manager.cpp:30), and it never called Update(), so
+//     nothing could ever have consumed the queue.  It could not pass in either
+//     lane: on the host the manager's translation unit needs windows.h and
+//     app.h; in igi_tests the manager is not compiled at all (it is built only
+//     into igi-editor -- build-mingw/compile_commands.json has exactly one
+//     entry for it, CMakeFiles/igi-editor.dir).  Registering it would have
+//     meant adding a new executable target for the manager plus a link stub for
+//     App, i.e. new build surface for a test that verifies a file path, and the
+//     Windows gate that would have to accept that cannot be run from this host.
+//     What it was reaching for is already covered, better, by
+//     tests/test_debug_command_parser.cpp (5 TESTs) and
+//     tests/test_debug_command_queue.cpp (3 TESTs), both registered.
+//
+// A file deleted with a cited reason beats a permanently-excluded file: the
+// exclusion list can only ever say "this never runs", while a deletion plus
+// this comment says why, and stops a future reader counting it as coverage.
+// ─────────────────────────────────────────────────────────────────────────────
 const char* const kNotBuiltTestFiles[][2] = {
-    {"tests/test_ai_behavior.cpp",
-     "predates the current suite layout; includes ../source/ai_system.h and has never been "
-     "in any CMake target"},
-    {"tests/test_debug_command_manager.cpp",
-     "predates the current suite layout; forward-declares App and has never been in any "
-     "CMake target"},
+    // (empty)
 };
 
 bool IsDeliberatelyNotBuilt(const std::string& path, std::string* reason) {

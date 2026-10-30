@@ -2,14 +2,14 @@
   "schemaVersion": 1,
   "sources": {
     "tests/test_ai_behavior.cpp": {
-      "status": "repair-required",
-      "reason": "Targets a superseded AI API: ResolveAiArchetype, civilian/panic fields, and detection state are absent from the current AiSystem interface.",
-      "resolvesIn": "Testing Master Plan Task 8"
+      "status": "deleted",
+      "reason": "Targets a superseded AI API: ResolveAiArchetype, AiArchetype, AiGuardState::Panic, SetDetectionEnabled and the civilian/stationary fields are absent from every revision of AiSystem (git log -S finds them only in this file). Never compiled by any target. Deleted rather than repaired; the behaviour that does exist is pinned by tests/test_ai_patrol_port.cpp.",
+      "resolvesIn": "2026-10-30 Task A (file removed; see tests/test_build_manifest_files.cpp)"
     },
     "tests/test_debug_command_manager.cpp": {
-      "status": "repair-required",
-      "reason": "Defines a substitute App and relies on timing and a shared commands.txt file.",
-      "resolvesIn": "Testing Master Plan Task 9"
+      "status": "deleted",
+      "reason": "Defines a substitute App that does not match the real class, polls a different path (editor/tools/debug-command.txt) than the test asserted, and could not link in either lane because DebugCommandManager is compiled only into igi-editor. Never compiled by any target. Deleted rather than repaired; the parser and queue halves are covered by tests/test_debug_command_parser.cpp and tests/test_debug_command_queue.cpp.",
+      "resolvesIn": "2026-10-30 Task A (file removed; see tests/test_build_manifest_files.cpp)"
     },
     "tests/test_debug_cli.py": {
       "status": "repair-required",
