@@ -425,6 +425,7 @@ add_executable(igi_tests
     # at one placement: host-portable, corpus-backed (self-skips without
     # IGI_GAME_PATH) plus a synthetic case that always runs.
     tests/test_skinned_static_parity.cpp
+    tests/test_seated_human.cpp
     tests/test_props_wire_interactables.cpp
     tests/test_scamera_params.cpp
     tests/test_door_params.cpp
@@ -441,6 +442,9 @@ add_executable(igi_tests
     tests/test_menu_labels.cpp
     tests/test_menu_ui.cpp
     tests/test_pause_menu_style.cpp
+    # The pause menu's KEY contract (MenuManager_ReadInput HOOK 0x418580) and the
+    # GAME's own menu pointer (`LOCAL:menusystem/pointer.spr`, corpus-backed).
+    tests/test_pause_menu_input.cpp
     tests/test_loading_bar_style.cpp
     tests/test_magic_object_expand.cpp
     tests/test_mission_fog.cpp
@@ -557,6 +561,11 @@ target_sources(igi_tests PRIVATE
     source/renderer/res_compiler.cpp
     source/level/res_model_set.cpp
     source/renderer/tex_writer.cpp
+    # The LOOP parser core, split out of tex_writer.cpp so the host lane can link
+    # a parse WITHOUT Logger (Logger::Log -> Config::Get(), and config.cpp is not
+    # host-portable).  tests/test_pause_menu_input.cpp needs exactly this to
+    # parse LOCAL:menusystem/pointer.spr out of the retail menu archive.
+    source/renderer/tex_parser.cpp
     source/renderer/model_texture_resolution.cpp
     source/renderer/spline_geometry.cpp
     source/level/mtp_writer.cpp
@@ -676,6 +685,12 @@ target_sources(igi_tests PRIVATE
     source/menu/menu_ui.cpp
     source/app_menu.cpp
     source/runtime/pause_menu_rows.cpp
+    # The GAME's own menu pointer (`LOCAL:menusystem/pointer.spr` out of
+    # `menusystem/ingamemenu.res`).  Pure logic over RES_Extract + TEX_ParseBytes,
+    # so tests/test_pause_menu_input.cpp can prove the resource identity in the
+    # host lane without a GL context.  igi-editor picks it up through the
+    # source/runtime/*.* glob; this line is what the igi_tests / host lane needs.
+    source/runtime/retail_pointer_sprite.cpp
 )
 
 set_source_files_properties(

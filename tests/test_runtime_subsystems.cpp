@@ -314,8 +314,14 @@ TEST(PauseMenuLayoutTest, IncludesLoggingToggleAndSeverityRows) {
 TEST(RuntimeRenderTargetTest, PauseMenuUsesOnlyTheNativeMouseCursor) {
     EXPECT_TRUE(ShouldDrawCustomCursor(false));
     EXPECT_FALSE(ShouldDrawCustomCursor(true));
-    EXPECT_FALSE(ShouldUseNativeCursor(false));
-    EXPECT_TRUE(ShouldUseNativeCursor(true));
+    // The two-argument form: the platform cursor is the fallback ONLY when the
+    // retail pointer sprite could not be read from the install.
+    EXPECT_FALSE(ShouldUseNativeCursor(/*pauseMenuVisible=*/false,
+                                       /*retailPointerAvailable=*/true));
+    EXPECT_TRUE(ShouldUseNativeCursor(/*pauseMenuVisible=*/true,
+                                      /*retailPointerAvailable=*/false));
+    EXPECT_FALSE(ShouldUseNativeCursor(/*pauseMenuVisible=*/true,
+                                       /*retailPointerAvailable=*/true));
 }
 
 TEST(PauseMenuLayoutTest, RendererAndInputShareSpinnerGeometry) {

@@ -323,6 +323,125 @@ With one title line the band is exactly retail's 21.
 | spinner boxes | the editor's own widgets. Their outline takes the retail window outline colour (`MenuWindow_DrawEnd` HOOK 0x424980, `src/widget/menuwindow.c:379-387`: idle `r = b = 0`, `g = 1`) and their text the retail item colour |
 | border / rule line width | no engine oracle (see §5) |
 
+## 8b. The keys that drive it, and the pointer it draws
+
+Two things about the menu are the engine's, not the editor's, and both were wrong
+before this pass. They are the subject of
+`source/runtime/pause_menu_input_policy.h` and
+`source/runtime/retail_pointer_sprite.h`, and
+`tests/test_pause_menu_input.cpp` (13 host tests, 4 of them corpus-backed) holds
+them.
+
+### Which keys drive the menu
+
+`MenuManager_ReadInput` HOOK 0x418580 (src/menu/menumanager.c:488-551) is the
+whole of it. It drains the engine's key queue — `while (Keys_GetCount())` — and
+acts on four of the values it pops; everything else falls out of its `switch` and
+is **discarded**, not handed on:
+
+| engine key | code | what the menu does |
+| --- | --- | --- |
+| `KEY_DOWN` | −4 | `if (++i >= mm->itemCount) i = 0;` then `MenuManager_SetFocus` (:536-541) |
+| `KEY_UP` | −3 | `if (--i < 0) i = mm->itemCount - 1;` then `MenuManager_SetFocus` (:542-547) |
+| `KEY_ENTER` | −7 | stored on the focused window (`mm->focus->key`, :530-535); `RUN_ACTION` tests `w.key == -7` and runs the item's `On Click Script` (src/menuscreen/menutext.c:170-179) |
+| `KEY_ESCAPE` | −8 | `in->back = 1`; `MenuScreen_Run` evaluates the screen's `On Press Escape` (src/widget/menuscreen.c:7-18) |
+| `KEY_TAB` | −11 | `in->select = 1` — and **nothing in IGI-RE reads `MenuInput::select`**, so this is accepted and ignored |
+| `KEY_LEFT` / `KEY_RIGHT` | −1 / −2 | stored on the focused window like ENTER; only −7 is acted on, so also accepted and ignored |
+
+The negative codes are the engine's typed keys (src/loadscreen/keys.c:10-22), and
+they are the only values that ever reach the queue: `Keys_WndProc` HOOK 0x48A730
+(src/loadscreen/keys.c:47-71) maps eleven `WM_KEYDOWN` virtual codes to them and
+pushes every other `WM_CHAR` verbatim.
+
+**What the editor used to do wrong.** Its pause overlay was a set of ad-hoc
+branches rather than the engine's switch, so keys the engine discards still
+reached the editor:
+
+* `Input_OnSpecial` ran **F8** (Editor ↔ Game Play), **F6/F7** (window focus) and
+  **F5** (apply + restart gameplay) *before* it checked whether the pause menu was
+  up, so those shortcuts fired **behind the overlay**. F11 was (and is) a
+  deliberate editor exception.
+* `Input_OnKeyboard`'s level-selector branch could fall through instead of
+  returning, and the pause branch's `Escape`/digit handling did not cover every
+  path.
+* Nothing in the editor modelled "the engine pops this and does nothing with it",
+  so there was no single place to see which keys the menu owns.
+
+The fix routes **every** pause-mode key through
+`igi::PauseMenuSpecialKeyAction` / `igi::PauseMenuCharKeyAction`, which are the
+engine's `switch` written out. Anything the policy does not name is `Consume`:
+the editor's own shortcuts can no longer fire while the overlay is up. The one
+documented editor-only deviation is the level-selector row, which owns the
+keyboard while it is focused and accepts the digits and BACKSPACE — retail has no
+text input anywhere in a menu, so this is the editor's own furniture and is
+marked as such at its use site.
+
+F11's camera snap is the single deliberate exception and is unchanged: it is an
+editor feature, not a menu key, and `ShouldProcessF11WhilePaused`
+(source/runtime/graph_camera_target.h:52) is where that decision is recorded.
+
+### The pointer is the GAME's sprite
+
+Retail never shows the platform cursor in a menu. Every menu manager owns a
+`Cursor` task and points it at an archive member:
+
+```c
+/* MenuManager_Update HOOK 0x417CF0, src/menu/menumanager.c:233 */
+Cursor_SetSprite(mm->pointer, MenuManager_FindSprite(mm, "pointer.spr"));
+```
+
+`MenuManager_FindSprite` HOOK 0x418DE0 (:810-818) matches that basename against
+the sprites `MenuManager_LoadResources` HOOK 0x417D50 (:238-257) collected with
+`Resource_ForEach` HOOK 0x4B5D80, and `Cursor_Draw` HOOK 0x424C40
+(src/widget/cursor.c:38-41) blits it at the pointer with `128.0f, 128.0f,
+128.0f` — which is **full** intensity, because `DrawSprite` multiplies by
+`COLOR_SCALE` = 1/128 (src/math/draw.c:12, :124-126).
+
+The member is `LOCAL:menusystem/pointer.spr`, 1884 bytes, LOOP v9, one frame,
+format 3 (ARGB8888), **20 × 22** pixels. It is in both menu archives
+(`ingamemenu.res` and `menusystem.res`), and the editor reads it from the same
+one it already reads `font3.fnt` from.
+
+**What the editor used to do wrong.** The pause menu called
+`glutSetCursor(GLUT_CURSOR_INHERIT)` and showed the *Windows* arrow. Its own
+`DrawCustomCursor` was explicitly disabled while paused
+(`ShouldDrawCustomCursor` returned false), so the game's sprite was never drawn
+at all. The editor's 12 tool cursors (`editor/qed/*.spr`) are the QED editor's
+own art and are unrelated to this.
+
+The fix loads `pointer.spr` out of `menusystem/ingamemenu.res`
+(`igi::LoadRetailPointerSprite`, source/runtime/retail_pointer_sprite.cpp) and
+draws it while the menu is up, keeping the platform cursor hidden — with the
+platform cursor as the fallback only when the archive or member cannot be read,
+so the menu stays usable on an incomplete install.
+
+Two things about the sprite have **no trustworthy engine oracle** and are
+recorded rather than papered over:
+
+* the hotspot. `Cursor_CreateHandler` HOOK 0x424C10 (src/widget/cursor.c:25-36)
+  seeds `hotX = -2, hotY = 0`, and `Draw_Sprite` adds the frame's own `x`/`y`.
+  The arrow's tip is the pixel at (2, 0) of the 20 × 22 bitmap, so −2,0 puts the
+  drawn tip exactly on the pointer. That is an inference from the bitmap's shape,
+  not a decompiled constant.
+* the frame-record boundary inside the LOOP v9 file. The bitmap sits at offset
+  0x50 and runs to the member's end, which is where the editor's reader lands,
+  but the field-by-field layout in the decompiled `LoopHeader` / `LoopFrame9`
+  (src/res/sprite.c:113-146) does not reproduce that offset. The editor therefore
+  takes the bitmap from its own reader rather than re-deriving the struct.
+
+### The fonts and the background
+
+* **Font.** Every `MenuText` on screen 900 names `font3.fnt`, and the editor
+  reads it from `menusystem/ingamemenu.res` — the same path the engine takes (§1,
+  §4). This was already the game's resource.
+* **Background.** Screen 900's `Background` is `""`, so the pause menu has no
+  picture (which is why `MenuScreen_DrawFrame` takes its 0.66-alpha black fill,
+  §5). The main menu's `mainmenu.pic` and `logo.pic` belong to a screen the
+  editor does not show: the editor's pause menu is the loaded tree's editor-added
+  screen, and the loaded retail screens are unreachable from it.
+* The editor's tool cursors (`editor/qed/*.spr`) stay the editor's: they are QED
+  art, not menu art, and the engine has no counterpart.
+
 ## 9. Scale
 
 When the viewport cannot hold the retail pitch for every row, the whole retail
@@ -348,6 +467,59 @@ The 21 `PauseMenuRetailStyle` tests and the 1 `FntParserRetailMenuFontTest` all
 pass in the Windows suite, which is where the FNT parser is exercised.
 `LodChainCorpusTest`'s corpus test — the one the project notes as a pre-existing
 failure on this install — passed in these runs.
+
+### §8b's checks (the input contract and the game's pointer)
+
+| check | command | result |
+| --- | --- | --- |
+| key contract + retail pointer (host) | `IGI_HOST_TESTS=tests/test_pause_menu_input.cpp bash scripts/run-host-tests.sh` | **exit 0** — 13 passed, 0 failed |
+| key contract + retail pointer (Windows) | `wine bin/igi_tests.exe --gtest_filter='PauseMenuInput.*'` with `IGI_GAME_PATH` and `WINEPATH` set | **exit 0** — 13 passed, 0 failed |
+| full host lane | `IGI_HOST_NO_CACHE=1 bash scripts/run-host-tests.sh` | 4 suites fail with **14 pre-existing corpus failures** (below); every other suite passes, including the new one |
+| Windows suite | `wine bin/igi_tests.exe '--gtest_filter=-*VerifyLevel*:MenuQvm.OperandLayoutsPinnedByTheRetailBytes'` | 2035 ran, **2008 passed, 15 failed** — all 15 corpus damage, see below |
+| build integrity | `bash scripts/check-build-integrity.sh` | **PASS** — 397 objects consistent |
+| headless end-to-end (`--fast`) | `IGI_E2E_STAGE=$PWD/scratch/e2e-menu bash scripts/e2e-headless.sh --fast` | **exit 0** — smoke + 278/278 native assertions, levels 1–14 |
+| the real loader, on the real install | `LoadRetailPointerSprite("/Users/haseeb-mir/Downloads/IGI")` in a host program | **ok** — 20×22, 1760 bytes RGBA, arrow tip at x=2 |
+
+**The 15 Windows failures (and the host lane's 14) are NOT from this change.** They
+are all in suites that read the *installed* `menusystem/ingamemenu.qvm` /
+`MAINMENU.QVM`, and the install's copies are no longer the shipped ones:
+`menusystem/ingamemenu.qvm` is now the editor's own compiled output
+(md5 `5f72faf3…`, 15219 bytes, byte-identical to the
+`*.overwritten-20261029-233007` backup), against the pristine
+`ingamemenu.qvm.orig` (md5 `76f112a1…`, 11308 bytes). Screen 900 in the current
+file has **6** items where the shipped file has **5**, which is exactly the
+assertion that fails (`tests/test_pause_menu_style.cpp:572`), and
+`MenuQvm.OperandLayoutsPinnedByTheRetailBytes` — which pins byte offsets in the
+shipped container — reads past the end of the recompiled one and **crashes the
+process**, which is why the suite has to exclude it to print a summary at all.
+
+Proved three ways:
+
+1. **The same failures on a clean tree.** The four host-lane suites were run
+   against a `git worktree` of `HEAD` with no changes at all: the same 14
+   failures, same suites, same counts.
+2. **The failures pass on a pristine corpus.** A copy of the install's
+   `menusystem/` + `LANGUAGE/` with `ingamemenu.qvm.orig` / `mainmenu.qvm.orig`
+   put back in place, used as `IGI_GAME_PATH`, turns **all 15 Windows failures
+   plus the crashing test into 21 passed, 0 failed**. Nothing in this change
+   touches menu QVM parsing.
+3. **The damage predates this pass.** The qvm's *content* is identical to the
+   backup the editor's own overwrite left at `2026-10-29 22:15:55`; this session
+   began at `2026-10-30 01:29`. The file's mtime moved to `01:54:16` without its
+   content changing.
+
+Restoring `menusystem/ingamemenu.qvm` and `MAINMENU.QVM` from their `.orig`
+copies is what would clear them — **not done here**, because the task forbids
+writing to that tree.
+
+**Not verified:** the rendered result, for this pass as for the rest of this
+document. This host has no OpenGL 4.1 context, so the drawn pointer sprite, its
+hotspot alignment and the menu's compositing are asserted only through the model,
+the resource bytes and the geometry — never seen. The input routing is verified
+at the policy level (which key maps to which action) and by reading the call
+sites; that the keys then *reach* the overlay in a live window is not something
+this host can show.
+
 
 The **"the editor draws its own text"** rule is held by 7 `MenuUiEditorText` tests
 (host, corpus-free: the hand-built retail-shaped definition) and 3 `MenuLabels`

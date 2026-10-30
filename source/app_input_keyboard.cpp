@@ -5,12 +5,56 @@
  *****************************************************************************/
 #include "app_internal.h"
 #include "runtime/graph_camera_target.h"
+#include "runtime/pause_menu_input_policy.h"
 #include "runtime/pause_menu_state.h"
 #include "renderer/renderer_objects_internal.h"
 
 void App::Input_OnSpecial(int key, int x, int y) {
-	// The pause menu owns keyboard input while it is visible.  In particular,
-	// editor shortcuts such as F8 must not alter the mode behind the overlay.
+	// The pause menu owns keyboard input while it is visible, and it is the
+	// FIRST consumer - before F8/F6/F7/F5 and before every editor shortcut.
+	// Retail's menu reads its keys through `MenuManager_ReadInput` HOOK 0x418580
+	// (src/menu/menumanager.c:488-551), which drains the engine's whole key
+	// queue: a key its switch has no case for is popped and discarded, not
+	// handed on.  `PauseMenuSpecialKeyAction` (source/runtime/pause_menu_input_policy.h)
+	// is that switch; anything it does not name is consumed here, so no editor
+	// shortcut can fire behind the overlay.
+	if (igi::IsPauseMenuInputActive(pause_mode_, IsGameplayInputFocused())) {
+		// One deliberate editor-only exception: F11's camera snap stays
+		// reachable while the menu is up (ShouldProcessF11WhilePaused,
+		// source/runtime/graph_camera_target.h - it was always a documented
+		// editor feature, and it is not a menu key in retail).
+		if (key == GLUT_KEY_F11) {
+			// fall through to the F11 handler below
+		} else {
+			switch (igi::PauseMenuSpecialKeyAction(key)) {
+			case igi::PauseKeyAction::MoveDown:
+				// KEY_DOWN (-4): `if (++i >= mm->itemCount) i = 0;`
+				// MenuManager_SetFocus HOOK 0x4186E0 (src/menu/menumanager.c:536-541).
+				MovePauseMenuFocus(1);
+				return;
+			case igi::PauseKeyAction::MoveUp:
+				// KEY_UP (-3): `if (--i < 0) i = mm->itemCount - 1;` (:542-547).
+				MovePauseMenuFocus(-1);
+				return;
+			case igi::PauseKeyAction::Ignore:
+				// KEY_LEFT (-1) / KEY_RIGHT (-2): stored on the focused window
+				// (`mm->focus->key`, :530-535) and acted on by nobody on this
+				// screen, because RUN_ACTION only tests for -7.
+				return;
+			case igi::PauseKeyAction::Consume:
+			case igi::PauseKeyAction::Activate:
+			case igi::PauseKeyAction::Back:
+			case igi::PauseKeyAction::LevelInput:
+			default:
+				// No case in the engine's switch: popped and discarded.  This
+				// is what stops F5/F6/F7/F8/F2/F10, PAGE_UP/PAGE_DOWN, HOME,
+				// END and every other editor shortcut from reaching the editor
+				// while the overlay is up.
+				return;
+			}
+		}
+	}
+
 	if (!ShouldProcessF11WhilePaused(key, GLUT_KEY_F11, pause_mode_)) return;
 
 	// F8 toggles Editor <-> Game Play from anywhere; it must run before every
@@ -34,16 +78,11 @@ void App::Input_OnSpecial(int key, int x, int y) {
 	}
 	if (in_game_mode_ && IsGameplayInputFocused() &&
 		!gameplay_host_.IsGameplayWindowCurrent()) return;
-	if (igi::IsPauseMenuInputActive(pause_mode_, IsGameplayInputFocused())) {
-		// The pause overlay owns the arrow keys while it is up.  This is
-		// `MenuManager_ReadInput` HOOK 0x418580 (src/menu/menumanager.c:479-551):
-		// KEY_DOWN (-4) advances with wraparound to 0, KEY_UP (-3) steps back with
-		// wraparound to itemCount-1, both moving the menu's focus.  The rows come
-		// from the loaded menu tree.
-		if (key == GLUT_KEY_DOWN) { MovePauseMenuFocus(1); return; }
-		if (key == GLUT_KEY_UP) { MovePauseMenuFocus(-1); return; }
-		return;
-	}
+	// NOTE: the pause menu's own branch is at the top of this function, so by
+	// here `pause_mode_` can only still be set for F11 (the one key it passes
+	// through).  There is deliberately no second arrow-key branch: a duplicate
+	// would be dead code, and the engine's switch lives in exactly one place
+	// (source/runtime/pause_menu_input_policy.h).
 	if (in_game_mode_ && IsGameplayInputFocused() && !pause_mode_) {
 		return;
 	}
@@ -442,6 +481,11 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		}
 	}
 
+	// F11's camera snap is the one special key the pause menu lets through
+	// (ShouldProcessF11WhilePaused, source/runtime/graph_camera_target.h); the
+	// pause branch above hands it here, and every key it did not name is already
+	// gone.  Reaching this block with `pause_mode_` set therefore means "F11
+	// while paused", which is exactly the documented editor exception.
 	if (key == GLUT_KEY_F11) {
 		auto& objects = level_.GetLevelObjects().GetObjects();
 		const bool hasSelectedObject = selected_object_index_ >= 0 &&
@@ -676,16 +720,27 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		gameplay_host_.GetInputRouter().OnKeyboardKey(key, true);
 		return;
 	}
+	// The pause menu owns the keyboard while it is visible, and the engine's own
+	// switch decides which keys that is: `MenuManager_ReadInput` HOOK 0x418580
+	// (src/menu/menumanager.c:488-551) drains the whole key queue and acts on
+	// KEY_ENTER (-7), KEY_ESCAPE (-8), KEY_UP (-3) and KEY_DOWN (-4); KEY_TAB
+	// (-11) and KEY_LEFT/RIGHT (-1/-2) are popped and change nothing on this
+	// screen; everything else has no case and is discarded.  Every branch below
+	// returns, so no key can fall through to an editor shortcut behind the
+	// overlay.  The classification itself is
+	// `igi::PauseMenuCharKeyAction` (source/runtime/pause_menu_input_policy.h).
 	if (igi::IsPauseMenuInputActive(pause_mode_, IsGameplayInputFocused())) {
-		if (key == 13) { // Enter
+		const bool level_row_focused =
+			igi::PauseMenuLevelInputFocused(pause_mode_, pause_active_input_);
+		switch (igi::PauseMenuCharKeyAction(key, level_row_focused)) {
+		case igi::PauseKeyAction::Activate:
 			// Enter is consumed by the pause overlay. It only commits the level
 			// selector after that row has explicitly been focused; opening the
 			// menu must never reload the current level as a side effect.  On any
 			// other row it is KEY_ENTER (-7), which retail forwards to the focused
 			// window (`MenuManager_ReadInput` HOOK 0x418580) — here, the focused
 			// row's editor action.
-			if (igi::PauseMenuLevelInputFocused(pause_mode_, pause_active_input_) &&
-				!pause_level_input_.empty()) {
+			if (level_row_focused && !pause_level_input_.empty()) {
 				int lvl = std::atoi(pause_level_input_.c_str());
 				if (lvl >= 1 && lvl <= 14) {
 					LoadLevel(lvl);
@@ -697,25 +752,40 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 				ActivateFocusedPauseMenuRow();
 			}
 			return;
-		}
-		if (key == 27) {
+		case igi::PauseKeyAction::Back:
 			if (pause_active_input_ != -1) { pause_active_input_ = -1; return; }
 			// KEY_ESCAPE (-8): pop the screen the menu pushed, or close the menu
 			// (`MenuManager_PopScreen` HOOK 0x417710, src/game/menumanager.c:237-247).
 			PauseMenuBack();
 			return;
-		}
-		if (igi::PauseMenuLevelInputFocused(pause_mode_, pause_active_input_)) {
-			if (key == 8 && !pause_level_input_.empty()) {
-				pause_level_input_.pop_back();
+		case igi::PauseKeyAction::LevelInput:
+			// EDITOR-ONLY DEVIATION, and the only one in this switch: the level
+			// selector is the editor's own row and retail has no text input
+			// anywhere in a menu (see the header).  While that row owns the
+			// input, BACKSPACE and the digits are accepted here and nowhere
+			// else.
+			if (key == igi::kKeyBackspace) {
+				if (!pause_level_input_.empty()) pause_level_input_.pop_back();
 				return;
 			}
-			if (key >= '0' && key <= '9' && pause_level_input_.size() < 2) {
+			if (pause_level_input_.size() < 2) {
 				pause_level_input_ += static_cast<char>(key);
-				return;
 			}
+			return;
+		case igi::PauseKeyAction::Ignore:
+			// KEY_TAB (-11): `in->select = 1`, and nothing in IGI-RE reads it.
+			return;
+		case igi::PauseKeyAction::MoveUp:
+		case igi::PauseKeyAction::MoveDown:
+			// The arrows arrive through Input_OnSpecial, never here.
+			return;
+		case igi::PauseKeyAction::Consume:
+		default:
+			// No case in the engine's switch: popped and discarded.  This is
+			// what stops every editor letter shortcut (B, L, DEL, Ctrl+…)
+			// from reaching the editor while the overlay is up.
+			return;
 		}
-		return;
 	}
 
 	bool ctrlDown = (glutGetModifiers() & GLUT_ACTIVE_CTRL) != 0 ||

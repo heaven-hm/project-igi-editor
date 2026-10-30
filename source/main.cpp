@@ -136,7 +136,13 @@ static void OnKeyboardUp(unsigned char key, int x, int y) {
 }
 
 static void OnDisplay() {
-  glutSetCursor(igi::ShouldUseNativeCursor(g_app.GetPauseMode())
+  // While the pause menu is up the pointer is the GAME's own sprite
+  // (`LOCAL:menusystem/pointer.spr`, source/runtime/retail_pointer_sprite.h),
+  // drawn by App::DrawRetailPointerCursor, so the platform cursor stays hidden -
+  // exactly as it does for the editor's own tool cursors.  The platform cursor
+  // is restored only if that sprite could not be read from the install.
+  glutSetCursor(igi::ShouldUseNativeCursor(g_app.GetPauseMode(),
+                                           g_app.HasRetailPointerCursor())
                     ? GLUT_CURSOR_INHERIT
                     : GLUT_CURSOR_NONE);
   g_app.OnDisplay();

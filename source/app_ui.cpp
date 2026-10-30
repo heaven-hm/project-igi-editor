@@ -7,6 +7,7 @@
 #include "runtime/loading_bar_style.h"
 #include "runtime/pause_menu_cursor.h"
 #include "runtime/progress_overlay_policy.h"
+#include "runtime/retail_pointer_sprite.h"
 
 static GLuint LoadOneSpr(const char* path, int& w, int& h) {
 	TEXFile tex = TEX_Parse(path);
@@ -249,8 +250,105 @@ void App::UpdateCursorMode() {
 		hover_object_index_);
 }
 
+// The GAME's own pointer, `LOCAL:menusystem/pointer.spr` out of
+// `menusystem/ingamemenu.res` - the sprite `MenuManager_Update` HOOK 0x417CF0
+// hands to `Cursor_SetSprite` (src/menu/menumanager.c:233) and `Cursor_Draw`
+// HOOK 0x424C40 then blits at the pointer unscaled and at full intensity
+// (src/widget/cursor.c:38-41; the 128.0f it passes is 1.0 after the engine's
+// 1/128 `COLOR_SCALE`, src/math/draw.c:12).  The editor draws that sprite
+// instead of the platform cursor while a menu is open, so the menu's pointer is
+// the game's and not the system's.  Loaded once, lazily, on the first menu
+// frame; a missing install leaves it unloaded and the caller falls back to the
+// platform cursor rather than drawing nothing.
+void App::EnsureRetailPointerCursor() {
+	if (retail_pointer_tried_) return;
+	retail_pointer_tried_ = true;
+
+	const igi::RetailPointerImage image =
+		igi::LoadRetailPointerSprite(Utils::GetIGIRootPath());
+	if (!image.ok) {
+		Logger::Get().Log(LogLevel::WARNING,
+			"[Cursor] retail menu pointer unavailable: " + image.reason);
+		return;
+	}
+	pic_s pic;
+	pic.width_  = image.width;
+	pic.height_ = image.height;
+	pic.pixels_ = const_cast<uint8_t*>(image.rgba.data());
+	// NEAREST: the pointer is a 20x22 pixel bitmap drawn 1:1, so filtering could
+	// only blur it.  The engine draws it with the sprite blit, which does not
+	// filter either.
+	retail_pointer_tex_ = GL_RegisterTexture(&pic, GL_CLAMP_TO_EDGE, GL_NEAREST,
+	                                         GL_NEAREST, false);
+	retail_pointer_w_ = image.width;
+	retail_pointer_h_ = image.height;
+	Logger::Get().Log(LogLevel::INFO,
+		"[Cursor] retail menu pointer " + std::string(igi::kRetailPointerResourceName) +
+		" " + std::to_string(image.width) + "x" + std::to_string(image.height) +
+		" from " + std::string(igi::kRetailPointerArchive));
+}
+
+void App::DrawRetailPointerCursor() {
+	EnsureRetailPointerCursor();
+	if (!retail_pointer_tex_) return;
+
+	const int mx = mouse_state_.prior_x_ + igi::kRetailPointerHotspotX;
+	const int my = mouse_state_.prior_y_ + igi::kRetailPointerHotspotY;
+	const int vw = window_state_.viewport_width_;
+	const int vh = window_state_.viewport_height_;
+	const int w  = retail_pointer_w_;
+	const int h  = retail_pointer_h_;
+
+	// Same fixed-function HUD state as DrawCustomCursor: a shader/VAO left bound
+	// by the 3D pass makes immediate-mode textured quads draw nothing.
+	glUseProgram(0);
+	glBindVertexArray(0);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+	for (int i = 0; i < 4; ++i) glDisableVertexAttribArray(i);
+	glBindBufferBase(GL_UNIFORM_BUFFER, 0, 0);
+	glActiveTexture(GL_TEXTURE0);
+
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_LIGHTING);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+	glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
+	glOrtho(0, vw, vh, 0, -1, 1);   // y=0 at top (top-down to match mouse coords)
+	glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+
+	glEnable(GL_TEXTURE_2D);
+	glBindTexture(GL_TEXTURE_2D, retail_pointer_tex_);
+	// 128/128 = full intensity, exactly what Cursor_Draw passes.
+	glColor4f(1.f, 1.f, 1.f, 1.f);
+	glBegin(GL_QUADS);
+	  glTexCoord2f(0, 0); glVertex2i(mx,     my);
+	  glTexCoord2f(1, 0); glVertex2i(mx + w, my);
+	  glTexCoord2f(1, 1); glVertex2i(mx + w, my + h);
+	  glTexCoord2f(0, 1); glVertex2i(mx,     my + h);
+	glEnd();
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glDisable(GL_TEXTURE_2D);
+
+	glMatrixMode(GL_MODELVIEW);  glPopMatrix();
+	glMatrixMode(GL_PROJECTION); glPopMatrix();
+}
+
 void App::DrawCustomCursor() {
-	if (!igi::ShouldDrawCustomCursor(pause_mode_)) return;
+	// While the pause menu is up the pointer is the GAME's own sprite, not the
+	// editor's tool cursor and not the platform cursor.
+	if (igi::ShouldDrawCustomCursor(pause_mode_)) {
+		if (retail_pointer_tex_) {
+			DrawRetailPointerCursor();
+			return;
+		}
+		// The retail sprite could not be read: fall back to the platform cursor
+		// rather than drawing nothing.  EnsureRetailPointerCursor logs why.
+		EnsureRetailPointerCursor();
+		return;
+	}
 	UpdateCursorMode();
 	int idx = (int)current_cursor_mode_;
 	if (idx < 0 || idx >= NUM_CURSORS || !cursor_tex_ids_[idx]) {
