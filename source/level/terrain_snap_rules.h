@@ -92,18 +92,56 @@ enum class TerrainSnapDecision {
     SnapToTerrain,   // human soldier on the surface: feet on the collision hit
 };
 
+// WHO SUPPLIES A HUMAN PLACEMENT'S Z.
+//
+// Human_ProbeGround HOOK 0x462390 (src/humanbase/human.c:1676-1857) splits on
+// `h->ai` at :1697 BEFORE it probes:
+//
+//   * h->ai == NULL -> the collision query (:1752-1773) and, on a hit,
+//     `to[2] = foot[2] + hits[0].pos.z` (:1816).  This is the branch the
+//     editor's collision world transcribes.
+//   * h->ai != NULL -> that query NEVER runs.  `ai->graph == NULL` leaves the
+//     hit zeroed and the human ungrounded (:1701-1702 -> :1806-1813);
+//     otherwise the AI node is the ground and, while the move queue is empty,
+//     its Z is the node's world Z (:1706-1717).  The move-queue interpolation
+//     (:1719-1745) is the AI's RUNTIME patrol progress and is not part of a
+//     static placement.
+//
+// `h->ai` is non-NULL exactly when the human owns a HumanAI task: HumanAI_Create
+// HOOK 0x44F060 calls Human_SetAI(ai->task.parent, ai)
+// (src/humanai/humanai.c:62-70, :69) and Human_SetAI HOOK 0x460C70 stores it
+// (src/humanbase/human.c:1157-1160).  A retail HumanSoldier always has one --
+// Soldier_RunHandler dereferences `h->ai->aiType` unconditionally
+// (src/soldier/soldier.c:814-816).
+//
+// So an AI human's Z is either the graph node's or the authored QSC Z; it is
+// never the collision drop.
+enum class HumanGroundRule {
+    CollisionDrop,   // h->ai == NULL: Human_ProbeGround's collision branch
+    AiGraphNode,     // h->ai != NULL, ai->graph and ai->node resolve
+    KeepAuthoredZ,   // h->ai != NULL with no usable graph/node: no probe at all
+};
+
+inline HumanGroundRule DecideHumanGround(bool has_ai_controller, bool ai_graph_node_found) {
+    if (!has_ai_controller) return HumanGroundRule::CollisionDrop;
+    return ai_graph_node_found ? HumanGroundRule::AiGraphNode : HumanGroundRule::KeepAuthoredZ;
+}
+
 // The rule, in the order App::SnapObjectsToTerrain applies it:
-//   1. no hit at all -> keep.  The engine never invents a Z for a miss
+//   1. a human WITH an AI controller -> DecideHumanGround above: graph node Z,
+//      or keep the authored Z when the AI has no usable graph/node.  Never the
+//      collision drop (the engine does not probe for these humans).
+//   2. no hit at all -> keep.  The engine never invents a Z for a miss
 //      (Game_DropToGround HOOK 0x4149B0, src/game/misc.c:88-95).
-//   2. not a human -> keep.  Props, trees, buildings, fences and vehicles have
+//   3. not a human -> keep.  Props, trees, buildings, fences and vehicles have
 //      authoritative QSC Z values; the engine's load path drops humans through
 //      Human_ProbeGround, not furniture, and dropping props destroys elevated
 //      platforms, embedded foundations and stacked props.
-//   3. otherwise -> snap the human.  A hit is a hit: the engine's probe reaches
-//      400 m down and 400 m up with no window around the authored Z
-//      (src/game/misc.c:82,88-92), and Human_ProbeGround reaches 1000 m
-//      (src/humanbase/human.c:192-193).  The old 100-unit (2.4 cm) band here was
-//      an editor invention and is gone.
+//   4. otherwise (human, no AI controller) -> snap the human.  A hit is a hit:
+//      the engine's probe reaches 400 m down and 400 m up with no window around
+//      the authored Z (src/game/misc.c:82,88-92), and Human_ProbeGround reaches
+//      1000 m (src/humanbase/human.c:192-193).  The old 100-unit (2.4 cm) band
+//      here was an editor invention and is gone.
 //
 // `hitFound` is the result of the engine's WHOLE drop query, not the terrain
 // alone: Coll_Drop HOOK 0x4CABF0 body (src/coll/coll.c:575-614) queries the

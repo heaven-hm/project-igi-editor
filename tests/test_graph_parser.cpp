@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "../source/renderer/graph_writer.h"
+#include "../source/level/ai_graph_ground.h"
 #include "utils.h"
 #include <string>
 #include <cmath>
@@ -447,4 +448,136 @@ TEST_F(GraphParserTest, SaveLeavesOtherNodesUnchanged) {
     EXPECT_DOUBLE_EQ(reloaded.nodes[1].z, graph.nodes[1].z);
 
     std::filesystem::remove(out);
+}
+
+// ============================================================
+//  The AI human's ground: AIGraph_FindNearest + Graph_GetNodePos
+//
+//  Used by App::SnapObjectsToTerrain for a HumanSoldier whose HumanAI has a
+//  Graph ID (source/level/ai_graph_ground.h).  These are pure synthetic graphs
+//  so the engine rule is pinned without the retail install:
+//
+//   * AIGraph_FindNearest HOOK 0x5096F0 (src/sysmisc/aigraph.c:296-337):
+//     skip `flags & AIGraph_GetViewCriteria()` (:311), score
+//     `distance - radius * 4096` (:314, :70), keep the smallest (:316-334).
+//   * Graph_GetNodePos HOOK 0x4F9770 (src/graphnode/graph.c:341-370):
+//     unattached -> graph->pos + node->pos (:363-367).
+//   * Human_ProbeGround HOOK 0x462390 (src/humanbase/human.c:1714-1717) writes
+//     that Z when the AI's move queue is empty.
+// ============================================================
+
+namespace {
+
+GraphNode AiNode(int id, double x, double y, double z, float radius = 0.0f,
+                 const std::string& criteria = "") {
+    GraphNode n;
+    n.id = id;
+    n.x = x; n.y = y; n.z = z;
+    n.radius = radius;
+    n.criteria = criteria;
+    return n;
+}
+
+}  // namespace
+
+TEST(AiGraphGroundTest, NearestNodeWinsAndItsWorldZIsReturned) {
+    // Three nodes on the +Y axis; the human sits at y = 5000, nearest node 1.
+    GraphFile g;
+    g.valid = true;
+    g.max_nodes = 3;
+    g.nodes = { AiNode(0, 0.0, 0.0, 100.0), AiNode(1, 0.0, 4096.0, 200.0),
+                AiNode(2, 0.0, 8192.0, 300.0) };
+    const double origin[3] = {0.0, 0.0, 60000.0};  // AIGraph task ObjectPos
+    const double human[3] = {0.0, 5000.0, 60000.0};
+
+    const igi::AiGraphGround r = igi::AiGraphGroundZ(g, origin, human);
+    ASSERT_TRUE(r.found);
+    EXPECT_EQ(r.node_id, 1);
+    EXPECT_DOUBLE_EQ(r.node_local_z, 200.0);
+    // Graph_GetNodePos (unattached): graph->pos.z + node->pos.z.
+    EXPECT_DOUBLE_EQ(r.world_z, 60200.0);
+}
+
+TEST(AiGraphGroundTest, ViewNodesAreSkipped) {
+    // AIGraph_FindNearest skips VIEW nodes even when they are the closest
+    // (src/sysmisc/aigraph.c:311).
+    GraphFile g;
+    g.valid = true;
+    g.max_nodes = 2;
+    g.nodes = { AiNode(0, 0.0, 0.0, 100.0, 0.0f, "NODECRITERIA_VIEW"),
+                AiNode(1, 0.0, 30000.0, 700.0) };
+    const double origin[3] = {0.0, 0.0, 0.0};
+    const double human[3] = {0.0, 0.0, 0.0};
+
+    const igi::AiGraphGround r = igi::AiGraphGroundZ(g, origin, human);
+    ASSERT_TRUE(r.found);
+    EXPECT_EQ(r.node_id, 1);
+    EXPECT_DOUBLE_EQ(r.world_z, 700.0);
+}
+
+TEST(AiGraphGroundTest, RadiusCountsAsArbitraryUnitsTimes4096) {
+    // Score = distance - radius * 4096 (kRadiusScale).  Node 1 is 5000 units
+    // farther than node 0 but has radius 2.0, worth 8192 units, so it wins.
+    GraphFile g;
+    g.valid = true;
+    g.max_nodes = 2;
+    g.nodes = { AiNode(0, 0.0, 0.0, 10.0, 0.0f), AiNode(1, 0.0, 5000.0, 20.0, 2.0f) };
+    const double origin[3] = {0.0, 0.0, 0.0};
+    const double human[3] = {0.0, 0.0, 0.0};
+
+    const igi::AiGraphGround r = igi::AiGraphGroundZ(g, origin, human);
+    ASSERT_TRUE(r.found);
+    EXPECT_EQ(r.node_id, 1);
+    EXPECT_DOUBLE_EQ(r.world_z, 20.0);
+}
+
+TEST(AiGraphGroundTest, ThereIsNoDistanceCutoff) {
+    // kNearMax is only the initial placeholder: the first three nodes always
+    // occupy the candidate slots, so a node kilometres away is still chosen
+    // when it is the nearest (src/sysmisc/aigraph.c:300-334).
+    GraphFile g;
+    g.valid = true;
+    g.max_nodes = 1;
+    g.nodes = { AiNode(7, 40960000.0, 0.0, 4242.0) };
+    const double origin[3] = {0.0, 0.0, 0.0};
+    const double human[3] = {0.0, 0.0, 0.0};
+
+    const igi::AiGraphGround r = igi::AiGraphGroundZ(g, origin, human);
+    ASSERT_TRUE(r.found);
+    EXPECT_EQ(r.node_id, 7);
+    EXPECT_DOUBLE_EQ(r.world_z, 4242.0);
+}
+
+TEST(AiGraphGroundTest, EmptyOrInvalidGraphHasNoNode) {
+    // The engine's answer when ai->graph has no nodes: AIGraph_FindNearest
+    // returns 0 / near = NULL (src/sysmisc/aigraph.c:303-305, :334-336), ai->node
+    // stays -1, Graph_GetNode returns NULL and Human_ProbeGround leaves the Z
+    // alone (src/humanbase/human.c:1701-1702, :1806-1813).
+    GraphFile empty;
+    empty.valid = true;
+    const double origin[3] = {0.0, 0.0, 0.0};
+    const double human[3] = {0.0, 0.0, 0.0};
+    EXPECT_FALSE(igi::AiGraphGroundZ(empty, origin, human).found);
+
+    GraphFile invalid;
+    invalid.valid = false;
+    invalid.nodes = { AiNode(0, 0.0, 0.0, 0.0) };
+    EXPECT_FALSE(igi::AiGraphGroundZ(invalid, origin, human).found);
+}
+
+TEST(AiGraphGroundTest, OnlyContainerParentsLeaveTheGraphUnattached) {
+    // Graph_GetNodePos 0x4F9770 treats `graph->pos` as world only when the graph
+    // is NOT attached; Graph_Create 0x4F90B0 attaches it when the DIRECT parent
+    // is a RigidDynCubeObj (src/graphnode/graph.c:65-69).  Containers are
+    // root-level task classes; Heli/Car/Train/Building are RigidDynCubeObj.
+    EXPECT_TRUE(igi::GraphParentIsContainer(""));
+    EXPECT_TRUE(igi::GraphParentIsContainer("Container"));
+    EXPECT_TRUE(igi::GraphParentIsContainer("ConditionalContainer"));
+    EXPECT_TRUE(igi::GraphParentIsContainer("Level"));
+    EXPECT_TRUE(igi::GraphParentIsContainer("Static"));
+    EXPECT_TRUE(igi::GraphParentIsContainer("Game"));
+    EXPECT_FALSE(igi::GraphParentIsContainer("Heli"));
+    EXPECT_FALSE(igi::GraphParentIsContainer("Car"));
+    EXPECT_FALSE(igi::GraphParentIsContainer("Train"));
+    EXPECT_FALSE(igi::GraphParentIsContainer("Building"));
 }

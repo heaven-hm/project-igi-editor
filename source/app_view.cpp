@@ -6,9 +6,11 @@
 #include "app_internal.h"
 #include "renderer/igi_transform.h"
 #include "runtime/editor_camera_start.h"
+#include "level/ai_graph_ground.h"
 #include "level/collision_drop_rules.h"
 #include "level/collision_world.h"
 #include "level/terrain_snap_rules.h"
+#include <unordered_map>
 #include <unordered_set>
 
 void App::ProcessInput(float delta_seconds) {
@@ -486,6 +488,53 @@ bool App::CheckCollision(const glm::vec3& nextPos) {
     return false;
 }
 
+namespace {
+
+// The HumanAI controller under a human placement, and the AIGraph task id it
+// was authored with.
+//
+// The engine creates the controller as a CHILD of the human: HumanAI_Create
+// HOOK 0x44F060 calls Human_SetAI(ai->task.parent, ai)
+// (src/humanai/humanai.c:62-70, :69), and Human_SetAI HOOK 0x460C70 stores the
+// pointer in Human::ai (src/humanbase/human.c:1157-1161).  The graph id is the
+// HumanAI's second declared parameter, "Graph ID" / Int32
+// (src/aiaction/aiaction.c:204-207), i.e. QSC argument 4 -- the editor already
+// stores it as LevelObject::aiGraphTaskId.
+struct SoldierAI {
+    bool has_controller = false;
+    int graph_task_id = -1;
+};
+
+SoldierAI FindSoldierAI(const std::vector<LevelObject>& objects, int soldier_index) {
+    SoldierAI result;
+    if (soldier_index < 0 || soldier_index >= (int)objects.size()) return result;
+    std::vector<int> pending = objects[soldier_index].childrenIndices;
+    int budget = 64;  // a malformed/cyclic tree cannot hang a level load
+    while (!pending.empty() && budget-- > 0) {
+        const int index = pending.back();
+        pending.pop_back();
+        if (index < 0 || index >= (int)objects.size() || objects[index].deleted) continue;
+        if (objects[index].type == "HumanAI") {
+            result.has_controller = true;
+            result.graph_task_id = objects[index].aiGraphTaskId;
+            return result;
+        }
+        for (int child : objects[index].childrenIndices) pending.push_back(child);
+    }
+    return result;
+}
+
+const LevelObject* FindAiGraphTask(const std::vector<LevelObject>& objects, int graph_task_id) {
+    if (graph_task_id < 0) return nullptr;
+    const std::string id = std::to_string(graph_task_id);
+    for (const LevelObject& o : objects) {
+        if (!o.deleted && o.type == "AIGraph" && o.taskId == id) return &o;
+    }
+    return nullptr;
+}
+
+}  // namespace
+
 void App::SnapObjectsToTerrain() {
     auto& objects = level_.GetLevelObjects().GetObjects();
     Logger::Get().Log(LogLevel::INFO, "[App] Snapping " + std::to_string(objects.size()) + " objects to terrain...");
@@ -513,13 +562,15 @@ void App::SnapObjectsToTerrain() {
     // are not part of this world; their models also carry no set-1 collision.
     igi::CollisionWorld collision_world;
     {
-        // Only humans are dropped by this pass, and only humans query the object
-        // world, so a level with no human placement pays nothing here.  (The
-        // engine builds its cubes either way; this is a load-time shortcut with
-        // no effect on the answer.)
+        // Only humans WITHOUT an AI controller are dropped by this pass, and only
+        // they query the object world, so a level whose humans all have a HumanAI
+        // pays nothing here.  (The engine builds its cubes either way; this is a
+        // load-time shortcut with no effect on the answer.)
         bool any_human = false;
-        for (const LevelObject& o : objects) {
-            if (!o.deleted && (o.type == "HumanSoldier" || o.type == "HumanSoldierFemale")) {
+        for (std::size_t i = 0; i < objects.size(); ++i) {
+            const LevelObject& o = objects[i];
+            if (o.deleted || (o.type != "HumanSoldier" && o.type != "HumanSoldierFemale")) continue;
+            if (!FindSoldierAI(objects, (int)i).has_controller) {
                 any_human = true;
                 break;
             }
@@ -575,6 +626,9 @@ void App::SnapObjectsToTerrain() {
     int snapped = 0;
     int skipped = 0;
     int no_terrain = 0;
+    // AIGraph data for the AI humans, parsed once per AIGraph task per pass
+    // (GRAPH_Parse = GraphOpen HOOK 0x4F9FF0, src/graphnode/stream.c:196-237).
+    std::unordered_map<std::string, GraphFile> graph_cache;
     for (auto& obj : objects) {
         // Skip non-spatial task nodes: HumanAI, PatrolPath, ConditionalContainer, LevelFlow, etc.
         // These have no world position (stored as 0,0,0) and no model to snap.
@@ -605,8 +659,10 @@ void App::SnapObjectsToTerrain() {
         }
         // Skip snapping for Cameras, Terminals, Trains and Spline Waypoints
         // Terminals sit on interior floors at their exact QSC Z, not outdoor terrain.
-        // AI soldiers (HumanSoldier/HumanSoldierFemale) fall through so they can be
-        // terrain-snapped; the isIndoorChild check below handles interior AI.
+        // AI soldiers do NOT fall through to the terrain drop any more: their Z
+        // comes from their AI graph below (Human_ProbeGround's AI branch, HOOK
+        // 0x462390, src/humanbase/human.c:1698-1751, never runs the collision
+        // query).
         if (obj.type == "SCamera" || obj.type == "SCameraControl" || obj.type == "AlarmControl" ||
             obj.type == "AIStationaryGunHolder" || obj.type == "StationaryGun" ||
             obj.type == "Door" || obj.type == "Terminal" || obj.type == "SplineObjWaypoint" ||
@@ -624,6 +680,108 @@ void App::SnapObjectsToTerrain() {
             obj.snap_z_offset = 0.0;
             skipped++;
             continue;
+        }
+
+        // ── A human WITH an AI controller: the Z comes from the AI GRAPH ──────
+        // Human_ProbeGround HOOK 0x462390 splits on h->ai at
+        // src/humanbase/human.c:1697 and NEVER runs the collision query when it
+        // is set (the drop block at :1752-1773 is the h->ai == NULL branch).
+        // With a graph and a node and no queued move, the probe's Z is the
+        // node's world position (`Graph_GetNodePos(d, node); hits[0].pos.z =
+        // d[2];`, :1714-1717).  With no graph it leaves the pose untouched
+        // (:1701-1702 -> :1806-1813).  The move-queue interpolation
+        // (:1719-1745) is the AI's runtime patrol progress and cannot exist in
+        // a static placement, so the load-time answer is the node's Z.
+        //
+        // The node is the nearest one to the AUTHORED placement:
+        // HumanAI_ParamsChanged HOOK 0x4505D0 (src/humanai/humanai.c:724-765)
+        // runs from Level_Load's whole-level Param_GetChangedEvent broadcast
+        // (HOOK 0x4F0D40, src/level/level.c:364), sets
+        // ai->graph = Graph_Find(ai->graphId) (:739-740) and
+        // ai->node = AIGraph_FindNearest(ai->graph, authored pos) (:746-756).
+        //
+        // So an AI human either follows its graph node or keeps the authored
+        // QSC Z -- it is never dropped onto the terrain or onto an object.
+        const bool isHuman = (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale");
+        if (isHuman) {
+            const int obj_index = static_cast<int>(&obj - objects.data());
+            const SoldierAI ai = FindSoldierAI(objects, obj_index);
+            if (ai.has_controller) {
+                const LevelObject* graph_task = FindAiGraphTask(objects, ai.graph_task_id);
+                std::string parent_type;
+                if (graph_task != nullptr && graph_task->parentIndex >= 0 &&
+                    graph_task->parentIndex < (int)objects.size()) {
+                    parent_type = objects[graph_task->parentIndex].type;
+                }
+
+                igi::AiGraphGround ground;
+                bool have_node = false;
+                std::string reason;
+                if (graph_task == nullptr) {
+                    reason = "no AIGraph task " + std::to_string(ai.graph_task_id) +
+                             " for its HumanAI (Graph_Find returns NULL; "
+                             "src/humanbase/human.c:1701-1702 runs no probe)";
+                } else if (!igi::GraphParentIsContainer(parent_type)) {
+                    // Graph_GetNodePos 0x4F9770's attached branch (graph.c:345-362)
+                    // uses the parent's matrix and position: the parent's POSE.
+                    reason = "AIGraph " + graph_task->taskId + " is attached to its parent (" +
+                             (parent_type.empty() ? std::string("unknown") : parent_type) +
+                             "); its node world Z is the parent's runtime pose";
+                } else {
+                    auto cached = graph_cache.find(graph_task->taskId);
+                    if (cached == graph_cache.end()) {
+                        const std::string path = Utils::GetIGIRootPath() +
+                            "\\missions\\location0\\level" + std::to_string(last_loaded_level_) +
+                            "\\graphs\\graph" + graph_task->taskId + ".dat";
+                        cached = graph_cache.emplace(graph_task->taskId, GRAPH_Parse(path)).first;
+                    }
+                    const GraphFile& graph = cached->second;
+                    if (!graph.valid) {
+                        reason = "graph " + graph_task->taskId + " data did not parse (" +
+                                 graph.error + ")";
+                    } else {
+                        const double origin[3] = {graph_task->pos.x, graph_task->pos.y,
+                                                  graph_task->pos.z};
+                        // At level load obj.pos is the authored QSC position, i.e.
+                        // exactly the value HumanAI_ParamsChanged hands to
+                        // AIGraph_FindNearest (src/humanai/humanai.c:746-748); a
+                        // later re-snap searches from the placement's current
+                        // position (the same params-changed rebind the engine does
+                        // when a placement is edited).
+                        const double human[3] = {obj.pos.x, obj.pos.y, obj.pos.z};
+                        ground = igi::AiGraphGroundZ(graph, origin, human);
+                        have_node = ground.found;
+                        if (!have_node) {
+                            reason = "no usable node in graph " + graph_task->taskId +
+                                     " (AIGraph_FindNearest skips VIEW nodes, "
+                                     "src/sysmisc/aigraph.c:311)";
+                        }
+                    }
+                }
+
+                obj.snap_z_offset = 0.0;
+                if (have_node) {
+                    obj.pos.z = ground.world_z;
+                    snapped++;
+                    // INFO with the ARITHMETIC, so a soldier that still stands
+                    // wrong is decided from the log rather than guessed at.
+                    Logger::Get().Log(LogLevel::INFO,
+                        "[App] Snapped AI human " + obj.modelId + " to AIGraph " +
+                        graph_task->taskId + " node " + std::to_string(ground.node_id) +
+                        " graphOriginZ=" + std::to_string(graph_task->pos.z) +
+                        " nodeLocalZ=" + std::to_string(ground.node_local_z) +
+                        " -> Z=" + std::to_string(ground.world_z) +
+                        " authoredZ=" + std::to_string(obj.original_pos.z) +
+                        " (Human_ProbeGround AI branch, no collision query)");
+                } else {
+                    obj.pos.z = obj.original_pos.z;
+                    skipped++;
+                    Logger::Get().Log(LogLevel::INFO,
+                        "[App] AI human " + obj.modelId + " keeps authored Z " +
+                        std::to_string(obj.original_pos.z) + ": " + reason);
+                }
+                continue;
+            }
         }
 
         // Underground objects (Tunnels, ElevatorTunnels, UndergroundRooms) have their
@@ -678,7 +836,9 @@ void App::SnapObjectsToTerrain() {
 
         float terrainZ = 0.0f;
         const bool terrainFound = level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ, false);
-        const bool isHuman = (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale");
+        // Reaching here means the human has NO AI controller (h->ai == NULL), so
+        // Human_ProbeGround's collision branch is the engine's rule for it;
+        // `isHuman` was established above, before the AI graph branch.
         const double zDelta = obj.original_pos.z - (double)terrainZ;
 
         // ── The engine's ground query, both halves ────────────────────────────
@@ -728,11 +888,12 @@ void App::SnapObjectsToTerrain() {
         }
 
         // The rule itself is igi::DecideCollisionSnap (level/terrain_snap_rules.h),
-        // shared with its host-lane test.  In short: props always keep their
-        // authored QSC Z and a query miss never moves anything, but a human WITH a
-        // hit always snaps -- the engine has no distance band: Human_ProbeGround
-        // reaches 1000 m each way (src/humanbase/human.c:192-193) and
-        // Game_DropToGround 400 m (src/game/misc.c:82).
+        // shared with its host-lane test.  Only a human with NO AI controller
+        // reaches this point (AI humans were handled above): props always keep
+        // their authored QSC Z and a query miss never moves anything, but such a
+        // human WITH a hit always snaps -- the engine has no distance band:
+        // Human_ProbeGround reaches 1000 m each way (src/humanbase/human.c:192-193)
+        // and Game_DropToGround 400 m (src/game/misc.c:82).
         if (igi::DecideCollisionSnap(chosen_hit.found, isHuman) ==
             igi::TerrainSnapDecision::SnapToTerrain) {
             // The engine puts the human's FOOT on the hit, not the mesh's lowest

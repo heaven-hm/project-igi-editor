@@ -98,3 +98,44 @@ TEST(TerrainSnapRules, AHitSnapsTheHumanAtAnyDistance) {
     EXPECT_EQ(igi::DecideTerrainSnap(/*terrainFound=*/true, /*isHuman=*/true),
               igi::TerrainSnapDecision::SnapToTerrain);
 }
+
+// ── humans WITH an AI controller ─────────────────────────────────────────────
+//
+// Human_ProbeGround HOOK 0x462390 splits on `h->ai` at src/humanbase/human.c:1697
+// BEFORE it probes.  h->ai != NULL means the collision query at :1752-1773 does
+// NOT run: with `ai->graph == NULL` the human is left ungrounded (:1701-1702 ->
+// :1806-1813), and with a graph and a node the probe's Z is the node's world Z
+// (:1713-1717).  So an AI human's Z is never the collision drop.
+
+TEST(TerrainSnapRules, AiHumanWithAGraphNodeUsesTheGraphZ) {
+    EXPECT_EQ(igi::DecideHumanGround(/*has_ai_controller=*/true, /*ai_graph_node_found=*/true),
+              igi::HumanGroundRule::AiGraphNode);
+}
+
+TEST(TerrainSnapRules, AiHumanWithoutAGraphKeepsTheAuthoredZ) {
+    // Graph ID -1 (or an AIGraph the level does not contain): Graph_Find returns
+    // NULL, `if (!ai->graph) goto check` leaves hits[0].found = 0, and the pose
+    // is not moved.  The engine does NOT fall back to the collision query.
+    EXPECT_EQ(igi::DecideHumanGround(/*has_ai_controller=*/true, /*ai_graph_node_found=*/false),
+              igi::HumanGroundRule::KeepAuthoredZ);
+}
+
+TEST(TerrainSnapRules, AiHumanWithNoUsableNodeKeepsTheAuthoredZ) {
+    // A graph whose nodes are all VIEW-criteria, or an AIGraph data file that did
+    // not load: AIGraph_FindNearest (0x5096F0, src/sysmisc/aigraph.c:311) skips
+    // VIEW nodes, `ai->node` stays -1, Graph_GetNode returns NULL, and again the
+    // pose is untouched.  Same result, different cause.
+    EXPECT_EQ(igi::DecideHumanGround(/*has_ai_controller=*/true, /*ai_graph_node_found=*/false),
+              igi::HumanGroundRule::KeepAuthoredZ);
+}
+
+TEST(TerrainSnapRules, HumanWithoutAnAiControllerUsesTheCollisionDrop) {
+    // h->ai == NULL is the collision branch: the player (HumanPlayer /
+    // HumanPlayerInput, never a HumanAI child) and any soldier the editor
+    // authors without a HumanAI task.
+    EXPECT_EQ(igi::DecideHumanGround(/*has_ai_controller=*/false, /*ai_graph_node_found=*/false),
+              igi::HumanGroundRule::CollisionDrop);
+    // A node cannot make a non-AI human graph-driven.
+    EXPECT_EQ(igi::DecideHumanGround(/*has_ai_controller=*/false, /*ai_graph_node_found=*/true),
+              igi::HumanGroundRule::CollisionDrop);
+}
