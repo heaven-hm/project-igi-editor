@@ -587,3 +587,133 @@ TEST(AiGraphGroundTest, OnlyContainerParentsLeaveTheGraphUnattached) {
     EXPECT_FALSE(igi::GraphParentIsContainer("Train"));
     EXPECT_FALSE(igi::GraphParentIsContainer("Building"));
 }
+
+// ============================================================
+//  The ATTACHED graph: Graph_GetNodePos's other branch
+//
+//   world = parent.pos + M(parent.matrix) * (graph.pos + node.pos)
+//   (HOOK 0x4F9770, src/graphnode/graph.c:345-362)
+//
+//  M is the parent's Real32x9 (three Euler angles, ParamReal32x9_Parse
+//  0x4EFBA0, src/physobj/paramops.c:423-435; Matrix_SetEuler 0x4B38E0,
+//  src/math/matrix.c:99-108), i.e. M = Rz(az) * Ry(ay) * Rx(ax).
+// ============================================================
+
+TEST(AiGraphGroundTest, AttachedGraphAppliesParentMatrixAndPosition) {
+    // One node at graph-loc (0, 4096, 0), graph origin (0, 0, 1000) and a
+    // parent at (100, 200, 300) rolled +90 degrees about X:
+    //   graph.pos + node.pos = (0, 4096, 1000)
+    //   Rx(pi/2) * that      = (0, -1000, 4096)
+    //   + parent.pos         = (100, -800, 4396)
+    // The unattached rule would have produced 1000 + 0 = 1000, so this pins the
+    // whole attached expression, not just the Z addition.
+    GraphFile g;
+    g.valid = true;
+    g.max_nodes = 1;
+    GraphNode n = AiNode(1, 0.0, 4096.0, 0.0);
+    g.nodes = {n};
+
+    const double origin[3] = {0.0, 0.0, 1000.0};
+    const double parent_pos[3] = {100.0, 200.0, 300.0};
+    const double parent_euler[3] = {3.14159265358979323846 / 2.0, 0.0, 0.0};
+    const double human[3] = {100.0, -800.0, 4396.0};
+
+    const igi::AiGraphGround r =
+        igi::AiGraphGroundZAttached(g, origin, parent_pos, parent_euler, human);
+    ASSERT_TRUE(r.found);
+    EXPECT_EQ(r.node_id, 1);
+    EXPECT_DOUBLE_EQ(r.node_local_z, 0.0);
+    EXPECT_NEAR(r.world_z, 4396.0, 1e-9);
+
+    // The UNATTACHED transcription is a different number for the same data.
+    const igi::AiGraphGround flat = igi::AiGraphGroundZ(g, origin, human);
+    ASSERT_TRUE(flat.found);
+    EXPECT_DOUBLE_EQ(flat.world_z, 1000.0);
+}
+
+TEST(AiGraphGroundTest, AttachedSelectionUsesWorldDistances) {
+    // Two nodes; the human is nearest node 1 in WORLD space.  The search is
+    // performed after pulling the human back through M^T, so a parent rotation
+    // that reorders the nodes locally must not change the answer.
+    GraphFile g;
+    g.valid = true;
+    g.nodes = {AiNode(0, 0.0, 0.0, 0.0), AiNode(1, 0.0, 8192.0, 0.0)};
+
+    const double origin[3] = {0.0, 0.0, 0.0};
+    const double parent_pos[3] = {0.0, 0.0, 100.0};
+    const double parent_euler[3] = {0.0, 0.0, 3.14159265358979323846 / 2.0};  // yaw 90
+    // Node 0 becomes (0,0,100); node 1 becomes (-8192,0,100).  A human at
+    // (-8000, 0, 100) is nearest node 1.
+    const double human[3] = {-8000.0, 0.0, 100.0};
+
+    const igi::AiGraphGround r =
+        igi::AiGraphGroundZAttached(g, origin, parent_pos, parent_euler, human);
+    ASSERT_TRUE(r.found);
+    EXPECT_EQ(r.node_id, 1);
+}
+
+TEST(AiGraphGroundTest, AttachedSearchStillSkipsViewNodes) {
+    // AIGraph_FindNearest's VIEW skip (src/sysmisc/aigraph.c:311) applies to the
+    // attached branch too: it is the same scan over the same nodes.
+    GraphFile g;
+    g.valid = true;
+    g.nodes = {AiNode(0, 0.0, 0.0, 500.0, 0.0f, "NODECRITERIA_VIEW"),
+               AiNode(1, 0.0, 30000.0, 700.0)};
+    const double origin[3] = {0.0, 0.0, 0.0};
+    const double parent_pos[3] = {0.0, 0.0, 100.0};
+    const double parent_euler[3] = {0.0, 0.0, 0.0};
+    const double human[3] = {0.0, 0.0, 100.0};
+
+    const igi::AiGraphGround r =
+        igi::AiGraphGroundZAttached(g, origin, parent_pos, parent_euler, human);
+    ASSERT_TRUE(r.found);
+    EXPECT_EQ(r.node_id, 1);
+    EXPECT_DOUBLE_EQ(r.world_z, 800.0);
+}
+
+TEST(AiGraphGroundTest, AttachedBuildingCaseFromLevel4) {
+    // Shipped case: LEVEL4 objects.qsc:543 (Building "Anya HQ"), :544 (AIGraph 6)
+    // and :545 (HumanSoldier with HumanAI graph 6); graph6.dat's only node.
+    //
+    //   Building Position    (42171.9453125, -1427.2568359375, 0)      args 3-5
+    //   Building Orientation (0, 0, 0)                                args 6-8
+    //   AIGraph 6 position   (30065.96484375, -21388.2421875, 12842.060546875)
+    //   graph6.dat node      (2165.2885811546294, 2740.26705613601,
+    //                         -7582.960178162124)
+    //   human authored Z     8105.5546875
+    //
+    // Graph_GetNodePos (attached): 0 + 12842.060546875 + (-7582.960178162124)
+    //                            = 5259.100368712876
+    // so the engine moves the human 0.695 m down from its authored Z.
+    GraphFile g;
+    g.valid = true;
+    g.max_nodes = 100;
+    g.nodes = {AiNode(1, 2165.2885811546294, 2740.26705613601, -7582.960178162124)};
+
+    const double origin[3] = {30065.96484375, -21388.2421875, 12842.060546875};
+    const double parent_pos[3] = {42171.9453125, -1427.2568359375, 0.0};
+    const double parent_euler[3] = {0.0, 0.0, 0.0};
+    const double human[3] = {68105.2265625, 432.6167907714844, 8105.5546875};
+
+    const igi::AiGraphGround r =
+        igi::AiGraphGroundZAttached(g, origin, parent_pos, parent_euler, human);
+    ASSERT_TRUE(r.found);
+    EXPECT_EQ(r.node_id, 1);
+    EXPECT_NEAR(r.world_z, 5259.100368712876, 1e-6);
+    EXPECT_NEAR(r.world_z - human[2], -2846.454318787124, 1e-6);
+}
+
+TEST(AiGraphGroundTest, OnlyAuthoredStartPosesAreEvaluatedAttached) {
+    // Heli/Car apply startPos/startMatrix at load (Heli_ParamsChanged 0x432950,
+    // src/heli/heli.c:645-646; Car_ParamsChanged 0x42F530, src/heli/car.c:91-92)
+    // and the AnimTask tick-0 reset can only repeat that pose.  Building is a
+    // static SectorObject.  Train has no ObjectPos: its pose is
+    // SplineObj_GetPoints(path, start_dist) (Train_Place 0x42A2C0), so it is NOT
+    // evaluated here and keeps the authored Z.
+    EXPECT_TRUE(igi::GraphParentPoseIsAuthoredAtProbe("Heli"));
+    EXPECT_TRUE(igi::GraphParentPoseIsAuthoredAtProbe("Car"));
+    EXPECT_TRUE(igi::GraphParentPoseIsAuthoredAtProbe("Building"));
+    EXPECT_FALSE(igi::GraphParentPoseIsAuthoredAtProbe("Train"));
+    EXPECT_FALSE(igi::GraphParentPoseIsAuthoredAtProbe("Container"));
+    EXPECT_FALSE(igi::GraphParentPoseIsAuthoredAtProbe(""));
+}

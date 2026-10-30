@@ -24,9 +24,14 @@
 
 #include "level/level_common.h"
 #include "level/level_objects.h"
+#include "level/ai_graph_ground.h"
+#include "renderer/graph_writer.h"
+#include "utils.h"
 
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <string>
 
 namespace {
 
@@ -260,4 +265,182 @@ TEST(LevelObjectParsePathsTest, LoadPathReadsTheElevatorRail) {
     EXPECT_TRUE(found->elevatorLinear);
     EXPECT_FALSE(found->elevatorForceOrientation);
     EXPECT_DOUBLE_EQ(found->elevatorStartHeight, 0.0);
+}
+
+// ── The attached-graph AI placement, through the editor's own loaders ────────
+//
+// A shipped case: LEVEL4 objects.qsc:543-545 is
+//
+//   Building "Anya HQ"  Position (42171.9453125, -1427.2568359375, 0)
+//                       Orientation (0, 0, 0)
+//     AIGraph 6         Graph position (30065.96484375, -21388.2421875, 12842.060546875)
+//     HumanSoldier      Position (68105.2265625, 432.6167907714844, 8105.5546875)
+//       HumanAI         Graph ID 6
+//
+// and graph6.dat's only node is (2165.2885811546294, 2740.26705613601,
+// -7582.960178162124).  Graph_GetNodePos's attached branch (HOOK 0x4F9770,
+// src/graphnode/graph.c:345-362) computes
+//
+//   world.z = parent.pos.z + M(Orientation) * (graph.pos + node.pos)
+//           = 0 + 12842.060546875 + (-7582.960178162124)
+//           = 5259.100368712876
+//
+// so Human_ProbeGround (HOOK 0x462390, src/humanbase/human.c:1714-1717) moves
+// the human 0.695 m down from its authored 8105.5546875.  This test proves the
+// four numbers the editor actually feeds that rule come from the shipped files
+// through LoadRecursive (not from hand-written constants).
+TEST(LevelObjectParsePathsTest, AttachedBuildingGraphFeedsTheAiGroundRule) {
+    const std::filesystem::path level_dir =
+        std::filesystem::path(Utils::GetIGIRootPath()) / "missions" / "location0" / "LEVEL4";
+    const std::filesystem::path qsc_path = level_dir / "objects.qsc";
+    if (!std::filesystem::exists(qsc_path)) {
+        GTEST_SKIP() << "retail LEVEL4 objects.qsc not installed: " << qsc_path;
+    }
+
+    QSC qsc;
+    qsc.Load(qsc_path.string().c_str());
+    LevelObjects objects;
+    objects.Load(nullptr, &qsc);
+    const std::vector<LevelObject>& list = objects.GetObjects();
+
+    int building = -1, graph = -1, human_ai = -1;
+    for (int i = 0; i < static_cast<int>(list.size()); ++i) {
+        const LevelObject& o = list[static_cast<std::size_t>(i)];
+        if (o.type == "Building" && o.name == "Anya HQ") building = i;
+        if (o.type == "AIGraph" && o.taskId == "6") graph = i;
+        if (o.type == "HumanAI" && o.aiGraphTaskId == 6) human_ai = i;
+    }
+    ASSERT_GE(building, 0) << "Building \"Anya HQ\" not found";
+    ASSERT_GE(graph, 0) << "AIGraph 6 not found";
+    ASSERT_GE(human_ai, 0) << "HumanAI with Graph ID 6 not found";
+
+    // Graph_Create 0x4F90B0 attaches the graph when its DIRECT parent is the
+    // RigidDynCubeObj (src/graphnode/graph.c:65-69): the AIGraph must be a
+    // direct child of the Building, and the human likewise.
+    ASSERT_EQ(list[static_cast<std::size_t>(graph)].parentIndex, building);
+    ASSERT_GE(list[static_cast<std::size_t>(human_ai)].parentIndex, 0);
+    const LevelObject& human =
+        list[static_cast<std::size_t>(list[static_cast<std::size_t>(human_ai)].parentIndex)];
+    ASSERT_EQ(human.type, "HumanSoldier");
+    ASSERT_EQ(human.parentIndex, building);
+
+    const LevelObject& b = list[static_cast<std::size_t>(building)];
+    const LevelObject& g = list[static_cast<std::size_t>(graph)];
+    EXPECT_DOUBLE_EQ(b.pos.x, 42171.9453125);
+    EXPECT_DOUBLE_EQ(b.pos.y, -1427.2568359375);
+    EXPECT_DOUBLE_EQ(b.pos.z, 0.0);
+    EXPECT_DOUBLE_EQ(b.rot.x, 0.0);
+    EXPECT_DOUBLE_EQ(b.rot.y, 0.0);
+    EXPECT_DOUBLE_EQ(b.rot.z, 0.0);
+    EXPECT_DOUBLE_EQ(g.pos.x, 30065.96484375);
+    EXPECT_DOUBLE_EQ(g.pos.y, -21388.2421875);
+    EXPECT_DOUBLE_EQ(g.pos.z, 12842.060546875);
+    EXPECT_DOUBLE_EQ(human.pos.x, 68105.2265625);
+    EXPECT_DOUBLE_EQ(human.pos.y, 432.6167907714844);
+    EXPECT_DOUBLE_EQ(human.pos.z, 8105.5546875);
+
+    std::filesystem::path dat = level_dir / "GRAPHS" / "GRAPH6.DAT";
+    if (!std::filesystem::exists(dat)) dat = level_dir / "graphs" / "graph6.dat";
+    if (!std::filesystem::exists(dat)) {
+        GTEST_SKIP() << "retail graph6.dat not installed: " << dat;
+    }
+    const GraphFile parsed = GRAPH_Parse(dat.string());
+    ASSERT_TRUE(parsed.valid) << parsed.error;
+
+    const double origin[3] = {g.pos.x, g.pos.y, g.pos.z};
+    const double parent_pos[3] = {b.pos.x, b.pos.y, b.pos.z};
+    const double parent_euler[3] = {b.rot.x, b.rot.y, b.rot.z};
+    const double human_pos[3] = {human.pos.x, human.pos.y, human.pos.z};
+    const igi::AiGraphGround r =
+        igi::AiGraphGroundZAttached(parsed, origin, parent_pos, parent_euler, human_pos);
+    ASSERT_TRUE(r.found);
+    EXPECT_EQ(r.node_id, 1);
+    EXPECT_NEAR(r.world_z, 5259.100368712876, 1e-6);
+    EXPECT_NEAR(r.world_z - human.pos.z, -2846.454318787124, 1e-6);
+}
+
+// The census behind the rule: in the three shipped levels whose objects.qsc is
+// unpacked here, exactly 18 AI humans patrol an ATTACHED graph, and every one
+// of those graphs has a Heli/Car/Train/Building direct parent:
+//
+//   level1   Heli 1;  Train 2, 3, 6;  Car 15      = 5
+//   LEVEL2   Heli 17;  Car 15                      = 2
+//   LEVEL4   Heli 8 (2), Heli 9 (3), Heli 12 (2),
+//            Heli 13 (3), Building 6               = 11
+//                                              total 18
+//
+// The editor evaluates the attached Z for Heli/Car/Building (15 of them) and
+// keeps the authored Z for the 3 Train ones, whose pose is the spline at
+// start_dist rather than an ObjectPos.
+TEST(LevelObjectParsePathsTest, ShippedAttachedGraphCensus) {
+    struct LevelCensus {
+        const char* dir;
+        int heli, car, train, building;
+    };
+    const LevelCensus levels[] = {
+        {"level1", 1, 1, 3, 0},
+        {"LEVEL2", 1, 1, 0, 0},
+        {"LEVEL4", 10, 0, 0, 1},
+    };
+
+    int total_heli = 0, total_car = 0, total_train = 0, total_building = 0;
+    int total_attached = 0;
+    int evaluated = 0;
+    for (const LevelCensus& level : levels) {
+        const std::filesystem::path qsc_path =
+            std::filesystem::path(Utils::GetIGIRootPath()) / "missions" / "location0" /
+            level.dir / "objects.qsc";
+        if (!std::filesystem::exists(qsc_path)) {
+            GTEST_SKIP() << "retail objects.qsc not installed: " << qsc_path;
+        }
+        QSC qsc;
+        qsc.Load(qsc_path.string().c_str());
+        LevelObjects objects;
+        objects.Load(nullptr, &qsc);
+        const std::vector<LevelObject>& list = objects.GetObjects();
+
+        // AIGraph task id -> its direct parent's type.
+        std::map<std::string, std::string> graph_parent;
+        for (const LevelObject& o : list) {
+            if (o.type != "AIGraph") continue;
+            const std::string parent_type =
+                (o.parentIndex >= 0 && o.parentIndex < static_cast<int>(list.size()))
+                    ? list[static_cast<std::size_t>(o.parentIndex)].type
+                    : std::string();
+            graph_parent[o.taskId] = parent_type;
+        }
+
+        int heli = 0, car = 0, train = 0, building = 0;
+        for (const LevelObject& o : list) {
+            if (o.type != "HumanAI" || o.aiGraphTaskId < 0) continue;
+            auto it = graph_parent.find(std::to_string(o.aiGraphTaskId));
+            if (it == graph_parent.end()) continue;
+            const std::string& parent = it->second;
+            if (igi::GraphParentIsContainer(parent)) continue;
+            if (parent == "Heli") heli++;
+            else if (parent == "Car") car++;
+            else if (parent == "Train") train++;
+            else if (parent == "Building") building++;
+            if (igi::GraphParentPoseIsAuthoredAtProbe(parent)) evaluated++;
+        }
+
+        EXPECT_EQ(heli, level.heli) << level.dir;
+        EXPECT_EQ(car, level.car) << level.dir;
+        EXPECT_EQ(train, level.train) << level.dir;
+        EXPECT_EQ(building, level.building) << level.dir;
+        total_heli += heli;
+        total_car += car;
+        total_train += train;
+        total_building += building;
+        total_attached += heli + car + train + building;
+    }
+
+    EXPECT_EQ(total_attached, 18);
+    EXPECT_EQ(total_heli, 12);
+    EXPECT_EQ(total_car, 2);
+    EXPECT_EQ(total_train, 3);
+    EXPECT_EQ(total_building, 1);
+    // Heli + Car + Building are evaluated; the 3 Train placements keep the
+    // authored Z because a Train has no ObjectPos.
+    EXPECT_EQ(evaluated, total_attached - total_train);
 }

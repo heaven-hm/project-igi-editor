@@ -719,6 +719,14 @@ void App::SnapObjectsToTerrain() {
         // ai->graph = Graph_Find(ai->graphId) (:739-740) and
         // ai->node = AIGraph_FindNearest(ai->graph, authored pos) (:746-756).
         //
+        // Graph_GetNodePos's attached branch (graph.c:345-362) adds the parent
+        // pose: world = parent.pos + M(parent.matrix) * (graph.pos + node.pos).
+        // That pose is the parent's AUTHORED start pose at the first probe for
+        // Heli/Car (startPos/startMatrix applied at load) and for a static
+        // Building; the header carries the full derivation.  Train has no
+        // ObjectPos (its pose is the spline at start_dist), so an attached
+        // Train graph keeps the authored Z rather than inventing a pose.
+        //
         // So an AI human either follows its graph node or keeps the authored
         // QSC Z -- it is never dropped onto the terrain or onto an object.
         const bool isHuman = (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale");
@@ -736,16 +744,28 @@ void App::SnapObjectsToTerrain() {
                 igi::AiGraphGround ground;
                 bool have_node = false;
                 std::string reason;
+                // A graph whose direct parent is not a container goes through
+                // Graph_GetNodePos's attached branch (graph.c:345-362):
+                //   world = parent.pos + M(parent.matrix) * (graph.pos + node.pos)
+                // That is derivable from the level file only when the parent's
+                // pose at the human's first probe is its AUTHORED start pose --
+                // Heli/Car/Building (see ai_graph_ground.h).  Train has no
+                // ObjectPos; its pose is the spline at start_dist.  Anything
+                // else is left alone rather than invented.
+                const bool attached = !igi::GraphParentIsContainer(parent_type);
+                const bool attached_authored =
+                    attached && igi::GraphParentPoseIsAuthoredAtProbe(parent_type);
                 if (graph_task == nullptr) {
                     reason = "no AIGraph task " + std::to_string(ai.graph_task_id) +
                              " for its HumanAI (Graph_Find returns NULL; "
                              "src/humanbase/human.c:1701-1702 runs no probe)";
-                } else if (!igi::GraphParentIsContainer(parent_type)) {
-                    // Graph_GetNodePos 0x4F9770's attached branch (graph.c:345-362)
-                    // uses the parent's matrix and position: the parent's POSE.
+                } else if (attached && !attached_authored) {
                     reason = "AIGraph " + graph_task->taskId + " is attached to its parent (" +
                              (parent_type.empty() ? std::string("unknown") : parent_type) +
-                             "); its node world Z is the parent's runtime pose";
+                             "); the parent pose that Graph_GetNodePos 0x4F9770 applies is not an "
+                             "authored ObjectPos (Train: spline(start_dist) from Train_Place "
+                             "0x42A2C0; other types: unverified), so the node world Z is not "
+                             "derivable from the placement";
                 } else {
                     auto cached = graph_cache.find(graph_task->taskId);
                     if (cached == graph_cache.end()) {
@@ -768,7 +788,23 @@ void App::SnapObjectsToTerrain() {
                         // position (the same params-changed rebind the engine does
                         // when a placement is edited).
                         const double human[3] = {obj.pos.x, obj.pos.y, obj.pos.z};
-                        ground = igi::AiGraphGroundZ(graph, origin, human);
+                        if (attached_authored) {
+                            // Heli/Car startPos+startMatrix, Building
+                            // Position+Orientation -- the fields the editor's QSC
+                            // loader kept in obj.pos/obj.rot (level_objects.cpp:
+                            // Heli/Car args 3..8, Building args 3..8).  This pass
+                            // never moves those parents (DecideCollisionSnap keeps
+                            // props at the authored Z), so parent.pos/rot here are
+                            // still the start pose the engine applies at load.
+                            const LevelObject& parent = objects[graph_task->parentIndex];
+                            const double parent_pos[3] = {parent.pos.x, parent.pos.y, parent.pos.z};
+                            const double parent_euler[3] = {parent.rot.x, parent.rot.y,
+                                                            parent.rot.z};
+                            ground = igi::AiGraphGroundZAttached(graph, origin, parent_pos,
+                                                                 parent_euler, human);
+                        } else {
+                            ground = igi::AiGraphGroundZ(graph, origin, human);
+                        }
                         have_node = ground.found;
                         if (!have_node) {
                             reason = "no usable node in graph " + graph_task->taskId +
@@ -784,13 +820,24 @@ void App::SnapObjectsToTerrain() {
                     snapped++;
                     // INFO with the ARITHMETIC, so a soldier that still stands
                     // wrong is decided from the log rather than guessed at.
+                    std::string attached_note;
+                    if (attached_authored) {
+                        const LevelObject& parent = objects[graph_task->parentIndex];
+                        attached_note = " attached=" + parent.type +
+                                        " parentPosZ=" + std::to_string(parent.pos.z) +
+                                        " parentEuler=" + std::to_string(parent.rot.x) + "," +
+                                        std::to_string(parent.rot.y) + "," +
+                                        std::to_string(parent.rot.z) +
+                                        " (Graph_GetNodePos 0x4F9770 attached: parent.pos + "
+                                        "M(startMatrix)*(graph.pos+node.pos))";
+                    }
                     Logger::Get().Log(LogLevel::INFO,
                         "[App] Snapped AI human " + obj.modelId + " to AIGraph " +
                         graph_task->taskId + " node " + std::to_string(ground.node_id) +
                         " graphOriginZ=" + std::to_string(graph_task->pos.z) +
                         " nodeLocalZ=" + std::to_string(ground.node_local_z) +
                         " -> Z=" + std::to_string(ground.world_z) +
-                        " authoredZ=" + std::to_string(obj.original_pos.z) +
+                        " authoredZ=" + std::to_string(obj.original_pos.z) + attached_note +
                         " (Human_ProbeGround AI branch, no collision query)");
                 } else {
                     obj.pos.z = obj.original_pos.z;
