@@ -132,11 +132,6 @@ void Renderer_Skydome::UpdateVertices(const skydome_define_s& d) {
 	BakeVertices();
 }
 
-void Renderer_Skydome::SetFogColor(const glm::vec3& fog_color) {
-	fog_color_ = fog_color;
-	BakeVertices();
-}
-
 void Renderer_Skydome::BakeVertices() {
 	const skydome_define_s& d = last_sd_;
 
@@ -196,12 +191,6 @@ void Renderer_Skydome::BakeVertices() {
 
 			float f2 = 1.0f - t;
 
-			// Atmospheric fog — physically, looking near the horizon means looking
-			// through much more atmosphere than looking straight up. Use a power-law
-			// on (1 - sin(pitch)) so the fog fades smoothly from full at the horizon
-			// to zero at the zenith without hard edges at any angle.
-			float fog_a = glm::pow(glm::max(0.0f, 1.0f - s), 1.5f);
-
 			float yaw = 0.0f;
 			constexpr float yaw_step = glm::two_pi<float>() / SLICES;
 
@@ -218,8 +207,17 @@ void Renderer_Skydome::BakeVertices() {
 				InterplateColor(start_color, start_color + 3,
 					start_color + 6, start_color + 9, f1, f2, sky_col);
 
-				// Blend toward atmospheric fog color at horizon.
-				vb[v_idx].color_ = glm::mix(sky_col, fog_color_, fog_a);
+				// The AUTHORED colour, with no fog blend. Retail draws the skydome
+				// with D3DRENDERSTATE_FOGENABLE = 0 (SkyDome_Render HOOK 0x52CF80,
+				// src/terredit/skydome.c:242) and its vertex colours come only from
+				// the level's FlatSky gradient (SkyDome_Fill HOOK 0x52CB60,
+				// skydome.c:94-135: d->color[0..4], the horizon picking which pair).
+				// The editor used to mix toward the scene fog colour here and to
+				// fill the skirt below the horizon with it, which is why the sky's
+				// horizon showed the fog colour instead of the level's own bottom
+				// colour -- an invention with no oracle, and the opposite of what
+				// the engine's fog state says.
+				vb[v_idx].color_ = sky_col;
 
 				yaw += yaw_step;
 			}
@@ -227,14 +225,15 @@ void Renderer_Skydome::BakeVertices() {
 			t1 += 0.1f;
 		}
 
-		// extrude downward — use full fog color at skirt (below horizon)
+		// Extrude downward. The skirt keeps the last ring's AUTHORED colour (the
+		// engine's below-horizon rows use d->color + 2, skydome.c:121-125); it is not
+		// filled with the fog colour.
 		for (int i = 0; i < SLICES; ++i) {
 			int pri_v_idx = 1 + (STACKS-1) * SLICES + i;
 			int v_idx = 1 + STACKS * SLICES + i;
 
 			vb[v_idx] = vb[pri_v_idx];
 			vb[v_idx].pos_[2] = RADIUS * -0.5f;
-			vb[v_idx].color_ = fog_color_;
 		}
 
 		glUnmapBuffer(GL_ARRAY_BUFFER);

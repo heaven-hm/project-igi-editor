@@ -356,6 +356,12 @@ public:
 
 	virtual void			SetupClearColor(const glm::vec4& color) = 0;
 	virtual void			SetupFog(const glm::vec4 & color, float fog_far) = 0;
+	// The OBJECT pass's fog, which retail takes from a DIFFERENT light set than the
+	// terrain's: gFogColor / gFogDensity are gFogColors[1] / gFogDensities[1], i.e.
+	// "Fog color object category 1" / "Fog density object category 1" (address
+	// arithmetic in source/runtime/mission_fog.h, kObjectLightSet). `fog_far` is the
+	// engine's e-folding distance in world units, exactly as for SetupFog.
+	virtual void			SetupObjectFog(const glm::vec4& color, float fog_far) = 0;
 	virtual void			SetupSkydome(const skydome_define_s& d) = 0;
 
 	virtual void			LoadFlatSkyLayerTex(int layer_no, const pic_s* pic) = 0;

@@ -565,3 +565,234 @@ Windows: `QSC::Load` needs `File_LoadText`/`File_FreeBuf` from
 host half drives the same rules through the QVM walk, and the Windows half
 cross-checks the bridge's tokens against that walk token for token, so the two
 halves cannot drift apart silently.
+
+---
+
+## 16. The OBJECT fog is a DIFFERENT light set, and it was not applied at all (2026-10-30)
+
+The user's report was "the fog and the smoke and the lighting should be exactly how
+the level is". Three separate defects came out of it. This section covers the first
+two; §17 covers the third.
+
+### 16.1 The engine fogs objects with "object category 1", proved by address arithmetic
+
+`publish()` fills five sets (globallight.c:127-134):
+
+| global | address | type | per-set stride |
+|---|---|---|---|
+| `gFogColors` | `0xB818E0` (`addr.c:1991`) | `Vec3f[5]` | 12 |
+| `gFogDensities` | `0xB46D00` (`addr.c:1970`) | `float[5]` | 4 |
+
+The **object** pass does not index them; it reads two plain globals:
+
+| global | address | reader |
+|---|---|---|
+| `gFogColor` (`float[3]`) | `0xB818EC` (`addr.c:1992`, `render/rendervars.h:18`) | `render.c:775-777` (`set_fog`), `dxinit/polylist.c:243-244` |
+| `gFogDensity` (`float`) | `0xB46D04` (`addr.c:1971`, `dxinit/dxinitvars.h:8`) | `render.c:780`, `polylist.c:245`, `Fog_SetRange` (`d3drender.c:117-118`) |
+
+`0xB818E0 + 12 == 0xB818EC` and `0xB46D00 + 4 == 0xB46D04`. So
+**`gFogColor` IS `gFogColors[1]` and `gFogDensity` IS `gFogDensities[1]`** — the
+object pass fogs with *object category 1*, while the terrain fogs with set 0 through
+`TerrainMesh_SetFog` / `TerrainMesh_SetAmbient` (globallight.c:124-125). The same
+aliasing identifies the object pass's D3D ambient material colour: `ALIAS(gLightColor,
+gAmbient, 12)` (`src/nodereg/water.c:544`) makes `gLightColor == gAmbient[1]`, and
+`polylist.c:249-250` sets `D3DRENDERSTATE_AMBIENT` from it — which is the oracle for
+`app_level.cpp` reading "Ambient color object category 1" rather than a guess.
+
+On the shipped corpus the two sets happen to carry the SAME numbers (every level
+links them: `link = 0,1,2,3` in the daytime keyframe), so this is a *correctness*
+fix — the editor now reads the set the engine reads — rather than a change of
+thickness. `ObjectFogCorpusTest.EveryLevelAuthorsBothTheTerrainAndTheObjectFog`
+prints both columns for all fourteen levels and they are equal on every one.
+
+### 16.2 The object fog was dead state
+
+`Renderer_Objects` carried `fog_color_`, `fog_far_` and `fog_enabled_`, assigned by
+`SetFogParams` / `SetFogEnabled` and **read by nothing**; the object fragment shader
+(`renderer_objects.cpp`'s `OBJ_FRAG_SRC`) had no fog term at all, and the draw
+carried the comment `// Fog is terrain-only — objects/buildings are never fogged.`
+Retail fogs them (`render.c:773-785`), so buildings, props and characters did not
+fade into the haze that the terrain did.
+
+Fixed by giving the object shader the engine's own exponential — the expression
+`terraind3d.c:164` uses for the terrain, with the object set's density:
+
+```
+r = 1 / exp(vz * gWorldScale * gFogDensity)
+```
+
+with `vz` the view-space z in game units, computed in the shader as
+`dot(v_fragPos - u_cameraPos, u_viewDir)` (all three in world units), and
+`u_fogFar` = the e-folding distance `2e6 / density` world units. Both GLSL tiers
+(3.30 and the 1.20 fallback) got the same six uniforms and the same arithmetic.
+
+**Named divergence.** D3D7 could only fog with a linear ramp (`render.c:781` sets
+`FOGVERTEXMODE = D3DFOG_LINEAR`), so the engine linearises per batch with
+`Fog_SetRange` (`HOOK 0x49B2D0`, `d3drender.c:108-131`), which solves for the ramp
+through the exponential's value at the near and far side of a sphere around the
+object. The editor applies the exponential itself — what that ramp approximates,
+without the approximation. `FogSetRangeForDepth` is the ported linearisation and
+`ObjectFogTest.FogSetRangeMatchesTheExponentialAtBothEdges` proves the two agree at
+both edges, so the port is not dead code and its relationship to what renders is
+pinned.
+
+### 16.3 The `link` inheritance was missing from the resolver
+
+`GlobalLightKeyframe_ParamsChanged` (`HOOK 0x5282C0`, globallight.c:392-403) resolves
+each set's `Link setting` before anything reads the sets, sweeping the whole table
+five times so chains resolve:
+
+```c
+for (n = 5; n; n--)
+    for (i = 0; i < 5; i++) {
+        int l = k->sets[i].link;
+        if (l >= 0 && l < 5) k->sets[i].set.color = k->sets[l].set.color;
+    }
+```
+
+`ResolveMissionFog` did not do this: it read the raw tokens. A level that authors
+`link` and leaves the linked set at placeholder zeros would therefore have produced
+a different fog from retail. The sweep is now implemented (copying ambient, fog and
+density together, as one `LightColor`) and
+`ObjectFogTest.LinkSettingsAreResolvedBeforeAnythingReadsTheSets` pins it, including
+a four-deep chain and the "negative link means none" case.
+
+## 17. The terrain fog was a clip-space length in the wrong unit (2026-10-30)
+
+`Renderer_Terrain`'s fog pass is the only fog the terrain had, and it could not be
+seen. `shaders/*/terrain_fog.frag` read
+
+```glsl
+float distance = length(vs_out_pos_in_view);
+float fog_near = g_fog_far * FOG_NEAR_FACTOR;      // FOG_NEAR_FACTOR = 0.333333
+float visibility = (g_fog_far - distance) / (g_fog_far - fog_near);
+```
+
+and the vertex shader set `vs_out_pos_in_view = (g_mvp_objects * v4).xyz`.
+`g_mvp_objects` is `mat_proj_persp * mat_view * mat_scale` (renderer.cpp:287), so
+that varying is the **clip-space** position, and `length(clip.xyz)` is not a distance
+in any unit: it is `clip.w * sqrt(x_ndc² + y_ndc² + z_ndc²)`. Meanwhile `g_fog_far`
+was handed over as `fog_far_meters * WORLD_UNITS_PER_METER` (level.cpp), i.e. world
+units. Two consequences, both measured:
+
+1. **Unit mismatch.** `clip.w` is the view depth in world units *
+   `RENDERER_MODEL_SCALE_DOWN` (`source/common.h:54` = 0.001f), so the shader's
+   "distance" is 1000x smaller than the `g_fog_far` it was compared against. For
+   LEVEL1 (`g_fog_far` = 1 058 201 world units, `fog_near` = 352 734) the terrain
+   would need a view depth of ~86 km before the ramp even began; the far plane is
+   `RENDER_Z_FAR = 409600` in the same scaled units (100 km), so the strongest fog
+   reachable anywhere in the scene was ~8 %, at the horizon.
+2. **An invented curve.** `FOG_NEAR_FACTOR = 0.333333` was a tuned constant with no
+   oracle (the file said "tune this"), and the engine's terrain fog is not linear at
+   all.
+
+Both are replaced by the engine's own rule, `td_project` in
+`src/glowmesh/terraind3d.c:164-167`:
+
+```c
+r = kOne / x87_exp(vz * gWorldScale * gTerrainFogScale);
+tl->specular = fistp(r * 255) << 24;
+```
+
+The fragment shader now reads `float depth = 1.0 / gl_FragCoord.w` — the clip-space w
+the shared `Matrices` block produces, which is `vz * gWorldScale` — and computes
+`1 - exp(-depth * g_fog_scale)`. Because the depth is already in `vz * gWorldScale`
+units, **`g_fog_scale` IS the engine's `gTerrainFogScale`** (authored density *
+0.0005, clamped 0..16384 by `TerrainMesh_SetFog`, `terrainmesh.c:302-320`), so the
+shader performs no unit conversion at all. `ubo_fog_s` therefore carries
+`{color_, scale_}` and `Renderer::ApplyFogIntensity` writes
+`1 / (effective_far * RENDERER_MODEL_SCALE_DOWN)`;
+`ObjectFogTest.TerrainShaderCoefficientIsTheEngineTerrainFogScale` proves that
+reciprocal reproduces `gTerrainFogScale` for eight authored densities, and the
+object pass (which works in world units) gets `effective_far` unchanged through its
+own uniforms.
+
+Checked against the shipped corpus, the restored fog reaches the documented retail
+figures: LEVEL1 is 32.1 % at 100 m, 68.7 % at 300 m and 97.9 % at 1 km; LEVEL14 is
+85.7 % at 100 m; LEVEL5 is 2.4 % at 100 m.
+
+## 18. Verification status of the 2026-10-30 changes
+
+| Claim | Evidence | Status |
+|---|---|---|
+| `gFogColor`/`gFogDensity` are set 1 | address arithmetic, `mission_fog.h` kObjectLightSet; corpus prints both sets equal on all 14 levels | **Proved (static)** |
+| The object pass is now fogged, with set 1's colour and density | `ObjectFogTest.EachPassReadsItsOwnAuthoredSet`, `ObjectFogCorpusTest.EveryLevelAuthorsBothTheTerrainAndTheObjectFog` | **Proved at the resolver** |
+| `Fog_SetRange` is the ramp through the exponential at both edges | `ObjectFogTest.FogSetRangeMatchesTheExponentialAtBothEdges` (4 cases, 8 edge comparisons) | **Proved** |
+| `link` inheritance | `ObjectFogTest.LinkSettingsAreResolvedBeforeAnythingReadsTheSets` | **Proved** |
+| The terrain coefficient equals `gTerrainFogScale` | `ObjectFogTest.TerrainShaderCoefficientIsTheEngineTerrainFogScale` | **Proved** |
+| Document order of the keyframes is chronological on all 14 shipped levels, and the smallest Time is unique | `ObjectFogCorpusTest.TheFirstKeyframeInDocumentOrderIsTheSmallestTime` (prints all 14) | **Proved for the corpus** |
+| The fog LOOKS like retail in the viewport | — | **NOT verified.** The GUI needs OpenGL 4.1 and this host offers 2.1, so no frame was rendered. The shader arithmetic is checked by construction and by the coefficient test, not by a picture. |
+| The blob shadow is fogged | — | **NOT done**, and now a named divergence: `renderer_objects_visual.cpp`'s shadow quad is the one surface left unfogged (see its comment). |
+| Smoke particles are fogged | — | **NOT verified.** Retail draws particles through the same D3D device with `FOGENABLE = gFogEnable`, but IGI-RE does not reconstruct which fog start/end are live at that call, so nothing was changed. |
+
+### 18.0 The terrain fog table really is a no-op, measured
+
+`BuildTerrainFogTable` (`source/level/terrain_lod_settings.h:212`) was reported as "a
+faithful, tested port with no caller", and the brief suggested that wiring it might be
+the user's complaint. It cannot be: recomputing the engine's own loop
+(`terrainmesh.c:277-292`, `gQCubeMinSize = 163` = retail's default preset) over all
+fourteen authored densities gives a **maximum table value of 0.166 of 255 for LEVEL1
+and 0.836 of 255 for the thickest shipped level (LEVEL14)** — not one 8-bit step on
+any shipped level, so wiring it would change no pixel. The reason is in §4.2: the
+table multiplies `(Float_Log2(d) - 130)` (≈133 at the top entry) by
+`gTerrainFogScale` (0.000945 for LEVEL1), which is a per-unit exponent, not a 0..1
+factor. It stays unwired, deliberately, with the number recorded here instead of being
+presented as the fix.
+
+
+### 18.1 The one trap this work found the hard way
+
+`FogSetRangeForDepth`'s third argument is **gFogDensity**, i.e. the AUTHORED
+"Fog density object category 1" **times** `kGlobalLightFogScale` — what
+`MissionFog::object_fog_scale()` returns — and not the authored number.
+`publish()` writes `gFogDensities[i] = s->color.fogDensity * kFogScale`
+(globallight.c:115,133-134), and every reader of `gFogDensity`
+(`render.c:780`, `polylist.c:245`, `d3drender.c:117-118`) consumes that scaled
+value. Passing the authored density inflates the exponent by 1/0.0005 = **2000x**,
+which collapses the ramp into the engine's `diff == 0` branch.
+
+The first version of the test did exactly that, and the two platforms disagreed
+about the result: MinGW i686 has an 80-bit `long double`, so `1/exp(5850)` stays a
+tiny non-zero number and the ramp came out `start = -inf, end = 2050`, while the
+arm64 host's 64-bit `long double` underflowed it to exactly 0 and took the
+engine's `{0, 0}` branch. `FogRangeIsDegenerate` now rejects a non-finite span, so
+no caller can divide by one, and the test passes the scaled density and is
+platform-independent (96/96 in the Windows lane, 23/23 on the host).
+
+
+## 19. The skydome was tinted with the fog colour, and the engine forbids that
+
+Item 4 of the brief ("sky / skydome / flat sky, if the level's look depends on it")
+turned up one more invention. `Renderer_Skydome::BakeVertices` blended every vertex
+toward the scene fog colour —
+
+```cpp
+float fog_a = glm::pow(glm::max(0.0f, 1.0f - s), 1.5f);   // s = sin(pitch)
+vb[v_idx].color_ = glm::mix(sky_col, fog_color_, fog_a);   // horizon ring
+vb[v_idx].color_ = fog_color_;                             // the skirt below it
+```
+
+— with the stated intent "blend horizon with fog color so sky matches the game's
+hazy look". The engine does the opposite:
+
+* `SkyDome_Render` (`HOOK 0x52CF80`, `src/terredit/skydome.c:242`) sets
+  `D3DRENDERSTATE_FOGENABLE = 0` before drawing the dome. The sky is never fogged.
+* `SkyDome_Fill` (`HOOK 0x52CB60`, `skydome.c:94-135`) takes every vertex colour from
+  the dome's five authored colours (`d->color[0..4]`, i.e. the level's `FlatSky`
+  top/middle1/middle2/bottom1/bottom2), with the horizon angle choosing which pair
+  and the rows below the horizon using `d->color + 2`. There is no fog term anywhere
+  in it.
+* The keyframe's "Sky color" (declared parameters 41..43) is **dead data**:
+  `Sky_SetTint` (`HOOK 0x52D400`, `skydome.c:321-326`) copies it into
+  `gSkyUnusedTint`, and nothing in IGI-RE reads that global. `MissionFog::sky_color`
+  is therefore resolved but deliberately unused — it is not a second sky source.
+
+So the sky's horizon and skirt showed the *fog* colour where retail shows the
+level's own bottom gradient colour. The blend and the skirt fill are removed; the
+dome now carries only the authored gradient, and `Renderer_Skydome::SetFogColor` (and
+the `fog_color_` member it wrote) is gone rather than left dead.
+
+**Not verified:** no frame was rendered, so this is a code-level parity fix, not an
+observed one. The engine's rule is unambiguous (an explicit `FOGENABLE = 0`), which
+is what makes the change safe to make blind.
+

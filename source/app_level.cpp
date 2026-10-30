@@ -490,24 +490,51 @@ void App::LoadLevel(int level_no) {
 					}
 				}
 				if (gl.type == "GlobalLight") {
+					// WHICH keyframe: the engine's, not the document's first.
+					//
+					// GlobalLight_ParamsChanged HOOK 0x528180 ends with
+					// GlobalLight_SetTime(0.0f) (src/animcam/globallight.c:337), so a
+					// level starts at time 0. GlobalLight_Apply HOOK 0x527520
+					// (globallight.c:153-215) then looks for the keyframe at time 0:
+					// with every shipped keyframe at Time 12 or 100, `lo` (the latest
+					// keyframe at or before 0) stays NULL and the `if (!lo)` branch
+					// takes `copy_key(g, hi, 1)` -- hi being the SMALLEST time greater
+					// than 0, i.e. the daytime keyframe.
+					//
+					// This used to take the FIRST GlobalLightKeyframe child in
+					// document order, which is not the same rule: LEVEL1 happens to
+					// list Time=12 before Time=100, but nothing enforces that, and the
+					// fog path (Level::LoadFogInfo -> igi::ResolveMissionFog) already
+					// selects by smallest Time. Two rules for one keyframe could pick
+					// the night ambient (near-black) while the fog came from the day
+					// keyframe.
+					double bestTime = std::numeric_limits<double>::max();
+					bool haveKf = false;
 					for (int ci : gl.childrenIndices) {
 						if (ci < 0 || ci >= (int)objects.size()) continue;
 						const auto& kf = objects[ci];
-						if (kf.type == "GlobalLightKeyframe" && kf.argTokens.size() >= 15) {
-							try {
-								globalAmbient.r = std::stof(kf.argTokens[12]); // Ambient color object category 1
-								globalAmbient.g = std::stof(kf.argTokens[13]);
-								globalAmbient.b = std::stof(kf.argTokens[14]);
-								Logger::Get().Log(LogLevel::INFO, "[App] GlobalLightKeyframe cat 1: " + std::to_string(globalAmbient.r) + "," + std::to_string(globalAmbient.g) + "," + std::to_string(globalAmbient.b));
-								if (kf.argTokens.size() >= 24) {
-									Logger::Get().Log(LogLevel::INFO, "[App] cat 2: " + kf.argTokens[15] + "," + kf.argTokens[16] + "," + kf.argTokens[17]);
-									Logger::Get().Log(LogLevel::INFO, "[App] cat 3: " + kf.argTokens[18] + "," + kf.argTokens[19] + "," + kf.argTokens[20]);
-									Logger::Get().Log(LogLevel::INFO, "[App] cat 4: " + kf.argTokens[21] + "," + kf.argTokens[22] + "," + kf.argTokens[23]);
-								}
-							} catch (const std::exception& e) {
-								Logger::Get().Log(LogLevel::WARNING, std::string("[App] GlobalLightKeyframe ambient unparsable (") + e.what() + "), using defaults");
+						if (kf.type != "GlobalLightKeyframe" || kf.argTokens.size() < 15) continue;
+						try {
+							// "Time" is declared parameter 50, i.e. argTokens[53]
+							// (src/animcam/globallight.c:264-282).
+							const double time = (kf.argTokens.size() > 53)
+								? std::stod(kf.argTokens[53])
+								: 0.0;
+							if (haveKf && !(time < bestTime)) continue;
+							globalAmbient.r = std::stof(kf.argTokens[12]); // Ambient color object category 1
+							globalAmbient.g = std::stof(kf.argTokens[13]);
+							globalAmbient.b = std::stof(kf.argTokens[14]);
+							bestTime = time;
+							haveKf = true;
+							Logger::Get().Log(LogLevel::INFO, "[App] GlobalLightKeyframe time=" + std::to_string(time) +
+								" cat 1 ambient: " + std::to_string(globalAmbient.r) + "," + std::to_string(globalAmbient.g) + "," + std::to_string(globalAmbient.b));
+							if (kf.argTokens.size() >= 24) {
+								Logger::Get().Log(LogLevel::INFO, "[App] cat 2: " + kf.argTokens[15] + "," + kf.argTokens[16] + "," + kf.argTokens[17]);
+								Logger::Get().Log(LogLevel::INFO, "[App] cat 3: " + kf.argTokens[18] + "," + kf.argTokens[19] + "," + kf.argTokens[20]);
+								Logger::Get().Log(LogLevel::INFO, "[App] cat 4: " + kf.argTokens[21] + "," + kf.argTokens[22] + "," + kf.argTokens[23]);
 							}
-							break;
+						} catch (const std::exception& e) {
+							Logger::Get().Log(LogLevel::WARNING, std::string("[App] GlobalLightKeyframe ambient unparsable (") + e.what() + "), using defaults");
 						}
 					}
 					break;

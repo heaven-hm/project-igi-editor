@@ -78,12 +78,14 @@ bool Renderer::Init() {
 	shutdown_started_ = false;
 	ubo_mats_ = GL_CreateBuffer(GL_UNIFORM_BUFFER, sizeof(ubo_mats_s), nullptr,
                               GL_DYNAMIC_DRAW);
-  // Initialize UBO with safe defaults so terrain fog shader never sees g_fog_far=0
-  // (divide-by-zero → NaN → black overlay before SetupFog is called on first level load).
+  // Initialize UBO with safe defaults so the terrain fog shader never sees a zero
+  // coefficient (which would be a no-op) before SetupFog is called on first level
+  // load. A tiny coefficient = effectively no fog, the same "before the level
+  // loads" state the old far_ = 1e9 represented.
   {
     ubo_fog_s safe_fog;
     safe_fog.color_ = glm::vec4(0.15f, 0.15f, 0.15f, 1.0f);
-    safe_fog.far_   = 1e9f; // enormous distance = no visible fog until level loads
+    safe_fog.scale_ = 0.0f; // no fog until a level authors one
     ubo_fog_ = GL_CreateBuffer(GL_UNIFORM_BUFFER, sizeof(ubo_fog_s), &safe_fog,
                                GL_STATIC_DRAW);
   }
@@ -195,6 +197,12 @@ void Renderer::SetupFog(const glm::vec4 &color, float fog_far) {
   ApplyFogIntensity();
 }
 
+void Renderer::SetupObjectFog(const glm::vec4 &color, float fog_far) {
+  object_fog_base_color_ = color;
+  object_fog_base_far_ = fog_far;
+  ApplyFogIntensity();
+}
+
 void Renderer::SetFogIntensity(int intensity) {
   fog_intensity_ = std::max(0, std::min(1000, intensity));
   ApplyFogIntensity();
@@ -208,18 +216,37 @@ void Renderer::ApplyFogIntensity() {
   // saturating at a hard floor around 200%.
   float scale = std::max(0.001f, 2.0f * std::pow(0.5f, fog_intensity_ / 100.0f));
   float effective_far = fog_base_far_ * scale;
+  float effective_object_far = object_fog_base_far_ * scale;
 
   ubo_fog_s ubo_fog;
   ubo_fog.color_ = fog_base_color_;
-  ubo_fog.far_ = effective_far;
+  // The terrain fog pass measures depth as `1.0 / gl_FragCoord.w`, i.e. in units of
+  // world * RENDERER_MODEL_SCALE_DOWN (0.001f) -- the same space the engine's
+  // gWorldScale puts its own fog depth in. gTerrainFogScale is therefore already the
+  // exponent per unit of THAT depth, with no conversion needed: see the field's
+  // comment in renderer.h. `effective_far` is the e-folding distance in world units,
+  // so its value in the shader's units is effective_far * RENDERER_MODEL_SCALE_DOWN
+  // and the coefficient is the reciprocal. Writing it this way keeps the Fog
+  // Intensity slider meaning one thing on both passes (a larger `scale` = a longer
+  // e-folding distance = thinner fog).
+  ubo_fog.scale_ = (effective_far > 0.0f)
+                       ? 1.0f / (effective_far * RENDERER_MODEL_SCALE_DOWN)
+                       : 0.0f;
 
   GL_BufferData(ubo_fog_, GL_UNIFORM_BUFFER, sizeof(ubo_fog), &ubo_fog,
                 GL_STATIC_DRAW);
 
-  // Propagate fog to object shader (warm atmospheric haze) and skydome
-  // (blend horizon with fog color so sky matches the game's hazy look).
-  objects_.SetFogParams(glm::vec3(fog_base_color_), effective_far);
-  skydome_.SetFogColor(glm::vec3(fog_base_color_));
+  // Propagate fog to the object shader (warm atmospheric haze over buildings). The
+  // skydome is NOT given a fog colour: retail draws it with FOGENABLE = 0 and uses
+  // only the level's authored FlatSky gradient (src/terredit/skydome.c:242, :94-135).
+  //
+  // The objects get the CATEGORY 1 set, NOT the terrain set: the engine's object
+  // pass reads gFogColor / gFogDensity, which are gFogColors[1] / gFogDensities[1]
+  // (src/render/render.c:775-780, src/dxinit/polylist.c:243-245; the aliasing is
+  // proven by address arithmetic in source/runtime/mission_fog.h, kObjectLightSet).
+  // `effective_object_far` is in world units, matching v_fragPos / u_cameraPos in
+  // the object shader.
+  objects_.SetFogParams(glm::vec3(object_fog_base_color_), effective_object_far);
 }
 
 void Renderer::SetupSkydome(const skydome_define_s &d) {

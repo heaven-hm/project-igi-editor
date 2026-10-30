@@ -96,8 +96,9 @@ static void LegacyUploadFloat(GLuint prog, const char* name, const uint8_t* src)
 // uniform names the shaders/21 tier declares.  The block layouts come from
 // renderer.h: ubo_mats_s is three mat4 in declaration order
 // (mvp_mat_follow_view_, mvp_flat_sky_layer_, mvp_objects_) and ubo_fog_s is a
-// vec4 followed by a float.  Both tests are size-guarded so a program is only
-// given the block it actually declares.
+// vec4 followed by a float (color_, scale_ -- scale_ replaced the old far_ when
+// the terrain fog became the engine's exponential; see renderer.h).  Both tests
+// are size-guarded so a program is only given the block it actually declares.
 static void LegacyUploadUboToCurrentProgram(const legacy_ubo_s& ubo) {
 	GLint prog = 0;
 	glGetIntegerv(GL_CURRENT_PROGRAM, &prog);
@@ -121,7 +122,7 @@ static void LegacyUploadUboToCurrentProgram(const legacy_ubo_s& ubo) {
 
 	if (size >= 20) {
 		LegacyUploadVec4(static_cast<GLuint>(prog), "g_fog_color", base + 0);
-		LegacyUploadFloat(static_cast<GLuint>(prog), "g_fog_far", base + 16);
+		LegacyUploadFloat(static_cast<GLuint>(prog), "g_fog_scale", base + 16);
 	}
 }
 

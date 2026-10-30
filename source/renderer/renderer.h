@@ -613,6 +613,7 @@ public:
 	// interface of IRendererLoader
 	void					SetupClearColor(const glm::vec4& color) override;
 	void					SetupFog(const glm::vec4& color, float fog_far) override;
+	void					SetupObjectFog(const glm::vec4& color, float fog_far) override;
 	void					SetFogEnabled(bool enabled) { objects_.SetFogEnabled(enabled); }
 	void					SetFogIntensity(int intensity);
 	void					SetupSkydome(const skydome_define_s& d) override;
@@ -917,9 +918,29 @@ private:
 		glm::mat4			mvp_objects_;
 	};
 
+	// ub_fog's std140 layout. The TERRAIN fog pass is the only reader of this block;
+	// the object pass gets its fog through its own uniforms (world units), and the
+	// skydome through its vertex colours.
+	//
+	//   color_  the fog colour (GlobalLight set 0, "Fog color terrain").
+	//   scale_  the exponent per unit of the terrain pass's depth. That pass measures
+	//           depth as `1.0 / gl_FragCoord.w`, i.e. the clip-space w the shared
+	//           `Matrices` block produces, which is world units *
+	//           RENDERER_MODEL_SCALE_DOWN (0.001f) -- the engine's own gWorldScale.
+	//           So the engine's exponent
+	//               depth_world * gWorldScale * gTerrainFogScale
+	//             = (depth_world * gWorldScale) * gTerrainFogScale
+	//             = depth_scaled * gTerrainFogScale
+	//           means scale_ IS the engine's gTerrainFogScale (authored density *
+	//           0.0005, clamped to 0..16384, src/animcam/globallight.c:115,125 +
+	//           src/glowmesh/terrainmesh.c:302-320) and the shader needs no unit
+	//           conversion of its own.
+	//
+	// vec4 at 0 plus float at 16 keeps the std140 block 32 bytes, so the 4.5 tier's
+	// std140 declaration and gl_helper.cpp's legacy plain-uniform upload stay in step.
 	struct ubo_fog_s {
 		glm::vec4			color_;
-		float				far_;
+		float				scale_;
 	};
 
 	GLuint					ubo_mats_;
@@ -929,7 +950,17 @@ private:
 	// ApplyFogIntensity) to produce the effective fog pushed to the UBO/objects/skydome.
 	void					ApplyFogIntensity();
 	glm::vec4				fog_base_color_ = glm::vec4(0.15f, 0.15f, 0.15f, 1.0f);
-	float					fog_base_far_ = 1e9f;
+	// 0 = "no fog yet": the terrain UBO's coefficient is the reciprocal of this
+	// (times RENDERER_MODEL_SCALE_DOWN), so a placeholder "huge distance" would no
+	// longer mean "no fog" the way it did for the old linear ramp -- 1e9 world units
+	// would put a third of the haze on the horizon before the first level loads.
+	// SetupFog/SetupObjectFog replace both on every level load.
+	float					fog_base_far_ = 0.0f;
+	// The object pass's own fog (GlobalLight set 1), kept separate from the terrain
+	// set because the engine reads a different one for each (mission_fog.h
+	// kObjectLightSet).
+	glm::vec4				object_fog_base_color_ = glm::vec4(0.15f, 0.15f, 0.15f, 1.0f);
+	float					object_fog_base_far_ = 0.0f;
 	int						fog_intensity_ = 200;
 
 	Renderer_Skydome		skydome_;

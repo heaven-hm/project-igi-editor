@@ -471,6 +471,13 @@ void Level::LoadFogInfo(const QSC* qsc_objects, IRenderResLoader* render_res_loa
 	// usable keyframe.
 	glm::vec4 fog_color(0.15f, 0.15f, 0.15f, 1.0f);
 	float fog_far_meters = 30000.0f;
+	// The object pass fogs with a DIFFERENT set from the terrain pass: the engine's
+	// gFogColor / gFogDensity are gFogColors[1] / gFogDensities[1], i.e. "object
+	// category 1" (address arithmetic in source/runtime/mission_fog.h,
+	// kObjectLightSet; readers at src/render/render.c:775-780 and
+	// src/dxinit/polylist.c:243-245). Its own default is the same "no fog" state.
+	glm::vec4 object_fog_color(0.15f, 0.15f, 0.15f, 1.0f);
+	float object_fog_far_meters = 30000.0f;
 
 	const igi::MissionFog authored_fog = igi::ResolveAuthoredFogFromQsc(*qsc_objects);
 
@@ -500,21 +507,33 @@ void Level::LoadFogInfo(const QSC* qsc_objects, IRenderResLoader* render_res_loa
 		// keyframe of every retail level), and keeps the far/no-fog default.
 		fog_far_meters = igi::LinearFogFarMetresForAuthoredDensity(
 			authored_fog.sets[0].density, fog_far_meters);
+
+		// The object set. Same rule, same conversion, different authored set --
+		// and NOT clamped to 16384, because that ceiling is TerrainMesh_SetFog's
+		// and applies to gTerrainFogScale only (mission_fog.h kObjectLightSet).
+		const float* object_fog = authored_fog.object_fog_color();
+		object_fog_color = glm::vec4(object_fog[0], object_fog[1], object_fog[2], 1.0f);
+		object_fog_far_meters = igi::LinearFogFarMetresForAuthoredDensity(
+			authored_fog.sets[igi::kObjectLightSet].density, object_fog_far_meters);
 	}
 
 	// fog_far_meters is derived from the QSC fog-density value in meters; the
 	// renderer's fog distance check operates in world units (v_fragPos/u_cameraPos
 	// are WORLD_UNITS_PER_METER per meter), so convert before handing it off.
 	render_res_loader->SetupFog(fog_color, fog_far_meters * WORLD_UNITS_PER_METER);
+	render_res_loader->SetupObjectFog(object_fog_color,
+					  object_fog_far_meters * WORLD_UNITS_PER_METER);
 
 	// The resolved fog is otherwise invisible (nothing prints it, and the GUI
 	// cannot run on this host), which is how an invented 120.0f constant survived
 	// here for so long. Report it.
 	char fog_log[256];
 	Str_SPrintf(fog_log, sizeof(fog_log),
-		    "[Level] authored GlobalLightKeyframe fog: %s, far %.2f m (density %.6f)\n",
+		    "[Level] authored GlobalLightKeyframe fog: %s, terrain far %.2f m (density %.6f), object far %.2f m (density %.6f)\n",
 		    authored_fog.authored ? "present" : "absent", fog_far_meters,
-		    authored_fog.authored ? authored_fog.sets[0].density : 0.0f);
+		    authored_fog.authored ? authored_fog.sets[0].density : 0.0f,
+		    object_fog_far_meters,
+		    authored_fog.authored ? authored_fog.sets[igi::kObjectLightSet].density : 0.0f);
 	Logger::Get().Log(LogLevel::INFO, fog_log);
 }
 

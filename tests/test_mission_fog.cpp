@@ -29,6 +29,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -484,3 +485,334 @@ TEST(MissionFogCorpusTest, Level1FogMatchesTheShippedNumbers) {
     EXPECT_NEAR(igi::ExponentialFogEFoldingDistance(fog.terrain_fog_scale()) / kFixed,
                 258.35f, 0.05f);
 }
+
+// ===========================================================================
+// The OBJECT pass's fog, and the two shader-facing conversions
+//
+// "the fog ... should be exactly how the level is": retail fogs the terrain with
+// GlobalLight set 0 and the objects with set 1, so the editor needs BOTH, and each
+// shader needs the authored number in ITS OWN units. These tests pin the three
+// things that decide what is drawn:
+//   1. which set each pass reads (kObjectLightSet, proved by address arithmetic);
+//   2. the authored `link` inheritance the engine resolves before publish();
+//   3. the two conversions: the object's e-folding distance in world units, and the
+//      terrain's exponent per unit of clip-space depth.
+// ===========================================================================
+
+namespace {
+
+// A keyframe whose five sets carry DISTINCT values, so a test can tell which set a
+// reader used. Parameter layout: see globallight.c:264-282 and the corpus helper's
+// KeyframeTokens (which gives every set the same values and therefore cannot).
+std::vector<std::string> KeyframeTokensPerSet(float terrain_density, float object_density,
+                                              float time) {
+    std::vector<std::string> t;
+    t.push_back("-1");
+    t.push_back("GlobalLightKeyframe");
+    t.push_back("");
+    t.push_back("FALSE");                       // 0  Link All Sliders
+    for (int set = 0; set < 5; ++set) {
+        const float density = (set == 0) ? terrain_density
+                             : (set == 1) ? object_density
+                                          : 0.0f;
+        t.push_back(std::to_string(0.1f * static_cast<float>(set)));   // ambient R
+        t.push_back(std::to_string(0.2f * static_cast<float>(set)));   // ambient G
+        t.push_back(std::to_string(0.3f * static_cast<float>(set)));   // ambient B
+        t.push_back(std::to_string(0.01f * static_cast<float>(set + 1)));  // fog R
+        t.push_back(std::to_string(0.02f * static_cast<float>(set + 1)));  // fog G
+        t.push_back(std::to_string(0.03f * static_cast<float>(set + 1)));  // fog B
+        t.push_back(std::to_string(density));                          // density
+        t.push_back("-1");                                            // link: none
+    }
+    t.push_back("0.5"); t.push_back("0.55"); t.push_back("0.6");  // 41..43 Sky color
+    t.push_back("0"); t.push_back("0"); t.push_back("0");         // 44..46 Water ambient
+    t.push_back("1"); t.push_back("1"); t.push_back("1");         // 47..49 Water color
+    t.push_back(std::to_string(time));                            // 50 Time
+    return t;
+}
+
+}  // namespace
+
+TEST(ObjectFogTest, EachPassReadsItsOwnAuthoredSet) {
+    // gFogColor is gFogColors[1] and gFogDensity is gFogDensities[1] (address
+    // arithmetic in mission_fog.h), while the terrain reads set 0 through
+    // TerrainMesh_SetFog/TerrainMesh_SetAmbient (globallight.c:124-125).
+    std::vector<igi::FogTaskObject> objects;
+    objects.push_back({"GlobalLightKeyframe", KeyframeTokensPerSet(2.0f, 8.0f, 12.0f)});
+
+    const igi::MissionFog fog = igi::ResolveMissionFog(objects);
+    ASSERT_TRUE(fog.authored);
+
+    // Terrain: set 0, clamped to the 16384 ceiling terrainmesh.c:302-320 applies.
+    EXPECT_FLOAT_EQ(fog.sets[0].density, 2.0f);
+    EXPECT_FLOAT_EQ(fog.terrain_fog_scale(), 2.0f * igi::kGlobalLightFogScale);
+    EXPECT_FLOAT_EQ(fog.terrain_fog_color()[0], 0.01f);
+    EXPECT_FLOAT_EQ(fog.terrain_fog_color()[2], 0.03f);
+
+    // Objects: set 1, and NOT clamped -- the ceiling is gTerrainFogScale's only.
+    EXPECT_FLOAT_EQ(fog.sets[igi::kObjectLightSet].density, 8.0f);
+    EXPECT_FLOAT_EQ(fog.object_fog_scale(), 8.0f * igi::kGlobalLightFogScale);
+    EXPECT_FLOAT_EQ(fog.object_fog_color()[0], 0.02f);
+    EXPECT_FLOAT_EQ(fog.object_fog_color()[1], 0.04f);
+    EXPECT_FLOAT_EQ(fog.object_fog_color()[2], 0.06f);
+
+    // The object scale is deliberately unclamped: 1e9 * 0.0005 exceeds 16384 and
+    // the object value must survive it (only the terrain value is capped).
+    std::vector<igi::FogTaskObject> huge;
+    huge.push_back({"GlobalLightKeyframe", KeyframeTokensPerSet(1.0e9f, 1.0e9f, 1.0f)});
+    const igi::MissionFog big = igi::ResolveMissionFog(huge);
+    ASSERT_TRUE(big.authored);
+    EXPECT_FLOAT_EQ(big.terrain_fog_scale(), igi::kTerrainFogScaleMax);
+    EXPECT_FLOAT_EQ(big.object_fog_scale(), 1.0e9f * igi::kGlobalLightFogScale);
+}
+
+TEST(ObjectFogTest, LinkSettingsAreResolvedBeforeAnythingReadsTheSets) {
+    // GlobalLightKeyframe_ParamsChanged HOOK 0x5282C0 (globallight.c:392-403):
+    //     for (n = 5; n; n--)
+    //         for (i = 0; i < 5; i++)
+    //             if (link in 0..4) sets[i].color = sets[link].color;
+    // A level that authors `link` and leaves the linked set at zero relies on it,
+    // and publish() then hands the RESOLVED colours to both passes.
+    std::vector<std::string> t = KeyframeTokensPerSet(4.0f, 0.0f, 12.0f);
+
+    // set 1 links to set 0, set 2 links to set 1, ... a chain, each with its own
+    // (wrong) explicit colour and density. Parameter k for set i is at token 3 + k,
+    // and set i's "Link setting" is the 8th field of its block.
+    const int base[5] = {1, 9, 17, 25, 33};
+    for (int set = 1; set < 5; ++set) {
+        t[3 + base[set] + 7] = std::to_string(set - 1);   // link -> the previous set
+        t[3 + base[set] + 6] = "123.0";                   // a placeholder density
+        for (int c = 0; c < 3; ++c) t[3 + base[set] + 3 + c] = "0.9";  // placeholder fog
+    }
+    t[3 + base[0] + 7] = "-1";   // "Link setting terrain"
+
+    std::vector<igi::FogTaskObject> objects;
+    objects.push_back({"GlobalLightKeyframe", t});
+    const igi::MissionFog fog = igi::ResolveMissionFog(objects);
+    ASSERT_TRUE(fog.authored);
+
+    // Every set now carries set 0's terrain colour and density, through the chain.
+    for (int set = 0; set < 5; ++set) {
+        EXPECT_FLOAT_EQ(fog.sets[set].density, 4.0f) << "set " << set;
+        EXPECT_FLOAT_EQ(fog.sets[set].fog[0], 0.01f) << "set " << set;
+        EXPECT_FLOAT_EQ(fog.sets[set].ambient[2], 0.0f) << "set " << set;
+    }
+    // The link values themselves stay as authored (the engine never rewrites them).
+    EXPECT_EQ(fog.sets[3].link, 2);
+
+    // A NEGATIVE link is "none" and must leave the set's own values alone.
+    std::vector<igi::FogTaskObject> unlinked;
+    unlinked.push_back({"GlobalLightKeyframe", KeyframeTokensPerSet(2.0f, 8.0f, 12.0f)});
+    const igi::MissionFog plain = igi::ResolveMissionFog(unlinked);
+    ASSERT_TRUE(plain.authored);
+    EXPECT_FLOAT_EQ(plain.sets[1].density, 8.0f);
+    EXPECT_FLOAT_EQ(plain.sets[4].density, 0.0f);
+}
+
+TEST(ObjectFogTest, TerrainShaderCoefficientIsTheEngineTerrainFogScale) {
+    // The terrain fog pass measures depth as `1.0 / gl_FragCoord.w`, i.e. in units
+    // of world * RENDERER_MODEL_SCALE_DOWN (0.001f) -- the engine's gWorldScale.
+    // The engine's exponent is
+    //     depth_world * gWorldScale * gTerrainFogScale
+    //   = (depth_world * gWorldScale) * gTerrainFogScale
+    //   = depth_clip * gTerrainFogScale
+    // so the coefficient the shader must be given IS gTerrainFogScale, and the
+    // reciprocal relation Renderer::ApplyFogIntensity uses has to reproduce it.
+    //
+    // Renderer::ApplyFogIntensity writes 1 / (far_world * RENDERER_MODEL_SCALE_DOWN)
+    // where far_world is the e-folding distance in world units.
+    constexpr float kModelScaleDown = 0.001f;   // source/common.h:54
+    for (float density : {0.115f, 0.12f, 0.4f, 1.2f, 1.89f, 3.0f, 4.79f, 9.5f}) {
+        const float far_metres = igi::LinearFogFarMetresForAuthoredDensity(density, 30000.0f);
+        const float far_world = far_metres * igi::kEditorWorldUnitsPerMetre;
+        const float coefficient = 1.0f / (far_world * kModelScaleDown);
+        const float engine_scale = density * igi::kGlobalLightFogScale;
+        // Within a float ulp: the two are algebraically the same number
+        // (488.28125 * 4096 * 0.001 == 2000, and 1/2000 == 0.0005).
+        EXPECT_NEAR(coefficient, engine_scale, engine_scale * 1e-5f) << "density " << density;
+    }
+
+    // The identity that makes it exact, stated as the engine states it:
+    // 1 / (kWorldScale * kGlobalLightFogScale) = 2 000 000 world units.
+    // (The tolerance is a float ulp at 2000: 0.001f is not exactly 1/1000.)
+    EXPECT_NEAR(igi::kEFoldingMetresPerAuthoredDensity * igi::kEditorWorldUnitsPerMetre *
+                    kModelScaleDown,
+                2000.0f, 0.001f);
+}
+
+TEST(ObjectFogTest, FogSetRangeMatchesTheExponentialAtBothEdges) {
+    // Fog_SetRange HOOK 0x49B2D0 (src/dxinit/d3drender.c:108-131) solves for the
+    // D3D linear ramp that passes through the engine's exponential at the near and
+    // far side of a sphere around the object:
+    //     (end - n) / (end - start) == 1 / exp(kWorldScale * n * density)
+    //     (end - f) / (end - start) == 1 / exp(kWorldScale * f * density)
+    // That is the property being tested -- not the code's own output.
+    //
+    // `density` is gFogDensity: the AUTHORED density times kGlobalLightFogScale
+    // (globallight.c:115,133-134), which is what publish() stores and what
+    // MissionFog::object_fog_scale() returns. Using the authored number here would
+    // inflate the exponent by 2000x.
+    struct Case { float depth; float radius; float authored; };
+    const Case cases[] = {
+        {200000.0f, 20000.0f, 1.89f},     // ~49 m away, a 5 m object, LEVEL1's haze
+        {1000000.0f, 100000.0f, 0.12f},   // ~244 m away, LEVEL5's thin haze
+        {40000.0f, 4000.0f, 9.5f},        // ~10 m away, LEVEL14's thick haze
+        {600000.0f, 30000.0f, 0.79f},     // ~146 m away, LEVEL7's haze
+    };
+    for (const Case& c : cases) {
+        const float density = c.authored * igi::kGlobalLightFogScale;
+        const igi::FogRange range = igi::FogSetRangeForDepth(c.depth, c.radius, density);
+        ASSERT_FALSE(igi::FogRangeIsDegenerate(range)) << "depth " << c.depth;
+        EXPECT_LT(range.start, range.end);
+
+        const float n = c.depth - c.radius;
+        const float f = c.depth + c.radius;
+        const float span = range.end - range.start;
+        // D3D's linear vertex fog factor, then the engine's transmittance at each
+        // edge: kWorldScale converts game units to the space Fog_SetRange writes in.
+        const float ramp_n = (range.end - n * igi::kWorldScale) / span;
+        const float ramp_f = (range.end - f * igi::kWorldScale) / span;
+        const float exp_n = 1.0f / std::exp(igi::kWorldScale * n * density);
+        const float exp_f = 1.0f / std::exp(igi::kWorldScale * f * density);
+        EXPECT_NEAR(ramp_n, exp_n, 2e-3f) << "near edge, density " << density;
+        EXPECT_NEAR(ramp_f, exp_f, 2e-3f) << "far edge, density " << density;
+        // The ramp runs the right way: the near edge retains more light than the far.
+        EXPECT_GT(ramp_n, ramp_f);
+    }
+}
+
+TEST(ObjectFogTest, FogSetRangeIsDegenerateWhenTheRampCollapses) {
+    // The engine's own branch: `if (eq(diffl, 0) || eq(a, 0)) { start = end = 0; }`.
+    // A zero density makes a == b == 1, so diff == 0 and there is no ramp to build.
+    EXPECT_TRUE(igi::FogRangeIsDegenerate(igi::FogSetRangeForDepth(200000.0f, 20000.0f, 0.0f)));
+    const igi::FogRange none = igi::FogSetRangeForDepth(200000.0f, 20000.0f, 0.0f);
+    EXPECT_FLOAT_EQ(none.start, 0.0f);
+    EXPECT_FLOAT_EQ(none.end, 0.0f);
+
+    // A valid ramp is NOT reported degenerate, so the flag cannot be vacuous.
+    const float level1 = 1.89f * igi::kGlobalLightFogScale;
+    EXPECT_FALSE(igi::FogRangeIsDegenerate(igi::FogSetRangeForDepth(200000.0f, 20000.0f, level1)));
+
+    // And the flag is the only safe gate for a span a caller might divide by: a
+    // hand-built non-finite range is rejected even though end > start holds.
+    igi::FogRange infinite;
+    infinite.start = -std::numeric_limits<float>::infinity();
+    infinite.end = 2050.0f;
+    EXPECT_TRUE(igi::FogRangeIsDegenerate(infinite));
+    EXPECT_TRUE(igi::FogRangeIsDegenerate(igi::FogRange{}));   // {0,0}
+}
+
+TEST(ObjectFogCorpusTest, EveryLevelAuthorsBothTheTerrainAndTheObjectFog) {
+    if (!fs::is_regular_file(LevelDir(1) / "OBJECTS.QVM")) {
+        GTEST_SKIP() << "retail IGI not found at " << GameRoot().string()
+                     << " (set IGI_GAME_PATH to a retail install to run this test)";
+    }
+
+    int levels = 0;
+    for (int level = 1; level <= 14; ++level) {
+        const fs::path path = LevelDir(level) / "OBJECTS.QVM";
+        if (!fs::is_regular_file(path)) continue;
+
+        const QVMFile qvm = QVM_Parse(path.string());
+        ASSERT_TRUE(qvm.valid) << "LEVEL" << level;
+        const std::vector<std::vector<std::string>> keyframes = ExtractKeyframes(qvm);
+        ASSERT_FALSE(keyframes.empty()) << "LEVEL" << level;
+
+        const igi::MissionFog fog = igi::ResolveMissionFog(KeyframesAsFogTasks(keyframes));
+        ASSERT_TRUE(fog.authored) << "LEVEL" << level;
+        ++levels;
+
+        // The selected keyframe is the smallest-Time one, which is also the one
+        // app_level.cpp must light with (GlobalLight_SetTime(0.0f) -> hi keyframe).
+        float min_time = keyframes[0].size() > 53 ? std::strtof(keyframes[0][53].c_str(), nullptr)
+                                                  : 0.0f;
+        for (const std::vector<std::string>& kf : keyframes) {
+            if (kf.size() <= 53) continue;
+            const float time = std::strtof(kf[53].c_str(), nullptr);
+            if (time < min_time) min_time = time;
+        }
+        EXPECT_FLOAT_EQ(fog.time_seconds, min_time) << "LEVEL" << level;
+
+        // Both passes have a usable authored fog: the terrain set 0 and the object
+        // set 1. A zero here would mean the level renders with no fog at all on
+        // that pass, which is exactly the defect this wiring fixes for objects.
+        EXPECT_GT(fog.sets[0].density, 0.0f) << "LEVEL" << level << " terrain density";
+        EXPECT_GT(fog.sets[igi::kObjectLightSet].density, 0.0f)
+            << "LEVEL" << level << " object-category-1 density";
+        EXPECT_GT(fog.terrain_fog_scale(), 0.0f) << "LEVEL" << level;
+        EXPECT_GT(fog.object_fog_scale(), 0.0f) << "LEVEL" << level;
+
+        // The object e-folding distance the editor hands the object shader, in
+        // metres, and the terrain one: both must be finite and inside the range the
+        // authored densities imply (51.4 m .. 4069 m across the corpus).
+        const float object_metres = igi::LinearFogFarMetresForAuthoredDensity(
+            fog.sets[igi::kObjectLightSet].density, 30000.0f);
+        EXPECT_GT(object_metres, 1.0f) << "LEVEL" << level;
+        EXPECT_LT(object_metres, 30000.0f) << "LEVEL" << level;
+
+        // The two values Level::LoadFogInfo actually hands over, plus the UBO
+        // coefficient Renderer::ApplyFogIntensity derives from the terrain one.
+        // `terrain_setup_far` is SetupFog's `fog_far` argument; the coefficient is
+        // the number the terrain fragment shader multiplies its view depth by.
+        const float terrain_metres = igi::LinearFogFarMetresForAuthoredDensity(
+            fog.sets[0].density, 30000.0f);
+        const float terrain_setup_far = terrain_metres * igi::kEditorWorldUnitsPerMetre;
+        const float object_setup_far = object_metres * igi::kEditorWorldUnitsPerMetre;
+        const float ubo_coefficient = 1.0f / (terrain_setup_far * 0.001f);
+        EXPECT_GT(ubo_coefficient, 0.0f) << "LEVEL" << level;
+        EXPECT_NEAR(ubo_coefficient, fog.terrain_fog_scale(), fog.terrain_fog_scale() * 1e-5f)
+            << "LEVEL" << level;
+
+        std::printf("  level %2d  terrain d=%-8.3f e=%-8.1f m  SetupFog far=%-12.0f coeff=%.9f"
+                    "  object d=%-8.3f e=%-8.1f m  SetupObjectFog far=%-12.0f\n",
+                    level, fog.sets[0].density, terrain_metres, terrain_setup_far,
+                    ubo_coefficient, fog.sets[igi::kObjectLightSet].density, object_metres,
+                    object_setup_far);
+    }
+    EXPECT_EQ(levels, 14) << "the corpus must be all fourteen shipped levels";
+}
+
+TEST(ObjectFogCorpusTest, TheFirstKeyframeInDocumentOrderIsTheSmallestTime) {
+    // app_level.cpp used to light with the FIRST GlobalLightKeyframe child in
+    // document order. That is only the engine's keyframe (GlobalLight_SetTime(0.0f)
+    // -> the smallest Time, globallight.c:337 + :186-192) if the level happens to
+    // author them chronologically. This test records whether it does, for every
+    // shipped level, so the two rules can never silently diverge again.
+    if (!fs::is_regular_file(LevelDir(1) / "OBJECTS.QVM")) {
+        GTEST_SKIP() << "retail IGI not found at " << GameRoot().string()
+                     << " (set IGI_GAME_PATH to a retail install to run this test)";
+    }
+
+    for (int level = 1; level <= 14; ++level) {
+        const fs::path path = LevelDir(level) / "OBJECTS.QVM";
+        if (!fs::is_regular_file(path)) continue;
+
+        const QVMFile qvm = QVM_Parse(path.string());
+        const std::vector<std::vector<std::string>> keyframes = ExtractKeyframes(qvm);
+        ASSERT_GE(keyframes.size(), 1u) << "LEVEL" << level;
+
+        ASSERT_GT(keyframes[0].size(), 53u) << "LEVEL" << level;
+        const float first_time = std::strtof(keyframes[0][53].c_str(), nullptr);
+
+        float min_time = first_time;
+        int min_count = 1;
+        for (std::size_t i = 1; i < keyframes.size(); ++i) {
+            if (keyframes[i].size() <= 53) continue;
+            const float time = std::strtof(keyframes[i][53].c_str(), nullptr);
+            if (time < min_time) { min_time = time; min_count = 1; }
+            else if (time == min_time) { ++min_count; }
+        }
+
+        std::printf("  level %2d: %zu keyframe(s), first Time=%.1f, smallest Time=%.1f%s\n",
+                    level, keyframes.size(), first_time, min_time,
+                    first_time == min_time ? "" : "  <-- document order is NOT chronological");
+
+        // The rule the engine's GlobalLight_SetTime(0.0f) resolves has to have ONE
+        // answer: if two keyframes shared the smallest Time, GlobalLight_Apply's
+        // `hi` would be whichever the child list reaches first, and the editor's
+        // resolver would be free to pick the other.
+        EXPECT_EQ(min_count, 1) << "LEVEL" << level
+                                << ": the smallest-Time keyframe is not unique";
+    }
+}
+

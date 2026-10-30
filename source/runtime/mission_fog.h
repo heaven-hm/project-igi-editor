@@ -61,6 +61,32 @@ constexpr float kTerrainFogScaleMax = 16384.0f;
 // GlobalLight carries five light sets; set 0 is "terrain" (globallight.c:266-268).
 constexpr int kLightSetCount = 5;
 
+// The OBJECT renderer reads a DIFFERENT set from the terrain's, and IGI-RE proves
+// it by address arithmetic rather than by naming it:
+//
+//   publish() fills, for i = 0..4 (globallight.c:127-134),
+//       gFogColors[i]    = s->color.fog          AT 0xB818E0, Vec3f[5]
+//       gFogDensities[i] = s->color.fogDensity * kFogScale   AT 0xB46D00, float[5]
+//
+//   The object pass uses the plain globals
+//       gFogColor   (float[3])  AT 0xB818EC   -- addr.c:1992, render/rendervars.h:18,
+//                                                read by render.c:775-777 (set_fog) and
+//                                                dxinit/polylist.c:243-244
+//       gFogDensity (float)     AT 0xB46D04   -- addr.c:1971, dxinit/dxinitvars.h:8,
+//                                                read by render.c:780, polylist.c:245 and
+//                                                Fog_SetRange (d3drender.c:117-118)
+//
+//   0xB818E0 + 12 == 0xB818EC  (sizeof(Vec3f) == 12), so gFogColor IS gFogColors[1].
+//   0xB46D00 +  4 == 0xB46D04  (sizeof(float) == 4),  so gFogDensity IS gFogDensities[1].
+//
+// So retail fogs OBJECTS with "object category 1", not with the terrain set.
+// (The same aliasing trick identifies the object pass's D3D ambient material
+// colour: `ALIAS(gLightColor, gAmbient, 12)` at src/nodereg/water.c:544 makes
+// gLightColor == gAmbient[1], and polylist.c:249-250 sets D3DRENDERSTATE_AMBIENT
+// from it -- which is why app_level.cpp reading "Ambient color object category 1"
+// is the engine's rule and not a guess.)
+constexpr int kObjectLightSet = 1;
+
 // GlobalLightKeyframe declares 51 parameters ending in "Time" (globallight.c:264-282).
 constexpr int kGlobalLightKeyframeParams = 51;
 
@@ -103,6 +129,21 @@ struct MissionFog {
 
     // The colour publish() hands to TerrainMesh_SetFog.
     const float* terrain_fog_color() const { return sets[0].fog; }
+
+    // The object pass's fog, i.e. gFogColors[1] / gFogDensities[1] (kObjectLightSet).
+    //
+    // NO 16384 CLAMP HERE, deliberately: that ceiling is TerrainMesh_SetFog's
+    // (terrainmesh.c:302-320) and it applies only to gTerrainFogScale. publish()
+    // writes gFogDensities[i] as a bare product (globallight.c:134), and the only
+    // consumers of gFogDensity are the D3D fog-density render state
+    // (render.c:780, polylist.c:245) and Fog_SetRange's exponent (d3drender.c:117),
+    // neither of which clamps. The negative/NaN guard is the caller's protection
+    // against exp() of a negative coefficient, which would give transmittance > 1.
+    float object_fog_scale() const {
+        const float scale = sets[kObjectLightSet].density * kGlobalLightFogScale;
+        return scale >= 0.0f ? scale : 0.0f;   // NaN or negative -> no fog
+    }
+    const float* object_fog_color() const { return sets[kObjectLightSet].fog; }
 };
 
 // Picks the keyframe the level's *default* (daytime) state comes from: the one
@@ -173,6 +214,75 @@ static_assert(kEFoldingMetresPerAuthoredDensity * kEditorWorldUnitsPerMetre == 2
 // expression Level::LoadFogInfo used before this module had a caller, so moving
 // it here changes no value for any input.
 float LinearFogFarMetresForAuthoredDensity(float authored_density, float fallback_metres);
+
+// ---------------------------------------------------------------------------
+// Fog_SetRange: how the engine fogs OBJECTS
+// ---------------------------------------------------------------------------
+
+// Fog_SetRange HOOK 0x49B2D0 (src/dxinit/d3drender.c:108-131), verbatim:
+//
+//     void Fog_SetRange(const Vec3d *pos, float radius)
+//     {
+//         long double px = pos->x - gTransContext.pos.x, py = ..., pz = ...;
+//         long double d = gTransContext.matrix.m[8] * pz + m[7] * py + m[6] * px;
+//         float n = d - radius;
+//         float f = d + radius;
+//         float a = 1 / exp(gWorldScale * n * gFogDensity);
+//         long double bl = 1 / exp(gWorldScale * f * gFogDensity);
+//         float b = bl;
+//         long double diffl = bl - a;
+//         if (eq(diffl, 0) || eq(a, 0)) { start = 0; end = 0; }
+//         else {
+//             long double t = (b * n - a * f) / diffl;
+//             start = (t - (t - n) / a) * gWorldScale;
+//             end = gWorldScale * t;
+//         }
+//         SET_RS(D3DRENDERSTATE_FOGSTART, f2u(start));
+//         SET_RS(D3DRENDERSTATE_FOGEND, f2u(end));
+//     }
+//
+// D3D7 could only fog with a linear ramp (render.c:781 sets FOGVERTEXMODE =
+// D3DFOG_LINEAR), so the engine picks the ramp that passes through the
+// exponential's own value at the near and far side of a sphere around the
+// object's centre: start/end satisfy (end-n)/(end-start) == a and
+// (end-f)/(end-start) == b. Solving gives end = (b*n - a*f)/(b-a) and
+// start = end - (end-n)/a, which is exactly the code above.
+//
+// `depth_units` is the engine's `d`, the view-space z of the object's centre in
+// GAME UNITS: m[6..8] is the view matrix's third row, so
+// d == dot(forward, pos - camera). `radius` is the object's bounding radius in
+// the same units.
+//
+// `fog_density` is gFogDensity -- the value publish() writes, i.e. the AUTHORED
+// "Fog density object category 1" times kGlobalLightFogScale (globallight.c:115,
+// 133-134) -- NOT the authored number. MissionFog::object_fog_scale() is that
+// value. Passing the authored density inflates the exponent by 2000x.
+//
+// The returned start/end are in the units the engine's D3D fog consumes, which
+// is game units * gWorldScale (the trailing `* gWorldScale` above). That is the
+// SAME space as a GL `gl_Position.w` in this editor: RENDERER_MODEL_SCALE_DOWN
+// (source/common.h:54) is 0.001f, the engine's gWorldScale, so the editor's
+// clip-space w is game units * 0.001 too.
+struct FogRange {
+    float start = 0.0f;
+    float end = 0.0f;
+};
+
+// NAMED DIVERGENCE (bounded by FogRangeIsDegenerate): the engine's `a`/`b` are x87
+// `long double` (80-bit, exponent range ~1e-4932), so its `a == 0` branch needs an
+// exponent of ~11356. A C++ `long double` is 64-bit on MSVC and on arm64 macOS,
+// where the same reciprocal reaches 0 at an exponent of ~710 -- so on those
+// platforms the engine's "no ramp" branch fires for shallower fog. Both are the
+// same physical state (the near edge of the object's sphere is already fully
+// fogged), `FogRangeIsDegenerate` rejects a non-finite span so no caller can divide
+// by one, and the editor's object SHADER uses the exponential directly rather than
+// this ramp.
+FogRange FogSetRangeForDepth(float depth_units, float radius, float fog_density);
+
+// Fog_SetRange's degenerate branch, exposed so the renderer can take the same
+// "no ramp" path the engine does. True when the ramp collapses (a zero-length
+// span, or a transmittance that has already reached 0).
+bool FogRangeIsDegenerate(const FogRange& range);
 
 // Fog_Compute HOOK 0x4DA790 (src/sector/light.c:55-72).
 //   haze_amount is the accumulated HazeLayer density, i.e. the value Haze_GetFog

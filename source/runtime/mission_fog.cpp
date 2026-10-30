@@ -107,6 +107,53 @@ float LinearFogFarMetresForAuthoredDensity(float authored_density, float fallbac
     return (1.0f / authored_density) * kEFoldingMetresPerAuthoredDensity;
 }
 
+// Fog_SetRange HOOK 0x49B2D0 (src/dxinit/d3drender.c:108-131). See the header for
+// the full transcription and for why the returned units are the ones a GL
+// `gl_Position.w` carries in this editor.
+//
+// `fog_density` is gFogDensity, i.e. the value publish() writes --
+// `authored "Fog density object category 1" * kFogScale` (globallight.c:115,133-134)
+// -- NOT the authored number. Passing the authored density here inflates the
+// exponent by 1/0.0005 = 2000x and collapses the ramp.
+FogRange FogSetRangeForDepth(float depth_units, float radius, float fog_density) {
+    const long double n = static_cast<long double>(depth_units) - radius;
+    const long double f = static_cast<long double>(depth_units) + radius;
+    // x87_exp is e^x (`fldl2e; fmulp; f2xm1; fscale`, d3drender.c:88-105), so these
+    // two are the TRANSMITTANCE at the near and far side of the sphere.
+    const long double a = 1.0L / std::exp(static_cast<long double>(kWorldScale) * n * fog_density);
+    const long double b = 1.0L / std::exp(static_cast<long double>(kWorldScale) * f * fog_density);
+    const long double diff = b - a;
+
+    FogRange out;
+    // `if (x87_eq(diffl, 0) || x87_eq(a, 0)) { start = 0; end = 0; }` -- the
+    // engine's x87_eq is exact equality on the long double. On a 64-bit `long
+    // double` (MSVC, arm64 macOS) `a` reaches 0 at an exponent of ~710 where x87
+    // needs ~11356, so this branch fires for shallower fog there; both are "the
+    // near edge is already fully fogged" states, and the object SHADER does not use
+    // this ramp at all.
+    if (diff == 0.0L || a == 0.0L) {
+        out.start = 0.0f;
+        out.end = 0.0f;
+        return out;
+    }
+    const long double t = (b * n - a * f) / diff;
+    out.start = static_cast<float>((t - (t - n) / a) * static_cast<long double>(kWorldScale));
+    out.end = static_cast<float>(static_cast<long double>(kWorldScale) * t);
+    return out;
+}
+
+bool FogRangeIsDegenerate(const FogRange& range) {
+    // The engine's branch above: start == end == 0 means "no ramp". A non-finite or
+    // inverted span would make the shader's division meaningless, so both are
+    // reported as degenerate too rather than left for the caller to notice -- and
+    // that is also what makes the long-double divergence above harmless: whichever
+    // of the two branches a platform takes, a caller that checks this flag never
+    // divides by an infinite span.
+    if (!(range.start == range.start) || !(range.end == range.end)) return true;  // NaN
+    if (!std::isfinite(range.start) || !std::isfinite(range.end)) return true;
+    return !(range.end > range.start);
+}
+
 float FogComputeAmount(float haze_amount, float depth_units, float scale, float fov) {
     // src/sector/light.c:55-72.
     const float f = fov * kFovScale + kFovBase;
@@ -208,6 +255,37 @@ MissionFog ResolveMissionFog(const std::vector<FogTaskObject>& objects) {
         // set is written there rather than inside the 1..3/4..6 block above.
         candidate.sets[0].link = TokenInt(t, kFirstParam + kParamLinkTerrain);
         candidate.sets[0].density = TokenFloat(t, kFirstParam + kParamDensityTerrain);
+
+        // GlobalLightKeyframe_ParamsChanged HOOK 0x5282C0 (src/animcam/globallight.c:
+        // 392-403) resolves the authored links BEFORE anything reads the sets:
+        //
+        //     for (n = 5; n; n--)
+        //         for (i = 0; i < 5; i++) {
+        //             int l = k->sets[i].link;
+        //             if (l >= 0 && l < 5) k->sets[i].set.color = k->sets[l].set.color;
+        //         }
+        //
+        // The whole table is swept FIVE times so that chains resolve (set 4 -> 3 ->
+        // 2 -> 1 -> 0), and each copy carries ambient, fog AND fogDensity together
+        // because they are one LightColor. A level that authors `link` and leaves
+        // placeholder zeros in the linked set relies on this, so the resolved
+        // colours -- not the raw tokens -- are what publish() reads
+        // (globallight.c:127-134) and therefore what both the terrain fog (set 0)
+        // and the object fog (set 1) must use.
+        for (int pass = 0; pass < kLightSetCount; ++pass) {
+            for (int set = 0; set < kLightSetCount; ++set) {
+                const int link = candidate.sets[set].link;
+                if (link >= 0 && link < kLightSetCount) {
+                    candidate.sets[set].ambient[0] = candidate.sets[link].ambient[0];
+                    candidate.sets[set].ambient[1] = candidate.sets[link].ambient[1];
+                    candidate.sets[set].ambient[2] = candidate.sets[link].ambient[2];
+                    candidate.sets[set].fog[0] = candidate.sets[link].fog[0];
+                    candidate.sets[set].fog[1] = candidate.sets[link].fog[1];
+                    candidate.sets[set].fog[2] = candidate.sets[link].fog[2];
+                    candidate.sets[set].density = candidate.sets[link].density;
+                }
+            }
+        }
 
         for (int c = 0; c < 3; ++c) {
             candidate.sky_color[c] = TokenFloat(t, kFirstParam + kParamSkyColor + c);

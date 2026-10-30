@@ -1,6 +1,12 @@
 /******************************************************************************
- * @file    terrain_fog.frag
+ * @file    terrain_fog.vert
  * @brief   vertex shader to apply fog
+ *
+ * Only gl_Position is produced: the fragment shader recovers the view depth from
+ * gl_FragCoord.w (= 1 / gl_Position.w), which is the engine's `vz * gWorldScale`.
+ * The old `vs_out_pos_in_view` varying was the CLIP-space position, and the
+ * fragment shader's `length()` of it was not a distance in any usable unit --
+ * see shaders/41/terrain_fog.frag.
  *****************************************************************************/
 
 #version 120
@@ -18,11 +24,6 @@ uniform mat4 g_mvp_objects;
 // no `layout (location = N)`); the original index is kept:
 attribute vec3  vs_in_pos_local;	// location = 0
 
-varying vec3 vs_out_pos_in_view;
-
 void main() {
-	vec4 v4 = vec4(vs_in_pos_local, 1.0);
-
-	gl_Position = g_mvp_objects * v4;
-	vs_out_pos_in_view = (g_mvp_objects * v4).xyz;
+	gl_Position = g_mvp_objects * vec4(vs_in_pos_local, 1.0);
 }

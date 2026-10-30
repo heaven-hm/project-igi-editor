@@ -1519,8 +1519,11 @@ static void DrawPickupTouchVolume(const glm::vec3& origin, float range, float ha
 //
 // TWO DELIBERATE EDITOR DIFFERENCES, stated rather than hidden:
 //   * No fog. The engine fogs polylist triangles (FOGENABLE = gFogEnable, :248),
-//     but the editor's object pass is unfogged too, so the shadow matches the pass
-//     it sits in. This is presentation, not rule.
+//     and the editor's object pass is now fogged too (renderer_objects.cpp's
+//     OBJ_FRAG_SRC, from GlobalLight set 1), so this quad is the one surface left
+//     unfogged. That is a remaining divergence, not a match: a shadow far from the
+//     camera stays as dark in the editor as one close up, where retail would blend
+//     it toward the fog colour.
 //   * Backface culling is disabled for the quad (the engine culls CW, :253), because
 //     the editor's object pass draws everything with culling off (renderer_objects.cpp)
 //     and the quad's winding must not depend on that choice.
