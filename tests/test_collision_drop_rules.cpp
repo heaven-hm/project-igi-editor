@@ -83,8 +83,8 @@ TEST(CollisionDropRules, TheDownProbeAcceptsTheEnginesSlopAboveThePoint) {
 // hit: the engine's reach is 1,638,400 units (game/misc.c:82, coll.c:587-590),
 // not 100.  This is the arithmetic behind removing the editor's 100-unit band.
 TEST(CollisionDropRules, TheProbeHasNoHundredUnitBand) {
-    const igi::DropTriangle far = Tri(0, 0, -1000000, 100, 0, -1000000, 0, 100, -1000000);
-    const igi::DropHit hit = igi::DropToGround({far}, 10.0, 10.0);
+    const igi::DropTriangle farTri = Tri(0, 0, -1000000, 100, 0, -1000000, 0, 100, -1000000);
+    const igi::DropHit hit = igi::DropToGround({farTri}, 10.0, 10.0);
     ASSERT_TRUE(hit.found);
     EXPECT_DOUBLE_EQ(hit.z, -1000000.0);
 
