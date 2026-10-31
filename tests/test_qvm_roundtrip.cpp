@@ -578,6 +578,44 @@ TEST_P(QvmGameRoundTripTest, ObjectsQvmDecompilesAndReparses) {
     ASSERT_TRUE(pr.ok) << "Parse failed after decompile of level " << level << ": " << pr.error;
 }
 
+// Writing a retail script back must not change what it says: the editor saves
+// objects.qvm through qvm::Compile, so decompile -> compile -> parse -> decompile
+// has to reproduce the first decompile exactly (a fixed point), for every level.
+// This pins semantic stability of the WRITE path on real game files; byte-equality
+// with the shipped file is a separate, stronger claim and is not asserted here.
+TEST_P(QvmGameRoundTripTest, ObjectsQvmWriteIsAFixedPoint) {
+    const int level = GetParam();
+    const std::filesystem::path qvmPath =
+        std::filesystem::path(CorpusRootString()) / "missions" / "location0" /
+        ("level" + std::to_string(level)) / "objects.qvm";
+    if (!std::filesystem::exists(qvmPath))
+        GTEST_SKIP() << "objects.qvm missing for level " << level;
+
+    QVMFile first = QVM_Parse(qvmPath.string());
+    ASSERT_TRUE(first.valid) << first.error;
+    const std::string text1 = QVM_DecompileToString(first);
+
+    auto lr = qsc::Lex(text1);
+    ASSERT_TRUE(lr.ok) << lr.error;
+    auto pr = qsc::Parse(lr.tokens);
+    ASSERT_TRUE(pr.ok) << pr.error;
+    auto cr = qvm::Compile(*pr.program);
+    ASSERT_TRUE(cr.ok) << cr.error;
+
+    const std::string tmp = FixturePath("_rt_fixedpoint_level" + std::to_string(level) + ".qvm");
+    {
+        std::ofstream out(tmp, std::ios::binary);
+        ASSERT_TRUE(out.is_open());
+        out.write(reinterpret_cast<const char*>(cr.binary.data()),
+                  static_cast<std::streamsize>(cr.binary.size()));
+    }
+    QVMFile second = QVM_Parse(tmp);
+    std::remove(tmp.c_str());
+    ASSERT_TRUE(second.valid) << second.error;
+    EXPECT_EQ(QVM_DecompileToString(second), text1)
+        << "level " << level << ": saving changed the script's meaning";
+}
+
 INSTANTIATE_TEST_SUITE_P(
     AllLevels,
     QvmGameRoundTripTest,
