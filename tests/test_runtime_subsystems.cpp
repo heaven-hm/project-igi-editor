@@ -3647,6 +3647,37 @@ TEST(RuntimeWorldTest, AuthoredOneShotSoundDoesNotRetrigger) {
     EXPECT_EQ(play_count, 1);
 }
 
+// ConditionalSound_Run (src/vehicle/condsound.c:128-129): `if (cs->once &&
+// cs->played) return;` sits BEFORE the stop branch, so a OneShot looping emitter
+// is never stopped by its condition falling, and never replayed.
+TEST(RuntimeWorldTest, AuthoredOneShotLoopIsNeverStoppedByItsConditionFalling) {
+    RuntimeWorld world;
+    world.Initialize(FlatTerrain);
+
+    AuthoredMissionConditionalSound conditional_sound;
+    conditional_sound.task_id = "3006";
+    conditional_sound.condition_expression = "LoopTrigger";
+    conditional_sound.sound_name = "land_ground_2";
+    conditional_sound.simple = false;
+    conditional_sound.one_shot = true;
+
+    int starts = 0, stops = 0;
+    world.SetMissionSoundEventHandler(
+        [&](const RuntimeMissionSoundEvent& sound_event) {
+            (sound_event.playing ? starts : stops)++;
+        });
+    world.SetAuthoredMissionState({}, {}, {}, {}, {}, {conditional_sound});
+    world.SetMissionStateBoolean("LoopTrigger", true);
+    world.UpdateSimulationTick(0, PlayerInputCmd());
+    world.SetMissionStateBoolean("LoopTrigger", false);
+    world.UpdateSimulationTick(1, PlayerInputCmd());
+    world.SetMissionStateBoolean("LoopTrigger", true);
+    world.UpdateSimulationTick(2, PlayerInputCmd());
+
+    EXPECT_EQ(starts, 1);
+    EXPECT_EQ(stops, 0);
+}
+
 TEST(RuntimeWorldTest, FixedStepGameplayQueuesOneShotAudioEvents) {
     RuntimeWorld world;
     world.Initialize(FlatTerrain);

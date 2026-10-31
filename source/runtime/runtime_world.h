@@ -1,6 +1,8 @@
 // runtime_world.h - Isolated simulation world and entity snapshot manager
 #pragma once
 
+#include "sound_emitter.h"
+
 #include <glm/glm.hpp>
 #include <array>
 #include <cstddef>
@@ -428,8 +430,9 @@ private:
     RuntimeCutSceneCamera active_cut_scene_camera_;
     struct AuthoredConditionalSoundRuntime {
         AuthoredMissionConditionalSound definition;
-        bool is_running = false;
-        bool has_played = false;
+        // The engine's isRun/isLastRun/isPlaying/played, ticked by
+        // igi::TickConditionalSound (ConditionalSound_Run, condsound.c:121-136).
+        igi::ConditionalSoundState engine_state;
     };
     std::vector<AuthoredConditionalSoundRuntime> mission_conditional_sounds_;
     MissionSoundEventHandler mission_sound_event_handler_;

@@ -2108,55 +2108,49 @@ void RuntimeWorld::RefreshAuthoredGuardGeneratorSnapshots() {
 }
 
 void RuntimeWorld::UpdateAuthoredConditionalSounds() {
-    const auto evaluate_condition = [this](const std::string& expression) {
-        bool result = false;
-        return mission_expression_state_.TryEvaluate(expression, result) && result;
-    };
-
+    // ConditionalSound_Run (src/vehicle/condsound.c:121-136) is ported as
+    // igi::TickConditionalSound.  What it decides -- rising edge only, a OneShot
+    // that after its first play is never stopped and never replayed, a Simple
+    // emitter whose stream outlives its condition -- is the engine's, not this
+    // file's.  The condition is the mission VM's boolean, passed as 1.0/0.0 (the
+    // engine rounds a real result to a char, condsound.c:124).
     for (AuthoredConditionalSoundRuntime& runtime_sound : mission_conditional_sounds_) {
-        const bool is_running = evaluate_condition(
-            runtime_sound.definition.condition_expression);
-        if (is_running && !runtime_sound.is_running &&
-            (!runtime_sound.definition.one_shot || !runtime_sound.has_played)) {
-            runtime_sound.has_played = true;
-            if (runtime_sound.definition.simple) {
-                QueueOneShotAudio(
-                    SoundEffect::ObjectiveComplete,
-                    runtime_sound.definition.sound_name);
-            } else {
-                QueueLoopStart(
-                    runtime_sound.definition.task_id,
-                    runtime_sound.definition.sound_name,
-                    SoundEffect::ObjectiveComplete,
-                    runtime_sound.definition.position,
-                    runtime_sound.definition.relative_to_microphone);
-            }
-            if (mission_sound_event_handler_) {
-                mission_sound_event_handler_({
-                    runtime_sound.definition.task_id,
-                    runtime_sound.definition.sound_name,
-                    runtime_sound.definition.position,
-                    true,
-                    runtime_sound.definition.simple,
-                    runtime_sound.definition.relative_to_microphone,
-                });
-            }
-        } else if (!is_running && runtime_sound.is_running &&
-                   !runtime_sound.definition.simple &&
-                   runtime_sound.has_played) {
-            QueueLoopStop(runtime_sound.definition.task_id);
-            if (mission_sound_event_handler_) {
-                mission_sound_event_handler_({
-                    runtime_sound.definition.task_id,
-                    runtime_sound.definition.sound_name,
-                    runtime_sound.definition.position,
-                    false,
-                    runtime_sound.definition.simple,
-                    runtime_sound.definition.relative_to_microphone,
-                });
-            }
+        const AuthoredMissionConditionalSound& definition = runtime_sound.definition;
+        bool condition = false;
+        const bool has_condition = !definition.condition_expression.empty();
+        if (has_condition) {
+            condition = mission_expression_state_.TryEvaluate(
+                definition.condition_expression, condition) && condition;
         }
-        runtime_sound.is_running = is_running;
+
+        igi::ConditionalSoundEmitter emitter;
+        emitter.simple = definition.simple;
+        emitter.one_shot = definition.one_shot;
+        emitter.relative_to_microphone = definition.relative_to_microphone;
+        const igi::ConditionalSoundTick tick = igi::TickConditionalSound(
+            runtime_sound.engine_state, emitter, has_condition, condition ? 1.0 : 0.0);
+
+        if (tick.start_sound) {
+            if (definition.simple) {
+                QueueOneShotAudio(SoundEffect::ObjectiveComplete, definition.sound_name);
+            } else {
+                QueueLoopStart(definition.task_id, definition.sound_name,
+                               SoundEffect::ObjectiveComplete, definition.position,
+                               definition.relative_to_microphone);
+            }
+        } else if (tick.stop_sound) {
+            QueueLoopStop(definition.task_id);
+        }
+        if ((tick.start_sound || tick.stop_sound) && mission_sound_event_handler_) {
+            mission_sound_event_handler_({
+                definition.task_id,
+                definition.sound_name,
+                definition.position,
+                tick.start_sound,
+                definition.simple,
+                definition.relative_to_microphone,
+            });
+        }
     }
 }
 
