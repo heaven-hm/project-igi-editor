@@ -402,9 +402,50 @@ void Renderer::DrawAnimSkeleton(const std::vector<glm::mat4>& boneWorldTransform
     if (prevProg) glUseProgram((GLuint)prevProg);
 }
 
+// IGI_PROFILE-only: split one DrawSkinnedMesh into its CPU skinning half and its
+// GL submission half.  The whole call was [FrameBreak]'s entire `post` span
+// (100 ms for 8 draws), so "the pose draw is slow" needs to say WHICH half: the
+// engine's own skinner over ~3k vertices, or the fixed-function submission of
+// ~3k vertices one glVertex at a time.  They need opposite fixes.
+using SkinnedClockTime = std::chrono::steady_clock::time_point;
+
+static void LogSkinnedDrawSplit(SkinnedClockTime t0, SkinnedClockTime t1,
+                               SkinnedClockTime t2, SkinnedClockTime t3,
+                               SkinnedClockTime t4) {
+    static int64_t acc_skin = 0, acc_state = 0, acc_build = 0, acc_draw = 0;
+    static int calls = 0;
+    const auto us = [](SkinnedClockTime a, SkinnedClockTime b) {
+        return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
+    };
+    acc_skin += us(t0, t1);
+    acc_state += us(t1, t2);
+    acc_build += us(t2, t3);
+    acc_draw += us(t3, t4);
+    ++calls;
+    if (calls >= 200) {
+        const int64_t total = acc_skin + acc_state + acc_build + acc_draw;
+        Logger::Get().Log(LogLevel::INFO,
+            "[FrameBreak] skinned draw split " + std::to_string(calls) +
+            " draws: skin=" + std::to_string(acc_skin / 1000) + "ms state=" +
+            std::to_string(acc_state / 1000) + "ms build=" +
+            std::to_string(acc_build / 1000) + "ms draw=" +
+            std::to_string(acc_draw / 1000) + "ms total=" +
+            std::to_string(total / 1000) + "ms (" +
+            std::to_string(total / calls / 1000) + "ms/draw)");
+        acc_skin = acc_state = acc_build = acc_draw = 0;
+        calls = 0;
+    }
+}
+
 void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
                                 const std::vector<igi::BoneTransform>& engineBoneTransforms,
                                 const glm::mat4& objWorldMat) {
+    const bool profileSkinned = []() {
+        static const bool enabled = std::getenv("IGI_PROFILE") != nullptr;
+        return enabled;
+    }();
+    using SkinnedClock = std::chrono::steady_clock;
+    const auto skinned_t0 = profileSkinned ? SkinnedClock::now() : SkinnedClock::time_point{};
     if (engineBoneTransforms.empty()) return;
     const ParsedGeometry* geo = objects_.GetOrLoadSkinGeometry(modelId, isBuilding);
     if (!geo || !HasRenderableSkinnedGeometry(*geo)) return;
@@ -471,6 +512,9 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
                                       skinned[i].normal[2]);
     }
 
+    // IGI_PROFILE-only: boundary between the engine skinner and the submit.
+    const auto skinned_t1 = profileSkinned ? SkinnedClock::now() : SkinnedClock::time_point{};
+
     // Resolve the same per-material textures the static (rigid) draw uses, so
     // the live-skinned mesh looks identical when not moving instead of a flat
     // debug color. Cheap: GetOrLoadMesh hits the cache (the model is already
@@ -512,26 +556,73 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
     const glm::vec3 lightDir = glm::normalize(glm::vec3(0.3f, 0.5f, 0.8f));
     const float kAmbient = 0.40f;  // minimum brightness so no face is fully black
 
-    // Disable legacy GL lighting so glColor4f/glTexCoord2f actually apply.
+    // Disable legacy GL lighting so the per-vertex colour actually applies.
     glDisable(GL_LIGHTING);
 
-    auto litColor = [&](uint32_t vi) {
-        // deformedNormal is already transformed by the bone matrix, use it directly.
+    // IGI_PROFILE-only: boundary after the fixed-function state switch (the
+    // program/VAO unbind, the matrix push, the cull/lighting changes).  A state
+    // switch that the driver re-validates costs the same for 10 triangles as for
+    // 3000, so it must be told apart from the per-vertex work.
+    const auto skinned_t2 = profileSkinned ? SkinnedClock::now() : SkinnedClock::time_point{};
+
+    // ── the submission form, and why it is a batch ─────────────────────────
+    // The vertex VALUES below are unchanged from the immediate-mode loop this
+    // replaces: the same `objWorldMat * deformedPos` position, the same CPU
+    // diffuse shade, the same (u, 1-v) texcoord, emitted in the same triangle
+    // order per render block.  What changed is only HOW they reach GL.
+    //
+    // WHY.  One human is ~950 triangles = ~2.9k vertices, and the old loop paid
+    // five fixed-function calls per vertex (glColor4f, glTexCoord2f,
+    // glVertex4f plus the glBegin/glEnd pair per block) -- ~8.3k GL calls per
+    // drawn AI.  Measured with IGI_PROFILE on the gl2.1 tier: 10.5 ms of the
+    // 12 ms DrawSkinnedMesh was this submission, for 8 AI per frame, i.e. ~85
+    // of the 100 ms that [FrameBreak] charges to `post`.  The engine's rule
+    // (BoneMesh_Skin 0x49B700 -> Direct3DRender_DrawBoneMesh 0x49F700) says
+    // nothing about how many GL calls carry the skinned result to the
+    // rasteriser; that is this renderer's own presentation choice, so batching
+    // it cannot change what is drawn.
+    //
+    // The stream is built once for ALL blocks in triangle order, and each
+    // block records its own (first, count) so the per-material texture binds
+    // stay exactly where they were.
+    struct SkinnedBatchVertex {
+        float position[4];   // world metres, w preserved (glVertex4f parity)
+        float color[4];      // CPU diffuse, alpha 1 (glColor4f parity)
+        float uv[2];
+    };
+    struct SkinnedBatchBlock {
+        GLuint texture;
+        GLint first;
+        GLsizei count;
+    };
+    std::vector<SkinnedBatchVertex> batch;
+    std::vector<SkinnedBatchBlock> batch_blocks;
+
+    auto emitVertex = [&](uint32_t vi) -> SkinnedBatchVertex {
+        SkinnedBatchVertex out{};
+        // litColor(), inlined: deformedNormal is already rotated by the bone
+        // matrix inside BoneMesh_Skin, so it is used directly (see the note on
+        // the light direction above).
         glm::vec3 n = deformedNormal[vi];
-        float nLen = glm::length(n);
+        const float nLen = glm::length(n);
         float diff = kAmbient;  // default: ambient only for degenerate normals
         if (nLen > 1e-5f) {
             float d = glm::dot(n / nLen, lightDir);
             if (!std::isfinite(d)) d = 0.0f;
             diff = kAmbient + (1.0f - kAmbient) * glm::clamp(d, 0.0f, 1.0f);
         }
-        glColor4f(diff, diff, diff, 1.0f);
-    };
-    auto emitVertex = [&](uint32_t vi) {
-        litColor(vi);
-        glTexCoord2f(geo->vertices[vi].uv.x, 1.0f - geo->vertices[vi].uv.y);
-        glm::vec4 worldPos = objWorldMat * glm::vec4(deformedPos[vi], 1.0f);
-        glVertex4f(worldPos.x, worldPos.y, worldPos.z, worldPos.w);
+        out.color[0] = diff;
+        out.color[1] = diff;
+        out.color[2] = diff;
+        out.color[3] = 1.0f;
+        out.uv[0] = geo->vertices[vi].uv.x;
+        out.uv[1] = 1.0f - geo->vertices[vi].uv.y;
+        const glm::vec4 worldPos = objWorldMat * glm::vec4(deformedPos[vi], 1.0f);
+        out.position[0] = worldPos.x;
+        out.position[1] = worldPos.y;
+        out.position[2] = worldPos.z;
+        out.position[3] = worldPos.w;
+        return out;
     };
 
     // Draw per render-block, binding each block's own material texture — same
@@ -540,27 +631,20 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
     // (skin/clothes/face/etc.) get their correct textures instead of one
     // flat body texture for the whole mesh.
     auto drawRange = [&](size_t start, size_t count, GLuint tex) {
-        // The normal scene pass leaves the lightmap on unit 1. Fixed-function
-        // texture sampling uses unit 0, so select it before every skin block.
-        glActiveTexture(GL_TEXTURE0);
-        if (tex != 0) {
-            glEnable(GL_TEXTURE_2D);
-            glBindTexture(GL_TEXTURE_2D, tex);
-        } else {
-            glDisable(GL_TEXTURE_2D);
-        }
-        glBegin(GL_TRIANGLES);
+        const GLint first = static_cast<GLint>(batch.size());
         for (size_t t = start; t < start + count && t < geo->triangles.size(); ++t) {
             const auto& tri = geo->triangles[t];
             if (tri[0] >= deformedPos.size() || tri[1] >= deformedPos.size() ||
                 tri[2] >= deformedPos.size()) continue;
-            emitVertex(tri[0]);
-            emitVertex(tri[1]);
-            emitVertex(tri[2]);
+            batch.push_back(emitVertex(tri[0]));
+            batch.push_back(emitVertex(tri[1]));
+            batch.push_back(emitVertex(tri[2]));
         }
-        glEnd();
+        const GLsizei emitted = static_cast<GLsizei>(batch.size()) - first;
+        if (emitted > 0) batch_blocks.push_back({tex, first, emitted});
     };
 
+    batch.reserve(geo->triangles.size() * 3);
     if (!geo->renderBlocks.empty()) {
         for (const auto& block : geo->renderBlocks) {
             if (block.triangleCount == 0) continue;
@@ -570,6 +654,35 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
         }
     } else {
         drawRange(0, geo->triangles.size(), fallbackTexture);
+    }
+
+    // IGI_PROFILE-only: boundary after the batch was built on the CPU.
+    const auto skinned_t3 = profileSkinned ? SkinnedClock::now() : SkinnedClock::time_point{};
+
+    if (!batch_blocks.empty()) {
+        // The normal scene pass leaves the lightmap on unit 1. Fixed-function
+        // texture sampling uses unit 0, so select it before the skin blocks.
+        glActiveTexture(GL_TEXTURE0);
+        const GLsizei stride = static_cast<GLsizei>(sizeof(SkinnedBatchVertex));
+        const float* base = &batch.front().position[0];
+        glEnableClientState(GL_VERTEX_ARRAY);
+        glEnableClientState(GL_COLOR_ARRAY);
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        glVertexPointer(4, GL_FLOAT, stride, base);
+        glColorPointer(4, GL_FLOAT, stride, base + 4);
+        glTexCoordPointer(2, GL_FLOAT, stride, base + 8);
+        for (const SkinnedBatchBlock& block : batch_blocks) {
+            if (block.texture != 0) {
+                glEnable(GL_TEXTURE_2D);
+                glBindTexture(GL_TEXTURE_2D, block.texture);
+            } else {
+                glDisable(GL_TEXTURE_2D);
+            }
+            glDrawArrays(GL_TRIANGLES, block.first, block.count);
+        }
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+        glDisableClientState(GL_COLOR_ARRAY);
+        glDisableClientState(GL_VERTEX_ARRAY);
     }
 
     glEnable(GL_LIGHTING);   // restore legacy lighting state disabled above
@@ -586,5 +699,9 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
     for (int i = 0; i < 4; ++i) glDisableVertexAttribArray(i);
 
     if (prevProg) glUseProgram((GLuint)prevProg);
+
+    if (profileSkinned) {
+        LogSkinnedDrawSplit(skinned_t0, skinned_t1, skinned_t2, skinned_t3, SkinnedClock::now());
+    }
 }
 

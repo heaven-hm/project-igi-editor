@@ -1052,6 +1052,48 @@ static void LogFrameBreakMapSplit(int64_t pick_us, int64_t mapsky_us,
 	}
 }
 
+// IGI_PROFILE-only: split the `post` span of the editor frame -- everything
+// App::Frame() submits AFTER renderer_.Draw().  [FrameBreak] charges all of it
+// to `post` (101-123 ms on the GL 2.1 fallback), but those milliseconds are five
+// different things: the gameplay-only attachment draws (no-ops in editor mode),
+// the live skinned pose submits, the static held-weapon submits, the editor
+// cursor quad, and glutSwapBuffers -- and only the last one is presentation.
+// Without this split the dominant term of the whole frame cannot be attributed,
+// and "post is the UI" would be an assumption rather than a measurement.  The
+// draw counts are logged with the times because a time without the number of
+// draws it bought cannot be compared between two builds.
+static void LogFrameBreakPostSplit(int64_t gameplay_us, int64_t skinned_us,
+                                   int64_t weapons_us, int64_t cursor_us,
+                                   int64_t swap_us, int skinned_draws,
+                                   int weapon_draws) {
+	static int64_t acc_gameplay = 0, acc_skinned = 0, acc_weapons = 0;
+	static int64_t acc_cursor = 0, acc_swap = 0;
+	static int64_t acc_skinned_draws = 0, acc_weapon_draws = 0;
+	static int frames = 0;
+	acc_gameplay += gameplay_us;
+	acc_skinned += skinned_us;
+	acc_weapons += weapons_us;
+	acc_cursor += cursor_us;
+	acc_swap += swap_us;
+	acc_skinned_draws += skinned_draws;
+	acc_weapon_draws += weapon_draws;
+	if (++frames >= 30) {
+		Logger::Get().Log(LogLevel::INFO,
+			"[FrameBreak] post split 30 frames: gameplay=" +
+			std::to_string(acc_gameplay / 30000) + "ms skinned=" +
+			std::to_string(acc_skinned / 30000) + "ms weapons=" +
+			std::to_string(acc_weapons / 30000) + "ms cursor=" +
+			std::to_string(acc_cursor / 30000) + "ms swap=" +
+			std::to_string(acc_swap / 30000) + "ms/frame (skinnedDraws=" +
+			std::to_string(acc_skinned_draws / 30) + " weaponDraws=" +
+			std::to_string(acc_weapon_draws / 30) + "/frame)");
+		frames = 0;
+		acc_gameplay = acc_skinned = acc_weapons = 0;
+		acc_cursor = acc_swap = 0;
+		acc_skinned_draws = acc_weapon_draws = 0;
+	}
+}
+
 // IGI_PROFILE-only: split the editor's own per-frame work that happens before
 // the renderer is called at all (animations, view define, scene hover pick).
 // [FrameBreak] reports this whole span as part of `pre`; the terrain buffer
@@ -1799,6 +1841,10 @@ void App::Frame(float delta_seconds) {
 	DrawGameplayExplosions();
 	DrawGameplayGuardMuzzleFlashes();
 	DrawGameplayPlayerWeapon();
+	// IGI_PROFILE-only post split (see LogFrameBreakPostSplit): the boundary
+	// after the gameplay attachment draws.
+	const auto frame_post_t1 = profile_frame_break ? FrameBreakClock::now()
+	                                               : FrameBreakClock::time_point{};
 
     // Find the "right hand" bone index in modelId's parsed bone list (REIH+MANB
     // names), cached per modelId. This is the same index space the engine pose's
@@ -1836,6 +1882,12 @@ void App::Frame(float delta_seconds) {
     const glm::mat4 kWeaponHandCorrection =
         glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), kBarrelDir) * kWeaponBase;
 
+    // IGI_PROFILE-only: how many pose/weapon submits this post span actually
+    // buys (see LogFrameBreakPostSplit -- a time without its draw count cannot
+    // be compared between two builds).
+    int post_skinned_draws = 0;
+    int post_weapon_draws = 0;
+
     // Draw the live skinned mesh for every AI with an active, playing clip â€”
     // all of them animate and render in parallel, not just the selected object.
     // This MUST run whenever a clip is playing (not gated by F10) â€” the static
@@ -1851,6 +1903,7 @@ void App::Frame(float delta_seconds) {
             auto playback_it = active_playbacks.find(idx);
             if (playback_it == active_playbacks.end()) continue;
             auto& pb = playback_it->second;
+
             // The pose comes out of the ENGINE, not out of the editor's own
             // slerp: `AnimPlayback` owns an `igi::AnimPlayer` and this is the
             // frame its last `BoneObj_Update` 0x4D38C0 produced (one glm matrix
@@ -1897,6 +1950,7 @@ void App::Frame(float delta_seconds) {
             // over these same bone records (raw `Bone::matrix` + `Bone::pos`),
             // which is what `Direct3DRender_DrawBoneMesh` 0x49F700 does.
             renderer_.DrawSkinnedMesh(obj.modelId, obj.isBuilding, pb.RawBoneTransforms(), objMat);
+            ++post_skinned_draws;
 
             if (show_anim_skeleton_ && idx == selected_object_index_) {
                 // boneParents is indexed by bone ID (the same engine-bone indexing
@@ -1916,10 +1970,15 @@ void App::Frame(float delta_seconds) {
                 if (handIdx >= 0 && (size_t)handIdx < worldTransforms.size()) {
                     glm::mat4 handWorldMat = objMat * worldTransforms[handIdx] * kWeaponHandCorrection;
                     renderer_.DrawAttachedMesh(obj.weaponModelId, false, handWorldMat);
+                    ++post_weapon_draws;
                 }
             }
         }
     }
+
+    // IGI_PROFILE-only post split: boundary after the live skinned pose submits.
+    const auto frame_post_t2 = profile_frame_break ? FrameBreakClock::now()
+                                                   : FrameBreakClock::time_point{};
 
     // Static/paused AI (not currently in skinnedReplacementIndices) still hold
     // their weapon, positioned at the hand bone's REST pose instead of an
@@ -1959,12 +2018,29 @@ void App::Frame(float delta_seconds) {
 
             glm::mat4 handLocalMat = glm::translate(glm::mat4(1.0f), restHandPos * kMefNativeScale);
             renderer_.DrawAttachedMesh(obj.weaponModelId, false, objMat * handLocalMat * kWeaponHandCorrection);
+            ++post_weapon_draws;
         }
     }
 
+    // IGI_PROFILE-only post split: boundary after the static held-weapon submits.
+    const auto frame_post_t3 = profile_frame_break ? FrameBreakClock::now()
+                                                   : FrameBreakClock::time_point{};
 	DrawCustomCursor();
+    // IGI_PROFILE-only post split: boundary after the editor cursor quad.
+    const auto frame_post_t4 = profile_frame_break ? FrameBreakClock::now()
+                                                   : FrameBreakClock::time_point{};
 	glutSwapBuffers();
+    // IGI_PROFILE-only post split: everything after this point is the host
+    // window system's presentation, charged to the platform layer.
+    const auto frame_post_t5 = profile_frame_break ? FrameBreakClock::now()
+                                                   : FrameBreakClock::time_point{};
 	if (profile_frame_break) {
+		LogFrameBreakPostSplit(frame_us(frame_draw_end, frame_post_t1),
+		                       frame_us(frame_post_t1, frame_post_t2),
+		                       frame_us(frame_post_t2, frame_post_t3),
+		                       frame_us(frame_post_t3, frame_post_t4),
+		                       frame_us(frame_post_t4, frame_post_t5),
+		                       post_skinned_draws, post_weapon_draws);
 		LogFrameBreak("editor", frame_us(frame_enter, frame_draw_begin),
 		              frame_us(frame_draw_begin, frame_draw_end),
 		              frame_us(frame_draw_end, FrameBreakClock::now()));

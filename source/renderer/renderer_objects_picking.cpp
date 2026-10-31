@@ -215,9 +215,16 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
 
     GLint loc_model = glGetUniformLocation(pick_shader_prog_, "u_model");
     GLint loc_id    = glGetUniformLocation(pick_shader_prog_, "u_object_id");
+    // IGI_PROFILE-only: boundary after the FBO bind + clear + program/uniform
+    // setup.  A pick starts by clearing a 1680x1050 colour+depth FBO, which is
+    // easy to mistake for "the scene submission" when only the whole pass is
+    // timed.
+    const auto pp_t2 = profilePickPass ? PickPassClock::now() : PickPassClock::time_point{};
+    int64_t pp_setup_us = 0;
 
     for (int i = 0; i < (int)objects.size(); ++i) {
         const auto& obj = objects[i];
+        const auto obj_t0 = profilePickPass ? PickPassClock::now() : PickPassClock::time_point{};
         if (obj.deleted || obj.modelId.empty()) continue;
         if (obj.isSplineWaypoint || obj.isSplineContainer) continue;
         if (IsSkippedModelId(obj.modelId)) continue;
@@ -332,6 +339,14 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
 
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
         glUniform1i(loc_id, i + 1); // ID 0 = background
+        // Everything above is CPU-side setup (mesh cache lookup, the mirrored
+        // view cull, the model matrix, the heli/seat/wire frame); everything
+        // below is GL submission.  A pass that is DRAW-SUBMISSION bound and one
+        // that is CPU bound need opposite fixes, so they are measured apart.
+        if (profilePickPass) {
+            pp_setup_us += std::chrono::duration_cast<std::chrono::microseconds>(
+                PickPassClock::now() - obj_t0).count();
+        }
 
         ++pp_objects;
         // Draw hull submeshes
@@ -368,6 +383,9 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
         }
     }
 
+    // IGI_PROFILE-only: boundary after the last pick draw, before the unbind.
+    const auto pp_t3 = profilePickPass ? PickPassClock::now() : PickPassClock::time_point{};
+
     glBindVertexArray(0);
     glUseProgram(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -381,11 +399,18 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
 
     if (profilePickPass) {
         static int64_t acc_occ_us = 0, acc_total_us = 0, acc_objs = 0, acc_draws = 0;
+        static int64_t acc_clear_us = 0, acc_setup_us = 0, acc_submit_us = 0;
         static int calls = 0;
         const auto us = [](PickPassClock::time_point a, PickPassClock::time_point b) {
             return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
         };
+        const int64_t loop_us = us(pp_t2, pp_t3);
         acc_occ_us += us(pp_t0, pp_t1);
+        acc_clear_us += us(pp_t1, pp_t2);
+        acc_setup_us += pp_setup_us;
+        // The remainder of the object loop is the GL submission the pick is
+        // bound by: uniform uploads, VAO binds and glDrawArrays.
+        acc_submit_us += loop_us - pp_setup_us;
         acc_total_us += us(pp_t0, PickPassClock::now());
         acc_objs += pp_objects;
         acc_draws += pp_draws;
@@ -393,12 +418,16 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
         if (calls >= 8) {
             Logger::Get().Log(LogLevel::INFO,
                 "[PickPass] 8 passes: occupancy=" +
-                std::to_string(acc_occ_us / calls / 1000) + "ms total=" +
+                std::to_string(acc_occ_us / calls / 1000) + "ms clear+state=" +
+                std::to_string(acc_clear_us / calls / 1000) + "ms setup=" +
+                std::to_string(acc_setup_us / calls / 1000) + "ms submit=" +
+                std::to_string(acc_submit_us / calls / 1000) + "ms total=" +
                 std::to_string(acc_total_us / calls / 1000) + "ms objects=" +
                 std::to_string(acc_objs / calls) + " draws=" +
                 std::to_string(acc_draws / calls) + " submeshes/pass");
             calls = 0;
             acc_occ_us = acc_total_us = acc_objs = acc_draws = 0;
+            acc_clear_us = acc_setup_us = acc_submit_us = 0;
         }
     }
 }
