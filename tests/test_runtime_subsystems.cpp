@@ -3391,6 +3391,83 @@ TEST(RuntimeWorldTest, LevelTimerAndStatusMessageDriveAuthoredMissionFlow) {
         "MISSION COMPLETE");
 }
 
+TEST(RuntimeWorldTest, EditVariableRoundsFractionalExpressionValues) {
+    RuntimeWorld world;
+    world.Initialize(FlatTerrain);
+
+    AuthoredMissionEditVariable edit_variable;
+    edit_variable.task_id = "200";
+    edit_variable.initial_value = 10;
+    // Evaluates to 1.6, which under round_int / fistpll rounds to 2
+    edit_variable.add_expression = "8.0 / 5.0";
+
+    world.SetAuthoredMissionState({}, {edit_variable});
+
+    world.UpdateSimulationTick(0, PlayerInputCmd());
+    double value = 0.0;
+    EXPECT_TRUE(world.GetMissionExpressionState().TryEvaluateNumber("EditVariable_200.nValue", value));
+    EXPECT_EQ(value, 12.0);
+}
+
+TEST(RuntimeWorldTest, LevelTimerResetEvaluatesBeforeTickIncrement) {
+    RuntimeWorld world;
+    world.Initialize(FlatTerrain);
+
+    AuthoredMissionLevelTimer level_timer;
+    level_timer.task_id = "99";
+    level_timer.on_expression = "1";
+    level_timer.reset_expression = "ResetTrigger";
+
+    world.SetAuthoredMissionState({}, {}, {level_timer});
+
+    world.UpdateSimulationTick(0, PlayerInputCmd());
+    double ticks = 0.0;
+    EXPECT_TRUE(world.GetMissionExpressionState().TryEvaluateNumber("LevelTimer_99.nTick", ticks));
+    EXPECT_EQ(ticks, 1.0);
+
+    world.UpdateSimulationTick(1, PlayerInputCmd());
+    EXPECT_TRUE(world.GetMissionExpressionState().TryEvaluateNumber("LevelTimer_99.nTick", ticks));
+    EXPECT_EQ(ticks, 2.0);
+
+    // Trigger reset: in LevelTimer_Run (0x51BE10), run is evaluated (true),
+    // then reset resets nTick to 0, then if (isRun) nTick++ increments it to 1.
+    world.SetMissionStateBoolean("ResetTrigger", true);
+    world.UpdateSimulationTick(2, PlayerInputCmd());
+    EXPECT_TRUE(world.GetMissionExpressionState().TryEvaluateNumber("LevelTimer_99.nTick", ticks));
+    EXPECT_EQ(ticks, 1.0);
+}
+
+TEST(RuntimeWorldTest, AreaActivationEvaluatesExactOrientedBoundingBoxAndCriteria) {
+    RuntimeWorld world;
+    world.Initialize(FlatTerrain);
+
+    // Box centered at origin, size (100, 20, 20), rotated 45 degrees around Z axis.
+    AuthoredMissionAreaActivation area;
+    area.task_id = "300";
+    area.position = glm::vec3(0.0f, 0.0f, 0.0f);
+    area.dimensions = glm::vec3(100.0f, 20.0f, 20.0f);
+    area.orientation = glm::vec3(0.0f, 0.0f, glm::radians(45.0f));
+    area.criteria = "CRITERIA_HUMAN"; // Matches human player (soldier/human.c:300)
+
+    world.SetAuthoredMissionState({area}, {});
+
+    // Point (30, 30, 0): in world coordinates along diagonal (local X ≈ 42.4 <= 50, local Y = 0 <= 10).
+    // This is INSIDE the rotated box.
+    world.GetPlayer().SetPosition(glm::vec3(30.0f, 30.0f, 0.0f));
+    world.UpdateSimulationTick(0, PlayerInputCmd());
+    double n_active = 0.0;
+    EXPECT_TRUE(world.GetMissionExpressionState().TryEvaluateNumber("AreaActivate_300.nActive", n_active));
+    EXPECT_EQ(n_active, 1.0);
+
+    // Point (40, 0, 0): Inside the axis-aligned bounding box (AABB spans [-42.4, 42.4] along X and Y),
+    // but in local coordinates: local X = 40 * cos(-45) ≈ 28.3, local Y = 40 * sin(-45) ≈ -28.3.
+    // |local Y| = 28.3 > half.y (10.0), so this point is OUTSIDE the rotated box!
+    world.GetPlayer().SetPosition(glm::vec3(40.0f, 0.0f, 0.0f));
+    world.UpdateSimulationTick(1, PlayerInputCmd());
+    EXPECT_TRUE(world.GetMissionExpressionState().TryEvaluateNumber("AreaActivate_300.nActive", n_active));
+    EXPECT_EQ(n_active, 0.0);
+}
+
 TEST(RuntimeWorldTest, AuthoredCutScenePublishesFixedTickCompletion) {
     RuntimeWorld world;
     world.Initialize(FlatTerrain);

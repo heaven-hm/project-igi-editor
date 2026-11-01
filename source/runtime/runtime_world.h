@@ -423,6 +423,9 @@ private:
         std::string task_id;
         glm::vec3 minimum = glm::vec3(0.0f);
         glm::vec3 maximum = glm::vec3(0.0f);
+        glm::vec3 position = glm::vec3(0.0f);
+        glm::mat3 orientation = glm::mat3(1.0f);
+        glm::vec3 half = glm::vec3(0.0f);
         bool accepts_player = false;
     };
     std::vector<MissionAreaActivationState> mission_area_activations_;

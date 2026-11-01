@@ -28,6 +28,10 @@ constexpr std::array<float, 4> kMapComputerFieldOfViews = {
 };
 constexpr float kMapComputerViewportAspect = 16.0f / 9.0f;
 
+// In IGI-RE soldier/human.c:300-303:
+//   gHumanCriteria = AreaActivate_AddCriteria("CRITERIA_HUMAN", Human_Criteria);
+//   gHumanTeamCriteria[0] = AreaActivate_AddCriteria("CRITERIA_HUMAN0", Human_CriteriaN);
+// "criteria_human" covers both general human criteria and team 0 (player).
 bool MissionCriteriaAcceptsPlayer(const std::string& criteria) {
     std::string normalized_criteria;
     normalized_criteria.reserve(criteria.size());
@@ -36,7 +40,7 @@ bool MissionCriteriaAcceptsPlayer(const std::string& criteria) {
     }
 
     return normalized_criteria.empty() ||
-        normalized_criteria.find("criteria_human0") != std::string::npos ||
+        normalized_criteria.find("criteria_human") != std::string::npos ||
         normalized_criteria.find("humanplayer") != std::string::npos ||
         normalized_criteria.find("player") != std::string::npos;
 }
@@ -58,13 +62,20 @@ glm::mat3 BuildEngineOrientation(const glm::vec3& angles) {
     return glm::mat3(orientation);
 }
 
-bool TryTruncateMissionExpressionValue(double value, int& result) {
-    if (!std::isfinite(value) ||
-        value < static_cast<double>(std::numeric_limits<int>::min()) ||
-        value >= static_cast<double>(std::numeric_limits<int>::max()) + 1.0) {
+// In IGI-RE EditVariable_Run (HOOK 0x4889B0, src/levelflow/editvar.c:59-66):
+//   v->nValue += round_int(VarString_EvalReal(&v->inc, v));
+//   v->nValue -= round_int(VarString_EvalReal(&v->dec, v));
+// where round_int invokes fistpll (HOOK round_int, src/levelflow/levelflow.h:41-47).
+bool TryRoundMissionExpressionValue(double value, int& result) {
+    if (!std::isfinite(value)) {
         return false;
     }
-    result = static_cast<int>(value);
+    const double rounded = std::llround(value);
+    if (rounded < static_cast<double>(std::numeric_limits<int>::min()) ||
+        rounded > static_cast<double>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+    result = static_cast<int>(rounded);
     return true;
 }
 
@@ -101,7 +112,7 @@ std::string GuardGeneratorIdentity(
 
 void ApplyMissionVariableDelta(int& value, double expression_value, int direction) {
     int delta = 0;
-    if (!TryTruncateMissionExpressionValue(expression_value, delta)) {
+    if (!TryRoundMissionExpressionValue(expression_value, delta)) {
         return;
     }
 
@@ -918,13 +929,22 @@ bool RuntimeWorld::UpdateWeaponSelection(const PlayerInputCmd& input_command) {
 void RuntimeWorld::UpdateAuthoredMissionState() {
     for (const MissionAreaActivationState& area : mission_area_activations_) {
         const glm::vec3 player_position = player_.GetPosition();
-        const bool active = area.accepts_player &&
+        bool active = false;
+        if (area.accepts_player &&
             player_position.x >= area.minimum.x &&
             player_position.x <= area.maximum.x &&
             player_position.y >= area.minimum.y &&
             player_position.y <= area.maximum.y &&
             player_position.z >= area.minimum.z &&
-            player_position.z <= area.maximum.z;
+            player_position.z <= area.maximum.z) {
+            // In IGI-RE AreaActivate_Contains (HOOK 0x5042B0, src/editobj/areaactivate.c:83-107):
+            // Check within oriented bounding box using matrix^T * (pos - pos.a)
+            const glm::vec3 delta = player_position - area.position;
+            const glm::vec3 local = glm::transpose(area.orientation) * delta;
+            active = std::abs(local.x) <= area.half.x &&
+                     std::abs(local.y) <= area.half.y &&
+                     std::abs(local.z) <= area.half.z;
+        }
         mission_expression_state_.SetNumber(
             "AreaActivate_" + area.task_id + ".nActive",
             active ? 1.0 : 0.0);
@@ -971,13 +991,20 @@ void RuntimeWorld::UpdateAuthoredMissionState() {
         int& tick_count = mission_level_timer_ticks_[timer_index];
         bool is_running = mission_level_timer_running_[timer_index] != 0;
 
-        if (evaluate_expression(timer.reset_expression)) {
-            tick_count = 0;
-        }
+        // In IGI-RE LevelTimer_Run (HOOK 0x51BE10, src/nodereg/leveltimer.c:159-174):
+        // 1. Evaluate run expression first:
+        //    if (VarString_HasExpr(&t->run)) t->isRun = x87_fistp(VarString_EvalReal(&t->run, t));
+        // 2. Evaluate reset expression second:
+        //    if (VarString_HasExpr(&t->reset)) { long double r = VarString_EvalReal(&t->reset, t); if (r < 0 || r > 0) t->nTick = 0; }
+        // 3. Increment tick count third:
+        //    if (t->isRun) t->nTick++;
         is_running = timer.on_expression.empty()
             ? timer.initial_run
             : evaluate_expression(timer.on_expression);
         mission_level_timer_running_[timer_index] = is_running ? 1 : 0;
+        if (evaluate_expression(timer.reset_expression)) {
+            tick_count = 0;
+        }
         if (is_running && tick_count < std::numeric_limits<int>::max()) {
             ++tick_count;
         }
@@ -1507,6 +1534,9 @@ void RuntimeWorld::SetAuthoredMissionState(
         area_state.task_id = authored_area.task_id;
         area_state.minimum = minimum;
         area_state.maximum = maximum;
+        area_state.position = authored_area.position;
+        area_state.orientation = orientation;
+        area_state.half = half_dimensions;
         area_state.accepts_player = MissionCriteriaAcceptsPlayer(authored_area.criteria);
         mission_area_activations_.push_back(std::move(area_state));
     }
