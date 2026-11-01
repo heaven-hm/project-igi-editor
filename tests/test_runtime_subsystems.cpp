@@ -3774,7 +3774,7 @@ TEST(RuntimeWorldTest, AuthoredAmbientAreaFadesInWhenPlayerEntersAndStopsWhenExi
     EXPECT_EQ(events[1].sound_name, "wind_01");
 }
 
-TEST(RuntimeWorldTest, AuthoredExplodeObjectPublishesDelayedDestroyedState) {
+TEST(RuntimeWorldTest, AuthoredExplodeObjectScriptTriggerDetonatesImmediately) {
     RuntimeWorld world;
     world.Initialize(FlatTerrain);
 
@@ -3793,22 +3793,57 @@ TEST(RuntimeWorldTest, AuthoredExplodeObjectPublishesDelayedDestroyedState) {
     ASSERT_EQ(world.GetExplodeObjectSnapshots().size(), 1U);
     EXPECT_FALSE(world.GetExplodeObjectSnapshots()[0].is_exploded);
 
+    // In IGI-RE (src/camera/explodeobject.c:260-263 ExplodeObject_RunHandler),
+    // script trigger detonates immediately without waiting for explosion delay.
     world.SetMissionStateBoolean("TriggerExplosion", true);
     world.UpdateSimulationTick(1, PlayerInputCmd());
-    EXPECT_FALSE(world.GetExplodeObjectSnapshots()[0].is_exploded);
-    world.UpdateSimulationTick(2, PlayerInputCmd());
-    EXPECT_FALSE(world.GetExplodeObjectSnapshots()[0].is_exploded);
-    world.UpdateSimulationTick(3, PlayerInputCmd());
     EXPECT_TRUE(world.GetExplodeObjectSnapshots()[0].is_exploded);
     EXPECT_EQ(
         world.GetExplodeObjectSnapshots()[0].destroyed_model_name,
         "300_02_1");
+}
 
-    world.SetMissionStateBoolean("TriggerExplosion", false);
-    world.UpdateSimulationTick(4, PlayerInputCmd());
-    world.SetMissionStateBoolean("TriggerExplosion", true);
-    world.UpdateSimulationTick(5, PlayerInputCmd());
+TEST(RuntimeWorldTest, AuthoredExplodeObjectBlastDamageRespectsExplosionDelay) {
+    RuntimeWorld world;
+    world.Initialize(FlatTerrain);
+
+    AuthoredMissionExplodeObject explode_object;
+    explode_object.object_index = 78;
+    explode_object.task_id = "-1";
+    explode_object.position = glm::vec3(0.0f);
+    explode_object.destroyed_model_name = "300_02_1";
+    explode_object.explosion_radius_meters = 2.0f;
+    explode_object.explosion_falloff_radius_meters = 1.5f;
+    explode_object.explosion_damage_scale = 0.0f;
+    explode_object.explosion_delay_seconds =
+        2.0f / static_cast<float>(GameClock::TICK_RATE_HZ);
+
+    world.SetAuthoredMissionState(
+        {}, {}, {}, {}, {}, {}, {explode_object});
+
+    // In IGI-RE (src/camera/explodeobject.c:368-372 ExplodeObject_BlastHandler),
+    // blast damage initiates the delay countdown: o->timer = round_ll(o->delay * kFrames).
+    ProjectileLaunch launch;
+    launch.position = glm::vec3(0.0f);
+    launch.type = ProjectileType::FragGrenade;
+    launch.fuse_ticks = 1;
+    launch.damage = 100.0f;
+    launch.explosion_radius_units = 5.0f * PlayerController::WORLD_METER;
+    ASSERT_TRUE(world.GetProjectiles().Spawn(launch));
+
+    world.UpdateSimulationTick(0, PlayerInputCmd());
+    ASSERT_EQ(world.GetExplodeObjectSnapshots().size(), 1U);
+    // On tick 0, grenade explodes and blast damages the explode_object, arming delay of 2 ticks.
+    EXPECT_FALSE(world.GetExplodeObjectSnapshots()[0].is_exploded);
+
+    world.UpdateSimulationTick(1, PlayerInputCmd());
+    EXPECT_FALSE(world.GetExplodeObjectSnapshots()[0].is_exploded);
+
+    world.UpdateSimulationTick(2, PlayerInputCmd());
     EXPECT_TRUE(world.GetExplodeObjectSnapshots()[0].is_exploded);
+    EXPECT_EQ(
+        world.GetExplodeObjectSnapshots()[0].destroyed_model_name,
+        "300_02_1");
 }
 
 TEST(RuntimeWorldTest, PlayerWeaponDestroysNearestAuthoredExplodeObject) {

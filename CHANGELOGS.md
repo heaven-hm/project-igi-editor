@@ -93,6 +93,12 @@ than invented.
 
 ### Fixes to reported defects
 
+- **ExplodeObject script trigger and blast delay parity with IGI-RE** —
+  aligned `RuntimeWorld::UpdateAuthoredExplodeObjects` and `ApplyExplosionDamage` with retail
+  `ExplodeObject_RunHandler` (`src/camera/explodeobject.c:260-263`) and `ExplodeObject_BlastHandler`
+  (`:368-372`). Script expressions detonate immediately upon evaluating true without waiting for
+  explosion delay, while blast damage from adjacent explosions arms the authored countdown timer
+  (`delay * kFrames`), staggering chain explosions.
 - **Magic object ATTA expansion rules and sibling recursion aligned with IGI-RE** —
   `DrawAttachmentsRecursive` and `DrawAttachmentsForPicking` now enforce retail child expansion
   rules (`src/shadow/sector.c:673-676`, `:190`, `src/magicobj/rigidcoll.c:383-496` via

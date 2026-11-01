@@ -732,8 +732,21 @@ void RuntimeWorld::ApplyExplosionDamage(
             continue;
         }
 
+        // Explosive props are part of the blast graph: a grenade can start a
+        // barrel chain, and a barrel can start the next authored prop.
+        // In IGI-RE (src/camera/explodeobject.c:368-372 ExplodeObject_BlastHandler):
+        //   d = Game_BlastFalloff(...) + o->damage;
+        //   if (d >= o->health) o->timer = (int)round_ll(o->delay * kFrames);
+        // Blast damage arms the authored delay timer so chain explosions stagger.
         if (calculate_damage(object_distance) > 0.0f) {
-            TriggerAuthoredExplodeObject(runtime_object);
+            const int delay_ticks = SecondsToSimulationTicks(
+                runtime_object.definition.explosion_delay_seconds);
+            if (delay_ticks == 0) {
+                TriggerAuthoredExplodeObject(runtime_object);
+            } else if (!runtime_object.delay_pending) {
+                runtime_object.delay_pending = true;
+                runtime_object.delay_ticks_remaining = delay_ticks;
+            }
         }
     }
 
@@ -2277,33 +2290,34 @@ void RuntimeWorld::UpdateAuthoredExplodeObjects() {
     };
 
     for (AuthoredExplodeObjectRuntime& runtime_object : mission_explode_objects_) {
-        const bool is_condition_active = evaluate_condition(
-            runtime_object.definition.explosion_expression);
-        const bool condition_started = is_condition_active &&
-            !runtime_object.condition_active;
+        if (!runtime_object.is_exploded) {
+            // In IGI-RE (src/camera/explodeobject.c:260-263 ExplodeObject_RunHandler):
+            //   if (VarString_HasExpr(&o->trigger))
+            //       o->triggered = (char)round_ll(VarString_EvalReal(&o->trigger, o));
+            //   if (o->triggered || !o->timer) {
+            //       ExplodeObject_Explode(o);
+            //   }
+            //   if (o->timer > 0)
+            //       o->timer--;
+            // Authored script trigger detonates immediately without delay. Delay applies
+            // to blast damage countdown (src/camera/explodeobject.c:371).
+            const bool is_condition_active = evaluate_condition(
+                runtime_object.definition.explosion_expression);
 
-        if (runtime_object.delay_pending) {
-            if (!is_condition_active) {
-                runtime_object.delay_pending = false;
-                runtime_object.delay_ticks_remaining = 0;
-            } else if (runtime_object.delay_ticks_remaining > 0) {
-                --runtime_object.delay_ticks_remaining;
+            if (is_condition_active) {
+                TriggerAuthoredExplodeObject(runtime_object);
+            } else if (runtime_object.delay_pending) {
+                if (runtime_object.delay_ticks_remaining > 0) {
+                    --runtime_object.delay_ticks_remaining;
+                }
                 if (runtime_object.delay_ticks_remaining == 0) {
                     TriggerAuthoredExplodeObject(runtime_object);
                 }
             }
-        } else if (condition_started && !runtime_object.is_exploded) {
-            const int delay_ticks = SecondsToSimulationTicks(
-                runtime_object.definition.explosion_delay_seconds);
-            if (delay_ticks == 0) {
-                TriggerAuthoredExplodeObject(runtime_object);
-            } else {
-                runtime_object.delay_pending = true;
-                runtime_object.delay_ticks_remaining = delay_ticks;
-            }
+
+            runtime_object.condition_active = is_condition_active;
         }
 
-        runtime_object.condition_active = is_condition_active;
         const std::string object_identity = runtime_object.definition.task_id == "-1"
             ? std::to_string(runtime_object.definition.object_index)
             : runtime_object.definition.task_id;
