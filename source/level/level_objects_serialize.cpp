@@ -196,6 +196,16 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(5, obj.pos.z);
             readDouble(6, obj.rot.z);
             if (obj.argTokens.size() > 7) obj.modelId = unquote(obj.argTokens[7]);
+        } else if (obj.type == "Wire") {
+            // IGI-RE Wire_Open (0x43EFF0, src/props/wire.c:89-113) & ParamTable_Add (:109-111):
+            // 3-5: start (ObjectPos), 6-8: end (ObjectPos), 9: model (String16).
+            // A Wire has no authored rotation (it computes its orientation matrix from
+            // end - start in Wire_ParamsChanged, HOOK 0x43F3D0, src/props/wire.c:160-191).
+            readDouble(3, obj.pos.x);
+            readDouble(4, obj.pos.y);
+            readDouble(5, obj.pos.z);
+            obj.rot = glm::dvec3(0.0);
+            if (obj.argTokens.size() > 9) obj.modelId = unquote(obj.argTokens[9]);
         } else if (obj.type == "AnimTask" || obj.type == "CutScene") {
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);

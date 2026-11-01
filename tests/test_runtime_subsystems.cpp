@@ -1087,6 +1087,99 @@ TEST(RuntimeQvmTest, ConvertsDeferredNativeExceptionsToDeterministicVmFaults) {
     EXPECT_NE(context->GetLastError().find("native failure"), std::string::npos);
 }
 
+TEST(RuntimeQvmTest, RetailLoopShiftMaskingAndFloatDivision) {
+    QvmNativeRegistry registry;
+    QVMFile parsed_file;
+    parsed_file.valid = true;
+
+    // Shift left by 33: (1 << (33 & 31)) == (1 << 1) == 2 (src/qsc/qvmop.c:113)
+    QVMInstruction push_val{};
+    push_val.type = QVMOpType::PUSH1;
+    push_val.address = 0;
+    push_val.size = 1;
+
+    QVMInstruction push_shift{};
+    push_shift.type = QVMOpType::PUSHB;
+    push_shift.signed_operand = 33;
+    push_shift.operand = 33;
+    push_shift.address = 1;
+    push_shift.size = 2;
+
+    QVMInstruction op_shl{};
+    op_shl.type = QVMOpType::SHL;
+    op_shl.address = 3;
+    op_shl.size = 1;
+
+    // Real division by 0: 5.0 / 0.0 -> inf (src/qsc/qvmop.c:133)
+    QVMInstruction push_real{};
+    push_real.type = QVMOpType::PUSHF;
+    push_real.operand_float = 5.0f;
+    push_real.address = 4;
+    push_real.size = 5;
+
+    QVMInstruction push_zero{};
+    push_zero.type = QVMOpType::PUSHF;
+    push_zero.operand_float = 0.0f;
+    push_zero.address = 9;
+    push_zero.size = 5;
+
+    QVMInstruction op_div{};
+    op_div.type = QVMOpType::DIV;
+    op_div.address = 14;
+    op_div.size = 1;
+
+    QVMInstruction program_end{};
+    program_end.type = QVMOpType::BRK;
+    program_end.address = 15;
+    program_end.size = 1;
+
+    parsed_file.instructions = {
+        push_val,
+        push_shift,
+        op_shl,
+        push_real,
+        push_zero,
+        op_div,
+        program_end,
+    };
+
+    QvmInterpreter interpreter(registry);
+    QvmProgram program;
+    ASSERT_TRUE(interpreter.LoadProgram(parsed_file, program))
+        << interpreter.GetLastError();
+    ASSERT_TRUE(program.uses_loop_85_instruction_set);
+
+    auto context = interpreter.CreateContext(program);
+    ASSERT_TRUE(context->Run()) << context->GetLastError();
+    ASSERT_EQ(context->StackSize(), 2U);
+    EXPECT_TRUE(std::isinf(context->Pop().real_val));
+    EXPECT_EQ(context->Pop().int_val, 2);
+}
+
+TEST(LevelObjectsSerializeTest, WireTaskPreservesEndAnchorWithoutOverwritingRotation) {
+    LevelObject obj;
+    std::string line = "Task_New(100, \"Wire\", \"TestWire\", 10.0, 20.0, 30.0, 100.0, 200.0, 300.0, \"wire_01_1\");";
+    LevelObjects level_objects;
+    level_objects.ParseTaskLine(line, obj);
+
+    EXPECT_DOUBLE_EQ(obj.pos.x, 10.0);
+    EXPECT_DOUBLE_EQ(obj.pos.y, 20.0);
+    EXPECT_DOUBLE_EQ(obj.pos.z, 30.0);
+    EXPECT_DOUBLE_EQ(obj.rot.x, 0.0);
+    EXPECT_DOUBLE_EQ(obj.rot.y, 0.0);
+    EXPECT_DOUBLE_EQ(obj.rot.z, 0.0);
+    EXPECT_EQ(obj.modelId, "wire_01_1");
+
+    glm::dvec3 start(0.0), end(0.0);
+    EXPECT_TRUE(obj.WireAnchors(start, end));
+    EXPECT_DOUBLE_EQ(start.x, 10.0);
+    EXPECT_DOUBLE_EQ(start.y, 20.0);
+    EXPECT_DOUBLE_EQ(start.z, 30.0);
+    EXPECT_DOUBLE_EQ(end.x, 100.0);
+    EXPECT_DOUBLE_EQ(end.y, 200.0);
+    EXPECT_DOUBLE_EQ(end.z, 300.0);
+}
+
 // 3. Task Tree & Messaging Tests
 TEST(RuntimeTaskTreeTest, LifecycleAndMessaging) {
     TaskTree tree;
