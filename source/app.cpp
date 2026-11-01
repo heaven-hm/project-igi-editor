@@ -1524,9 +1524,14 @@ void App::Frame(float delta_seconds) {
 	// In GAMEPLAY mode this block does not recompute the set: it was already
 	// built above by `GetGameplayDrawnAnimationIndices()` and handed to
 	// `AdvanceGameplayAnimationClocks`, so the draw uses that one set unchanged.
+	const bool camMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
+	const bool camMoving = camMode && (camera_mode_moved_ ||
+		((input_.keys_ & (MK_FORWARD | MK_BACKWARD | MK_LEFT | MK_RIGHT | MK_STRAIGHT_UP | MK_STRAIGHT_DOWN)) != 0) ||
+		Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraForward) ||
+		Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraBackward) ||
+		(last_pointer_motion_ms_ >= 0 && (Sys_Milliseconds() - last_pointer_motion_ms_) < 100));
 	draw_params_.fast_scene_preview_ = igi::ShouldUseFastScenePreview(
-		cameraNavigating, render_gameplay,
-		Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera));
+		cameraNavigating, render_gameplay, camMode, camMoving);
 	if (!draw_params_.fast_scene_preview_) {
 		if (!render_gameplay) {
 			// IGI_PROFILE_ANIMBENCH-only: see ShouldUseAnimBench.  Force one
@@ -1585,7 +1590,7 @@ void App::Frame(float delta_seconds) {
 	                                                  : FrameBreakClock::time_point{};
 	const bool pointer_changed = mouse_state_.prior_x_ != last_pick_x_ ||
 		mouse_state_.prior_y_ != last_pick_y_;
-	const bool camMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
+	// camMode is declared above at line 1527
 	const bool overPanel = prop_editor_open_ &&
 		mouse_state_.prior_x_ < (PropPanel::kLeft + PropPanel::kWidth);
 	int64_t editor_pick_us = 0;

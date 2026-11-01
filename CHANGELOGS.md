@@ -68,6 +68,13 @@ than invented.
 
 ### Performance
 
+- **ALT camera look/orbit navigation fast preview** — previously, holding the camera key
+  disabled fast scene preview even while actively rotating or orbiting the view, forcing full
+  per-frame CPU skeletal animation deformation across all visible AI (~77 ms/frame) and
+  immediate-mode TreeView HUD text rasterization on every mouse event. Fast scene preview is now
+  engaged during active camera motion (`camera_mode_moving` and pointer motion delta), bringing
+  camera look responsiveness up to WASD speed (~35 ms busy time), while retaining complete overlays
+  and full scene details whenever stationary.
 - **`.res` reads memoised** (`405df37c`) — `ReadMefMeshHeader` was re-reading every `.mef` from
   disk once per placement per pass per frame (~2832 reads/frame). **2534–5399 ms → 155–163 ms per
   frame.**
@@ -86,6 +93,15 @@ than invented.
 
 ### Fixes to reported defects
 
+- **ALT camera movement lag eliminated** — camera look and orbit no longer stutter or drop frames
+  relative to WASD movement.
+- **ConditionalSound one-shot loop rule aligned with IGI-RE** — `RuntimeWorld` now invokes
+  `igi::TickConditionalSound` matching `ConditionalSound_Run` (`src/vehicle/condsound.c:121-136`):
+  one-shot conditional loops are never prematurely terminated when their trigger condition falls.
+- **ATTACH child picking transform and model ID parity** — unified `DrawObjectParts` in picking
+  pass with `igi::IgiAttaChildWorld` and `MagicObjectModelId`.
+- **Objects QVM fixed point verified** — saving any retail level's `objects.qvm` is proven to be a
+  semantic fixed point across all 14 retail levels (`test_qvm_roundtrip.cpp`).
 - **Fullscreen no longer leaves half the screen black.** Root cause: `main.cpp` re-applied the
   `-w`/`-h` window size *after* `App::Init` had already gone borderless-fullscreen, undoing the
   viewport. Proven by an A/B trace.
