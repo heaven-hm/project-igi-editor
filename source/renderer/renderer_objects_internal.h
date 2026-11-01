@@ -9,6 +9,8 @@
 #include "pch.h"
 #include "renderer_objects.h"
 #include "../config.h"
+#include "../runtime/magic_object_registry.h"
+#include "../runtime/magic_object_expand.h"
 #include <iostream>
 #include <fstream>
 #include <filesystem>
@@ -71,6 +73,7 @@ inline bool IsWeaponModel(const std::string& modelId) {
 // src/magicobj/rigidcoll.c:484: arg.model = def->model).
 // Defined in renderer_objects_atta.cpp.
 std::string MagicObjectModelId(const std::string& attachmentName);
+const igi::MagicObjectRegistry& MagicObjectTable();
 
 namespace igi {
 

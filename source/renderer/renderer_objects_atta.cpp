@@ -55,7 +55,7 @@ static const std::set<std::string>& RotorAttachmentIds() {
 // has `model == name` (measured: 374 of 374), so this resolves to the
 // attachment name on shipped data and the visible behaviour is unchanged; it
 // exists so a definition whose model differs loads the model the game loads.
-static const igi::MagicObjectRegistry& MagicObjectTable() {
+const igi::MagicObjectRegistry& MagicObjectTable() {
     static std::string loadedFrom;
     static igi::MagicObjectRegistry registry;
     const std::string qvmPath = Utils::GetIGIRootPath() + "\\magicobj\\magicobj.qvm";
@@ -1419,6 +1419,38 @@ void Renderer_Objects::DrawAttachmentsRecursive(
                                  att.r[6], att.r[7], att.r[8]};
         const glm::mat4 childWorldMat = igi::IgiAttaChildWorld(parentWorldMat, attPos, attMat);
 
+        auto recurse_children = [&]() {
+            // In IGI-RE, child attachment expansion only recurses if the child is a
+            // sector (model has portals; src/shadow/sector.c:673-676) or if its task
+            // type create handler calls RigidDynCubeObj_CreateMagicObjs
+            // (src/magicobj/rigidcoll.c:383-496, igi::MagicObjectTypeChildExpansion).
+            bool expands = false;
+            if (!subMesh.portalMeshes.empty()) {
+                expands = true;
+            } else {
+                const auto* def = MagicObjectTable().Find(att.modelId);
+                if (def != nullptr) {
+                    switch (igi::MagicObjectTypeChildExpansion(def->task_type_name)) {
+                    case igi::MagicObjectChildExpansion::kAlways:
+                        expands = true;
+                        break;
+                    case igi::MagicObjectChildExpansion::kIfModelResolved:
+                        expands = (subMesh.vertexCount > 0);
+                        break;
+                    case igi::MagicObjectChildExpansion::kNo:
+                        break;
+                    }
+                }
+            }
+            if (expands && drawn.count(spawnModelId) == 0) {
+                drawn.insert(spawnModelId);
+                DrawAttachmentsRecursive(topLevelModelId, spawnModelId, isBuilding, childWorldMat, isTransparentPass,
+                                          loc_model, loc_dirlight, loc_ambient,
+                                          loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
+                drawn.erase(spawnModelId);
+            }
+        };
+
         // Rotor preview (TASKTYPE_ROTOR attachments). The retail game spins a
         // Rotor magic object about its own local X axis, post-multiplied, and only
         // for the DRAWING copy — the frame its children inherit stays unspun. See
@@ -1440,12 +1472,7 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         // the proxy renders it — but still recurse into children.
         if (IsAttaPromoted(att.modelId, worldPos) ||
             promoted_atta_records_.count(parentModelId + ":" + std::to_string(rri)) > 0) {
-            std::string childKey = parentModelId + ">" + spawnModelId;
-            if (drawn.insert(childKey).second) {
-                DrawAttachmentsRecursive(topLevelModelId, spawnModelId, isBuilding, childWorldMat, isTransparentPass,
-                                         loc_model, loc_dirlight, loc_ambient,
-                                         loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
-            }
+            recurse_children();
             continue;
         }
 
@@ -1453,12 +1480,7 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         // vertices). These render as misshapen boxes with fabricated UVs.  Still recurse
         // into their children — those may have proper render geometry.
         if (!subMesh.fromRenderMesh) {
-            std::string childKey = parentModelId + ">" + spawnModelId;
-            if (drawn.insert(childKey).second) {
-                DrawAttachmentsRecursive(topLevelModelId, spawnModelId, isBuilding, childWorldMat, isTransparentPass,
-                                         loc_model, loc_dirlight, loc_ambient,
-                                         loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
-            }
+            recurse_children();
             continue;
         }
 
@@ -1482,12 +1504,7 @@ void Renderer_Objects::DrawAttachmentsRecursive(
             EnsureAiModelIdsLoaded();
             const bool isAiModel = (ai_model_ids_.count(topLevelModelId) > 0);
             if (!subHasTex && (!isAiModel || isLargeSlab)) {
-                std::string childKey = parentModelId + ">" + spawnModelId;
-                if (drawn.insert(childKey).second) {
-                    DrawAttachmentsRecursive(topLevelModelId, spawnModelId, isBuilding, childWorldMat, isTransparentPass,
-                                             loc_model, loc_dirlight, loc_ambient,
-                                             loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
-                }
+                recurse_children();
                 continue;
             }
         }
@@ -1523,12 +1540,7 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         const bool drawInThisPass = !isTransparentPass || attHasAlpha;
         if (!drawInThisPass) {
             // Still recurse into children — they may need a different pass
-            std::string childKey = parentModelId + ">" + spawnModelId;
-            if (drawn.insert(childKey).second) {
-                DrawAttachmentsRecursive(topLevelModelId, spawnModelId, isBuilding, childWorldMat, isTransparentPass,
-                                          loc_model, loc_dirlight, loc_ambient,
-                                          loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
-            }
+            recurse_children();
             continue;
         }
 
@@ -1606,12 +1618,7 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         }
 
         // Recurse into this attachment's own children
-        std::string childKey = parentModelId + ">" + spawnModelId;
-        if (drawn.insert(childKey).second) {
-            DrawAttachmentsRecursive(topLevelModelId, spawnModelId, isBuilding, childWorldMat, isTransparentPass,
-                                      loc_model, loc_dirlight, loc_ambient,
-                                      loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
-        }
+        recurse_children();
     }
 }
 

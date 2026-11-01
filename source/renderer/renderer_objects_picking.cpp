@@ -83,10 +83,6 @@ void Renderer_Objects::DrawAttachmentsForPicking(
         const glm::mat4 childWorldMat = igi::IgiAttaChildWorld(parentWorldMat, attPos, att.r);
         const glm::vec3 worldPos(childWorldMat[3]);
 
-        // Recurse regardless of whether this node has pick-able geometry
-        std::string childKey = parentModelId + ">" + spawnModelId;
-        bool recurse = drawn.insert(childKey).second;
-
         // Skip ATTAs already promoted (by world-pos key or by direct record index).
         bool occupied = IsAttaPromoted(att.modelId, worldPos) ||
             promoted_atta_records_.count(parentModelId + ":" + std::to_string(ri)) > 0;
@@ -123,9 +119,34 @@ void Renderer_Objects::DrawAttachmentsForPicking(
             }
         }
 
-        if (recurse) {
+        // Rule 5: in IGI-RE, a spawned child task expands its own attachments only
+        // when it is a child Sector (its mesh has portals; src/shadow/sector.c:673-676)
+        // or when its task type create handler calls RigidDynCubeObj_CreateMagicObjs
+        // (src/magicobj/rigidcoll.c:383-496, igi::MagicObjectTypeChildExpansion).
+        bool expands = false;
+        if (!subMesh.portalMeshes.empty()) {
+            expands = true;
+        } else {
+            const auto* def = MagicObjectTable().Find(att.modelId);
+            if (def != nullptr) {
+                switch (igi::MagicObjectTypeChildExpansion(def->task_type_name)) {
+                case igi::MagicObjectChildExpansion::kAlways:
+                    expands = true;
+                    break;
+                case igi::MagicObjectChildExpansion::kIfModelResolved:
+                    expands = (subMesh.vertexCount > 0);
+                    break;
+                case igi::MagicObjectChildExpansion::kNo:
+                    break;
+                }
+            }
+        }
+
+        if (expands && drawn.count(spawnModelId) == 0) {
+            drawn.insert(spawnModelId);
             DrawAttachmentsForPicking(spawnModelId, isBuilding, childWorldMat, parentScale,
                                       loc_model, loc_id, parentObjIndex, drawn, selected_object_index);
+            drawn.erase(spawnModelId);
         }
     }
 }

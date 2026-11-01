@@ -93,6 +93,12 @@ than invented.
 
 ### Fixes to reported defects
 
+- **Magic object ATTA expansion rules and sibling recursion aligned with IGI-RE** —
+  `DrawAttachmentsRecursive` and `DrawAttachmentsForPicking` now enforce retail child expansion
+  rules (`src/shadow/sector.c:673-676`, `:190`, `src/magicobj/rigidcoll.c:383-496` via
+  `igi::MagicObjectTypeChildExpansion`). Sibling attachments sharing identical models are no longer
+  improperly blocked by static string keys; cycle prevention is now tracked along the active ancestor
+  call-stack.
 - **AmbientArea runtime simulation wired to IGI-RE oracle** — authored `AmbientArea` tasks
   (162 across retail corpus) are now loaded in `mission_state_loader.cpp` and ticked during
   gameplay simulation via `RuntimeWorld::UpdateAuthoredAmbientAreas()`. Fades in (+0.05/tick)

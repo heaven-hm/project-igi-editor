@@ -249,6 +249,23 @@ TEST(MagicObjectExpandTest, MagicObjectTypeChainsWhileItsModelsResolve) {
     EXPECT_EQ(result.stats.max_depth, 3);
 }
 
+TEST(MagicObjectExpandTest, SiblingAttachmentsWithSameModelBothExpand) {
+    const MagicObjectRegistry registry = SyntheticRegistry();
+    FakeWorld world;
+    world.attachments["MODEL_ROOT"] = {Attachment("ATT_A"), Attachment("ATT_A")};
+    world.attachments["MODEL_A"] = {Attachment("ATT_B")};
+    world.attachments["MODEL_B"] = {};
+
+    const MagicObjectExpansionResult result =
+        igi::ExpandMagicObjects(registry, "MODEL_ROOT", world.Source());
+
+    ASSERT_EQ(result.spawns.size(), 4u);
+    EXPECT_EQ(result.spawns[0].model_id, "MODEL_A");
+    EXPECT_EQ(result.spawns[1].model_id, "MODEL_B");
+    EXPECT_EQ(result.spawns[2].model_id, "MODEL_A");
+    EXPECT_EQ(result.spawns[3].model_id, "MODEL_B");
+}
+
 TEST(MagicObjectExpandTest, UnconditionallyExpandingTypesKeepWalkingWithoutAModel) {
     const MagicObjectRegistry registry = SyntheticRegistry();
     FakeWorld world;
