@@ -44,7 +44,6 @@
 
 # ── needs windows.h or another Windows-only declaration (trial compile fails) ──
 tests/test_verify_level.cpp        # includes <windows.h> directly
-tests/test_igi1conv_lightmap.cpp   # source/utils_igi1conv.h uses DWORD/Win32 types
 tests/test_runtime_subsystems.cpp  # source/app.h declares Windows-only types
 tests/test_config.cpp              # Config's Windows-only members do not exist on the host
 tests/test_verify_unit.cpp         # VerifyUnit's Windows-only members do not exist on the host
@@ -56,24 +55,3 @@ tests/test_visual_integrity.cpp    # igi::VisualIntegrityView layout is Windows-
 # "engine-symbol suites" the P1 report names.
 tests/test_mcp_server.cpp          # mcp::CallRuntimeTool — source/runtime does not build on the host
 tests/test_mcp_runtime_tools.cpp   # mcp::CallRuntimeTool — same translation unit
-tests/test_mcp_string_tools.cpp    # Config::Get()
-tests/test_menu_text_res.cpp       # Config::Get()
-tests/test_logger.cpp              # Config::Get()
-tests/test_utils.cpp               # Utils::SetLogEnabled / Utils::GetIGIRootPath
-tests/test_dat_parser.cpp          # Utils::GetIGIRootPath()
-tests/test_dat_writer.cpp          # Utils::GetIGIRootPath()
-tests/test_graph_parser.cpp        # Utils::GetIGIRootPath()
-tests/test_res_parser.cpp          # Utils::GetIGIRootPath()
-tests/test_res_stream_append.cpp   # Utils::GetIGIRootPath()
-tests/test_tex_parser.cpp          # Utils::GetIGIRootPath()
-tests/test_mtp_parser.cpp          # Utils::GetIGIRootPath()
-tests/test_mtp_writer.cpp          # Utils::GetIGIRootPath()
-tests/test_fnt_parser.cpp          # Utils::GetIGIRootPath()
-tests/test_pickup_resolve.cpp      # Utils::TrimFileInPlace
-tests/test_animation.cpp           # AlignAnimationWorldToMefBind
-tests/test_vanilla_fixture_parity.cpp  # igi::QvmNativeRegistry::TrySetValueByName
-tests/test_level_weather.cpp       # File_FreeBuf(void*)
-tests/test_spline_task_tree.cpp    # File_FreeBuf(void*)
-tests/test_level_object_parse_paths.cpp  # File_FreeBuf(void*)
-tests/test_rail_source_corpus.cpp  # File_FreeBuf(void*)
-tests/test_cutscene_camera_corpus.cpp    # File_FreeBuf(void*)

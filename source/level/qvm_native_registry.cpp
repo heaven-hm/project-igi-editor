@@ -2,6 +2,7 @@
 #include "qvm_native_registry.h"
 #include "qvm_interpreter.h"
 #include <algorithm>
+#include <cstdlib>
 #include <exception>
 #include <utility>
 
