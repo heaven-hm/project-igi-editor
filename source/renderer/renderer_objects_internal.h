@@ -67,6 +67,11 @@ inline bool IsWeaponModel(const std::string& modelId) {
     return false;
 }
 
+// Magic-object model resolution (IGI-RE src/shadow/sector.c:667,
+// src/magicobj/rigidcoll.c:484: arg.model = def->model).
+// Defined in renderer_objects_atta.cpp.
+std::string MagicObjectModelId(const std::string& attachmentName);
+
 namespace igi {
 
 // Renderer_Objects::DrawLadderGizmos (renderer_objects_visual.cpp) is opt-out.

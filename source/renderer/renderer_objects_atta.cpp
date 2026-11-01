@@ -78,7 +78,7 @@ static const igi::MagicObjectRegistry& MagicObjectTable() {
 // entry for it (the engine warns and skips such a record: IGI-RE
 // `src/shadow/sector.c:659-663`; the editor keeps drawing the name it always
 // drew rather than dropping the node).
-static std::string MagicObjectModelId(const std::string& attachmentName) {
+std::string MagicObjectModelId(const std::string& attachmentName) {
     const igi::MagicObjectDefinition* def = MagicObjectTable().Find(attachmentName);
     if (def == nullptr || def->model_id.empty()) return attachmentName;
     return def->model_id;

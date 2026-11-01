@@ -64,10 +64,11 @@ void Renderer_Objects::DrawAttachmentsForPicking(
     for (size_t ri = 0; ri < atts.size(); ++ri) {
         const auto& att = atts[ri];
         // Find the attachment mesh (same cache lookup as DrawAttachmentsRecursive)
-        std::string subKey = std::to_string(current_level_) + ":" + prefix + att.modelId;
+        const std::string spawnModelId = MagicObjectModelId(att.modelId);
+        std::string subKey = std::to_string(current_level_) + ":" + prefix + spawnModelId;
         auto sit = mesh_cache_.find(subKey);
         if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) {
-            subKey = std::to_string(current_level_) + ":object:" + att.modelId;
+            subKey = std::to_string(current_level_) + ":object:" + spawnModelId;
             sit = mesh_cache_.find(subKey);
         }
         if (sit == mesh_cache_.end()) continue;
@@ -83,7 +84,7 @@ void Renderer_Objects::DrawAttachmentsForPicking(
         const glm::vec3 worldPos(childWorldMat[3]);
 
         // Recurse regardless of whether this node has pick-able geometry
-        std::string childKey = parentModelId + ">" + att.modelId;
+        std::string childKey = parentModelId + ">" + spawnModelId;
         bool recurse = drawn.insert(childKey).second;
 
         // Skip ATTAs already promoted (by world-pos key or by direct record index).
@@ -123,7 +124,7 @@ void Renderer_Objects::DrawAttachmentsForPicking(
         }
 
         if (recurse) {
-            DrawAttachmentsForPicking(att.modelId, isBuilding, childWorldMat, parentScale,
+            DrawAttachmentsForPicking(spawnModelId, isBuilding, childWorldMat, parentScale,
                                       loc_model, loc_id, parentObjIndex, drawn, selected_object_index);
         }
     }
@@ -711,22 +712,20 @@ Renderer_Objects::VisualEvidence Renderer_Objects::CaptureObjectVisualEvidence(
         const auto ait = attachment_cache_.find(cache_key);
         if (ait == attachment_cache_.end()) return;
         for (const auto& att : ait->second) {
-            std::string mesh_key = std::to_string(current_level_) + ":" + prefix + att.modelId;
+            const std::string spawn_model = MagicObjectModelId(att.modelId);
+            std::string mesh_key = std::to_string(current_level_) + ":" + prefix + spawn_model;
             auto sit = mesh_cache_.find(mesh_key);
             if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) {
-                mesh_key = std::to_string(current_level_) + ":object:" + att.modelId;
+                mesh_key = std::to_string(current_level_) + ":object:" + spawn_model;
                 sit = mesh_cache_.find(mesh_key);
             }
             if (sit == mesh_cache_.end()) continue;
             const Mesh& child = sit->second;
-            glm::mat4 local_rotation(att.r[0], att.r[1], att.r[2], 0.f,
-                                     att.r[3], att.r[4], att.r[5], 0.f,
-                                     att.r[6], att.r[7], att.r[8], 0.f,
-                                     0.f,      0.f,      0.f,      1.f);
-            const glm::vec3 world_pos = glm::vec3(parent_world * glm::vec4(att.px, att.py, att.pz, 1.f));
-            glm::mat4 parent_rotation = parent_world;
-            parent_rotation[3] = glm::vec4(0.f, 0.f, 0.f, 1.f);
-            glm::mat4 child_world = glm::translate(glm::mat4(1.f), world_pos) * parent_rotation * local_rotation;
+
+            // Compute exact child world frame via IGI-RE orthonormalization
+            // (src/magicobj/rigidcoll.c:399-450, src/shadow/sector.c:545-630)
+            const float att_pos[3] = { att.px, att.py, att.pz };
+            const glm::mat4 child_world = igi::IgiAttaChildWorld(parent_world, att_pos, att.r);
 
             const bool is_death_zone = deathzone_ids_.count(att.modelId) > 0;
             bool has_texture = child.textureID > 0;
@@ -738,9 +737,9 @@ Renderer_Objects::VisualEvidence Renderer_Objects::CaptureObjectVisualEvidence(
             if (!is_death_zone && child.fromRenderMesh && !large_untextured_slab)
                 draw_mesh_parts(child, glm::scale(child_world, glm::vec3(40.96f * obj.scale)), true);
 
-            if (ancestry.insert(att.modelId).second) {
-                draw_attachments(att.modelId, child_world, ancestry);
-                ancestry.erase(att.modelId);
+            if (ancestry.insert(spawn_model).second) {
+                draw_attachments(spawn_model, child_world, ancestry);
+                ancestry.erase(spawn_model);
             }
         }
     };
