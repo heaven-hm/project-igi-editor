@@ -2678,11 +2678,24 @@ void Renderer::Draw(const draw_params_s &params,
             };
 
             if (is_pos) {
-              // X/Y/Z editable numeric boxes.
+              // X/Y/Z editable sliders + numeric boxes.
               const char* lab[3] = {"X", "Y", "Z"};
               for (int c = 0; c < 3; ++c) {
-                const auto& w = L.widgets[wi++];
-                draw_numbox(w, lab[w.comp]);
+                const auto& sl = L.widgets[wi++];
+                const auto& bx = L.widgets[wi++];
+                draw_text(L.panel_x + PropPanel::kPad, sl.y1 + 12, lab[c], 1.0f, 0.9f, 0.2f);
+                int cy = (sl.y1 + sl.y2) / 2;
+                quad(sl.x1, cy - 2, sl.x2, cy + 2, 0.0f, 0.0f, 0.0f, 0.40f);
+                border(sl.x1, cy - 2, sl.x2, cy + 2, 1.0f, 1.0f, 1.0f);
+                bool drag = dragVal(fi * 3 + c);
+                int mid_x = (sl.x1 + sl.x2) / 2;
+                int tx = mid_x - 3;
+                if (drag) {
+                  int dx = task_tree_view.mouse_x_ - task_tree_view.prop_drag_start_x_;
+                  tx = std::max(sl.x1, std::min(sl.x2 - 6, mid_x + dx - 3));
+                }
+                quad(tx, cy - 5, tx + 6, cy + 5, 1.0f, drag ? 0.95f : 0.85f, drag ? 0.2f : 0.0f, 1.0f);
+                draw_numbox(bx, nullptr);
               }
               // 2D pad
               const auto& pad = L.widgets[wi++];
@@ -2753,11 +2766,24 @@ void Renderer::Draw(const draw_params_s &params,
                 y += L.row_h;
               }
             } else if (is_float3) {
-              // Generic 3-component float (Speed, etc.) — three labeled NumBoxes, no pad
+              // Generic 3-component float (Speed, etc.) — three labeled sliders + NumBoxes
               const char* lab[3] = {"X", "Y", "Z"};
               for (int c = 0; c < 3; ++c) {
-                const auto& w = L.widgets[wi++];
-                draw_numbox(w, lab[c]);
+                const auto& sl = L.widgets[wi++];
+                const auto& bx = L.widgets[wi++];
+                draw_text(L.panel_x + PropPanel::kPad, sl.y1 + 12, lab[c], 1.0f, 0.9f, 0.2f);
+                int cy = (sl.y1 + sl.y2) / 2;
+                quad(sl.x1, cy - 2, sl.x2, cy + 2, 0.0f, 0.0f, 0.0f, 0.40f);
+                border(sl.x1, cy - 2, sl.x2, cy + 2, 1.0f, 1.0f, 1.0f);
+                bool drag = dragVal(fi * 3 + c);
+                int mid_x = (sl.x1 + sl.x2) / 2;
+                int tx = mid_x - 3;
+                if (drag) {
+                  int dx = task_tree_view.mouse_x_ - task_tree_view.prop_drag_start_x_;
+                  tx = std::max(sl.x1, std::min(sl.x2 - 6, mid_x + dx - 3));
+                }
+                quad(tx, cy - 5, tx + 6, cy + 5, 1.0f, drag ? 0.95f : 0.85f, drag ? 0.2f : 0.0f, 1.0f);
+                draw_numbox(bx, nullptr);
               }
               y = L.widgets[wi - 1].y2;
             } else if (is_ori) {

@@ -168,6 +168,7 @@ static constexpr int kZSliderW   = 22;   // vertical Z slider width
 
 enum class WidgetKind {
     NoteBox,       // editable note (obj.name)
+    PosSlider,     // horizontal position slider (X, Y, or Z component)
     PosPad,        // 2D X/Y pad
     PosZSlider,    // vertical Z slider
     SnapGround,    // button
@@ -252,10 +253,11 @@ inline Layout BuildLayout(const TaskSchemaNS::TaskSchema& schema, bool is_ai = f
             y += rowH;  // field header line
 
             if (is_pos) {
-                const int pBoxX1 = kLeft + kPad + 20;
-                const int pBoxX2 = pBoxX1 + 180;
                 for (int c = 0; c < 3; ++c) {
-                    L.widgets.push_back({WidgetKind::NumBox, pBoxX1, y, pBoxX2, y + boxH, fi, c});
+                    int sx1 = kLeft + kPad + 20;
+                    int sx2 = boxX1 - 8;
+                    L.widgets.push_back({WidgetKind::PosSlider, sx1, y, sx2, y + boxH, fi, c});
+                    L.widgets.push_back({WidgetKind::NumBox, boxX1, y, boxX2, y + boxH, fi, c});
                     y += boxH + 2;
                 }
                 int pad_x1 = kLeft + kPad;
@@ -274,10 +276,11 @@ inline Layout BuildLayout(const TaskSchemaNS::TaskSchema& schema, bool is_ai = f
                 y += boxH + 4;
                 y += rowH;  // "Altitude: ... meter"
             } else if (is_float3) {
-                const int pBoxX1 = kLeft + kPad + 20;
-                const int pBoxX2 = pBoxX1 + 180;
                 for (int c = 0; c < 3; ++c) {
-                    L.widgets.push_back({WidgetKind::NumBox, pBoxX1, y, pBoxX2, y + boxH, fi, c});
+                    int sx1 = kLeft + kPad + 20;
+                    int sx2 = boxX1 - 8;
+                    L.widgets.push_back({WidgetKind::PosSlider, sx1, y, sx2, y + boxH, fi, c});
+                    L.widgets.push_back({WidgetKind::NumBox, boxX1, y, boxX2, y + boxH, fi, c});
                     y += boxH + 2;
                 }
             } else if (is_ori) {
@@ -478,6 +481,8 @@ public:
 		int  prop_text_edit_field_ = -1;
 		int  prop_edit_obj_index_  = -1;  // LevelObject targeted by active text edit (-1 = parent)
 		int  prop_drag_obj_index_  = -1;  // LevelObject targeted by active slider/pad drag (-1 = parent)
+		int  prop_drag_start_x_    = 0;
+		int  prop_drag_start_y_    = 0;
 		std::string prop_text_buf_;
 		int  prop_text_caret_      = 0;
 		// AI Script editor text selection (driven by Ctrl+Shift+arrow / mouse

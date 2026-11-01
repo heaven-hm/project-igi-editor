@@ -82,7 +82,7 @@ LevelWeatherSettings ResolveLevelWeather(
             *start < 0.0f || *end < 0.0f || *start <= *end || *alpha < 0.0f)
             continue;
 
-        if (!*is_active) return {};
+        if (!*is_active) continue;
 
         return LevelWeatherSettings{true, !*is_rain, *start, *end, *alpha};
     }

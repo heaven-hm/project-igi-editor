@@ -28,6 +28,12 @@ Project IGI 1, and each fix cites the engine function + HOOK address + `file:lin
 and in its commit message. Where the engine has no behaviour to copy, that is stated rather
 than invented.
 
+### TaskTree Property Editor & Camera Look Parity
+
+- **XYZ Position Movement Fixed in TaskTree** — added horizontal position sliders (`PosSlider`) for X, Y, and Z alongside editable `NumBox` controls in the property panel for `ObjectPos`, `Real64x3`, and `Real32x3` tasks. Replaced the runaway per-frame velocity acceleration model in `ApplyPropPositionDrag` with 1:1 scrubbing and slider dragging in `Input_OnMotion`. The 2D position pad (`PosPad`) and vertical Z slider (`PosZSlider`) now move coordinates directly and responsively. Transforms immediately synchronize with `obj.pos`, `argTokens`, children transforms (`PropagateTransformToChildren`), `UpdateCoordinatesInLine`, and `SyncGraphOverlayOffsetFromAIGraph`.
+- **Eliminated ALT Camera Mouse Look Lag** — removed per-event pointer warping (`glutWarpPointer` / `SetCursorPos`) on every single mouse move in camera orbit mode. Direct accumulation of mouse deltas eliminates Win32 message queue flooding and dropped input events, matching WASD movement fluidity.
+- **Weather Parse Sequence Parity** — `ResolveLevelWeather` now continues parsing instead of dropping weather when an inactive `RainEffect` precedes an active one (closes D14 in `docs/igi-re-parity/RAIN.md`).
+
 ### Loaders now follow the engine's own path
 
 - **Textures** — mission status text resolves from `LANGUAGE:messages.res` by the engine's flat

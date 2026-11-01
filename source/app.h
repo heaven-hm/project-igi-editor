@@ -477,6 +477,7 @@ private:
       -1; // LevelObject targeted by the active text edit (-1 = selected/parent)
   int prop_drag_obj_index_ = -1; // LevelObject targeted by the active
                                  // slider/pad drag (-1 = selected/parent)
+  PropPanel::WidgetKind prop_drag_kind_ = PropPanel::WidgetKind::NumBox;
   std::string prop_text_buf_;
   int prop_text_caret_ = 0; // caret index within prop_text_buf_
   // ── Text selection (used by AI Script editor; mouse drag, Shift+arrows, Ctrl+A).

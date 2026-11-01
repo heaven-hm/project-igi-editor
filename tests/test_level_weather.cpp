@@ -223,6 +223,18 @@ TEST(LevelWeatherTest, FalseVarStringDoesNotEnableWeather) {
     EXPECT_FLOAT_EQ(weather.alpha, 0.0f);
 }
 
+TEST(LevelWeatherTest, InactivePrecedingRainEffectDoesNotMaskActiveRainEffect) {
+    // D14 (docs/igi-re-parity/RAIN.md): An inactive RainEffect should not cause
+    // the parser to return 'no weather' and ignore a subsequent active effect.
+    const igi::LevelWeatherSettings weather = igi::ResolveLevelWeather({
+        RainEffect("TRUE", "FALSE"),
+        RainEffect("FALSE", "TRUE", "0.06")
+    });
+    EXPECT_TRUE(weather.active);
+    EXPECT_TRUE(weather.is_snow);
+    EXPECT_FLOAT_EQ(weather.alpha, 0.06f);
+}
+
 TEST(LevelWeatherTest, EscapedVarStringNewlineEnablesWeather) {
     const igi::LevelWeatherSettings weather = igi::ResolveLevelWeather(
         {RainEffect("TRUE", "\"TRUE\\n\"", "0.15")});

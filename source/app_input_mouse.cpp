@@ -285,10 +285,20 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 									prop_text_buf_ = (argIdx >= 0 && argIdx < (int)tobj.argTokens.size()) ? tobj.argTokens[argIdx] : "";
 									prop_text_caret_ = (int)prop_text_buf_.size();
 									prop_drag_obj_index_ = tIdx;
+									prop_drag_kind_ = w.kind;
 									prop_field_index_  = w.fieldIndex * 3 + w.comp;
 									prop_drag_start_x_ = x;
 									prop_drag_start_y_ = y;
 									PushUndoState();
+									prop_drag_start_val_ = tTok(argIdx);
+								} else if (w.kind == K::PosSlider) {
+									prop_drag_obj_index_ = tIdx;
+									prop_drag_kind_ = w.kind;
+									prop_field_index_  = w.fieldIndex * 3 + w.comp;
+									prop_drag_start_x_ = x;
+									prop_drag_start_y_ = y;
+									PushUndoState();
+									int argIdx = fieldArg(w.fieldIndex, w.comp);
 									prop_drag_start_val_ = tTok(argIdx);
 								} else if (w.kind == K::Checkbox) {
 									int argIdx = fieldArg(w.fieldIndex, w.comp);
@@ -301,6 +311,7 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 								} else if (w.kind == K::PosPad) {
 									// drag X and Y simultaneously — store field, use comp=0 marker
 									prop_drag_obj_index_ = tIdx;
+									prop_drag_kind_ = w.kind;
 									prop_field_index_  = w.fieldIndex * 3 + 0;
 									prop_drag_start_x_ = x;
 									prop_drag_start_y_ = y;
@@ -308,6 +319,15 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 									int off = fieldArg(w.fieldIndex, 0);
 									prop_drag_start_val_  = tTok(off + 0);
 									prop_drag_start_val2_ = tTok(off + 1);
+								} else if (w.kind == K::PosZSlider) {
+									prop_drag_obj_index_ = tIdx;
+									prop_drag_kind_ = w.kind;
+									prop_field_index_  = w.fieldIndex * 3 + 2;
+									prop_drag_start_x_ = x;
+									prop_drag_start_y_ = y;
+									PushUndoState();
+									int off = fieldArg(w.fieldIndex, 2);
+									prop_drag_start_val_ = tTok(off);
 								} else if (w.kind == K::AIScriptPath) {
 									prop_edit_obj_index_ = -1;
 									prop_text_edit_field_ = PropPanel::kAIScriptPathField;
@@ -356,8 +376,9 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 										ai_text_box_h_  = w.y2 - w.y1;
 									}
 								} else {
-									// PosZSlider / OriSlider / RgbSlider / NumSlider — single-value drag
+									// OriSlider / RgbSlider / NumSlider — single-value drag
 									prop_drag_obj_index_ = tIdx;
+									prop_drag_kind_ = w.kind;
 									prop_field_index_  = w.fieldIndex * 3 + w.comp;
 									prop_drag_start_x_ = x;
 									prop_drag_start_y_ = y;
@@ -652,10 +673,6 @@ void App::Input_OnMotion(int x, int y) {
 		// Priority 2: 3D Object Hover — deferred to Frame() to avoid blocking GPU sync on every mouse event
 	}
 
-	if (window_state_.cursor_visible_) {
-		glutSetCursor(GLUT_CURSOR_NONE);
-	}
-
 	if (window_state_.cursor_visible_ && !enableCameraMode) {
 		if (mouse_state_.left_button_down_) {
 			input_.mouse_delta_x_ = dx;
@@ -676,17 +693,25 @@ void App::Input_OnMotion(int x, int y) {
 			return;
 		}
 
-		int center_x = window_state_.viewport_width_ >> 1;
-		int center_y = window_state_.viewport_height_ >> 1;
+		// Use the mouse delta directly during camera look/orbit instead of warping
+		// to the window center on every single motion event. Per-event OS pointer
+		// warps flood the message queue with synthetic events and cause severe
+		// stutter/lag. Re-center only when approaching a viewport boundary.
+		input_.mouse_delta_x_ += dx;
+		input_.mouse_delta_y_ += dy;
 
-		input_.mouse_delta_x_ += x - center_x;
-		input_.mouse_delta_y_ += y - center_y;
-
-		mouse_state_.prior_x_ = x;
-		mouse_state_.prior_y_ = y;
-
-		glutWarpPointer(center_x, center_y); // move cursor to view center
-		skip_input_on_motion_once_ = true;   // skip next cursor motion event caused by glutWarpPointer
+		const int margin = 16;
+		const int w = window_state_.viewport_width_;
+		const int h = window_state_.viewport_height_;
+		if (w > margin * 2 && h > margin * 2 &&
+		    (x <= margin || x >= w - margin || y <= margin || y >= h - margin)) {
+			const int center_x = w >> 1;
+			const int center_y = h >> 1;
+			mouse_state_.prior_x_ = center_x;
+			mouse_state_.prior_y_ = center_y;
+			glutWarpPointer(center_x, center_y);
+			skip_input_on_motion_once_ = true;
+		}
 	}
 
 	if (edit_dragging_) {
@@ -717,16 +742,87 @@ void App::Input_OnMotion(int x, int y) {
 				if (fi < (int)schema.size()) {
 					const FieldDef& fd = schema[fi];
 					const std::string& tn = fd.typeName;
-					bool is_pos = (tn == "ObjectPos"); // only actual position type gets pad/camera-follow
+					bool is_pos = (tn == "ObjectPos");
+					bool is_float3 = (tn == "Real32x3" || tn == "Real64x3");
 					bool is_ori = (tn == "Real32x9");
-						int dxp = x - prop_drag_start_x_;
+					int dxp = x - prop_drag_start_x_;
+					int dyp = y - prop_drag_start_y_;
+
+					if (is_pos && prop_drag_kind_ == PropPanel::WidgetKind::PosPad) {
+						// 2D pad: X and Y simultaneous manipulation
+						float sens = 0.5f;
+						if (glutGetModifiers() & GLUT_ACTIVE_SHIFT) sens = 0.05f;
+						else if (glutGetModifiers() & GLUT_ACTIVE_CTRL) sens = 5.0f;
+
+						glm::dvec3 oldPos = obj.pos;
+						double nx = (double)prop_drag_start_val_  + (double)dxp * sens;
+						double ny = (double)prop_drag_start_val2_ - (double)dyp * sens; // screen-y down -> world-y up
+						obj.pos.x = nx;
+						obj.pos.y = ny;
+
+						auto writeArg = [&](int idx, double v) {
+							if (idx >= 0 && idx < (int)obj.argTokens.size()) {
+								char buf[64]; snprintf(buf, sizeof(buf), "%.6f", v);
+								obj.argTokens[idx] = buf;
+							}
+						};
+						writeArg(fd.argOffset + 0, nx);
+						writeArg(fd.argOffset + 1, ny);
+
+						obj.modified = true;
+						glm::dvec3 deltaPos = obj.pos - oldPos;
+						PropagateTransformToChildren(dragIdx, deltaPos, glm::dmat3(1.0), oldPos);
+						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+						SyncGraphOverlayOffsetFromAIGraph();
+					} else if (is_pos && prop_drag_kind_ == PropPanel::WidgetKind::PosZSlider) {
+						// Vertical Z slider
+						float sens = 0.5f;
+						if (glutGetModifiers() & GLUT_ACTIVE_SHIFT) sens = 0.05f;
+						else if (glutGetModifiers() & GLUT_ACTIVE_CTRL) sens = 5.0f;
+
+						glm::dvec3 oldPos = obj.pos;
+						double nz = (double)prop_drag_start_val_ - (double)dyp * sens; // screen-y up -> +Z
+						obj.pos.z = nz;
+
+						if (fd.argOffset + 2 < (int)obj.argTokens.size()) {
+							char buf[64]; snprintf(buf, sizeof(buf), "%.6f", nz);
+							obj.argTokens[fd.argOffset + 2] = buf;
+						}
+
+						obj.modified = true;
+						glm::dvec3 deltaPos = obj.pos - oldPos;
+						PropagateTransformToChildren(dragIdx, deltaPos, glm::dmat3(1.0), oldPos);
+						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+						SyncGraphOverlayOffsetFromAIGraph();
+					} else if (is_pos || (is_float3 && (comp >= 0 && comp < 3))) {
+						// Horizontal slider (PosSlider) or NumBox scrub on X, Y, or Z
+						float sens = 0.5f;
+						if (glutGetModifiers() & GLUT_ACTIVE_SHIFT) sens = 0.05f;
+						else if (glutGetModifiers() & GLUT_ACTIVE_CTRL) sens = 5.0f;
+
+						double nv = (double)prop_drag_start_val_ + (double)dxp * sens;
+						glm::dvec3 oldPos = obj.pos;
 
 						if (is_pos) {
-							// Position pad / Z slider use a per-frame velocity model
-							// (ApplyPropPositionDrag) so the object accelerates while held in a
-							// direction and keeps moving even when the cursor is pinned at the
-							// window edge. Raw motion events do nothing for position here.
-						} else {
+							if      (comp == 0) obj.pos.x = nv;
+							else if (comp == 1) obj.pos.y = nv;
+							else if (comp == 2) obj.pos.z = nv;
+						}
+
+						int argIdx = fd.argOffset + comp;
+						if (argIdx >= 0 && argIdx < (int)obj.argTokens.size()) {
+							char buf[64]; snprintf(buf, sizeof(buf), "%.6f", nv);
+							obj.argTokens[argIdx] = buf;
+						}
+
+						obj.modified = true;
+						if (is_pos) {
+							glm::dvec3 deltaPos = obj.pos - oldPos;
+							PropagateTransformToChildren(dragIdx, deltaPos, glm::dmat3(1.0), oldPos);
+						}
+						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
+						if (is_pos) SyncGraphOverlayOffsetFromAIGraph();
+					} else {
 						glm::dvec3 oldPos = obj.pos;
 						glm::dvec3 oldRot = obj.rot;
 						// Orientation / RGB / numeric horizontal slider or NumBox scrub.
@@ -767,86 +863,7 @@ void App::Input_OnMotion(int x, int y) {
 	}
 }
 
-// Per-frame velocity-ramped position drag for the property editor's 2D pad and Z
-// slider. Called once per frame while the field is held. The object accelerates
-// the longer the cursor is held away from the drag-start point (mirrors the
-// ALT+SHIFT camera boost) and keeps moving even when the cursor is pinned at the
-// window edge. The camera is intentionally NOT moved, so the object visibly
-// travels through the world.
+// Property editor position drag is handled directly in Input_OnMotion for instant,
+// 1:1, responsive manipulation without runaway per-frame acceleration.
 void App::ApplyPropPositionDrag() {
-	if (prop_field_index_ < 0) return;
-	auto& objects = level_.GetLevelObjects().GetObjects();
-	int dragIdx = (prop_drag_obj_index_ >= 0) ? prop_drag_obj_index_ : selected_object_index_;
-	if (dragIdx < 0 || dragIdx >= (int)objects.size()) return;
-	auto& obj = objects[dragIdx];
-	const TaskSchema* scp = GetSchema(obj.type);
-	if (!scp) return;
-	const TaskSchema& schema = *scp;
-	int fi = prop_field_index_ / 3;
-	int comp = prop_field_index_ % 3;
-	if (fi >= (int)schema.size()) return;
-	const FieldDef& fd = schema[fi];
-	if (fd.typeName != "ObjectPos") return;   // only the pad / Z slider use this model
-
-	int dispx = mouse_state_.prior_x_ - prop_drag_start_x_;
-	int dispy = mouse_state_.prior_y_ - prop_drag_start_y_;
-	const int   kDead   = 5;        // cursor dead zone around the drag start
-	const float kBase   = 25.0f;    // units/frame just past the dead zone
-	const float kGrowth = 1.05f;    // per-frame acceleration multiplier
-	const float kMax    = 8000.0f;  // speed cap (units/frame)
-
-	auto curArg = [&](int idx) -> double {
-		return (idx >= 0 && idx < (int)obj.argTokens.size()) ? std::atof(obj.argTokens[idx].c_str()) : 0.0;
-	};
-	auto writeArg = [&](int idx, double v) {
-		if (idx >= 0 && idx < (int)obj.argTokens.size()) {
-			char buf[64]; snprintf(buf, sizeof(buf), "%.6f", v);
-			obj.argTokens[idx] = buf;
-		}
-	};
-
-	glm::dvec3 oldPos = obj.pos;
-	bool moved = false;
-
-	if (comp == 0) {            // 2D pad → X / Y
-		float len = std::sqrt((float)(dispx * dispx + dispy * dispy));
-		if (len < (float)kDead) { prop_drag_speed_ = 0.f; return; }
-		prop_drag_speed_ = (prop_drag_speed_ < kBase) ? kBase : std::min(kMax, prop_drag_speed_ * kGrowth);
-		float ux = dispx / len, uy = dispy / len;
-		double nx = curArg(fd.argOffset + 0) + ux * prop_drag_speed_;
-		double ny = curArg(fd.argOffset + 1) - uy * prop_drag_speed_;  // screen-y down → world-y up
-		writeArg(fd.argOffset + 0, nx);
-		writeArg(fd.argOffset + 1, ny);
-		obj.pos.x = nx; obj.pos.y = ny;
-		moved = true;
-	} else if (comp == 1) {     // Y numeric box → Y only
-		if (std::abs(dispy) < kDead) { prop_drag_speed_ = 0.f; return; }
-		prop_drag_speed_ = (prop_drag_speed_ < kBase) ? kBase : std::min(kMax, prop_drag_speed_ * kGrowth);
-		float uy = (dispy < 0) ? 1.f : -1.f;   // drag up → +Y
-		double ny = curArg(fd.argOffset + 1) + uy * prop_drag_speed_;
-		writeArg(fd.argOffset + 1, ny);
-		obj.pos.y = ny;
-		moved = true;
-	} else if (comp == 2) {     // Z slider
-		if (std::abs(dispy) < kDead) { prop_drag_speed_ = 0.f; return; }
-		prop_drag_speed_ = (prop_drag_speed_ < kBase) ? kBase : std::min(kMax, prop_drag_speed_ * kGrowth);
-		float uy = (dispy < 0) ? 1.f : -1.f;   // drag up → +Z
-		double nz = curArg(fd.argOffset + 2) + uy * prop_drag_speed_;
-		writeArg(fd.argOffset + 2, nz);
-		obj.pos.z = nz;
-		moved = true;
-	}
-
-	if (moved) {
-		obj.modified = true;
-		glm::dvec3 deltaPos = obj.pos - oldPos;
-		PropagateTransformToChildren(dragIdx, deltaPos, glm::dmat3(1.0), oldPos);
-		level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
-		// Live-sync the graph overlay offset when the user drags an AIGraph
-		// task's position pad / Z slider — the 3D nodes/edges follow along
-		// while F7 is showing the graph.
-		SyncGraphOverlayOffsetFromAIGraph();
-		// Camera follows the object so it stays in view as it accelerates/travels.
-		viewer_.pos_ += glm::vec3(deltaPos);
-	}
 }
