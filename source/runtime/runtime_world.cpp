@@ -819,6 +819,11 @@ void RuntimeWorld::Reset() {
         QueueLoopStop(runtime_sound.definition.task_id);
     }
     mission_conditional_sounds_.clear();
+    for (const AuthoredAmbientAreaRuntime& runtime_area :
+         mission_ambient_areas_) {
+        QueueLoopStop(runtime_area.task_id);
+    }
+    mission_ambient_areas_.clear();
     mission_conditional_containers_.clear();
     authored_conditional_container_snapshots_.clear();
     mission_guard_generators_.clear();
@@ -1397,7 +1402,8 @@ void RuntimeWorld::SetAuthoredMissionState(
     std::vector<AuthoredMissionConditionalSound> conditional_sounds,
     std::vector<AuthoredMissionExplodeObject> explode_objects,
     std::vector<AuthoredMissionConditionalContainer> conditional_containers,
-    std::vector<AuthoredMissionGuardGenerator> guard_generators) {
+    std::vector<AuthoredMissionGuardGenerator> guard_generators,
+    std::vector<AuthoredMissionAmbientArea> ambient_areas) {
     mission_expression_state_.Clear();
     mission_area_activations_.clear();
     mission_edit_variables_ = std::move(edit_variables);
@@ -1414,11 +1420,23 @@ void RuntimeWorld::SetAuthoredMissionState(
         QueueLoopStop(runtime_sound.definition.task_id);
     }
     mission_conditional_sounds_.clear();
+    for (const AuthoredAmbientAreaRuntime& runtime_area :
+         mission_ambient_areas_) {
+        QueueLoopStop(runtime_area.task_id);
+    }
+    mission_ambient_areas_.clear();
     mission_conditional_sounds_.reserve(conditional_sounds.size());
     for (AuthoredMissionConditionalSound& definition : conditional_sounds) {
         AuthoredConditionalSoundRuntime runtime_sound;
         runtime_sound.definition = std::move(definition);
         mission_conditional_sounds_.push_back(std::move(runtime_sound));
+    }
+    mission_ambient_areas_.reserve(ambient_areas.size());
+    for (AuthoredMissionAmbientArea& definition : ambient_areas) {
+        AuthoredAmbientAreaRuntime runtime_area;
+        runtime_area.task_id = std::move(definition.task_id);
+        runtime_area.area = std::move(definition.area);
+        mission_ambient_areas_.push_back(std::move(runtime_area));
     }
     mission_conditional_containers_.clear();
     mission_conditional_containers_.reserve(conditional_containers.size());
@@ -2154,6 +2172,61 @@ void RuntimeWorld::UpdateAuthoredConditionalSounds() {
     }
 }
 
+void RuntimeWorld::UpdateAuthoredAmbientAreas() {
+    // AmbientArea_Run (src/aiaction/ambientarea.c:125-179) is ported as
+    // igi::TickAmbientArea. The listener position is the player's position.
+    // When the listener is inside the box, the volume integrates up (+0.05/tick)
+    // and after the delay expires, a sound is picked and played. When the
+    // listener exits, the volume integrates down (-0.05/tick) and stops.
+    const glm::dvec3 player_pos = player_.GetPosition();
+    const double listener[3] = {player_pos.x, player_pos.y, player_pos.z};
+
+    for (AuthoredAmbientAreaRuntime& runtime_area : mission_ambient_areas_) {
+        const igi::AmbientAreaTick tick = igi::TickAmbientArea(
+            runtime_area.engine_state, runtime_area.area, listener, false, 0.0, 0.1, 0.0);
+
+        if (tick.start_sound) {
+            runtime_area.engine_state.has_sound = true;
+            if (tick.sound_index >= 0 &&
+                tick.sound_index < static_cast<int>(runtime_area.area.sounds.size())) {
+                const std::string& sound_name = runtime_area.area.sounds[tick.sound_index];
+                runtime_area.current_sound = sound_name;
+                const glm::vec3 pos(static_cast<float>(runtime_area.area.authored.position[0]),
+                                    static_cast<float>(runtime_area.area.authored.position[1]),
+                                    static_cast<float>(runtime_area.area.authored.position[2]));
+                QueueLoopStart(runtime_area.task_id, sound_name,
+                               SoundEffect::ObjectiveComplete, pos, false);
+                if (mission_sound_event_handler_) {
+                    mission_sound_event_handler_({
+                        runtime_area.task_id,
+                        sound_name,
+                        pos,
+                        true,
+                        false,
+                        false,
+                    });
+                }
+            }
+        } else if (tick.stop_sound) {
+            QueueLoopStop(runtime_area.task_id);
+            if (mission_sound_event_handler_ && !runtime_area.current_sound.empty()) {
+                const glm::vec3 pos(static_cast<float>(runtime_area.area.authored.position[0]),
+                                    static_cast<float>(runtime_area.area.authored.position[1]),
+                                    static_cast<float>(runtime_area.area.authored.position[2]));
+                mission_sound_event_handler_({
+                    runtime_area.task_id,
+                    runtime_area.current_sound,
+                    pos,
+                    false,
+                    false,
+                    false,
+                });
+            }
+            runtime_area.current_sound.clear();
+        }
+    }
+}
+
 void RuntimeWorld::TriggerAuthoredExplodeObject(
     AuthoredExplodeObjectRuntime& runtime_object) {
     runtime_object.delay_pending = false;
@@ -2403,6 +2476,7 @@ void RuntimeWorld::UpdateSimulationTick(uint64_t tick_number, const PlayerInputC
     UpdateAuthoredMissionState();
     UpdateAuthoredCutScenes();
     UpdateAuthoredConditionalSounds();
+    UpdateAuthoredAmbientAreas();
     UpdateAuthoredExplodeObjects();
     UpdateAuthoredDoors();
     UpdateMissionActorState();

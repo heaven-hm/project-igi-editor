@@ -30,6 +30,7 @@ struct AuthoredMissionStateDefinitions {
     std::vector<AuthoredMissionLevelTimer> level_timers;
     std::vector<AuthoredMissionCutScene> cut_scenes;
     std::vector<AuthoredMissionConditionalSound> conditional_sounds;
+    std::vector<AuthoredMissionAmbientArea> ambient_areas;
     std::vector<AuthoredMissionConditionalContainer> conditional_containers;
     std::vector<AuthoredMissionGuardGenerator> guard_generators;
     std::vector<AuthoredMissionExplodeObject> explode_objects;

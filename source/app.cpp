@@ -2967,6 +2967,7 @@ void App::SetupRuntimeMissionState() {
 	const size_t timer_count = definitions.level_timers.size();
 	const size_t cut_scene_count = definitions.cut_scenes.size();
 	const size_t conditional_sound_count = definitions.conditional_sounds.size();
+	const size_t ambient_area_count = definitions.ambient_areas.size();
 	const size_t conditional_container_count =
 		definitions.conditional_containers.size();
 	const size_t guard_generator_count = definitions.guard_generators.size();
@@ -2981,7 +2982,8 @@ void App::SetupRuntimeMissionState() {
 		std::move(definitions.conditional_sounds),
 		std::move(definitions.explode_objects),
 		std::move(definitions.conditional_containers),
-		std::move(definitions.guard_generators));
+		std::move(definitions.guard_generators),
+		std::move(definitions.ambient_areas));
 
 	Logger::Get().Log(
 		LogLevel::INFO,
@@ -2995,6 +2997,8 @@ void App::SetupRuntimeMissionState() {
 		" CutScene task(s), " +
 		std::to_string(conditional_sound_count) +
 		" ConditionalSound task(s), " +
+		std::to_string(ambient_area_count) +
+		" AmbientArea task(s), " +
 		std::to_string(conditional_container_count) +
 		" ConditionalContainer task(s), " +
 		std::to_string(guard_generator_count) +

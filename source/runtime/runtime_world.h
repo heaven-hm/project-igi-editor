@@ -164,7 +164,8 @@ public:
         std::vector<AuthoredMissionConditionalSound> conditional_sounds = {},
         std::vector<AuthoredMissionExplodeObject> explode_objects = {},
         std::vector<AuthoredMissionConditionalContainer> conditional_containers = {},
-        std::vector<AuthoredMissionGuardGenerator> guard_generators = {});
+        std::vector<AuthoredMissionGuardGenerator> guard_generators = {},
+        std::vector<AuthoredMissionAmbientArea> ambient_areas = {});
     const std::vector<RuntimeExplodeObjectSnapshot>&
     GetExplodeObjectSnapshots() const {
         return authored_explode_object_snapshots_;
@@ -337,6 +338,7 @@ private:
     void UpdateAuthoredConditionalContainers();
     void UpdateAuthoredGuardGenerators();
     void UpdateAuthoredConditionalSounds();
+    void UpdateAuthoredAmbientAreas();
     void UpdateAuthoredExplodeObjects();
     void RefreshAuthoredExplodeObjectSnapshots();
     void RefreshAuthoredConditionalContainerSnapshots();
@@ -435,6 +437,13 @@ private:
         igi::ConditionalSoundState engine_state;
     };
     std::vector<AuthoredConditionalSoundRuntime> mission_conditional_sounds_;
+    struct AuthoredAmbientAreaRuntime {
+        std::string task_id;
+        AmbientAreaResolved area;
+        igi::AmbientAreaState engine_state;
+        std::string current_sound;
+    };
+    std::vector<AuthoredAmbientAreaRuntime> mission_ambient_areas_;
     MissionSoundEventHandler mission_sound_event_handler_;
     std::vector<RuntimeAudioEvent> pending_audio_events_;
     struct AuthoredConditionalContainerRuntime {

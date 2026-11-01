@@ -93,6 +93,11 @@ than invented.
 
 ### Fixes to reported defects
 
+- **AmbientArea runtime simulation wired to IGI-RE oracle** — authored `AmbientArea` tasks
+  (162 across retail corpus) are now loaded in `mission_state_loader.cpp` and ticked during
+  gameplay simulation via `RuntimeWorld::UpdateAuthoredAmbientAreas()`. Fades in (+0.05/tick)
+  when the player enters the authored 3D box, triggers delay-gated audio loops, and fades out
+  (-0.05/tick) upon exit, matching `src/aiaction/ambientarea.c:125-179`.
 - **ALT camera movement lag eliminated** — camera look and orbit no longer stutter or drop frames
   relative to WASD movement.
 - **ConditionalSound one-shot loop rule aligned with IGI-RE** — `RuntimeWorld` now invokes

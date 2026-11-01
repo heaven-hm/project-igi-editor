@@ -329,6 +329,17 @@ AuthoredMissionStateDefinitions LoadAuthoredMissionStateDefinitions(
             continue;
         }
 
+        if (task_source.task_type == "AmbientArea") {
+            AmbientAreaResolved area;
+            if (ParseAmbientArea(task_source.argument_tokens, area)) {
+                AuthoredMissionAmbientArea ambient_area;
+                ambient_area.task_id = task_source.task_id;
+                ambient_area.area = std::move(area);
+                definitions.ambient_areas.push_back(std::move(ambient_area));
+            }
+            continue;
+        }
+
         if (task_source.task_type == "ConditionalContainer") {
             if (task_source.argument_tokens.size() <=
                     kConditionalContainerRunAtStopArgumentIndex) {

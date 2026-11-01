@@ -3730,6 +3730,50 @@ TEST(RuntimeWorldTest, FixedStepGameplayQueuesConditionalSoundEdges) {
     EXPECT_EQ(stop_events[0].channel_id, "Alarm");
 }
 
+TEST(RuntimeWorldTest, AuthoredAmbientAreaFadesInWhenPlayerEntersAndStopsWhenExits) {
+    RuntimeWorld world;
+    world.Initialize(FlatTerrain);
+
+    AuthoredMissionAmbientArea ambient_area;
+    ambient_area.task_id = "5001";
+    ambient_area.area.authored_name = "wind_tunnel";
+    ambient_area.area.authored.position[0] = 0.0;
+    ambient_area.area.authored.position[1] = 0.0;
+    ambient_area.area.authored.position[2] = 0.0;
+    ambient_area.area.authored.size[0] = 10.0;
+    ambient_area.area.authored.size[1] = 10.0;
+    ambient_area.area.authored.size[2] = 10.0;
+    ambient_area.area.authored.min_delay = 0.0;
+    ambient_area.area.authored.random_wait = 0.0;
+    ambient_area.area.sounds = {"wind_01"};
+
+    std::vector<RuntimeMissionSoundEvent> events;
+    world.SetMissionSoundEventHandler(
+        [&events](const RuntimeMissionSoundEvent& sound_event) {
+            events.push_back(sound_event);
+        });
+    world.SetAuthoredMissionState(
+        {}, {}, {}, {}, {}, {}, {}, {}, {}, {ambient_area});
+
+    // Player inside the box: volume integrates up (+0.05/tick = 20 ticks to reach 1.0)
+    world.GetPlayer().SetPosition(glm::vec3(0.0f, 0.0f, 0.0f));
+    for (int tick = 0; tick < 20; ++tick) {
+        world.UpdateSimulationTick(tick, PlayerInputCmd());
+    }
+    ASSERT_EQ(events.size(), 1U);
+    EXPECT_TRUE(events[0].playing);
+    EXPECT_EQ(events[0].sound_name, "wind_01");
+
+    // Player moves outside the box: volume integrates down (-0.05/tick = 20 ticks to reach 0.0)
+    world.GetPlayer().SetPosition(glm::vec3(100000.0f, 0.0f, 0.0f));
+    for (int tick = 20; tick < 40; ++tick) {
+        world.UpdateSimulationTick(tick, PlayerInputCmd());
+    }
+    ASSERT_EQ(events.size(), 2U);
+    EXPECT_FALSE(events[1].playing);
+    EXPECT_EQ(events[1].sound_name, "wind_01");
+}
+
 TEST(RuntimeWorldTest, AuthoredExplodeObjectPublishesDelayedDestroyedState) {
     RuntimeWorld world;
     world.Initialize(FlatTerrain);

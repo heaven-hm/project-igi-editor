@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 
 #include "runtime/cutscene_camera.h"
+#include "runtime/sound_emitter.h"
 
 #include <cstdint>
 #include <string>
@@ -76,6 +77,13 @@ struct AuthoredMissionConditionalSound {
     bool simple = false;
     bool one_shot = false;
     bool relative_to_microphone = false;
+};
+
+// Authored AmbientArea volume definition. RuntimeWorld evaluates containment
+// and drives fade in / fade out and delay-gated sound playing.
+struct AuthoredMissionAmbientArea {
+    std::string task_id;
+    AmbientAreaResolved area;
 };
 
 // Authored ConditionalContainer state. The runtime owns the gate latch while
