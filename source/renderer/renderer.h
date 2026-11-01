@@ -168,7 +168,6 @@ static constexpr int kZSliderW   = 22;   // vertical Z slider width
 
 enum class WidgetKind {
     NoteBox,       // editable note (obj.name)
-    PosSlider,     // horizontal position slider (X, Y, or Z component)
     PosPad,        // 2D X/Y pad
     PosZSlider,    // vertical Z slider
     SnapGround,    // button
@@ -253,34 +252,35 @@ inline Layout BuildLayout(const TaskSchemaNS::TaskSchema& schema, bool is_ai = f
             y += rowH;  // field header line
 
             if (is_pos) {
+                const int pBoxX1 = kLeft + kPad + 20;
+                const int pBoxX2 = pBoxX1 + 180;
                 for (int c = 0; c < 3; ++c) {
-                    int sx1 = kLeft + kPad + 20;
-                    int sx2 = boxX1 - 8;
-                    L.widgets.push_back({WidgetKind::PosSlider, sx1, y, sx2, y + boxH, fi, c});
-                    L.widgets.push_back({WidgetKind::NumBox, boxX1, y, boxX2, y + boxH, fi, c});
+                    L.widgets.push_back({WidgetKind::NumBox, pBoxX1, y, pBoxX2, y + boxH, fi, c});
                     y += boxH + 2;
                 }
                 int pad_x1 = kLeft + kPad;
                 int pad_y1 = y;
-                L.widgets.push_back({WidgetKind::PosPad, pad_x1, pad_y1,
-                                     pad_x1 + kPadSize, pad_y1 + kPadSize, fi, 0});
-                int zs_x1 = pad_x1 + kPadSize + 10;
-                L.widgets.push_back({WidgetKind::PosZSlider, zs_x1, pad_y1,
-                                     zs_x1 + kZSliderW, pad_y1 + kPadSize, fi, 2});
-                y += kPadSize + 6;
-                int bw = (kWidth - 2 * kPad - 8) / 2;
-                L.widgets.push_back({WidgetKind::SnapGround, kLeft + kPad, y,
-                                     kLeft + kPad + bw, y + boxH, -1, 0});
-                L.widgets.push_back({WidgetKind::SnapObject, kLeft + kPad + bw + 8, y,
-                                     kLeft + kPad + bw + 8 + bw, y + boxH, -1, 0});
+                int pad_sz = 140;
+                int pad_x2 = pad_x1 + pad_sz;
+                int pad_y2 = pad_y1 + pad_sz;
+                L.widgets.push_back({WidgetKind::PosPad, pad_x1, pad_y1, pad_x2, pad_y2, fi, 0});
+                int zs_x1 = pad_x2 + 8;
+                int zs_y1 = pad_y1;
+                int zs_x2 = zs_x1 + kZSliderW;
+                int zs_y2 = pad_y2;
+                L.widgets.push_back({WidgetKind::PosZSlider, zs_x1, zs_y1, zs_x2, zs_y2, fi, 2});
+                y = pad_y2 + 6;
+                int btn_w = 120;
+                L.widgets.push_back({WidgetKind::SnapGround, kLeft + kPad, y, kLeft + kPad + btn_w, y + boxH, fi, 0});
+                y += boxH + 2;
+                L.widgets.push_back({WidgetKind::SnapObject, kLeft + kPad, y, kLeft + kPad + btn_w, y + boxH, fi, 0});
                 y += boxH + 4;
                 y += rowH;  // "Altitude: ... meter"
             } else if (is_float3) {
+                const int pBoxX1 = kLeft + kPad + 20;
+                const int pBoxX2 = pBoxX1 + 180;
                 for (int c = 0; c < 3; ++c) {
-                    int sx1 = kLeft + kPad + 20;
-                    int sx2 = boxX1 - 8;
-                    L.widgets.push_back({WidgetKind::PosSlider, sx1, y, sx2, y + boxH, fi, c});
-                    L.widgets.push_back({WidgetKind::NumBox, boxX1, y, boxX2, y + boxH, fi, c});
+                    L.widgets.push_back({WidgetKind::NumBox, pBoxX1, y, pBoxX2, y + boxH, fi, c});
                     y += boxH + 2;
                 }
             } else if (is_ori) {
