@@ -122,6 +122,8 @@ struct RuntimeGuardGeneratorSnapshot {
     int object_index = -1;
     std::string task_id;
     bool is_on = false;
+    bool is_spawned = false;
+    int n_spawns = 0;
     int maximum_spawns = 0;
     std::vector<int> guard_object_indices;
     std::vector<int> active_guard_object_indices;
@@ -193,6 +195,10 @@ public:
     // itself -- Logger::Log needs Config::Get(), and config.cpp is not
     // host-portable, while this translation unit is -- so App injects the sink.
     void SetMissionExpressionLogSink(MissionExpressionLogSink log_sink);
+
+    const MissionExpressionState& GetMissionExpressionState() const {
+        return mission_expression_state_;
+    }
 
     using InteractionQuery = std::function<RuntimeInteractionResult(
         const glm::vec3& interaction_origin,
@@ -457,6 +463,9 @@ private:
     struct AuthoredGuardGeneratorRuntime {
         AuthoredMissionGuardGenerator definition;
         bool is_on = false;
+        bool is_spawned = false;
+        int n_spawns = 0;
+        int active_guard_index = -1;
     };
     std::vector<AuthoredGuardGeneratorRuntime> mission_guard_generators_;
     std::vector<RuntimeGuardGeneratorSnapshot>

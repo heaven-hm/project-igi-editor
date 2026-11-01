@@ -2067,34 +2067,71 @@ void RuntimeWorld::UpdateAuthoredGuardGenerators() {
                 condition_result) &&
             condition_result;
 
-        const size_t maximum_spawn_count = runtime_generator.is_on
-            ? std::min(
-                definition.guard_object_indices.size(),
-                static_cast<size_t>(std::max(0, definition.maximum_spawns)))
-            : 0U;
-        for (size_t guard_index = 0;
-             guard_index < definition.guard_object_indices.size();
-             ++guard_index) {
-            const int object_index = definition.guard_object_indices[guard_index];
-            if (object_index < 0) {
-                continue;
+        // In IGI-RE GuardGenerator_Run (0x487EE0, src/levelflow/guardgen.c:114-135):
+        // 1. If !isOn: if no active guard alive, isSpawned = 0.
+        // 2. If isOn and nSpawns < maxSpawns:
+        //    if no guard spawned yet or current spawned guard is dead,
+        //    spawn next child: isSpawned = 1, nSpawns++.
+        if (!runtime_generator.is_on) {
+            bool active_guard_alive = false;
+            if (runtime_generator.active_guard_index >= 0 &&
+                runtime_generator.active_guard_index < static_cast<int>(definition.guard_object_indices.size())) {
+                const int obj_idx = definition.guard_object_indices[runtime_generator.active_guard_index];
+                if (AiGuardEntity* guard = ai_.FindGuard(static_cast<uint32_t>(obj_idx))) {
+                    if (guard->health > 0.0f && guard->state != AiGuardState::Dead) {
+                        active_guard_alive = true;
+                    }
+                }
             }
+            if (!active_guard_alive) {
+                runtime_generator.is_spawned = false;
+            }
+        } else if (runtime_generator.n_spawns < definition.maximum_spawns) {
+            bool need_spawn = false;
+            if (!runtime_generator.is_spawned || runtime_generator.active_guard_index < 0) {
+                need_spawn = true;
+            } else if (runtime_generator.active_guard_index < static_cast<int>(definition.guard_object_indices.size())) {
+                const int obj_idx = definition.guard_object_indices[runtime_generator.active_guard_index];
+                if (AiGuardEntity* guard = ai_.FindGuard(static_cast<uint32_t>(obj_idx))) {
+                    if (guard->health <= 0.0f || guard->state == AiGuardState::Dead) {
+                        need_spawn = true;
+                    }
+                }
+            }
+            if (need_spawn && !definition.guard_object_indices.empty()) {
+                const int next_index = runtime_generator.active_guard_index + 1;
+                if (next_index < static_cast<int>(definition.guard_object_indices.size())) {
+                    runtime_generator.active_guard_index = next_index;
+                    runtime_generator.is_spawned = true;
+                    runtime_generator.n_spawns++;
+                }
+            }
+        }
 
-            const bool should_enable = guard_index < maximum_spawn_count;
+        for (int i = 0; i < static_cast<int>(definition.guard_object_indices.size()); ++i) {
+            const int object_index = definition.guard_object_indices[i];
+            if (object_index < 0) continue;
             const uint32_t guard_id = static_cast<uint32_t>(object_index);
-            const auto [iterator, inserted] = guard_enablement.emplace(
-                guard_id,
-                should_enable);
+            const bool should_enable = runtime_generator.is_spawned && (i == runtime_generator.active_guard_index);
+            const auto [iterator, inserted] = guard_enablement.emplace(guard_id, should_enable);
             if (!inserted) {
                 iterator->second = iterator->second && should_enable;
             }
         }
 
+        // Script_RegisterBool8/Int2 symbols in GuardGenerator_Activate (0x488430, guardgen.c:320-334):
+        // <name>.isOn, <name>.isSpawned, <name>.nSpawns
         const std::string expression_prefix =
             "GuardGenerator_" + GuardGeneratorIdentity(definition);
         mission_expression_state_.SetBoolean(
             expression_prefix + ".isOn",
             runtime_generator.is_on);
+        mission_expression_state_.SetBoolean(
+            expression_prefix + ".isSpawned",
+            runtime_generator.is_spawned);
+        mission_expression_state_.SetNumber(
+            expression_prefix + ".nSpawns",
+            runtime_generator.n_spawns);
         mission_expression_state_.SetNumber(
             expression_prefix + ".nMaxSpawns",
             definition.maximum_spawns);
@@ -2121,19 +2158,18 @@ void RuntimeWorld::RefreshAuthoredGuardGeneratorSnapshots() {
         snapshot.object_index = runtime_generator.definition.object_index;
         snapshot.task_id = runtime_generator.definition.task_id;
         snapshot.is_on = runtime_generator.is_on;
+        snapshot.is_spawned = runtime_generator.is_spawned;
+        snapshot.n_spawns = runtime_generator.n_spawns;
         snapshot.maximum_spawns = runtime_generator.definition.maximum_spawns;
         snapshot.guard_object_indices =
             runtime_generator.definition.guard_object_indices;
-        const size_t active_guard_count = runtime_generator.is_on
-            ? std::min(
-                snapshot.guard_object_indices.size(),
-                static_cast<size_t>(std::max(
-                    0,
-                    snapshot.maximum_spawns)))
-            : 0U;
-        snapshot.active_guard_object_indices.assign(
-            snapshot.guard_object_indices.begin(),
-            snapshot.guard_object_indices.begin() + active_guard_count);
+        if (runtime_generator.is_spawned &&
+            runtime_generator.active_guard_index >= 0 &&
+            runtime_generator.active_guard_index < static_cast<int>(snapshot.guard_object_indices.size())) {
+            snapshot.active_guard_object_indices = {
+                snapshot.guard_object_indices[runtime_generator.active_guard_index]
+            };
+        }
         authored_guard_generator_snapshots_.push_back(std::move(snapshot));
     }
 }

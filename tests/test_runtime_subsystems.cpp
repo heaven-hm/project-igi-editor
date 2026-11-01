@@ -3577,10 +3577,41 @@ TEST(RuntimeWorldTest, AuthoredGuardGeneratorGatesPreauthoredGuards) {
     world.UpdateSimulationTick(0, PlayerInputCmd());
 
     EXPECT_TRUE(world.GetGuardGeneratorSnapshots()[0].is_on);
+    EXPECT_TRUE(world.GetGuardGeneratorSnapshots()[0].is_spawned);
+    EXPECT_EQ(world.GetGuardGeneratorSnapshots()[0].n_spawns, 1);
     EXPECT_EQ(
         world.GetGuardGeneratorSnapshots()[0].active_guard_object_indices,
         std::vector<int>({41}));
     EXPECT_TRUE(world.GetAi().FindGuard(41)->runtime_enabled);
+    EXPECT_FALSE(world.GetAi().FindGuard(42)->runtime_enabled);
+
+    bool is_spawned_val = false;
+    double n_spawns_val = 0.0;
+    EXPECT_TRUE(world.GetMissionExpressionState().TryEvaluate("GuardGenerator_40.isSpawned", is_spawned_val));
+    EXPECT_TRUE(is_spawned_val);
+    EXPECT_TRUE(world.GetMissionExpressionState().TryEvaluateNumber("GuardGenerator_40.nSpawns", n_spawns_val));
+    EXPECT_DOUBLE_EQ(n_spawns_val, 1.0);
+
+    // When the spawned guard dies while generator is still on and maxSpawns is reached,
+    // isSpawned remains true (guardgen.c:120-135).
+    world.GetAi().FindGuard(41)->health = 0.0f;
+    world.GetAi().FindGuard(41)->state = AiGuardState::Dead;
+    world.UpdateSimulationTick(1, PlayerInputCmd());
+
+    EXPECT_TRUE(world.GetGuardGeneratorSnapshots()[0].is_on);
+    EXPECT_TRUE(world.GetGuardGeneratorSnapshots()[0].is_spawned);
+    EXPECT_EQ(world.GetGuardGeneratorSnapshots()[0].n_spawns, 1);
+
+    // When the generator is turned off (!isOn) and active guard is dead,
+    // isSpawned resets to false (guardgen.c:120-123).
+    world.SetMissionStateBoolean("SpawnGuards", false);
+    world.UpdateSimulationTick(2, PlayerInputCmd());
+
+    EXPECT_FALSE(world.GetGuardGeneratorSnapshots()[0].is_on);
+    EXPECT_FALSE(world.GetGuardGeneratorSnapshots()[0].is_spawned);
+    EXPECT_EQ(world.GetGuardGeneratorSnapshots()[0].n_spawns, 1);
+    EXPECT_TRUE(world.GetGuardGeneratorSnapshots()[0].active_guard_object_indices.empty());
+    EXPECT_FALSE(world.GetAi().FindGuard(41)->runtime_enabled);
     EXPECT_FALSE(world.GetAi().FindGuard(42)->runtime_enabled);
 }
 
