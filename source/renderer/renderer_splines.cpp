@@ -1,21 +1,102 @@
 #include "pch.h"
 #include "renderer_splines.h"
 #include <glm/gtc/type_ptr.hpp>
-#include <glm/gtc/matrix_transform.hpp>
+#include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <fstream>
 
 void Renderer_Splines::Init() {}
 
-glm::vec3 Renderer_Splines::HermitePoint(float t,
-    const glm::vec3& p0, const glm::vec3& p1,
-    const glm::vec3& t0, const glm::vec3& t1)
-{
-    float t2 = t * t, t3 = t2 * t;
-    return (2.f*t3 - 3.f*t2 + 1.f)*p0
-         + (t3 - 2.f*t2 + t)*t0
-         + (-2.f*t3 + 3.f*t2)*p1
-         + (t3 - t2)*t1;
+void Renderer_Splines::ClearBentCache() {
+    for (auto& entry : bent_gpu_cache_) {
+        for (auto& sub : entry.second.subMeshes) {
+            if (sub.VAO) glDeleteVertexArrays(1, &sub.VAO);
+            if (sub.VBO) glDeleteBuffers(1, &sub.VBO);
+            if (sub.IBO) glDeleteBuffers(1, &sub.IBO);
+        }
+    }
+    bent_gpu_cache_.clear();
 }
+
+size_t Renderer_Splines::BentSpanKeyHash::operator()(const BentSpanKey& key) const {
+    size_t h = std::hash<std::string>{}(key.modelId);
+    auto mix = [&](double value) {
+        uint64_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        h ^= static_cast<size_t>(bits) + 0x9e3779b9u + (h << 6) + (h >> 2);
+    };
+    mix(key.p0.x); mix(key.p0.y); mix(key.p0.z);
+    mix(key.p1.x); mix(key.p1.y); mix(key.p1.z);
+    mix(key.rot0.x); mix(key.rot0.y); mix(key.rot0.z);
+    mix(key.rot1.x); mix(key.rot1.y); mix(key.rot1.z);
+    h ^= static_cast<size_t>(key.rigid) + 0x9e3779b9u + (h << 6) + (h >> 2);
+    h ^= static_cast<size_t>(key.reversed) + 0x9e3779b9u + (h << 6) + (h >> 2);
+    h ^= static_cast<size_t>(key.segments) + 0x9e3779b9u + (h << 6) + (h >> 2);
+    return h;
+}
+
+namespace {
+
+// Uploads the engine-transformed span: ONE vertex buffer holding the whole
+// transformed model vertex list and, per render block, the model's own index
+// buffer. That is the engine's shape - Direct3DRender_FillSplineVB
+// (HOOK 0x49CC80, src/render/render.c:613-670) fills the vertex buffer once and
+// draw_group (:522-532) issues one DrawIndexedPrimitiveVB per group over the
+// model's own indices - not the triangle-expanded form the editor used to build.
+std::vector<SubMesh> UploadEngineSpanMesh(
+    const spline_geometry::EngineSpanMesh& spanMesh,
+    const Mesh& sourceMesh) {
+    std::vector<SubMesh> uploaded;
+    uploaded.reserve(spanMesh.indices.size());
+    if (spanMesh.vertexCount <= 0 || spanMesh.interleaved.empty()) return uploaded;
+
+    size_t sourceSubmesh = 0;
+    for (const std::vector<uint32_t>& indices : spanMesh.indices) {
+        if (indices.empty()) continue;
+
+        SubMesh sub;
+        if (sourceSubmesh < sourceMesh.subMeshes.size()) {
+            sub.textureID = sourceMesh.subMeshes[sourceSubmesh].textureID;
+            sub.alphaMode = sourceMesh.subMeshes[sourceSubmesh].alphaMode;
+            sub.baseColorFactor = sourceMesh.subMeshes[sourceSubmesh].baseColorFactor;
+            sub.materialSlot = sourceMesh.subMeshes[sourceSubmesh].materialSlot;
+        }
+        sub.vertexCount = spanMesh.vertexCount;
+        sub.indexCount = static_cast<int>(indices.size());
+
+        glGenVertexArrays(1, &sub.VAO);
+        glGenBuffers(1, &sub.VBO);
+        glBindVertexArray(sub.VAO);
+        glBindBuffer(GL_ARRAY_BUFFER, sub.VBO);
+        glBufferData(GL_ARRAY_BUFFER,
+                     spanMesh.interleaved.size() * sizeof(float),
+                     spanMesh.interleaved.data(),
+                     GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(6 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(8 * sizeof(float)));
+        glEnableVertexAttribArray(3);
+        glGenBuffers(1, &sub.IBO);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sub.IBO);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                     indices.size() * sizeof(uint32_t),
+                     indices.data(),
+                     GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
+
+        uploaded.push_back(sub);
+        ++sourceSubmesh;
+    }
+    return uploaded;
+}
+
+} // namespace
 
 void Renderer_Splines::Draw(
     const std::vector<LevelObject>& objects,
@@ -32,14 +113,37 @@ void Renderer_Splines::Draw(
     glDisable(GL_CULL_FACE);
     glDisable(GL_BLEND);
 
+    GLint loc_model    = glGetUniformLocation(shader_program, "u_model");
+    GLint loc_dirlight = glGetUniformLocation(shader_program, "u_dirlight");
+    GLint loc_ambient  = glGetUniformLocation(shader_program, "u_ambient");
+    GLint loc_useTex      = glGetUniformLocation(shader_program, "u_useTexture");
+    GLint loc_tex         = glGetUniformLocation(shader_program, "u_texture");
+    GLint loc_useLightmap = glGetUniformLocation(shader_program, "u_useLightmap");
+    GLint loc_alpha       = glGetUniformLocation(shader_program, "u_alpha");
+    GLint loc_baseColor   = glGetUniformLocation(shader_program, "u_baseColor");
+    GLint loc_tint        = glGetUniformLocation(shader_program, "u_tint");
+    GLint loc_glassMin    = glGetUniformLocation(shader_program, "u_glassMin");
+
+    glUniform1i(loc_useLightmap, 0);
+    glUniform1f(loc_alpha, 1.0f);
+    glUniform4f(loc_baseColor, 1.0f, 1.0f, 1.0f, 1.0f);
+    glUniform3f(loc_tint, 1.0f, 1.0f, 1.0f);
+    glUniform1f(loc_glassMin, 0.0f);
+
+    thread_local std::vector<int> children;
     for (const auto& obj : objects) {
         if (!obj.isSplineContainer || obj.deleted) continue;
         if (Renderer_Objects::IsSkippedModelId(obj.modelId)) continue;
 
-        const auto& children = obj.childrenIndices;
+        children.clear();
+        children.reserve(obj.childrenIndices.size());
+        for (int childIndex : obj.childrenIndices) {
+            if (childIndex < 0 || childIndex >= static_cast<int>(objects.size())) continue;
+            const LevelObject& child = objects[childIndex];
+            if (!child.deleted && child.isSplineWaypoint) children.push_back(childIndex);
+        }
 
-        // Find the first non-empty segmentModelId as fallback for waypoints that leave it blank.
-        std::string fallbackSegmentModelId;
+        std::string_view fallbackSegmentModelId;
         for (int ci : children) {
             if (ci >= 0 && ci < (int)objects.size() && !objects[ci].segmentModelId.empty()) {
                 fallbackSegmentModelId = objects[ci].segmentModelId;
@@ -48,22 +152,11 @@ void Renderer_Splines::Draw(
         }
 
         for (size_t i = 0; i + 1 < children.size(); ++i) {
-            int si = children[i];
-            int ei = children[i + 1];
-            int pi = (i > 0) ? children[i - 1] : si;
-            int ni = (i + 2 < children.size()) ? children[i + 2] : ei;
-
-            if (si < 0 || si >= (int)objects.size()) continue;
-            if (ei < 0 || ei >= (int)objects.size()) continue;
-            if (pi < 0 || pi >= (int)objects.size()) pi = si;
-            if (ni < 0 || ni >= (int)objects.size()) ni = ei;
-
-            if (objects[si].deleted || objects[ei].deleted) continue;
-
             DrawSplineSegment(
-                objects[si], objects[ei],
-                objects[pi], objects[ni],
+                objects[children[i]], objects[children[i + 1]],
                 obj, ubo_mats, shader_program,
+                loc_model, loc_dirlight, loc_ambient, loc_useTex, loc_tex,
+                loc_useLightmap, loc_alpha, loc_baseColor, loc_tint, loc_glassMin,
                 fallbackSegmentModelId);
         }
     }
@@ -75,129 +168,128 @@ void Renderer_Splines::Draw(
 void Renderer_Splines::DrawSplineSegment(
     const LevelObject& start,
     const LevelObject& end,
-    const LevelObject& prev,
-    const LevelObject& nextNext,
     const LevelObject& parent,
     GLuint ubo_mats,
     GLuint shader_program,
-    const std::string& fallbackSegmentModelId)
+    GLint loc_model,
+    GLint loc_dirlight,
+    GLint loc_ambient,
+    GLint loc_useTex,
+    GLint loc_tex,
+    GLint loc_useLightmap,
+    GLint loc_alpha,
+    GLint loc_baseColor,
+    GLint loc_tint,
+    GLint loc_glassMin,
+    std::string_view fallbackSegmentModelId)
 {
-    const std::string& segModelId = start.segmentModelId.empty() ? fallbackSegmentModelId : start.segmentModelId;
+    (void)ubo_mats;
+    (void)shader_program;
+    (void)loc_useLightmap;
+    (void)loc_baseColor;
+    (void)loc_tint;
+    (void)loc_glassMin;
+
+    const std::string_view segModelId = spline_geometry::ResolveSegmentModel(
+        start.segmentModelId, end.segmentModelId, fallbackSegmentModelId);
     if (segModelId.empty()) return;
-    if (Renderer_Objects::IsSkippedModelId(segModelId)) return;
+    if (segModelId == "colbox" || segModelId == "colbox2" || segModelId == "colbox3" ||
+        segModelId == "colbox4" || segModelId == "colbox66") return;
 
-    Mesh mesh = obj_renderer_.GetOrLoadMesh(segModelId, false);
-    if (mesh.vertexCount == 0) return;
+    const glm::dvec3 p0 = start.pos;
+    const glm::dvec3 p1 = end.pos;
+    const double intervalLen = glm::length(p1 - p0);
+    if (!std::isfinite(intervalLen) || intervalLen <= 1e-9) return;
 
-    GLint loc_model    = glGetUniformLocation(shader_program, "u_model");
-    GLint loc_dirlight = glGetUniformLocation(shader_program, "u_dirlight");
-    GLint loc_ambient  = glGetUniformLocation(shader_program, "u_ambient");
-    GLint loc_useTex   = glGetUniformLocation(shader_program, "u_useTexture");
-    GLint loc_tex      = glGetUniformLocation(shader_program, "u_texture");
+    // Waypoint_SetupSegment, src/tagitem/spline.c:77-82: "the segment of w runs
+    // from its previous waypoint to w", so the span drawn here - `start` to `end`
+    // - carries the END waypoint's authored parameters.
+    //
+    // SplineObjWaypoint_Changed (HOOK 0x500EF0, src/tagitem/spline.c:769-772):
+    //   w->rigid = obj->rigid || w->straight;
+    //   n = min(w->segments, obj->maxSegments);  w->segments = min(n, 20);
+    // and SplineObjSegment_Setup (HOOK 0x4E4530, src/sound/segsetup.c:268-270)
+    // then forces 1 sub-segment for a rigid span. `SplineEffectiveSegmentCount`
+    // is that rule; a waypoint that declares no "NumAreas" keeps the container's
+    // count (SplineObjWaypoint_Create, src/tagitem/spline.c:544), which the
+    // editor stores as 0.
+    const bool rigid = parent.linearSegments || end.splineStraight;
+    const int waypointSegments =
+        end.splineSegments > 0 ? end.splineSegments : parent.splineSegmentCount;
+    const bool reversed = end.splineReversed;
+    const int segments =
+        igi::SplineEffectiveSegmentCount(waypointSegments, parent.splineSegmentCount, rigid);
 
-    glm::vec3 p0     = glm::vec3(start.pos);
-    glm::vec3 p1     = glm::vec3(end.pos);
-    glm::vec3 p_prev = glm::vec3(prev.pos);
-    glm::vec3 p_next = glm::vec3(nextNext.pos);
+    bent_lookup_key_.modelId.assign(segModelId);
+    bent_lookup_key_.p0 = p0;
+    bent_lookup_key_.p1 = p1;
+    bent_lookup_key_.rot0 = start.rot;
+    bent_lookup_key_.rot1 = end.rot;
+    bent_lookup_key_.rigid = rigid;
+    bent_lookup_key_.reversed = reversed;
+    bent_lookup_key_.segments = segments;
+    auto cacheIt = bent_gpu_cache_.find(bent_lookup_key_);
+    if (cacheIt == bent_gpu_cache_.end()) {
+        const std::string modelId(segModelId);
+        const ParsedGeometry* geometry = obj_renderer_.GetOrLoadParsedGeometry(modelId, false);
+        if (!geometry) return;
 
-    glm::vec3 tan0 = (p1 - p_prev) * 0.5f;
-    glm::vec3 tan1 = (p_next - p0) * 0.5f;
+        spline_geometry::EngineSpanInput span;
+        span.from = p0;
+        span.to = p1;
+        span.rotFrom = start.rot;
+        span.rotTo = end.rot;
+        span.waypointSegments = waypointSegments;
+        span.maxSegments = parent.splineSegmentCount;
+        span.rigid = rigid;
+        span.reversed = reversed;
+        // The engine's own transform of the segment model's vertex buffer
+        // (Direct3DRender_FillSplineVB, HOOK 0x49CC80, src/render/render.c:613-670),
+        // in source vertex order and with the model's own index buffer.
+        const spline_geometry::EngineSpanMesh spanMesh =
+            spline_geometry::BuildEngineSpanMesh(*geometry, span);
+        if (spanMesh.vertexCount <= 0) return;
 
-    // Clamp tangent magnitude to interval length to prevent overshoot at transitions.
-    float intervalLen = glm::length(p1 - p0);
-    float t0len = glm::length(tan0);
-    float t1len = glm::length(tan1);
-    if (t0len > intervalLen) tan0 *= intervalLen / t0len;
-    if (t1len > intervalLen) tan1 *= intervalLen / t1len;
+        const Mesh& sourceMesh = obj_renderer_.GetOrLoadMesh(modelId, false);
+        if (sourceMesh.vertexCount == 0) return;
 
-    // Tile geometry span in model X. minX is the model's near edge; localLen is the
-    // full X extent. A natural (unstretched) tile spans localLen * 40.96 in world units.
-    const float LENGTH_SCALE = 40.96f;
-    float minX     = mesh.center.x - mesh.halfExtents.x;
-    float localLen = mesh.halfExtents.x * 2.0f;
-    if (localLen < 1.f) localLen = 1.f;
-    float tileWorldLen = localLen * LENGTH_SCALE;
-
-    // Choose the tile count that lands closest to the natural tile length, then stretch
-    // each tile in X to fill its share of the segment exactly. This guarantees tiles
-    // butt end-to-end with no gaps or overlaps (the game's "Snap Length" behavior).
-    int steps = std::max(1, (int)std::lround(intervalLen / tileWorldLen));
-    steps = std::min(steps, 64);
-
-    const glm::vec3 worldZ(0.f, 0.f, 1.f);
-
-    for (int i = 0; i < steps; ++i) {
-        float ta = (float)i       / (float)steps;
-        float tb = (float)(i + 1) / (float)steps;
-
-        // Tile endpoints sampled on the Hermite curve. Tiles stay at their authored
-        // (data) Z — the game does NOT lift track onto terrain; where the track dips
-        // below the surface it is simply hidden by the terrain (e.g. track entering a
-        // cutting/under a hill). Snapping to terrain wrongly exposed those buried runs.
-        glm::vec3 a = HermitePoint(ta, p0, p1, tan0, tan1);
-        glm::vec3 b = HermitePoint(tb, p0, p1, tan0, tan1);
-
-        // Orient the tile along the chord a→b. Pitch comes from the actual placed
-        // endpoints, so the tile follows the grade and connects seamlessly to its
-        // neighbours. (Chord direction, not the instantaneous tangent, prevents the
-        // curve overshoot that made earlier builds look near-vertical.)
-        glm::vec3 chord = b - a;
-        float chordLen = glm::length(chord);
-        if (chordLen < 0.001f) continue;
-        glm::vec3 forward = chord / chordLen;
-
-        glm::vec3 right = glm::cross(worldZ, forward);
-        if (glm::length(right) < 0.001f)               // near-vertical fallback
-            right = glm::cross(glm::vec3(1.f, 0.f, 0.f), forward);
-        right = glm::normalize(right);
-        glm::vec3 up = glm::cross(forward, right);
-
-        glm::mat4 rotMat(1.f);
-        rotMat[0] = glm::vec4(forward, 0.f);           // local X → track direction
-        rotMat[1] = glm::vec4(right,   0.f);           // local Y → track width
-        rotMat[2] = glm::vec4(up,      0.f);           // local Z → track up
-
-        // Stretch X so the tile's localLen exactly covers chordLen; Y/Z keep their
-        // natural scale so the cross-section (width/height) is undistorted.
-        float sx = chordLen / localLen;
-
-        // Place so the model's near edge (local minX) lands on point a.
-        glm::vec3 pos = a - forward * (sx * minX);
-
-        glm::mat4 unscaledModel = glm::translate(glm::mat4(1.f), pos) * rotMat;
-        glm::mat4 model = glm::scale(unscaledModel, glm::vec3(sx, LENGTH_SCALE, LENGTH_SCALE));
-
-        glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
-
-        for (const auto& sub : mesh.subMeshes) {
-            if (sub.VAO == 0 || sub.vertexCount == 0) continue;
-            if (sub.textureID > 0) {
-                glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
-                glUniform1i(loc_useTex, 1);
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, sub.textureID);
-                glUniform1i(loc_tex, 0);
-            } else {
-                glUniform3f(loc_dirlight, 0.7f, 0.7f, 0.7f);
-                glUniform3f(loc_ambient,  0.2f, 0.2f, 0.2f);
-                glUniform1i(loc_useTex, 0);
-            }
-            glBindVertexArray(sub.VAO);
-            glDrawArrays(GL_TRIANGLES, 0, sub.vertexCount);
-        }
-        glBindVertexArray(0);
-
-        // Rails/details (ATTA) use the same orientation and the same X stretch so they
-        // stay aligned with the stretched deck tile.
-        obj_renderer_.DrawAttachmentsForSpline(segModelId, /*isBuilding=*/false, unscaledModel, ubo_mats,
-                                               glm::vec3(sx, LENGTH_SCALE, LENGTH_SCALE));
-        glUseProgram(shader_program);
-        glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo_mats);
-        glDepthFunc(GL_LESS);
-        glDepthMask(GL_TRUE);
-        glDisable(GL_BLEND);
-        glDisable(GL_POLYGON_OFFSET_FILL);
+        CachedBentSpanGpu cached;
+        cached.subMeshes = UploadEngineSpanMesh(spanMesh, sourceMesh);
+        if (cached.subMeshes.empty()) return;
+        cacheIt = bent_gpu_cache_.emplace(bent_lookup_key_, std::move(cached)).first;
     }
-}
 
+    // BuildEngineSpanMesh returns offsets relative to the span's mid point, which
+    // is the origin the engine's joints are stored against (SplineObjSegment.pos
+    // is set to the mid point in SplineObjSegment_Setup) and the world position
+    // Direct3DRender_DrawSplineMesh translates the span to
+    // (src/render/render.c:558-570: a scale-only world matrix plus o->pos).
+    const glm::dvec3 origin = (p0 + p1) * 0.5;
+    const glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(static_cast<float>(origin.x),
+                                                                      static_cast<float>(origin.y),
+                                                                      static_cast<float>(origin.z)))
+                          * glm::scale(glm::mat4(1.0f), glm::vec3(40.96f));
+    glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
+
+    for (const auto& sub : cacheIt->second.subMeshes) {
+        if (sub.VAO == 0 || sub.indexCount == 0) continue;
+        if (sub.textureID > 0) {
+            glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
+            glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+            glUniform1i(loc_useTex, 1);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, sub.textureID);
+            glUniform1i(loc_tex, 0);
+        } else {
+            glUniform3f(loc_dirlight, 0.7f, 0.7f, 0.7f);
+            glUniform3f(loc_ambient,  0.2f, 0.2f, 0.2f);
+            glUniform1i(loc_useTex, 0);
+        }
+        glBindVertexArray(sub.VAO);
+        // The engine draws the transformed vertex buffer INDEXED, with the
+        // model's own indices (draw_group, src/render/render.c:522-532:
+        // DrawIndexedPrimitiveVB over g->indices / g->indexCount).
+        glDrawElements(GL_TRIANGLES, sub.indexCount, GL_UNSIGNED_INT, (void*)0);
+    }
+    glBindVertexArray(0);
+}

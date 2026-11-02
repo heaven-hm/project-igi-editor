@@ -8,31 +8,54 @@
 #include "logger.h"
 #include <string>
 
-static void CleanBloatedBackslashesInPlace(char* str) {
+// Reader_ReadLine, HOOK 0x4BEFE0, src/qsc/reader.c:36-111 (retail engine).
+//
+// The engine's line reader is the only place the QSC format has comments: its
+// strip block (reader.c:80-109) ends the line at the first "//".  The quoted
+// region loop it contains is entered with c == '"' and breaks on its first
+// check, so as written it never skips a quoted region -- reader.c:88 states the
+// result: "starts on the opening quote and stops there, so \"//\" is cut even
+// inside strings".  Nothing else is rewritten: in particular the engine does
+// not collapse or unescape backslashes in this function, so the former
+// CleanBloatedBackslashesInPlace (no engine counterpart) is gone.
+//
+// This parser scans the whole file rather than a per-line buffer, so the cut is
+// applied in place and the line terminators (which Parser_SkipWhiteChar treats
+// as space) are preserved.
+static void StripLineCommentsInPlace(char* str) {
     if (!str) return;
-    char* src = str;
-    char* dst = str;
-    while (*src) {
-        if (*src == '\\') {
-            int count = 0;
-            while (src[count] == '\\') {
-                count++;
+
+    char* w = str;
+    char* line = str;
+
+    while (*line) {
+        char* end = line;
+        while (*end && *end != '\r' && *end != '\n') {
+            end++;
+        }
+
+        char* cut = end;
+        for (char* p = line; p + 1 < end; p++) {
+            if (p[0] == '/' && p[1] == '/') {
+                cut = p;
+                break;
             }
-            if (count >= 4) {
-                *dst++ = '\\';
-                *dst++ = '\\';
-                src += count;
-            } else {
-                for (int i = 0; i < count; ++i) {
-                    *dst++ = '\\';
-                }
-                src += count;
-            }
-        } else {
-            *dst++ = *src++;
+        }
+
+        for (char* p = line; p < cut; p++) {
+            *w++ = *p;
+        }
+        for (char* p = end; *p == '\r' || *p == '\n'; p++) {
+            *w++ = *p;
+        }
+
+        line = end;
+        while (*line == '\r' || *line == '\n') {
+            line++;
         }
     }
-    *dst = '\0';
+
+    *w = '\0';
 }
 
 
@@ -436,6 +459,27 @@ bool Tex_Load(const char* filename, pics_s& pics) {
 	return load_ok;
 }
 
+bool Tex_LoadFromMemory(const uint8_t* data, size_t size, pics_s& pics) {
+	memset(&pics, 0, sizeof(pics));
+	if (!data || size < sizeof(tex_head_s)) return false;
+
+	const tex_head_s* head = reinterpret_cast<const tex_head_s*>(data);
+	if (head->ident_ != TEX_IDENT) return false;
+
+	bool load_ok = false;
+	if (head->version_ == 2)
+		load_ok = Tex_Loadv2(const_cast<tex_head_v2_s*>(reinterpret_cast<const tex_head_v2_s*>(data)), pics);
+	else if (head->version_ == 7)
+		load_ok = Tex_Loadv7(const_cast<tex_head_v7_s*>(reinterpret_cast<const tex_head_v7_s*>(data)), pics);
+	else if (head->version_ == 9)
+		load_ok = Tex_Loadv9(const_cast<tex_head_v9_s*>(reinterpret_cast<const tex_head_v9_s*>(data)), pics);
+	else if (head->version_ == 11)
+		load_ok = Tex_Loadv11(const_cast<tex_head_v11_s*>(reinterpret_cast<const tex_head_v11_s*>(data)), pics);
+
+	if (!load_ok) Pic_FreePics(pics);
+	return load_ok;
+}
+
 /*
 ================================================================================
  QSC
@@ -449,6 +493,7 @@ QSC::QSC() :
 	root_func_count_(0),
 	allocated_funcs_(0),
 	allocated_args_(0),
+	parse_overflow_(false),
 	parse_func_stack_size_(0)
 {
 	//
@@ -467,7 +512,7 @@ void QSC::Load(const char* filename) {
 		return;
 	}
 
-	CleanBloatedBackslashesInPlace(scripts_);
+	StripLineCommentsInPlace(scripts_);
 
 	// Make a pristine copy for raw line extraction because Parse() is destructive
 	size_t len = strlen(scripts_);
@@ -482,6 +527,7 @@ void QSC::Load(const char* filename) {
 	root_func_count_ = 0;
 	allocated_funcs_ = 0;
 	allocated_args_ = 0;
+	parse_overflow_ = false;
 
 	// start parse
 	Parse();
@@ -502,6 +548,7 @@ void QSC::Unload() {
 	root_func_count_ = 0;
 	allocated_funcs_ = 0;
 	allocated_args_ = 0;
+	parse_overflow_ = false;
 	parse_func_stack_size_ = 0;
 }
 
@@ -633,6 +680,7 @@ QSC::func_s* QSC::AllocFunc() {
 		return new_func;
 	}
 	else {
+		parse_overflow_ = true;
 		Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "QSC::AllocFunc buf overflow\n");
 	}
 
@@ -651,6 +699,7 @@ QSC::arg_s* QSC::AllocArg() {
 		return new_arg;
 	}
 	else {
+		parse_overflow_ = true;
 		Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "QSC::AllocArg buf overflow\n");
 	}
 
@@ -665,6 +714,9 @@ void QSC::Parse() {
 		}
 
 		AddFunc(func);
+		if (parse_overflow_) {
+			break;
+		}
 
 		if (!Parser_SkipWhiteChar()) {
 			break;
@@ -736,11 +788,30 @@ bool QSC::Parser_ForwardToChar(char c) {
 	return *pc_ != '\0';
 }
 
+// Quoted-string scan.
+//
+// There is no counterpart to this helper in the engine's line reader:
+// Reader_ReadLine's quoted-region loop (HOOK 0x4BEFE0, src/qsc/reader.c:87-103)
+// is entered with c == '"' and breaks on its first check, so it never advances.
+// The scan that actually finds the closing quote is in Lex_ReadToken
+// (HOOK 0x517260, src/terrdraw/lexer.c:32-60): on a backslash it consumes the
+// next character and continues, otherwise a '"' ends the string.  That is what
+// the loop below does.
+//
+// The value is kept raw.  DEVIATION (reported, not fixed here): Lex_ReadToken
+// also decodes \b \n \r \t \xNN and drops the backslash for any other escaped
+// character, so the engine's value for "...\n..." contains a real newline.
+// Decoding here would require ArgTokenFromArg (source/level/level_objects_internal.h)
+// to re-escape on write, which is outside this module.
 bool QSC::Parser_ForwardToDoubleQuoto() {
 	while (*pc_) {
 
 		if (*pc_ == '\\') {
 			pc_ += 2;	// skip escape character
+			if (pc_[-1] == '\0') {
+				pc_--;	// the escape ran into the terminator
+				break;
+			}
 		}
 		else if (*pc_ == '"') {
 			break;
@@ -805,7 +876,15 @@ QSC::func_s* QSC::ParseFunc() {
 	new_func->end_offset_ = new_func->start_offset_;
 	new_func->args_ = nullptr;
 
-	parse_func_stack_[parse_func_stack_size_++] = new_func;
+	if (parse_func_stack_size_ < 1024) {
+		parse_func_stack_[parse_func_stack_size_++] = new_func;
+	}
+	else {
+		parse_overflow_ = true;
+		Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "QSC::ParseFunc nesting overflow\n");
+		allocated_funcs_--;
+		return nullptr;
+	}
 
 	if (!ParseArgs(new_func)) {
 		allocated_funcs_--;
@@ -1024,7 +1103,13 @@ bool QSC::ParseArgs(func_s* func) {
 }
 
 void QSC::AddFunc(func_s* func) {
-	root_funcs_[root_func_count_++] = func;
+	if (root_func_count_ < MAX_QSC_FUNCS) {
+		root_funcs_[root_func_count_++] = func;
+	}
+	else {
+		parse_overflow_ = true;
+		Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "QSC::AddFunc root_funcs overflow\n");
+	}
 }
 
 void QSC::AddArgToFunc(func_s* func, arg_s* arg) {

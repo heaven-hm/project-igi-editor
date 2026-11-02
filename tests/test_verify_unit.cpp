@@ -1,7 +1,49 @@
 #include <gtest/gtest.h>
+#include <algorithm>
+#include "cli/cli_handler.h"
 #include "cli/verify_level_core.h"
+#include "config.h"
+#include "level/qsc_lexer.h"
+#include "level/qsc_parser.h"
+#include "level/qvm_compiler.h"
+#include "level/task_schema.h"
 #include "utils.h"
+#include <chrono>
 #include <filesystem>
+#include <fstream>
+
+namespace {
+
+class ScopedEnvironmentVariable {
+public:
+    ScopedEnvironmentVariable(const char* name, const std::string& value) : name_(name) {
+        char* oldValue = nullptr;
+        size_t oldValueLength = 0;
+        if (_dupenv_s(&oldValue, &oldValueLength, name) == 0 && oldValue != nullptr) {
+            oldValue_ = oldValue;
+            free(oldValue);
+        }
+        _putenv_s(name_.c_str(), value.c_str());
+    }
+
+    ~ScopedEnvironmentVariable() {
+        _putenv_s(name_.c_str(), oldValue_.c_str());
+    }
+
+private:
+    std::string name_;
+    std::string oldValue_;
+};
+
+void WriteQedConfig(const std::filesystem::path& gameRoot, bool logsEnabled) {
+    const std::filesystem::path qedDir = gameRoot / "editor" / "qed";
+    std::filesystem::create_directories(qedDir);
+    std::ofstream config(qedDir / "qedconfig.qsc");
+    config << "QEDLogs(" << (logsEnabled ? "TRUE" : "FALSE") << ");\n";
+    config << "QEDDebug(FALSE);\n";
+}
+
+} // namespace
 
 // ============================================================
 //  verify_level_core — unit tests (no game files, no launch)
@@ -313,8 +355,116 @@ TEST(ParseQscObjectsTest, ParsesSplineObjWaypointFromFixture) {
     EXPECT_TRUE(found) << "322_01_1 not found in parsed objects";
 }
 
+TEST(TaskSchemaTest, SplineWaypointExposesEndingSegmentModel) {
+    const auto* schema = TaskSchemaNS::GetBuiltinSchema("SplineObjWaypoint");
+    ASSERT_NE(schema, nullptr);
+    auto field = std::find_if(schema->begin(), schema->end(), [](const auto& def) {
+        return def.name == "Segment Model";
+    });
+    ASSERT_NE(field, schema->end());
+    EXPECT_EQ(field->argOffset, 10);
+    EXPECT_EQ(field->typeName, "String16");
+}
+
 TEST(ParseQscObjectsTest, ReturnsEmptyForMissingFile) {
     std::map<std::string, std::string> noNames;
     auto objs = ParseQscObjects(kMissingPath(), noNames);
     EXPECT_TRUE(objs.empty());
+}
+
+TEST(VerifyOneLevelTest, DoesNotRequireALogWhenDisabledByConfiguration) {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() /
+        ("igi1ed-verify-no-log-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const fs::path levelDir = root / "missions" / "location0" / "level1";
+    const fs::path verifierOutput = root / "output";
+    const fs::path qvmPath = levelDir / "objects.qvm";
+    const fs::path missingLog = root / "disabled.log";
+    std::error_code ec;
+    fs::create_directories(levelDir, ec);
+    ASSERT_FALSE(ec);
+    fs::create_directories(verifierOutput, ec);
+    ASSERT_FALSE(ec);
+
+    std::ifstream sourceFile(kQscFixture());
+    const std::string source((std::istreambuf_iterator<char>(sourceFile)),
+                             std::istreambuf_iterator<char>());
+    const qsc::LexResult lexed = qsc::Lex(source);
+    ASSERT_TRUE(lexed.ok) << lexed.error;
+    const qsc::ParseResult parsed = qsc::Parse(lexed.tokens);
+    ASSERT_TRUE(parsed.ok) << parsed.error;
+    std::string compileError;
+    ASSERT_TRUE(qvm::CompileToFile(*parsed.program, qvmPath.string(), &compileError))
+        << compileError;
+
+    const LevelReport report = VerifyOneLevel(
+        root.string(), verifierOutput.string(), missingLog.string(), 1, {}, false);
+    EXPECT_TRUE(report.logChecksSkipped);
+    EXPECT_FALSE(report.logError);
+    EXPECT_EQ(report.logEntries, 0);
+    EXPECT_FALSE(report.objects.expected.empty());
+    EXPECT_TRUE(report.buildings.missing.empty());
+    EXPECT_TRUE(report.objects.missing.empty());
+    EXPECT_TRUE(report.ai.missing.empty());
+
+    fs::remove_all(root, ec);
+}
+
+TEST(VerifyLevelTest, GamePathConfigurationControlsWhetherLogsAreRequired) {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() /
+        ("igi1ed-verify-game-path-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const fs::path callerRoot = root / "caller";
+    const fs::path targetRoot = root / "target";
+    const fs::path levelDir = targetRoot / "missions" / "location0" / "level1";
+    const fs::path qvmPath = levelDir / "objects.qvm";
+    const fs::path missingLog = root / "missing.log";
+    const fs::path reportJson = root / "report.json";
+    const fs::path reportMd = root / "report.md";
+    std::error_code ec;
+    fs::create_directories(levelDir, ec);
+    ASSERT_FALSE(ec);
+    WriteQedConfig(callerRoot, true);
+    WriteQedConfig(targetRoot, false);
+
+    std::ifstream sourceFile(kQscFixture());
+    const std::string source((std::istreambuf_iterator<char>(sourceFile)),
+                             std::istreambuf_iterator<char>());
+    const qsc::LexResult lexed = qsc::Lex(source);
+    ASSERT_TRUE(lexed.ok) << lexed.error;
+    const qsc::ParseResult parsed = qsc::Parse(lexed.tokens);
+    ASSERT_TRUE(parsed.ok) << parsed.error;
+    std::string compileError;
+    ASSERT_TRUE(qvm::CompileToFile(*parsed.program, qvmPath.string(), &compileError))
+        << compileError;
+
+    {
+        ScopedEnvironmentVariable gamePath("IGI_GAME_PATH", callerRoot.string());
+        Config::Init();
+        ASSERT_TRUE(Config::Get().enableLogging);
+
+        VerifyLevelParams params;
+        params.levels = {1};
+        params.gamePath = targetRoot.string();
+        params.logPath = missingLog.string();
+        params.skipLaunch = true;
+        params.delay = 0;
+        params.reportJson = reportJson.string();
+        params.reportMd = reportMd.string();
+        EXPECT_EQ(CLIHandler::VerifyLevel(params), 0);
+
+        std::ifstream json(reportJson);
+        const std::string jsonText((std::istreambuf_iterator<char>(json)),
+                                   std::istreambuf_iterator<char>());
+        EXPECT_NE(jsonText.find("\"log_checks_skipped\": true"), std::string::npos);
+
+        std::ifstream markdown(reportMd);
+        const std::string markdownText((std::istreambuf_iterator<char>(markdown)),
+                                       std::istreambuf_iterator<char>());
+        EXPECT_NE(markdownText.find("Log checks: skipped by configuration"), std::string::npos);
+    }
+
+    fs::remove_all(root, ec);
 }

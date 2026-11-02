@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "mutations": [
+    { "id": "autosave-paused-gate", "detector": "policy truth table", "required": true },
+    { "id": "history-redo-clear", "detector": "history branching test", "required": true },
+    { "id": "chunk-skip-header", "detector": "malformed parser corpus", "required": true },
+    { "id": "pair-validation", "detector": "save rollback test", "required": true },
+    { "id": "inconclusive-required-status", "detector": "required lane aggregation", "required": true },
+    { "id": "attachment-presence", "detector": "visual negative fixture", "required": true },
+    { "id": "configured-save-binding", "detector": "keyboard save scenario", "required": true }
+  ]
+}

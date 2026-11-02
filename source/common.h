@@ -5,6 +5,31 @@
 
 #pragma once
 
+// MAX_PATH is a Win32 constant; macOS/libc++ and Linux have no such thing, which made
+// common.cpp fail to COMPILE with the host clang (12 errors, at HEAD too -- not a
+// regression).  That matters beyond the build: common.cpp is in the host archive, and
+// when it does not compile its object is missing and the archive carries an undefined
+// _RENDER_Z_NEAR, so 54 suites abort at load with
+//   dyld: symbol not found in flat namespace '_RENDER_Z_NEAR'
+// -- one missing object masquerading as 54 broken suites.
+// 1024 is the size the Str_* buffers in common.cpp actually use; any value >= those
+// arrays is safe, and 4096 is the conventional POSIX PATH_MAX slack.
+#if !defined(_WIN32) && !defined(MAX_PATH)
+#  define MAX_PATH 4096
+#endif
+
+// This header is self-contained: it names size_t, va_list, FILE and
+// std::exception in its declarations, so it must include the headers that
+// define them.  It used to rely on its includers having pulled those in first,
+// which made any translation unit that includes common.h first fail to compile
+// (tests/test_terrain_ctr_rules.cpp did exactly that: "expected class name" at
+// the quit_exception declaration below).
+#include <cstdarg>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <exception>
+
 #include <glm/glm.hpp>
 
 
@@ -116,6 +141,15 @@ enum class log_type_t {
 };
 
 void	Log(log_type_t tp, const char * file, int line, const char * fmt, ...);
+
+/*
+Logs regardless of the configured filter. Use this for failures that happen before
+Config::Get() is usable -- i.e. during startup and renderer/shader initialisation --
+where the ordinary Log() would be silently dropped because logging is still disabled.
+See the empty-log fix: the shader compile and program link errors below were being
+written and then discarded, so a shader that failed to compile reported nothing.
+*/
+void	LogStartup(log_type_t tp, const char * file, int line, const char * fmt, ...);
 
 /*
 ================================================================================
@@ -345,6 +379,12 @@ public:
 
 	virtual void			SetupClearColor(const glm::vec4& color) = 0;
 	virtual void			SetupFog(const glm::vec4 & color, float fog_far) = 0;
+	// The OBJECT pass's fog, which retail takes from a DIFFERENT light set than the
+	// terrain's: gFogColor / gFogDensity are gFogColors[1] / gFogDensities[1], i.e.
+	// "Fog color object category 1" / "Fog density object category 1" (address
+	// arithmetic in source/runtime/mission_fog.h, kObjectLightSet). `fog_far` is the
+	// engine's e-folding distance in world units, exactly as for SetupFog.
+	virtual void			SetupObjectFog(const glm::vec4& color, float fog_far) = 0;
 	virtual void			SetupSkydome(const skydome_define_s& d) = 0;
 
 	virtual void			LoadFlatSkyLayerTex(int layer_no, const pic_s* pic) = 0;

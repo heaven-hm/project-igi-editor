@@ -4,6 +4,9 @@
  *          Split from app.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include "runtime/loading_bar_style.h"
+#include "runtime/pause_menu_cursor.h"
+#include "runtime/progress_overlay_policy.h"
 
 static GLuint LoadOneSpr(const char* path, int& w, int& h) {
 	TEXFile tex = TEX_Parse(path);
@@ -45,32 +48,43 @@ static GLuint LoadOneSpr(const char* path, int& w, int& h) {
 }
 
 void App::LoadAllCursors() {
-	// Order must match CursorMode enum values (0..9)
-	const char* paths[NUM_CURSORS] = {
-		"editor\\qed\\TerrainEditIcon_Pointer.spr",     // 0 Default
-		"editor\\qed\\highlighttool.spr",               // 1 Hover
-		"editor\\qed\\activetool.spr",                  // 2 Selected
-		"editor\\qed\\TerrainEditIcon_Lift.spr",        // 3 TerrainLift
-		"editor\\qed\\TerrainEditIcon_Lower.spr",       // 4 TerrainLower
-		"editor\\qed\\TerrainEditIcon_Flatten.spr",     // 5 TerrainFlatten
-		"editor\\qed\\TerrainEditIcon_FlattenLine.spr", // 6 TerrainFlattenLine
-		"editor\\qed\\TerrainEditIcon_Drop.spr",        // 7 TerrainDrop
-		"editor\\qed\\TerrainEditIcon_Soften.spr",      // 8 TerrainSoften
-		"editor\\qed\\inactivetool.spr",                // 9 Inactive
-		"editor\\qed\\editor_camera.spr",               // 10 Camera (ALT held)
-		"editor\\qed\\editor_move.spr",                 // 11 Move (ALT held + moving)
+	// Search bundle/exe directory first, then game root
+	std::string qed = Utils::ToNativePath(Utils::GetExeDirectory() + "/editor/qed/");
+	if (!std::filesystem::exists(Utils::ToNativePath(qed + "TerrainEditIcon_Pointer.spr"))) {
+		qed = Utils::ToNativePath(Utils::GetIGIRootPath() + "/editor/qed/");
+	}
+	const std::string absPaths[NUM_CURSORS] = {
+		Utils::ToNativePath(qed + "TerrainEditIcon_Pointer.spr"),  // 0 Default
+		Utils::ToNativePath(qed + "highlighttool.spr"),             // 1 Hover
+		Utils::ToNativePath(qed + "activetool.spr"),                // 2 Selected
+		Utils::ToNativePath(qed + "TerrainEditIcon_Lift.spr"),      // 3 TerrainLift
+		Utils::ToNativePath(qed + "TerrainEditIcon_Lower.spr"),     // 4 TerrainLower
+		Utils::ToNativePath(qed + "TerrainEditIcon_Flatten.spr"),   // 5 TerrainFlatten
+		Utils::ToNativePath(qed + "TerrainEditIcon_FlattenLine.spr"),// 6 TerrainFlattenLine
+		Utils::ToNativePath(qed + "TerrainEditIcon_Drop.spr"),      // 7 TerrainDrop
+		Utils::ToNativePath(qed + "TerrainEditIcon_Soften.spr"),    // 8 TerrainSoften
+		Utils::ToNativePath(qed + "inactivetool.spr"),              // 9 Inactive
+		Utils::ToNativePath(qed + "editor_camera.spr"),             // 10 Camera (ALT held)
+		Utils::ToNativePath(qed + "editor_move.spr"),               // 11 Move (ALT held + moving)
 	};
 	cursor_loaded_count_ = 0;
 	for (int i = 0; i < NUM_CURSORS; ++i) {
-		cursor_tex_ids_[i] = LoadOneSpr(paths[i], cursor_tex_ws_[i], cursor_tex_hs_[i]);
+		cursor_tex_ids_[i] = LoadOneSpr(absPaths[i].c_str(), cursor_tex_ws_[i], cursor_tex_hs_[i]);
 		if (cursor_tex_ids_[i]) cursor_loaded_count_++;
+		else Logger::Get().Log(LogLevel::WARNING, "[Cursor] Failed to load: " + absPaths[i]);
 	}
+	Logger::Get().Log(LogLevel::INFO, "[Cursor] Loaded " + std::to_string(cursor_loaded_count_) +
+		"/" + std::to_string(NUM_CURSORS) + " cursor sprites");
 
 	// Cache AITYPE_ model IDs from IGIModels.json
 	ai_model_ids_.clear();
 	{
-		std::string jsonPath = Utils::GetExeDirectory() + "\\editor\\tools\\IGIModels.json";
+		std::string jsonPath = Utils::ToNativePath(Utils::GetExeDirectory() + "/editor/tools/IGIModels.json");
 		std::ifstream jf(jsonPath);
+		if (!jf.is_open()) {
+			jsonPath = Utils::ToNativePath(Utils::GetIGIRootPath() + "/editor/tools/IGIModels.json");
+			jf.open(jsonPath);
+		}
 		if (jf) {
 			std::string content((std::istreambuf_iterator<char>(jf)), {});
 			size_t pos = 0;
@@ -91,27 +105,48 @@ void App::LoadAllCursors() {
 
 void App::LoadHelpEntries() {
 	help_entries_.clear();
-	std::vector<std::string> paths = {
-		Utils::GetExeDirectory() + "\\editor\\qed\\qedkeybindings.qsc",
-		Utils::GetExeDirectory() + "\\qed\\qedkeybindings.qsc",
-		Utils::GetIGIRootPath() + "\\editor\\qed\\qedkeybindings.qsc",
-		Utils::GetIGIRootPath() + "\\qed\\qedkeybindings.qsc",
-		"editor\\qed\\qedkeybindings.qsc",
-		"qed\\qedkeybindings.qsc"
+	std::string content;
+	std::vector<std::string> qvmPaths = {
+		Utils::GetIGIRootPath() + "\\editor\\qed\\qedkeybindings.qvm",
+		Utils::GetIGIRootPath() + "\\qed\\qedkeybindings.qvm",
+		Utils::GetExeDirectory() + "\\editor\\qed\\qedkeybindings.qvm",
+		Utils::GetExeDirectory() + "\\qed\\qedkeybindings.qvm",
+		"editor\\qed\\qedkeybindings.qvm",
+		"qed\\qedkeybindings.qvm"
 	};
-	std::ifstream f;
-	for (const auto& p : paths) {
-		f.open(p);
-		if (f.is_open()) {
-			Logger::Get().Log(LogLevel::INFO, "[App] Loaded keybindings from: " + p);
+	for (const auto& qp : qvmPaths) {
+		QVMFile qvm = QVM_Parse(qp);
+		if (qvm.valid) {
+			content = QVM_DecompileToString(qvm);
+			Logger::Get().Log(LogLevel::INFO, "[App] Loaded keybindings from QVM: " + qp);
 			break;
 		}
-		f.clear();
 	}
-	if (!f.is_open()) {
-		Logger::Get().Log(LogLevel::WARNING, "[App] Could not load help keybindings file: qedkeybindings.qsc");
+	if (content.empty()) {
+		std::vector<std::string> paths = {
+			Utils::GetExeDirectory() + "\\editor\\qed\\qedkeybindings.qsc",
+			Utils::GetExeDirectory() + "\\qed\\qedkeybindings.qsc",
+			Utils::GetIGIRootPath() + "\\editor\\qed\\qedkeybindings.qsc",
+			Utils::GetIGIRootPath() + "\\qed\\qedkeybindings.qsc",
+			"editor\\qed\\qedkeybindings.qsc",
+			"qed\\qedkeybindings.qsc"
+		};
+		std::ifstream f;
+		for (const auto& p : paths) {
+			f.open(p);
+			if (f.is_open()) {
+				Logger::Get().Log(LogLevel::INFO, "[App] Loaded keybindings from: " + p);
+				content.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+				break;
+			}
+			f.clear();
+		}
+	}
+	if (content.empty()) {
+		Logger::Get().Log(LogLevel::WARNING, "[App] Could not load help keybindings file: qedkeybindings.qvm/.qsc");
 		return;
 	}
+	std::stringstream f(content);
 	std::string line;
 	while (std::getline(f, line)) {
 		// Strip leading whitespace
@@ -150,11 +185,14 @@ void App::LoadHelpEntries() {
 
 void App::LoadAutoCompleteKeywords() {
 	autocomplete_keywords_.clear();
-	std::string path = Utils::GetExeDirectory() + "\\editor\\tools\\IGIAutoComplete.txt";
+	std::string path = Utils::ToNativePath(Utils::GetExeDirectory() + "/editor/tools/IGIAutoComplete.txt");
 	std::ifstream f(path);
 	if (!f.is_open()) {
-		// try IGI root fallback
-		path = Utils::GetIGIRootPath() + "\\editor\\tools\\IGIAutoComplete.txt";
+		path = Utils::ToNativePath(Utils::GetIGIRootPath() + "/editor/tools/IGIAutoComplete.txt");
+		f.open(path);
+	}
+	if (!f.is_open()) {
+		path = Utils::ToNativePath(Utils::GetExeDirectory() + "/editor/tools/igi1conv/IGIAutoComplete.txt");
 		f.open(path);
 	}
 	if (!f.is_open()) { Logger::Get().Log(LogLevel::WARNING, "[App] IGIAutoComplete.txt not found"); return; }
@@ -230,29 +268,20 @@ void App::ConfirmFileDialog() {
 }
 
 void App::UpdateCursorMode() {
-	if (terrain_edit_enabled_) {
-		// Drop is the neutral terrain cursor; Lift/Lower for raise/lower brush
-		if (edit_brush_ == 0)
-			current_cursor_mode_ = CursorMode::TerrainLift;  // BRUSH_RAISE
-		else if (edit_brush_ == 1)
-			current_cursor_mode_ = CursorMode::TerrainLower; // BRUSH_LOWER
-		else
-			current_cursor_mode_ = CursorMode::TerrainDrop;  // any other terrain mode
-		return;
-	}
-	// Camera mode (ALT held)
 	bool enableCameraMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
-	if (enableCameraMode) {
-		// ALT + left button held = camera look (editor_camera.spr)
-		// ALT + any movement = lateral move (editor_move.spr)
-		current_cursor_mode_ = mouse_state_.left_button_down_ ? CursorMode::Camera : CursorMode::Move;
+	if (enableCameraMode)
 		camera_mode_moved_ = false;
-		return;
-	}
-	current_cursor_mode_ = CursorMode::Default;
+	current_cursor_mode_ = igi::ResolveCursorMode(
+		enableCameraMode,
+		mouse_state_.left_button_down_,
+		terrain_edit_enabled_,
+		edit_brush_,
+		selected_object_index_,
+		hover_object_index_);
 }
 
 void App::DrawCustomCursor() {
+	if (!igi::ShouldDrawCustomCursor(pause_mode_)) return;
 	UpdateCursorMode();
 	int idx = (int)current_cursor_mode_;
 	if (idx < 0 || idx >= NUM_CURSORS || !cursor_tex_ids_[idx]) {
@@ -270,6 +299,9 @@ void App::DrawCustomCursor() {
 	// the 3D pass makes immediate-mode textured quads draw nothing.
 	glUseProgram(0);
 	glBindVertexArray(0);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+	for (int i = 0; i < 4; ++i) glDisableVertexAttribArray(i);
 	glBindBufferBase(GL_UNIFORM_BUFFER, 0, 0);
 	glActiveTexture(GL_TEXTURE0);
 
@@ -306,9 +338,34 @@ void App::DrawProgressOverlay(const char* title, int pct, const char* stage) {
 	pct = std::max(0, std::min(100, pct));
 	int vw = window_state_.viewport_width_;
 	int vh = window_state_.viewport_height_;
-	if (vw <= 0 || vh <= 0) return;
+	// No viewport, nothing to draw into: the frame is dropped (see
+	// `ProgressOverlayCanPaint`, runtime/progress_overlay_policy.h, and why
+	// `App::Init` has to seed the viewport before the startup level load).
+	if (!igi::ProgressOverlayCanPaint(vw, vh)) return;
+
+	// The overlay owns the surface for this pass: present it BEFORE pumping
+	// events and suppress any scene repaint the pump dispatches (see
+	// runtime/progress_overlay_policy.h), or the bar is never seen.
+	struct OverlayGuard {
+		bool& flag;
+		~OverlayGuard() { flag = false; }
+	} guard{progress_overlay_active_};
+	progress_overlay_active_ = true;
+
 	glViewport(0, 0, vw, vh);
-	glClearColor(0.02f, 0.06f, 0.02f, 1.0f);
+	glDisable(GL_SCISSOR_TEST); // prevent ImGui from clipping the overlay
+	glUseProgram(0);
+	glBindVertexArray(0);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+	for (int i = 0; i < 4; ++i) glDisableVertexAttribArray(i);
+	glBindBufferBase(GL_UNIFORM_BUFFER, 0, 0);
+	// The retail loading screen clears to black when it tears the bar down:
+	//   LoadingScreen_Delete (HOOK 0x48A5D0, src/loadscreen/loadscreen.c:100-108)
+	//       Display_SetClearColor(0, 0, 0);
+	//       Display_Clear();
+	// The editor has no loading picture, so its overlay backdrop is that black.
+	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	glDisable(GL_DEPTH_TEST);
 	glMatrixMode(GL_PROJECTION);
@@ -317,43 +374,90 @@ void App::DrawProgressOverlay(const char* title, int pct, const char* stage) {
 	glMatrixMode(GL_MODELVIEW);
 	glPushMatrix(); glLoadIdentity();
 
-	int pw = 340, ph = 84;
-	int px = (vw - pw) / 2, py = (vh - ph) / 2;
+	// ── the retail loading bar ──────────────────────────────────────────────
+	// Geometry, colours and the fill rule all come from
+	// source/runtime/loading_bar_style.h, which cites
+	//   LoadingScreen_New  (HOOK 0x48A440, src/loadscreen/loadscreen.c:63-96)
+	//   LoadingScreen_Step (HOOK 0x48A620, src/loadscreen/loadscreen.c:110-124)
+	// The bar is a flat 560x10 two-tone green bitmap inside a screen-centred
+	// 640x480 band (:74-76).  It has NO border, NO panel and NO gradient -- and
+	// it is NOT the pause menu's MenuScreen_DrawFrame (HOOK 0x421CD0,
+	// src/menuscreen/menuscreen.c:168-229), which is a different widget.
+	const igi::LoadingBarLayout bar = igi::BuildLoadingBarLayout(vw, vh);
+	// The layout is top-down (the engine blits with a top-left origin) while
+	// this projection has y=0 at the bottom, so flip the y.
+	const int barY = vh - (bar.y + bar.h);
+
+	// One DEBUG line per presented frame: the overlay is the one UI surface whose
+	// absence cannot be told apart from "nothing to report" (the user's own report
+	// was exactly that -- the bar was invisible for the STARTUP load, see
+	// runtime/progress_overlay_policy.h).  DEBUG keeps it out of a normal run's log
+	// (a bulk lightmap bake presents one frame per object) while making a
+	// diagnostic run say which frames were actually painted, at which viewport and
+	// with which retail rect.
+	Logger::Get().Log(LogLevel::DEBUG,
+	                  std::string("progress overlay: ") + (title != nullptr ? title : "") +
+	                      " " + std::to_string(pct) + "% (" +
+	                      (stage != nullptr ? stage : "") + ") viewport " +
+	                      std::to_string(vw) + "x" + std::to_string(vh) + " bar " +
+	                      std::to_string(bar.x) + "," + std::to_string(bar.y) + " " +
+	                      std::to_string(bar.w) + "x" + std::to_string(bar.h) + " filled " +
+	                      std::to_string(igi::LoadingBarFillWidthForPercent(bar.w, pct)));
+
 	glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	glColor4f(0.0f, 0.15f, 0.0f, 0.9f);
+
+	// Track: every pixel starts at 0x7F00 (:77-78).  The low 24 bits are
+	// literal 8-bit RGB -- Direct3D_Blit takes them verbatim and ORs in the
+	// alpha (src/d3d/direct3d.c:1111-1114) -- so the green is 0x7F / 255 and
+	// NOT the menus' 1/128 domain (gColorScale DATA 0x534AB0,
+	// src/res/qvertex.c:189).  Dividing by 128 here would draw the track at
+	// 0.99 and erase the contrast against the fill.
+	glColor4f(igi::kRetailLoadingBarRed, igi::kRetailLoadingTrackGreen,
+	          igi::kRetailLoadingBarBlue, 1.0f);
 	glBegin(GL_QUADS);
-	glVertex2i(px, py); glVertex2i(px+pw, py);
-	glVertex2i(px+pw, py+ph); glVertex2i(px, py+ph);
+	glVertex2i(bar.x, barY); glVertex2i(bar.x + bar.w, barY);
+	glVertex2i(bar.x + bar.w, barY + bar.h); glVertex2i(bar.x, barY + bar.h);
 	glEnd();
-	glColor3f(0.0f, 0.8f, 0.0f);
-	glBegin(GL_LINE_LOOP);
-	glVertex2i(px, py); glVertex2i(px+pw, py);
-	glVertex2i(px+pw, py+ph); glVertex2i(px, py+ph);
-	glEnd();
-	int bx = px+20, by = py+18, bw = pw-40, bh = 12;
-	glColor3f(0.0f, 0.3f, 0.0f);
-	glBegin(GL_QUADS);
-	glVertex2i(bx, by); glVertex2i(bx+bw, by);
-	glVertex2i(bx+bw, by+bh); glVertex2i(bx, by+bh);
-	glEnd();
-	int fw = bw * pct / 100;
-	glColor3f(0.1f, 0.95f, 0.1f);
-	glBegin(GL_QUADS);
-	glVertex2i(bx, by); glVertex2i(bx+fw, by);
-	glVertex2i(bx+fw, by+bh); glVertex2i(bx, by+bh);
-	glEnd();
+
+	// Fill: the first `filled` pixels of each row are overwritten with 0xFF00
+	// (:119-121), i.e. 8-bit green 0xFF = 1.0.  The retail rule is
+	//   filled = ls->bar.w * ls->done / ls->total;   (:115)
+	// an integer fraction of `done`/`total`; the editor's driver is a
+	// percentage, which is the same rule with total == 100.
+	const int filled = igi::LoadingBarFillWidthForPercent(bar.w, pct);
+	if (filled > 0) {
+		glColor4f(igi::kRetailLoadingBarRed, igi::kRetailLoadingFillGreen,
+		          igi::kRetailLoadingBarBlue, 1.0f);
+		glBegin(GL_QUADS);
+		glVertex2i(bar.x, barY); glVertex2i(bar.x + filled, barY);
+		glVertex2i(bar.x + filled, barY + bar.h); glVertex2i(bar.x, barY + bar.h);
+		glEnd();
+	}
 	glDisable(GL_BLEND);
 
+	// ── the editor's own label ──────────────────────────────────────────────
+	// NO ENGINE ORACLE for this text.  The retail loading bar draws none:
+	// LoadingScreen_New loads only the loading picture (`loading.pic`, a sprite
+	// via Text_Load HOOK 0x4B6DB0, src/res/text.c:12-35) and never a .fnt, so
+	// there is no retail loading-bar font to follow.  The editor therefore
+	// keeps its OWN strings and its OWN font, drawn just above the bar.
 	char msg[160];
 	snprintf(msg, sizeof(msg), "%s  -  %d%%  (%s)", title ? title : "", pct, stage ? stage : "");
-	glColor3f(0.0f, 0.9f, 0.0f);
-	glRasterPos2i(px + 20, py + ph - 18);
+	glColor3f(0.0f, igi::kRetailLoadingFillGreen, 0.0f);
+	void* overlayFont = (Config::Get().systemFontSize >= 15) ? GLUT_BITMAP_HELVETICA_18
+	                  : (Config::Get().systemFontSize <= 11) ? GLUT_BITMAP_HELVETICA_10
+	                                                         : GLUT_BITMAP_HELVETICA_12;
+	glRasterPos2i(bar.x, barY + bar.h + 6);
 	for (const char* c = msg; *c; ++c)
-		glutBitmapCharacter(GLUT_BITMAP_HELVETICA_12, *c);
+		glutBitmapCharacter(overlayFont, *c);
 
 	glMatrixMode(GL_PROJECTION); glPopMatrix();
 	glMatrixMode(GL_MODELVIEW);  glPopMatrix();
 	glEnable(GL_DEPTH_TEST);
-	glutSwapBuffers();
+
+	const igi::ProgressOverlayState overlay_state{progress_overlay_active_, false};
+	if (igi::ShouldPresentOverlayBeforePumpingEvents(overlay_state))
+		glutSwapBuffers();
+	glutMainLoopEvent();
 }
 

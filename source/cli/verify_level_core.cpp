@@ -1,7 +1,7 @@
 #include "verify_level_core.h"
 #include "level/task_schema.h"
-#include "parsers/qvm_parser.h"
-#include "parsers/qvm_decompiler.h"
+#include "level/qvm_parser.h"
+#include "level/qvm_decompiler.h"
 
 #include <fstream>
 #include <sstream>
@@ -449,7 +449,8 @@ LevelReport VerifyOneLevel(const std::string& igiPath,
                            const std::string& exeDir,
                            const std::string& logPath,
                            int levelNo,
-                           const std::map<std::string, std::string>& modelNames) {
+                           const std::map<std::string, std::string>& modelNames,
+                           bool requireLog) {
     LevelReport report;
     report.levelNo = levelNo;
     report.buildings.label = "BUILDINGS";
@@ -521,6 +522,12 @@ LevelReport VerifyOneLevel(const std::string& igiPath,
               << report.objects.expected.size()                << " objects, "
               << report.ai.expected.size()                     << " AI\n";
     std::cout.flush();
+
+    if (!requireLog) {
+        report.logChecksSkipped = true;
+        std::cout << "  Log: skipped because logging is disabled by configuration\n";
+        return report;
+    }
 
     // 4. Parse log
     bool logErr = false;

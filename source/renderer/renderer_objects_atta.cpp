@@ -5,6 +5,206 @@
  *          Split from renderer_objects.cpp; shares renderer_objects_internal.h.
  *****************************************************************************/
 #include "renderer_objects_internal.h"
+#include "../runtime/magic_object_registry.h"
+// The AIStationaryGun definition's first data argument is a WeaponType key, and
+// that type's `key` field is the weapon model (WEAPONS/<NAME>/WEAPON.QVM,
+// DefineWeaponType arg 29). See DrawMountedSentryGuns.
+#include "../runtime/weapon_model_lookup.h"
+#if !defined(_WIN32)
+#include <unistd.h>   // getpid(), used to name the import staging directory
+#endif
+
+// ─── Rotor attachment classification (TASKTYPE_ROTOR) ────────────────────────
+// Every ATTA record name is a magic-object name: the game walks a model's ATTA
+// records, looks each name up in the DefineMagicObj table and creates a task of
+// that definition's type (retail engine `src/magicobj/rigidcoll.c:385-434`,
+// `src/shadow/sector.c:540-560`). The retail MAGICOBJ.QVM defines exactly six
+// names as TASKTYPE_ROTOR — 700_02_1, 700_03_1, 700_04_1, 711_01_1, 711_02_1
+// and 712_01_1 (verified against the shipped file; `DefineMagicObj` itself is
+// `src/magicobj/magicobj.c:189-220`). Nothing gates this on the parent's type,
+// so the editor must not either.
+static const std::set<std::string>& RotorAttachmentIds() {
+    static std::string loadedFrom;
+    static std::set<std::string> ids;
+    const std::string qvmPath = Utils::GetIGIRootPath() + "\\magicobj\\magicobj.qvm";
+    if (loadedFrom == qvmPath) return ids;
+    loadedFrom = qvmPath;
+    ids.clear();
+    if (!std::filesystem::exists(qvmPath)) return ids;
+
+    QVMFile qvm = QVM_Parse(qvmPath);
+    if (!qvm.valid) return ids;
+
+    igi::MagicObjectRegistry registry;
+    if (!registry.LoadDecompiledSource(QVM_DecompileToString(qvm))) return ids;
+
+    for (const igi::MagicObjectDefinition& def : registry.GetDefinitions()) {
+        if (def.task_type_name == "TASKTYPE_ROTOR") ids.insert(def.attachment_name);
+    }
+    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Loaded " +
+        std::to_string(ids.size()) + " TASKTYPE_ROTOR attachment names from magicobj.qvm");
+    return ids;
+}
+
+// ─── Magic-object model resolution (issue #67) ───────────────────────────────
+// The engine spawns `def->model` for an ATTA record, not the record's name:
+// `arg.model = def->model` before the task is created
+// (retail engine `src/shadow/sector.c:667`, `src/magicobj/rigidcoll.c:484`), and the
+// attachment name is only ever used to look the definition up by exact strcmp
+// (`src/shadow/sector.c:656-658`). On the retail MAGICOBJ.QVM every definition
+// has `model == name` (measured: 374 of 374), so this resolves to the
+// attachment name on shipped data and the visible behaviour is unchanged; it
+// exists so a definition whose model differs loads the model the game loads.
+const igi::MagicObjectRegistry& MagicObjectTable() {
+    static std::string loadedFrom;
+    static igi::MagicObjectRegistry registry;
+    const std::string qvmPath = Utils::GetIGIRootPath() + "\\magicobj\\magicobj.qvm";
+    if (loadedFrom == qvmPath) return registry;
+    loadedFrom = qvmPath;
+    registry = igi::MagicObjectRegistry{};
+    if (!std::filesystem::exists(qvmPath)) return registry;
+
+    QVMFile qvm = QVM_Parse(qvmPath);
+    if (!qvm.valid) return registry;
+    if (!registry.LoadDecompiledSource(QVM_DecompileToString(qvm))) return registry;
+
+    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Loaded " +
+        std::to_string(registry.GetDefinitions().size()) +
+        " magic-object definitions from magicobj.qvm");
+    return registry;
+}
+
+// The model an attachment spawns, or the attachment name when the table has no
+// entry for it (the engine warns and skips such a record: retail engine
+// `src/shadow/sector.c:659-663`; the editor keeps drawing the name it always
+// drew rather than dropping the node).
+std::string MagicObjectModelId(const std::string& attachmentName) {
+    const igi::MagicObjectDefinition* def = MagicObjectTable().Find(attachmentName);
+    if (def == nullptr || def->model_id.empty()) return attachmentName;
+    return def->model_id;
+}
+
+// ─── DrawMountedSentryGuns ──────────────────────────────────────────────────
+// A placed `AIStationaryGunHolder` is not one model. GunHolder_Changed
+// (HOOK 0x46E7F0, retail engine src/comprun/gunholder.c:223-224) gives it an attached
+// MagicObjContainer built from the holder MODEL's ATTA records
+// (RigidDynCubeObj_CreateMagicObjs 0x4C4950, src/magicobj/rigidcoll.c:381-434:
+// each record's NAME is looked up in the DefineMagicObj table and a task of that
+// definition's type, with the definition's MODEL, is created at the record's
+// transform). For Level 14's sentry gun the holder model `456_11_1` has exactly
+// one ATTA record, `456_12_1`, and MAGICOBJ.QVM:372 defines it:
+//
+//     DefineMagicObj("456_12_1", "456_12_1", TASKTYPE_AISTATIONARYGUN,
+//                    "456_13_1", 361, -10, -90, 10000, 60, 60,
+//                    "tank_turret", 45, 0.2);
+//
+// The generic ATTA pass already draws the turret `456_12_1`. It cannot draw the
+// WEAPON that AIStationaryGun_Create mounts on it
+// (`Gun_New(g, 0, *WeaponType_FindByKey(g->def->weapon), g->def->ammo, 0)`,
+// src/binocular/stationarygun.c:145-147), because the weapon is not an
+// attachment of anything: `g->def->weapon` is the definition's first data
+// argument, "456_13_1", which is a WEAPON TYPE KEY -- WEAPONS/SENTRYGUN/
+// WEAPON.QVM sets `WeaponType.key` (DefineWeaponType arg 29, HOOK 0x413F90,
+// src/weapon/weapontype.c:335-337) to "456_13_1", and `key` is the model the Gun
+// task loads. So the full assembly is holder 456_11_1 + turret 456_12_1 +
+// weapon 456_13_1, and the editor drew the first two.
+//
+// THE LOOKUP DIRECTION IS THE WHOLE BUG (fixed here). The engine's call is
+// `WeaponType_FindByKey(def->weapon)` (HOOK 0x413C00, weapontype.c:134-146):
+// a strcmp of the query against each type's `key`, returning the matched TYPE,
+// whose `key` -- the same string -- `Gun_ParamChangedHandler` hands to
+// `VirModel_Find` (HOOK 0x4789C0, gun.c:493-506). This pass used to ask the
+// roster the OPPOSITE question, `FindWeaponModelForEnum("456_13_1")`, i.e. "is
+// there a weapon whose CONSTANT NAME is 456_13_1"; there is not (the constant is
+// WEAPON_ID_SENTRY), so the lookup answered empty and the `continue` below
+// skipped the weapon on every sentry in every frame. Measured on the retail
+// data: FindWeaponModelForEnum("456_13_1") = "", FindWeaponModelForEnum(
+// "WEAPON_ID_SENTRY") = "456_13_1", FindWeaponModelForKey("456_13_1") =
+// "456_13_1". tests/test_statgun_mount.cpp pins all three.
+//
+// The rest pose is AIStationaryGun_PlaceWeapon (HOOK 0x470050,
+// src/binocular/stationarygun.c:464-487):
+//     Model_GetPoint(&pos, g, 1);  pos += g->obj.pos;
+//     Matrix_SetEuler(&r, g->pitch, 0, g->yaw);
+//     mat_mul(&m, &g->owner->matrix, &r, 0, 1, 0);   // owner = the HOLDER
+// with pitch = yaw = 0 (AIStationaryGun_Create, stationarygun.c:143-144) and the
+// gun's position = the ATTA world position CreateMagicObjs computed
+// (rigidcoll.c:399-412). `456_12_1` carries no XTVM point array (measured: MVTX
+// chunk size 0), so Model_GetPoint is the out-of-range zero and the weapon sits
+// at the gun's position with the holder's matrix. `igi::gunholder::
+// AttachmentWorldPos` is that create-time position.
+void Renderer_Objects::DrawMountedSentryGuns(const std::vector<LevelObject>& objects,
+                                             int draw_parts, GLuint ubo_mats) {
+    const int DRAW_OBJECTS = 4;
+    const int DRAW_PROPS = 32;
+    if ((draw_parts & (DRAW_OBJECTS | DRAW_PROPS)) == 0) return;
+
+    const std::string gameRoot = Utils::GetIGIRootPath();
+    static int logged_mounts = 0;
+    for (const auto& obj : objects) {
+        if (obj.deleted || obj.type != "AIStationaryGunHolder") continue;
+        const std::vector<AttachInfo> attaches = GetModelAttachments(obj.modelId, obj.isBuilding);
+        if (attaches.empty()) continue;
+
+        const glm::mat4 holderWorld =
+            glm::translate(glm::mat4(1.0f),
+                           glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z)) *
+            igi::IgiEulerRotationMatrix(obj.rot);
+        const glm::mat3 holderRot(holderWorld);
+
+        for (const AttachInfo& att : attaches) {
+            const igi::MagicObjectDefinition* def = MagicObjectTable().Find(att.modelId);
+            if (def == nullptr || def->task_type_name != "TASKTYPE_AISTATIONARYGUN") continue;
+            if (def->data_args.empty()) continue;   // no weapon key: nothing is mounted
+
+            // AIStationaryGun_ParseDef (HOOK 0x46FA50, stationarygun.c:400):
+            // the first data argument is `def->weapon`, the WeaponType KEY.
+            // WeaponType_FindByKey compares it against `WeaponType.key`
+            // (HOOK 0x413C00, src/weapon/weapontype.c:134-146), and the model the
+            // mounted Gun task loads is that same `key`
+            // (Gun_ParamChangedHandler HOOK 0x4789C0, src/guncasing/gun.c:493-506).
+            const std::string weaponKey = def->data_args[0];
+            const std::string weaponModel =
+                igi::weapons::FindWeaponModelForKey(gameRoot, weaponKey);
+            // An unresolved key means WeaponType_FindByKey returns NULL and the
+            // engine's `*NULL` kills the frame; the editor mounts nothing, matching
+            // PlaceWeapon's `if (!w) return;` (stationarygun.c:165-166).
+            if (weaponModel.empty()) continue;
+
+            const std::string gunModel = def->model_id.empty() ? att.modelId : def->model_id;
+            const float attPos[3] = {att.px, att.py, att.pz};
+            const float attMat[9] = {att.r[0], att.r[1], att.r[2],
+                                     att.r[3], att.r[4], att.r[5],
+                                     att.r[6], att.r[7], att.r[8]};
+            const glm::mat4 gunWorld = igi::IgiAttaChildWorld(holderWorld, attPos, attMat);
+
+            // Model_GetPoint(gun, 1): the gun's muzzle point, scaled mesh-local
+            // -> world (40.96) and rotated by the gun's own matrix
+            // (Mesh3D_GetWorldVertex, src/lod/mesh3d.c:420-441). Zero when the
+            // model has fewer than two points, which is the shipped sentry turret.
+            glm::vec3 muzzleOffset(0.0f);
+            const std::vector<glm::vec3> gunPoints = GetModelMagicVertices(gunModel, false);
+            if (gunPoints.size() > 1) {
+                muzzleOffset = glm::mat3(gunWorld) * (gunPoints[1] * 40.96f);
+            }
+            const glm::vec3 weaponPos = glm::vec3(gunWorld[3]) + muzzleOffset;
+
+            // Stationarygun.c:475-476 with pitch = yaw = 0: the weapon matrix is
+            // the HOLDER's matrix (mat_mul(&m, &g->owner->matrix, &r, ...)).
+            glm::mat4 world = glm::translate(glm::mat4(1.0f), weaponPos) *
+                              glm::mat4(holderRot) *
+                              glm::scale(glm::mat4(1.0f), glm::vec3(40.96f));
+            DrawAttachedMesh(weaponModel, false, world, ubo_mats);
+            if (logged_mounts < 3) {
+                Logger::Get().Log(LogLevel::INFO,
+                    "[Renderer_Objects] AIStationaryGunHolder " + obj.taskId + " mounts " +
+                    weaponKey + " -> weapon model " + weaponModel + " (gun model " +
+                    gunModel + ")");
+            }
+            ++logged_mounts;
+        }
+    }
+}
 
 std::string Renderer_Objects::AttaOccupancyKey(const std::string& modelId, const glm::vec3& worldPos) {
     char buf[160];
@@ -129,30 +329,45 @@ bool Renderer_Objects::SuppressAttachmentInMef(const std::string& parentModelId,
 static bool AddEntriesToRes(const std::string& resPath,
                             const std::vector<RESEntry>& wanted,
                             std::string& err,
-                            const std::function<void(size_t,size_t)>& onProgress = nullptr) {
-    auto equalsCI = [](const std::string& a, const std::string& b) {
-        if (a.size() != b.size()) return false;
-        for (size_t i = 0; i < a.size(); ++i)
-            if (std::tolower((unsigned char)a[i]) != std::tolower((unsigned char)b[i])) return false;
+                            const std::function<void(size_t,size_t)>& onProgress = nullptr,
+                            bool replaceExisting = false) {
+    auto equalsResourceCI = [](const std::string& a, const std::string& b) {
+        const auto leaf = [](const std::string& value) {
+            const size_t slash = value.find_last_of("\\/");
+            return slash == std::string::npos ? value : value.substr(slash + 1);
+        };
+        const std::string aLeaf = leaf(a);
+        const std::string bLeaf = leaf(b);
+        if (aLeaf.size() != bLeaf.size()) return false;
+        for (size_t i = 0; i < aLeaf.size(); ++i)
+            if (std::tolower((unsigned char)aLeaf[i]) != std::tolower((unsigned char)bLeaf[i])) return false;
         return true;
     };
 
     // Pass 1: stream source to find which wanted names are already present.
     std::vector<bool> present(wanted.size(), false);
+    std::vector<bool> differs(wanted.size(), false);
     std::string ferr;
     if (!RES_ForEachEntry(resPath,
-            [&](const std::string& name, const uint8_t*, size_t) {
-                for (size_t i = 0; i < wanted.size(); ++i)
-                    if (!present[i] && equalsCI(name, wanted[i].name)) present[i] = true;
+            [&](const std::string& name, const uint8_t* data, size_t size) {
+                for (size_t i = 0; i < wanted.size(); ++i) {
+                    if (!equalsResourceCI(name, wanted[i].name)) continue;
+                    present[i] = true;
+                    if (size != wanted[i].data.size() ||
+                        !std::equal(data, data + size, wanted[i].data.begin())) {
+                        differs[i] = true;
+                    }
+                }
             }, ferr)) {
         err = "membership scan failed: " + ferr;
         return false;
     }
 
     std::vector<RESEntry> toAdd;
-    for (size_t i = 0; i < wanted.size(); ++i)
-        if (!present[i]) toAdd.push_back(wanted[i]);
-    if (toAdd.empty()) return true;  // everything already present -> no-op success
+    for (size_t i = 0; i < wanted.size(); ++i) {
+        if (!present[i] || (replaceExisting && differs[i])) toAdd.push_back(wanted[i]);
+    }
+    if (toAdd.empty()) return true;  // requested bytes are already present
 
     const std::string bak = resPath + ".orig";
     if (!std::filesystem::exists(bak)) {
@@ -165,7 +380,10 @@ static bool AddEntriesToRes(const std::string& resPath,
     }
 
     const std::string tmp = resPath + ".tmp";
-    if (!RES_StreamAppend(resPath, toAdd, tmp, err, onProgress)) {
+    const bool merged = replaceExisting
+        ? RES_StreamMerge(resPath, toAdd, tmp, err, onProgress)
+        : RES_StreamAppend(resPath, toAdd, tmp, err, onProgress);
+    if (!merged) {
         std::error_code rmec;
         std::filesystem::remove(tmp, rmec);
         return false;
@@ -209,6 +427,7 @@ static bool StemInFamily(const std::string& stem, const std::string& prefix) {
 // reproduces the original game .mtp byte-for-byte, whereas an in-process
 // incremental MTP write corrupted the model→texture mapping (transparent /
 // wrong textures in-game and after reload). Returns true on exit code 0.
+#if defined(_WIN32)
 static bool RunIgi1conv(const std::string& args, std::string& err) {
     const std::string exe = Utils::GetExeDirectory() + "\\editor\\tools\\igi1conv\\igi1conv.exe";
     if (!std::filesystem::exists(exe)) {
@@ -238,9 +457,61 @@ static bool RunIgi1conv(const std::string& args, std::string& err) {
     if (code != 0) { err = "igi1conv exit code " + std::to_string(code); return false; }
     return true;
 }
+#else  // !_WIN32
+
+// The bundled converter is a Windows PE; without an external Wine install there
+// is nothing to spawn.  Report the real reason so the caller's error path runs.
+static bool RunIgi1conv(const std::string&, std::string& err) {
+    err = "igi1conv.exe is a Windows executable and cannot run in the native macOS build";
+    return false;
+}
+#endif  // _WIN32
+
+struct StagedImportFile {
+    std::string staged;
+    std::string target;
+    std::string backup;
+};
+
+static bool PublishStagedImportFiles(const std::vector<StagedImportFile>& files,
+                                     std::string& error) {
+    std::vector<StagedImportFile> backedUp;
+    auto restore = [&]() {
+        bool restored = true;
+        for (auto it = backedUp.rbegin(); it != backedUp.rend(); ++it) {
+            std::error_code ec;
+            std::filesystem::copy_file(it->backup, it->target,
+                std::filesystem::copy_options::overwrite_existing, ec);
+            if (ec) restored = false;
+        }
+        return restored;
+    };
+
+    for (const auto& file : files) {
+        std::error_code ec;
+        if (!std::filesystem::copy_file(file.target, file.backup,
+                std::filesystem::copy_options::overwrite_existing, ec)) {
+            error = "backup failed for " + file.target + ": " + ec.message();
+            if (!restore()) error += "; rollback also failed";
+            return false;
+        }
+        backedUp.push_back(file);
+
+        ec.clear();
+        std::filesystem::copy_file(file.staged, file.target,
+            std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) {
+            error = "publish failed for " + file.target + ": " + ec.message();
+            if (!restore()) error += "; rollback also failed";
+            return false;
+        }
+    }
+    return true;
+}
 
 bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId,
-                                          const std::function<void(size_t,size_t)>& onProgress) {
+                                          const std::function<void(size_t,size_t)>& onProgress,
+                                          int sourceLevel) {
     const std::string levelDir = Utils::GetIGIRootPath() + "\\missions\\location0\\level" +
         std::to_string(current_level_);
     const std::string modelsRes   = levelDir + "\\models\\level"   + std::to_string(current_level_) + ".res";
@@ -248,6 +519,10 @@ bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId,
 
     if (!std::filesystem::exists(modelsRes)) {
         Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: models archive missing: " + modelsRes);
+        return false;
+    }
+    if (!std::filesystem::exists(texturesRes)) {
+        Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: textures archive missing: " + texturesRes);
         return false;
     }
 
@@ -291,10 +566,88 @@ bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId,
     }
 
     // ALWAYS include the originally-requested model even if the glob missed it.
+    // GetOrExtractMefTemp tries disk first, then falls back to pulling the mesh
+    // bytes straight out of the OWNING level's packed .res (via the cross-level
+    // ResCache) and extracting to a temp file — needed when the foreign model was
+    // never extracted to disk (only lives inside another level's archive).
     if (!familyModels.count(modelId)) {
-        std::string mefPath = FindModelFile(modelId, /*isBuilding=*/false);
-        if (mefPath.empty()) mefPath = FindModelFile(modelId, true);
+        EnsureGlobalTextureMapLoaded();
+        auto mit = model_level_map_.find(modelId);
+        if (mit != model_level_map_.end() && mit->second != current_level_) {
+            LoadResCache(mit->second, Utils::GetIGIRootPath());
+        }
+        std::string mefPath = GetOrExtractMefTemp(modelId, /*isBuilding=*/false);
+        if (mefPath.empty()) mefPath = GetOrExtractMefTemp(modelId, true);
         if (!mefPath.empty()) familyModels.emplace(modelId, mefPath);
+    }
+
+    // Same fallback for the REST of the family (LODs/sub-parts) when the disk
+    // scan found nothing for them: consult the global model->level map (built
+    // from every level's .dat) for family siblings, load that level's ResCache,
+    // and extract each sibling to a temp file.
+    {
+        EnsureGlobalTextureMapLoaded();
+        for (const auto& gm : global_texture_map_) {
+            const std::string& stem = gm.first;
+            if (familyModels.count(stem)) continue;
+            if (!StemInFamily(stem, prefix)) continue;
+            auto mit = model_level_map_.find(stem);
+            if (mit != model_level_map_.end() && mit->second != current_level_) {
+                LoadResCache(mit->second, Utils::GetIGIRootPath());
+            }
+            std::string mefPath = GetOrExtractMefTemp(stem, /*isBuilding=*/false);
+            if (mefPath.empty()) mefPath = GetOrExtractMefTemp(stem, true);
+            if (!mefPath.empty()) familyModels.emplace(stem, mefPath);
+        }
+    }
+
+    // ── Resolve ATTA sub-model dependencies across families ──────────────────
+    // A family model's .mef can ATTA-reference a sub-model in a completely
+    // different numeric prefix (e.g. hull "420_04_1" references "235_01_1").
+    // Without pulling those in too, the dependency is never packed into this
+    // level's .res/.dat/.mtp, so the game reports "VirModel not available"
+    // even though the parent renders fine in the editor (via the cross-level
+    // ResCache fallback used only for in-viewport preview).
+    {
+        std::vector<std::string> worklist;
+        for (const auto& fm : familyModels) worklist.push_back(fm.first);
+        std::unordered_set<std::string> visited(worklist.begin(), worklist.end());
+
+        while (!worklist.empty()) {
+            std::string cur = worklist.back();
+            worklist.pop_back();
+            auto it = familyModels.find(cur);
+            if (it == familyModels.end()) continue;
+
+            std::ifstream mf(it->second, std::ios::binary);
+            std::vector<uint8_t> mefBytes((std::istreambuf_iterator<char>(mf)), std::istreambuf_iterator<char>());
+            if (mefBytes.empty()) continue;
+
+            ParsedGeometry geo;
+            try { geo = ParseMefFileFromMemory(mefBytes); } catch (...) { continue; }
+
+            for (const auto& a : geo.mefAttachments) {
+                std::string aname(a.name, strnlen(a.name, 16));
+                if (aname.empty()) continue;
+                // The dependency to pack is the model the engine spawns for this
+                // record (MagicObjectModelId); the log keeps the ATTA name.
+                const std::string spawnModelId = MagicObjectModelId(aname);
+                if (!visited.insert(spawnModelId).second) continue;
+                if (familyModels.count(spawnModelId)) continue;
+
+                std::string mefPath = GetOrExtractMefTemp(spawnModelId, /*isBuilding=*/false);
+                if (mefPath.empty()) mefPath = GetOrExtractMefTemp(spawnModelId, true);
+                if (mefPath.empty()) {
+                    Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: ATTA dependency '" +
+                        aname + "' (needed by '" + cur + "') not found anywhere; skipping");
+                    continue;
+                }
+                familyModels.emplace(spawnModelId, mefPath);
+                worklist.push_back(spawnModelId);
+                Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: pulling in ATTA dependency '" +
+                    aname + "' (needed by '" + cur + "')");
+            }
+        }
     }
 
     if (familyModels.empty()) {
@@ -303,13 +656,80 @@ bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId,
         return false;
     }
 
-    // 1. Batch-add ALL family MEFs to the models archive (single streaming append).
+    // Resolve every mapping before touching either destination archive. The
+    // requested model uses its owning level's exact DAT entry, so a stale
+    // destination entry cannot become the import source.
+    EnsureGlobalTextureMapLoaded();
+    std::map<std::string, std::vector<std::string>> familyTextureIds;
+    std::map<std::string, int> familySourceLevels;
+    int requestedSourceLevel = sourceLevel;
+    if (sourceLevel <= 0) {
+        // The same model and texture IDs can denote different assets in
+        // different levels. An untagged import is therefore valid only when
+        // every exact source bundle is byte-identical.
+        std::vector<ModelSourceBundle> bundles;
+        std::unordered_set<int> sourceLevels;
+        for (const auto& candidate : texture_sources_) {
+            if (candidate.modelId != modelId || candidate.level <= 0 ||
+                !sourceLevels.insert(candidate.level).second) continue;
+
+            LoadResCache(candidate.level, Utils::GetIGIRootPath());
+            ModelSourceBundle bundle;
+            bundle.level = candidate.level;
+            bundle.textureIds = candidate.textures;
+            bundle.meshBytes = FindMeshDataFromLevel(modelId, candidate.level);
+            for (const auto& textureId : candidate.textures) {
+                bundle.textureBytes.push_back(
+                    FindTextureDataFromLevel(textureId, candidate.level));
+            }
+            bundles.push_back(std::move(bundle));
+        }
+        requestedSourceLevel = SelectUnambiguousModelSourceLevel(bundles);
+        if (requestedSourceLevel == 0) {
+            Logger::Get().Log(LogLevel::WARNING,
+                "[Renderer] AddModelToLevelRes: ambiguous source for '" + modelId +
+                "'; select a source level explicitly");
+            return false;
+        }
+        Logger::Get().Log(LogLevel::INFO,
+            "[Renderer] AddModelToLevelRes: untagged equivalent source level " +
+            std::to_string(requestedSourceLevel) + " for '" + modelId +
+            "'");
+    }
+    if (requestedSourceLevel < 1 || requestedSourceLevel > 14) {
+        Logger::Get().Log(LogLevel::WARNING,
+            "[Renderer] AddModelToLevelRes: invalid source level " + std::to_string(requestedSourceLevel));
+        return false;
+    }
+    for (const auto& fm : familyModels) {
+        int familySourceLevel = requestedSourceLevel;
+        auto mapping = GetTextureIdsForSourceModel(fm.first, familySourceLevel);
+        if (mapping.empty() && fm.first != modelId) {
+            // ATTA helper meshes can intentionally inherit their parent's
+            // material list when they have no standalone DAT entry.
+            mapping = GetTextureIdsForModel(fm.first);
+        }
+        if (mapping.empty()) {
+            Logger::Get().Log(LogLevel::WARNING,
+                "[Renderer] AddModelToLevelRes: unresolved texture mapping for '" + fm.first + "'");
+            return false;
+        }
+        familyTextureIds.emplace(fm.first, std::move(mapping));
+        familySourceLevels.emplace(fm.first, familySourceLevel);
+    }
+
+    // 1. Read ALL family MEFs before changing either destination archive.
     std::vector<RESEntry> modelEntries;
     std::vector<std::pair<std::string, std::vector<uint8_t>>> looseModels; // for editor-content copy
     modelEntries.reserve(familyModels.size());
     for (const auto& fm : familyModels) {
-        std::ifstream mf(fm.second, std::ios::binary);
-        std::vector<uint8_t> mefBytes((std::istreambuf_iterator<char>(mf)), std::istreambuf_iterator<char>());
+        const int familySourceLevel = familySourceLevels.at(fm.first);
+        LoadResCache(familySourceLevel, Utils::GetIGIRootPath());
+        std::vector<uint8_t> mefBytes = FindMeshDataFromLevel(fm.first, familySourceLevel);
+        if (mefBytes.empty()) {
+            std::ifstream mf(fm.second, std::ios::binary);
+            mefBytes.assign(std::istreambuf_iterator<char>(mf), std::istreambuf_iterator<char>());
+        }
         if (mefBytes.empty()) {
             Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: empty/unreadable family .mef, skipping: " + fm.second);
             continue;
@@ -322,185 +742,315 @@ bool Renderer_Objects::AddModelToLevelRes(const std::string& modelId,
         return false;
     }
 
-    std::string err;
-    if (!AddEntriesToRes(modelsRes, modelEntries, err)) {
-        Logger::Get().Log(LogLevel::ERR, "[Renderer] AddModelToLevelRes: model add failed: " + err);
+    const std::string datPath = levelDir + "\\level" + std::to_string(current_level_) + ".dat";
+    const std::string mtpPath = levelDir + "\\level" + std::to_string(current_level_) + ".mtp";
+    if (!std::filesystem::exists(datPath) || !std::filesystem::exists(mtpPath)) {
+        Logger::Get().Log(LogLevel::WARNING,
+            "[Renderer] AddModelToLevelRes: complete destination DAT/MTP pair is required");
         return false;
     }
-    Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: family '" + prefix + "' (" +
-        std::to_string(modelEntries.size()) + " mef) -> " + modelsRes);
 
-    // 2. Gather + batch-add ALL family textures into the textures archive in ONE
+    DATFile stagedDat;
+    if (!persistent_dat_.valid || persistent_dat_path_ != datPath) {
+        persistent_dat_ = DAT_Parse(datPath);
+        persistent_dat_path_ = datPath;
+    }
+    if (!persistent_dat_.valid) {
+        Logger::Get().Log(LogLevel::WARNING,
+            "[Renderer] AddModelToLevelRes: destination DAT parse failed: " + persistent_dat_.error);
+        return false;
+    }
+    stagedDat = persistent_dat_;
+
+    #if defined(_WIN32)
+    const auto stageId = std::to_string(GetCurrentProcessId()) + "-" +
+#else
+    const auto stageId = std::to_string(::getpid()) + "-" +
+#endif
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const std::filesystem::path stagingDir = std::filesystem::path(levelDir) /
+        (".igi-import-staging-" + stageId);
+    const std::filesystem::path stagingBackupDir = stagingDir / "backups";
+    std::error_code stageEc;
+    std::filesystem::create_directories(stagingBackupDir, stageEc);
+    if (stageEc) {
+        Logger::Get().Log(LogLevel::WARNING,
+            "[Renderer] AddModelToLevelRes: staging directory creation failed: " + stageEc.message());
+        return false;
+    }
+    const auto cleanupStaging = [&]() {
+        std::error_code ec;
+        std::filesystem::remove_all(stagingDir, ec);
+    };
+    const std::string stagedModelsRes = (stagingDir / "models.res").string();
+    const std::string stagedTexturesRes = (stagingDir / "textures.res").string();
+    const std::string stagedDatPath = (stagingDir / "level.dat").string();
+    const std::string stagedMtpPath = (stagingDir / "level.mtp").string();
+    for (const auto& pair : std::vector<std::pair<std::string, std::string>>{
+            {modelsRes, stagedModelsRes}, {texturesRes, stagedTexturesRes},
+            {datPath, stagedDatPath}, {mtpPath, stagedMtpPath}}) {
+        std::error_code ec;
+        if (!std::filesystem::copy_file(pair.first, pair.second,
+                std::filesystem::copy_options::overwrite_existing, ec)) {
+            Logger::Get().Log(LogLevel::WARNING,
+                "[Renderer] AddModelToLevelRes: staging copy failed for " + pair.first + ": " + ec.message());
+            cleanupStaging();
+            return false;
+        }
+    }
+
+    // Validate every MEF material slot against the selected ordered mapping
+    // before staging any archive append. An out-of-range slot would otherwise
+    // silently bind a different texture at runtime.
+    for (const auto& fm : familyModels) {
+        std::ifstream mf(fm.second, std::ios::binary);
+        std::vector<uint8_t> mefBytes((std::istreambuf_iterator<char>(mf)), std::istreambuf_iterator<char>());
+        if (mefBytes.empty()) continue;
+        try {
+            const ParsedGeometry geometry = ParseMefFileFromMemory(mefBytes, fm.first);
+            std::vector<int> materialSlots;
+            if (geometry.renderBlocks.empty()) {
+                materialSlots.push_back(0);
+            } else {
+                materialSlots.reserve(geometry.renderBlocks.size());
+                for (const auto& block : geometry.renderBlocks) {
+                    materialSlots.push_back(block.materialSlot);
+                }
+            }
+            if (!IsTextureMappingCompatible(materialSlots,
+                                             familyTextureIds.at(fm.first).size())) {
+                Logger::Get().Log(LogLevel::WARNING,
+                    "[Renderer] AddModelToLevelRes: MEF material slot exceeds ordered texture mapping for '" +
+                    fm.first + "'");
+                cleanupStaging();
+                return false;
+            }
+        } catch (const std::exception& e) {
+            Logger::Get().Log(LogLevel::WARNING,
+                "[Renderer] AddModelToLevelRes: MEF material validation failed for '" +
+                fm.first + "': " + e.what());
+            cleanupStaging();
+            return false;
+        }
+    }
+
+    // 2. Gather ALL family textures before changing either destination archive.
     //    batched streaming append (the textures .res is 200MB+ — stream it once,
     //    never per-texture, and never RES_Parse it into RAM).
-    const bool haveTexRes = std::filesystem::exists(texturesRes);
     int texAdded = 0;
     std::vector<std::pair<std::string, std::vector<uint8_t>>> looseTextures;  // for editor-content copy
     std::vector<RESEntry> texEntries;
     std::set<std::string> seenTex;
+    EnsureGlobalTextureMapLoaded();
+    // AddModelToLevelRes appends to the current archive. Refresh before
+    // resolving family textures so a previous import cannot leave a stale
+    // archive index hiding entries that are already packed on disk.
+    RefreshTextureResCache();
     for (const auto& fm : familyModels) {
-        for (const std::string& texId : GetTextureIdsForModel(fm.first)) {
+        for (const std::string& texId : familyTextureIds.at(fm.first)) {
             if (!seenTex.insert(texId).second) continue; // dedupe across the family
-            std::string texPath = FindTextureFile(texId);
-            if (texPath.empty()) {
-                Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: texture " + texId +
-                    " not found on disk, skipping");
-                continue;
+            std::vector<uint8_t> texBytes;
+            const int sourceLevel = familySourceLevels.at(fm.first);
+            LoadResCache(sourceLevel, Utils::GetIGIRootPath());
+            texBytes = FindTextureDataFromLevel(texId, sourceLevel);
+
+            // Loose files are a fallback for a source level that has no packed
+            // copy. Search only that level; a destination-level loose file with
+            // the same ID must never override the selected source bytes.
+            std::string texPath;
+            if (texBytes.empty()) texPath = FindTextureFileInLevel(texId, sourceLevel);
+            if (!texPath.empty() && texBytes.empty()) {
+                std::ifstream tf(texPath, std::ios::binary);
+                texBytes.assign(std::istreambuf_iterator<char>(tf), std::istreambuf_iterator<char>());
             }
-            std::ifstream tf(texPath, std::ios::binary);
-            std::vector<uint8_t> texBytes((std::istreambuf_iterator<char>(tf)), std::istreambuf_iterator<char>());
-            if (texBytes.empty()) continue;
+            // Foreign texture not on disk: pull it straight from the owning
+            // level's packed .res via the cross-level ResCache (same fallback
+            // GetOrLoadTexture already uses for in-editor rendering).
+            if (texBytes.empty() && sourceLevel != current_level_) {
+                auto tit = texture_level_map_.find(texId);
+                if (tit != texture_level_map_.end() && tit->second != current_level_) {
+                    LoadResCache(tit->second, Utils::GetIGIRootPath());
+                    texBytes = FindTextureDataFromLevel(texId, tit->second);
+                }
+            }
+            if (texBytes.empty()) {
+                // DAT files are not guaranteed to provide a complete owner
+                // map for cross-level references. Search every packed texture
+                // archive using the same indexed reader used by rendering.
+                for (int level = 1; level <= 14 && texBytes.empty(); ++level) {
+                    LoadResCache(level, Utils::GetIGIRootPath());
+                    texBytes = FindTextureDataFromLevel(texId, level);
+                }
+            }
+            if (texBytes.empty()) {
+                Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: required texture " + texId +
+                    " not found on disk or in any level's .res");
+                cleanupStaging();
+                return false;
+            }
             looseTextures.emplace_back(texId, texBytes);
             texEntries.push_back(RESEntry{ "LOCAL:textures/" + texId + ".tex", std::move(texBytes) });
         }
     }
 
+    // 3. Batch-add ALL family MEFs to the models archive (single streaming append).
+    // This happens only after every required texture was resolved and packed.
+    std::string err;
+    if (!AddEntriesToRes(stagedModelsRes, modelEntries, err, nullptr, true)) {
+        Logger::Get().Log(LogLevel::ERR, "[Renderer] AddModelToLevelRes: model add failed: " + err);
+        cleanupStaging();
+        return false;
+    }
+    Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: staged family '" + prefix + "' (" +
+        std::to_string(modelEntries.size()) + " mef)");
+
     if (!texEntries.empty()) {
-        if (!haveTexRes) {
-            Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: textures archive missing, "
-                "skipping texture packing: " + texturesRes);
-            looseTextures.clear();
-        } else {
-            std::string terr;
-            if (AddEntriesToRes(texturesRes, texEntries, terr, onProgress)) {
-                texAdded = (int)texEntries.size();
-            } else {
-                Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: texture pack failed for family '" +
-                    prefix + "': " + terr);
-                looseTextures.clear();
-            }
+        std::string stagedTextureError;
+        if (!AddEntriesToRes(stagedTexturesRes, texEntries, stagedTextureError, onProgress, true)) {
+            Logger::Get().Log(LogLevel::WARNING,
+                "[Renderer] AddModelToLevelRes: staged texture pack failed: " + stagedTextureError);
+            cleanupStaging();
+            return false;
         }
+        texAdded = static_cast<int>(texEntries.size());
     }
 
-    // 3. Best-effort: copy loose files into the editor's content dirs so the editor
+    // 3. Register the model + its textures so the GAME can resolve the model's
+    //    materials (otherwise it renders transparent in-game). We update the TEXT
+    //    level<N>.dat then drive mtp_decoder.exe to regenerate the binary level<N>.mtp
+    //    (the game accepts the tool's output; a natively-written .mtp crashed it).
+    //    Required metadata publication is part of import success. A model archive
+    //    append without a matching DAT/MTP mapping is not a complete import.
+    for (const auto& fm : familyModels) {
+        if (!DAT_UpsertModel(stagedDat, fm.first, familyTextureIds.at(fm.first))) {
+            continue;
+        }
+    }
+    // DAT_UpsertModel returns false for both an idempotent match and an
+    // unsuccessful/no-op path.  Verify the staged result explicitly so a
+    // missing or mismatched required mapping cannot be published as success.
+    for (const auto& fm : familyModels) {
+        const auto mappingIt = std::find_if(stagedDat.models.begin(), stagedDat.models.end(),
+            [&](const DATModelEntry& entry) { return entry.modelName == fm.first; });
+        if (mappingIt == stagedDat.models.end() ||
+            mappingIt->textures != familyTextureIds.at(fm.first)) {
+            Logger::Get().Log(LogLevel::WARNING,
+                "[Renderer] AddModelToLevelRes: staged DAT mapping verification failed for '" + fm.first + "'");
+            cleanupStaging();
+            return false;
+        }
+    }
+    std::string datError;
+    if (!DAT_WriteNative(stagedDat, stagedDatPath, datError)) {
+        Logger::Get().Log(LogLevel::WARNING,
+            "[Renderer] AddModelToLevelRes: staged DAT write failed: " + datError);
+        cleanupStaging();
+        return false;
+    }
+    std::string convErr;
+    if (!RunIgi1conv("dat to-mtp \"" + stagedDatPath + "\" -o \"" + stagedMtpPath + "\"", convErr)) {
+        Logger::Get().Log(LogLevel::WARNING,
+            "[Renderer] AddModelToLevelRes: staged MTP conversion failed: " + convErr);
+        cleanupStaging();
+        return false;
+    }
+    const DATFile verifiedDat = DAT_Parse(stagedDatPath);
+    if (!verifiedDat.valid || std::filesystem::file_size(stagedMtpPath) == 0) {
+        Logger::Get().Log(LogLevel::WARNING,
+            "[Renderer] AddModelToLevelRes: staged metadata verification failed");
+        cleanupStaging();
+        return false;
+    }
+
+    const std::vector<StagedImportFile> files{
+        {stagedModelsRes, modelsRes, (stagingBackupDir / "models.res").string()},
+        {stagedTexturesRes, texturesRes, (stagingBackupDir / "textures.res").string()},
+        {stagedDatPath, datPath, (stagingBackupDir / "level.dat").string()},
+        {stagedMtpPath, mtpPath, (stagingBackupDir / "level.mtp").string()}};
+    std::string publishError;
+    if (!PublishStagedImportFiles(files, publishError)) {
+        Logger::Get().Log(LogLevel::WARNING,
+            "[Renderer] AddModelToLevelRes: import publication failed: " + publishError);
+        cleanupStaging();
+        return false;
+    }
+    persistent_dat_ = verifiedDat;
+    persistent_dat_path_ = datPath;
+    cleanupStaging();
+
+    // 4. Best-effort: copy loose files into the editor's content dirs so the editor
     //    keeps resolving them after a level reload. Failure here is non-fatal.
     try {
         const std::string exeDir = Utils::GetExeDirectory();
         const std::string lvl = std::to_string(current_level_);
-        std::filesystem::path modelDst = std::filesystem::path(exeDir) / "content" / "models" / ("level" + lvl);
-        std::filesystem::create_directories(modelDst);
+        std::filesystem::path modelDstEditor = std::filesystem::path(exeDir) / "editor" / "models" / ("level" + lvl);
+        std::filesystem::path modelDstContent = std::filesystem::path(exeDir) / "content" / "models" / ("level" + lvl);
+        std::filesystem::create_directories(modelDstEditor);
+        std::filesystem::create_directories(modelDstContent);
         for (const auto& m : looseModels) {
-            std::ofstream out((modelDst / (m.first + ".mef")).string(), std::ios::binary);
-            out.write(reinterpret_cast<const char*>(m.second.data()), (std::streamsize)m.second.size());
+            std::ofstream out1((modelDstEditor / (m.first + ".mef")).string(), std::ios::binary);
+            out1.write(reinterpret_cast<const char*>(m.second.data()), (std::streamsize)m.second.size());
+            std::ofstream out2((modelDstContent / (m.first + ".mef")).string(), std::ios::binary);
+            out2.write(reinterpret_cast<const char*>(m.second.data()), (std::streamsize)m.second.size());
         }
         if (!looseTextures.empty()) {
-            std::filesystem::path texDst = std::filesystem::path(exeDir) / "content" / "textures" / ("level" + lvl);
-            std::filesystem::create_directories(texDst);
+            std::filesystem::path texDstEditor = std::filesystem::path(exeDir) / "editor" / "textures" / ("level" + lvl);
+            std::filesystem::path texDstContent = std::filesystem::path(exeDir) / "content" / "textures" / ("level" + lvl);
+            std::filesystem::create_directories(texDstEditor);
+            std::filesystem::create_directories(texDstContent);
             for (const auto& t : looseTextures) {
-                std::ofstream out((texDst / (t.first + ".tex")).string(), std::ios::binary);
-                out.write(reinterpret_cast<const char*>(t.second.data()), (std::streamsize)t.second.size());
+                std::ofstream out1((texDstEditor / (t.first + ".tex")).string(), std::ios::binary);
+                out1.write(reinterpret_cast<const char*>(t.second.data()), (std::streamsize)t.second.size());
+                std::ofstream out2((texDstContent / (t.first + ".tex")).string(), std::ios::binary);
+                out2.write(reinterpret_cast<const char*>(t.second.data()), (std::streamsize)t.second.size());
             }
         }
     } catch (const std::exception& e) {
         Logger::Get().Log(LogLevel::WARNING, std::string("[Renderer] AddModelToLevelRes: editor-content copy failed: ") + e.what());
     }
 
-    // 4. Register the model + its textures so the GAME can resolve the model's
-    //    materials (otherwise it renders transparent in-game). We update the TEXT
-    //    level<N>.dat then drive mtp_decoder.exe to regenerate the binary level<N>.mtp
-    //    (the game accepts the tool's output; a natively-written .mtp crashed it).
-    //    A failure here is a WARNING only -- the .res parts already succeeded.
-    {
-        const std::string lvl = std::to_string(current_level_);
-        const std::string lvlDir = Utils::GetIGIRootPath() +
-            "\\missions\\location0\\level" + lvl + "\\";
-        const std::string datPath = lvlDir + "level" + lvl + ".dat";
-        const std::string mtpPath = lvlDir + "level" + lvl + ".mtp";
-
-        if (!std::filesystem::exists(datPath)) {
-            Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: level .dat not found, "
-                "skipping model->texture mapping: " + datPath);
-        } else {
-            // 4a. Back up the .dat once, then add the model mapping and write it back.
-            bool proceed = true;
-            const std::string datBackup = datPath + ".orig";
-            if (!std::filesystem::exists(datBackup)) {
-                std::error_code ec;
-                std::filesystem::copy_file(datPath, datBackup,
-                    std::filesystem::copy_options::overwrite_existing, ec);
-                if (ec) {
-                    proceed = false;
-                    Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: could not back up "
-                        ".dat, skipping mapping update: " + datBackup + " (" + ec.message() + ")");
-                }
-            }
-
-            if (proceed) {
-                // Use the persistent in-memory DAT to avoid data loss caused by
-                // mtp_decoder.exe rewriting level.dat on disk between adds.
-                // On the first add this session, populate it from disk; on all
-                // subsequent adds for the same level, reuse the accumulated copy.
-                if (!persistent_dat_.valid || persistent_dat_path_ != datPath) {
-                    persistent_dat_ = DAT_Parse(datPath);
-                    persistent_dat_path_ = datPath;
-                    if (!persistent_dat_.valid) {
-                        Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: initial .dat parse failed: "
-                            + persistent_dat_.error + " — clearing persistent cache");
-                        persistent_dat_path_.clear();
-                    }
-                }
-                DATFile& dat = persistent_dat_;
-                if (!dat.valid) {
-                    Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: .dat parse failed, "
-                        "skipping mapping update: " + dat.error);
-                } else {
-                    // Add EVERY family model to the .dat; write once if any were new.
-                    bool anyAdded = false;
-                    for (const auto& fm : familyModels) {
-                        bool present = false;
-                        DAT_AddModel(dat, fm.first, GetTextureIdsForModel(fm.first), present);
-                        if (!present) anyAdded = true;
-                    }
-                    bool datReady = true; // either we'll write below, or it's already complete
-                    if (anyAdded) {
-                        std::string derr;
-                        if (DAT_WriteNative(dat, datPath, derr)) {
-                            Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: added family '" +
-                                prefix + "' to " + datPath);
-                        } else {
-                            datReady = false;
-                            Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: .dat write "
-                                "failed for family '" + prefix + "': " + derr);
-                        }
-                    } else {
-                        Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: family '" + prefix +
-                            "' already mapped in " + datPath);
-                    }
-
-                    // 4b. Back up the .mtp once, then REGENERATE it from the updated
-                    // .dat via the bundled igi1conv converter. `dat to-mtp` reproduces
-                    // the game's binary .mtp exactly (verified byte-identical to the
-                    // originals), so the model→texture mapping stays correct in-game
-                    // and after reload. The editor no longer writes .mtp in-process.
-                    if (datReady && std::filesystem::exists(mtpPath)) {
-                        const std::string mtpBackup = mtpPath + ".orig";
-                        if (!std::filesystem::exists(mtpBackup)) {
-                            std::error_code ec;
-                            std::filesystem::copy_file(mtpPath, mtpBackup,
-                                std::filesystem::copy_options::overwrite_existing, ec);
-                            if (ec)
-                                Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: "
-                                    "could not back up .mtp: " + mtpBackup + " (" + ec.message() + ")");
-                        }
-                        std::string convErr;
-                        if (RunIgi1conv("dat to-mtp \"" + datPath + "\" -o \"" + mtpPath + "\"", convErr)) {
-                            Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: regenerated " +
-                                mtpPath + " from .dat via igi1conv");
-                        } else {
-                            Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: "
-                                "igi1conv dat to-mtp failed: " + convErr);
-                        }
-                    } else if (datReady) {
-                        Logger::Get().Log(LogLevel::WARNING, "[Renderer] AddModelToLevelRes: "
-                            ".mtp not found, skipping MTP update: " + mtpPath);
-                    }
-                }
+    // 6. Invalidate caches and reload mapping so subsequent rendering sees the new assets immediately
+    texture_map_level_ = -1;
+    EnsureTextureMapLoaded();
+    RefreshTextureResCache();
+    for (const auto& fm : familyModels) {
+        const auto texs = familyTextureIds.at(fm.first);
+        global_texture_map_[fm.first] = texs;
+        model_level_map_[fm.first] = current_level_;
+        // The exact-source resolver reads texture_sources_, so it must see
+        // the just-published destination bundle. Otherwise a later import in
+        // the same session would resolve this model to its stale pre-import
+        // mapping and pack textures from the wrong level's archive.
+        bool sourceUpdated = false;
+        for (auto& source : texture_sources_) {
+            if (source.level == current_level_ && source.modelId == fm.first) {
+                source.textures = texs;
+                sourceUpdated = true;
+                break;
             }
         }
+        if (!sourceUpdated) {
+            texture_sources_.push_back(ModelTextureSource{current_level_, fm.first, texs});
+        }
+        for (const auto& t : texs) {
+            texture_level_map_[t] = current_level_;
+			const std::string textureCacheKey = std::to_string(current_level_) + ":" + t;
+			auto cachedTexture = texture_cache_.find(textureCacheKey);
+			if (cachedTexture != texture_cache_.end()) {
+				if (cachedTexture->second != 0) glDeleteTextures(1, &cachedTexture->second);
+				texture_cache_.erase(cachedTexture);
+			}
+        }
+        mesh_cache_.erase(std::to_string(current_level_) + ":object:" + fm.first);
+        mesh_cache_.erase(std::to_string(current_level_) + ":building:" + fm.first);
+        skin_geometry_cache_.erase(fm.first);
     }
 
     Logger::Get().Log(LogLevel::INFO, "[Renderer] AddModelToLevelRes: packed family '" + prefix + "' = " +
         std::to_string(modelEntries.size()) + " model(s) + " + std::to_string(texAdded) + " texture(s)");
+    // A completed import is rare and its evidence is asserted by live tests:
+    // flush now rather than leaving it in the logger's userspace buffer.
+    Logger::Get().Flush();
     return true;
 }
 
@@ -594,6 +1144,46 @@ bool Renderer_Objects::UpdateAttaLocalPosInMef(
     return true;
 }
 
+void Renderer_Objects::PrePopulateAttaFromParsed(const std::string& modelId, bool isBuilding,
+                                                  const std::vector<MefAttachment>& mefAttachments) {
+    std::string cacheKey = std::to_string(current_level_) + ":" +
+                           (isBuilding ? "building:" : "object:") + modelId;
+    if (attachment_cache_.find(cacheKey) != attachment_cache_.end()) return;
+
+    std::vector<AttachInfo> attaches;
+    for (const auto& a : mefAttachments) {
+        std::string aname(a.name, strnlen(a.name, 16));
+        if (aname.empty()) continue;
+        AttachInfo info;
+        info.modelId = aname;
+        info.px = a.px; info.py = a.py; info.pz = a.pz;
+        info.r[0]=a.r00; info.r[1]=a.r01; info.r[2]=a.r02;
+        info.r[3]=a.r03; info.r[4]=a.r04; info.r[5]=a.r05;
+        info.r[6]=a.r06; info.r[7]=a.r07; info.r[8]=a.r08;
+        attaches.push_back(info);
+    }
+    attachment_cache_[cacheKey] = std::move(attaches);
+}
+
+std::vector<AttachInfo> Renderer_Objects::GetModelAttachments(
+    const std::string& modelId,
+    bool isBuilding) {
+    GetOrLoadMesh(modelId, isBuilding);
+    const std::string cacheKey = std::to_string(current_level_) + ":" +
+        (isBuilding ? "building:" : "object:") + modelId;
+    const auto attachment_iterator = attachment_cache_.find(cacheKey);
+    if (attachment_iterator == attachment_cache_.end()) {
+        return {};
+    }
+    return attachment_iterator->second;
+}
+
+std::vector<glm::vec3> Renderer_Objects::GetModelMagicVertices(
+    const std::string& modelId,
+    bool isBuilding) {
+    return GetOrLoadMesh(modelId, isBuilding).magicVertices;
+}
+
 void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool isBuilding,
                                                  std::unordered_set<std::string>& visited) {
     if (!visited.insert(modelId).second) return; // cycle guard
@@ -601,63 +1191,176 @@ void Renderer_Objects::LoadAttachmentsRecursive(const std::string& modelId, bool
     std::string cacheKey = std::to_string(current_level_) + ":" +
                            (isBuilding ? "building:" : "object:") + modelId;
 
-    if (attachment_cache_.find(cacheKey) != attachment_cache_.end()) return;
-
-    std::string filepath = FindModelFile(modelId, isBuilding);
-    if (filepath.empty()) {
-        attachment_cache_[cacheKey] = {};
-        return;
-    }
-
-    std::vector<AttachInfo> attaches;
-    try {
-        ParsedGeometry geo = ParseMefFile(filepath);
-        for (const auto& a : geo.mefAttachments) {
-            std::string aname(a.name, strnlen(a.name, 16));
-            if (aname.empty()) continue;
-
-            AttachInfo info;
-            info.modelId = aname;
-            info.px = a.px; info.py = a.py; info.pz = a.pz;
-            info.r[0]=a.r00; info.r[1]=a.r01; info.r[2]=a.r02;
-            info.r[3]=a.r03; info.r[4]=a.r04; info.r[5]=a.r05;
-            info.r[6]=a.r06; info.r[7]=a.r07; info.r[8]=a.r08;
-            attaches.push_back(info);
-
-            Logger::Get().Log(LogLevel::INFO,
-                "[Renderer_Objects] Attachment '" + aname + "' of '" + modelId +
-                "' pos=(" + std::to_string(a.px) + "," + std::to_string(a.py) +
-                "," + std::to_string(a.pz) + ")");
-
-            // Pre-warm the sub-model mesh
-            std::string subFile = FindModelFile(aname, isBuilding);
-            if (subFile.empty()) {
-                Logger::Get().Log(LogLevel::WARNING,
-                    "[Renderer_Objects] Attachment sub-model NOT FOUND: " + aname);
-            } else {
-                std::string subKey = std::to_string(current_level_) + ":" +
-                                     (isBuilding ? "building:" : "object:") + aname;
-                if (mesh_cache_.find(subKey) == mesh_cache_.end()) {
+    // If attachment_cache_ already has this entry (from PrePopulateAttaFromParsed or a
+    // previous call), skip re-parsing the MEF but still ensure every sub-model's mesh
+    // is loaded — PrePopulateAttaFromParsed only fills the structural list, not meshes.
+    auto existingIt = attachment_cache_.find(cacheKey);
+    if (existingIt != attachment_cache_.end()) {
+        for (const auto& att : existingIt->second) {
+            std::string subKey = std::to_string(current_level_) + ":" +
+                                 (isBuilding ? "building:" : "object:") + att.modelId;
+            if (mesh_cache_.find(subKey) == mesh_cache_.end()) {
+                bool loaded = false;
+                std::string subRes;
+                std::vector<uint8_t> subBytes = FindMeshData(att.modelId, &subRes);
+                if (!subBytes.empty()) {
                     try {
-                        Mesh subMesh = loadObjModel(subFile, "");
-                        ApplyTexturesToMesh(subMesh, aname, modelId);
+                        Mesh subMesh = loadObjModelFromMemory(subBytes, att.modelId);
+                        // The ATTA child's textures are read from the archive the
+                        // child's own bytes came from: one gModelDir supplies the
+                        // model and its textures (Model_SetDir HOOK 0x4CFBD0,
+                        // src/lod/modelfile.c:153-157; ModelFile_Setup's
+                        // "textures/<name>.res", src/model/model.c:261, HOOK 0x4CF080).
+                        ApplyTexturesToMesh(subMesh, att.modelId, modelId,
+                                            ModelArchiveOwnerLevel(subRes));
                         mesh_cache_[subKey] = subMesh;
-                        Logger::Get().Log(LogLevel::INFO,
-                            "[Renderer_Objects] Attachment sub-model loaded: " + aname +
-                            " (" + std::to_string(subMesh.vertexCount) + " verts)");
-                    } catch (const std::exception &se) {
-                        Logger::Get().Log(LogLevel::ERR,
-                            "[Renderer_Objects] Attachment sub-model load FAILED: " + aname + ": " + se.what());
+                        loaded = true;
+                    } catch (...) {}
+                }
+                if (!loaded) {
+                    std::string subFile = FindModelFile(att.modelId, isBuilding);
+                    if (!subFile.empty()) {
+                        try {
+                            Mesh subMesh = loadObjModel(subFile, "");
+                            ApplyTexturesToMesh(subMesh, att.modelId, modelId, 0);
+                            mesh_cache_[subKey] = subMesh;
+                            loaded = true;
+                        } catch (...) {}
+                    } else {
+                        // FindModelFile may have lazily indexed a cross-level .res as a
+                        // side effect (its cross-level lookup block) -- retry the ResCache
+                        // now that the owning level's models.res is indexed.
+                        std::string lazyRes;
+                        std::vector<uint8_t> lazyBytes = FindMeshData(att.modelId, &lazyRes);
+                        if (!lazyBytes.empty()) {
+                            try {
+                                Mesh subMesh = loadObjModelFromMemory(lazyBytes, att.modelId);
+                                ApplyTexturesToMesh(subMesh, att.modelId, modelId,
+                                                    ModelArchiveOwnerLevel(lazyRes));
+                                mesh_cache_[subKey] = subMesh;
+                                loaded = true;
+                            } catch (...) {}
+                        }
+                    }
+                    if (!loaded) {
                         Mesh empty; mesh_cache_[subKey] = empty;
                     }
                 }
-                // Recurse: parse this child's own ATTA section
-                LoadAttachmentsRecursive(aname, isBuilding, visited);
+            }
+            LoadAttachmentsRecursive(att.modelId, isBuilding, visited);
+        }
+        return;
+    }
+
+    // Parse the parent MEF to find ATTA records — try res cache first.
+    ParsedGeometry geo;
+    {
+        bool parsedOk = false;
+        std::vector<uint8_t> mefBytes = FindMeshData(modelId);
+        if (!mefBytes.empty()) {
+            try { geo = ParseMefFileFromMemory(mefBytes); parsedOk = true; } catch (...) {}
+        }
+        if (!parsedOk) {
+            std::string filepath = FindModelFile(modelId, isBuilding);
+            if (filepath.empty()) {
+                attachment_cache_[cacheKey] = {};
+                return;
+            }
+            try { geo = ParseMefFile(filepath); } catch (...) {}
+        }
+    }
+
+    std::vector<AttachInfo> attaches;
+    for (const auto& a : geo.mefAttachments) {
+        std::string aname(a.name, strnlen(a.name, 16));
+        if (aname.empty()) continue;
+
+        // The mesh this spawn loads is the DEFINITION's model (see
+        // MagicObjectModelId). `info.modelId` stays the ATTA name: the editor's
+        // name-keyed paths -- rotor preview, death-zone filter, promoted ATTA
+        // records -- are keyed by the magic-object name, which is also what the
+        // level data references.
+        const std::string spawnModelId = MagicObjectModelId(aname);
+
+        AttachInfo info;
+        info.modelId = aname;
+        info.px = a.px; info.py = a.py; info.pz = a.pz;
+        info.r[0]=a.r00; info.r[1]=a.r01; info.r[2]=a.r02;
+        info.r[3]=a.r03; info.r[4]=a.r04; info.r[5]=a.r05;
+        info.r[6]=a.r06; info.r[7]=a.r07; info.r[8]=a.r08;
+        attaches.push_back(info);
+
+        // Pre-warm the sub-model mesh — try res cache first, disk fallback.
+        std::string subKey = std::to_string(current_level_) + ":" +
+                             (isBuilding ? "building:" : "object:") + spawnModelId;
+        if (mesh_cache_.find(subKey) == mesh_cache_.end()) {
+            bool loaded = false;
+            std::string subRes;
+            std::vector<uint8_t> subBytes = FindMeshData(spawnModelId, &subRes);
+            if (!subBytes.empty()) {
+                try {
+                    Mesh subMesh = loadObjModelFromMemory(subBytes, spawnModelId);
+                    // The sub-model's textures come from the archive its own bytes
+                    // came from (one gModelDir supplies both; Model_SetDir
+                    // HOOK 0x4CFBD0, src/lod/modelfile.c:153-157).
+                    ApplyTexturesToMesh(subMesh, spawnModelId, modelId,
+                                        ModelArchiveOwnerLevel(subRes));
+                    mesh_cache_[subKey] = subMesh;
+                    Logger::Get().Log(LogLevel::INFO,
+                        "[Renderer_Objects] ATTA sub-model loaded from ResCache: " + aname +
+                        " (" + std::to_string(subMesh.vertexCount) + " verts)");
+                    loaded = true;
+                } catch (const std::exception& se) {
+                    Logger::Get().Log(LogLevel::WARNING,
+                        "[Renderer_Objects] ATTA ResCache parse failed for " + aname + ": " + se.what());
+                }
+            }
+            if (!loaded) {
+                std::string subFile = FindModelFile(spawnModelId, isBuilding);
+                if (subFile.empty()) {
+                    // FindModelFile may have lazily indexed a cross-level .res as a side
+                    // effect (its cross-level lookup block) -- retry the ResCache now that
+                    // the owning level's models.res is indexed, before giving up.
+                    std::string lazyRes;
+                    std::vector<uint8_t> lazyBytes = FindMeshData(spawnModelId, &lazyRes);
+                    if (!lazyBytes.empty()) {
+                        try {
+                            Mesh subMesh = loadObjModelFromMemory(lazyBytes, spawnModelId);
+                            ApplyTexturesToMesh(subMesh, spawnModelId, modelId,
+                                                ModelArchiveOwnerLevel(lazyRes));
+                            mesh_cache_[subKey] = subMesh;
+                            Logger::Get().Log(LogLevel::INFO,
+                                "[Renderer_Objects] ATTA sub-model loaded from ResCache (lazy): " + aname +
+                                " (" + std::to_string(subMesh.vertexCount) + " verts)");
+                            loaded = true;
+                        } catch (const std::exception& se) {
+                            Logger::Get().Log(LogLevel::WARNING,
+                                "[Renderer_Objects] ATTA lazy ResCache parse failed for " + aname + ": " + se.what());
+                        }
+                    }
+                    if (!loaded) {
+                        Logger::Get().Log(LogLevel::WARNING,
+                            "[Renderer_Objects] ATTA sub-model NOT FOUND: " + aname);
+                        Mesh empty; mesh_cache_[subKey] = empty;
+                    }
+                } else {
+                    try {
+                        Mesh subMesh = loadObjModel(subFile, "");
+                        ApplyTexturesToMesh(subMesh, spawnModelId, modelId, 0);
+                        mesh_cache_[subKey] = subMesh;
+                        Logger::Get().Log(LogLevel::INFO,
+                            "[Renderer_Objects] ATTA sub-model loaded from disk: " + aname +
+                            " (" + std::to_string(subMesh.vertexCount) + " verts)");
+                    } catch (const std::exception& se) {
+                        Logger::Get().Log(LogLevel::ERR,
+                            "[Renderer_Objects] ATTA sub-model load FAILED: " + aname + ": " + se.what());
+                        Mesh empty; mesh_cache_[subKey] = empty;
+                    }
+                }
             }
         }
-    } catch (const std::exception &pe) {
-        Logger::Get().Log(LogLevel::WARNING,
-            "[Renderer_Objects] Could not parse ATTA from '" + filepath + "': " + pe.what());
+        // Recurse: parse this child's own ATTA section
+        LoadAttachmentsRecursive(spawnModelId, isBuilding, visited);
     }
 
     attachment_cache_[cacheKey] = std::move(attaches);
@@ -680,20 +1383,22 @@ void Renderer_Objects::DrawAttachmentsRecursive(
 {
     // Skip rendering attachments for any weapon model
     if (IsWeaponModel(parentModelId)) return;
-    std::string prefix = isBuilding ? "building:" : "object:";
-    std::string attCacheKey = std::to_string(current_level_) + ":" + prefix + parentModelId;
-    auto ait = attachment_cache_.find(attCacheKey);
+    FillLevelModelKey(level_model_key_scratch_, current_level_, isBuilding, parentModelId);
+    auto ait = attachment_cache_.find(level_model_key_scratch_);
     if (ait == attachment_cache_.end()) return;
 
     const auto& attsR = ait->second;
     for (size_t rri = 0; rri < attsR.size(); ++rri) {
         const auto &att = attsR[rri];
-        // Find the mesh
-        std::string subKey = std::to_string(current_level_) + ":" + prefix + att.modelId;
-        auto sit = mesh_cache_.find(subKey);
+        // Find the mesh. The spawned model is the definition's model
+        // (MagicObjectModelId); the name-keyed checks further down (death zone,
+        // rotor preview, promoted records) keep using att.modelId.
+        const std::string spawnModelId = MagicObjectModelId(att.modelId);
+        FillLevelModelKey(level_model_key_scratch_, current_level_, isBuilding, spawnModelId);
+        auto sit = mesh_cache_.find(level_model_key_scratch_);
         if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) {
-            subKey = std::to_string(current_level_) + ":object:" + att.modelId;
-            sit = mesh_cache_.find(subKey);
+            FillLevelModelKey(level_model_key_scratch_, current_level_, false, spawnModelId);
+            sit = mesh_cache_.find(level_model_key_scratch_);
         }
         if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) continue;
         const Mesh &subMesh = sit->second;
@@ -703,39 +1408,71 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         EnsureDeathZoneIdsLoaded();
         if (deathzone_ids_.count(att.modelId)) continue;
 
-        // Build the ATTA local rotation matrix (DirectX row-major → GLM column-major)
-        glm::mat4 attLocalRot(
-            att.r[0], att.r[1], att.r[2], 0.f,
-            att.r[3], att.r[4], att.r[5], 0.f,
-            att.r[6], att.r[7], att.r[8], 0.f,
-            0.f,      0.f,      0.f,      1.f
-        );
+        // Child world transform: child_world = parent_world * child_local, with the
+        // child's world position = parent_pos + parent_rot * ATTA pos. See
+        // renderer/atta_children.h (retail engine src/magicobj/rigidcoll.c:399-450).
+        // ATTA px/py/pz are raw floats in the same raw game units as obj.pos, and
+        // parentWorldMat is unscaled (translate + rotate), so no conversion is needed.
+        const float attPos[3] = {att.px, att.py, att.pz};
+        const float attMat[9] = {att.r[0], att.r[1], att.r[2],
+                                 att.r[3], att.r[4], att.r[5],
+                                 att.r[6], att.r[7], att.r[8]};
+        const glm::mat4 childWorldMat = igi::IgiAttaChildWorld(parentWorldMat, attPos, attMat);
 
-        // ATTA px/py/pz are raw floats from the MEF file, in the same coordinate
-        // space as obj.pos (raw game units). parentWorldMat is also in raw game units
-        // (translate=obj.pos, no scale), so no conversion needed.
-        glm::vec3 localOff(att.px, att.py, att.pz);
-        glm::vec3 worldPos = glm::vec3(parentWorldMat * glm::vec4(localOff, 1.f));
+        auto recurse_children = [&]() {
+            // in retail engine, child attachment expansion only recurses if the child is a
+            // sector (model has portals; src/shadow/sector.c:673-676) or if its task
+            // type create handler calls RigidDynCubeObj_CreateMagicObjs
+            // (src/magicobj/rigidcoll.c:383-496, igi::MagicObjectTypeChildExpansion).
+            bool expands = false;
+            if (!subMesh.portalMeshes.empty()) {
+                expands = true;
+            } else {
+                const auto* def = MagicObjectTable().Find(att.modelId);
+                if (def != nullptr) {
+                    switch (igi::MagicObjectTypeChildExpansion(def->task_type_name)) {
+                    case igi::MagicObjectChildExpansion::kAlways:
+                        expands = true;
+                        break;
+                    case igi::MagicObjectChildExpansion::kIfModelResolved:
+                        expands = (subMesh.vertexCount > 0);
+                        break;
+                    case igi::MagicObjectChildExpansion::kNo:
+                        break;
+                    }
+                }
+            }
+            if (expands && drawn.count(spawnModelId) == 0) {
+                drawn.insert(spawnModelId);
+                DrawAttachmentsRecursive(topLevelModelId, spawnModelId, isBuilding, childWorldMat, isTransparentPass,
+                                          loc_model, loc_dirlight, loc_ambient,
+                                          loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
+                drawn.erase(spawnModelId);
+            }
+        };
 
-        // Extract parent rotation (upper-left 3x3 of the unscaled parent mat)
-        glm::mat4 parentRot = parentWorldMat;
-        parentRot[3] = glm::vec4(0.f, 0.f, 0.f, 1.f); // zero out translation
-
-        // Unscaled world matrix for this attachment (used by children)
-        glm::mat4 childWorldMat(1.0f);
-        childWorldMat = glm::translate(childWorldMat, worldPos);
-        childWorldMat = childWorldMat * parentRot * attLocalRot;
+        // Rotor preview (TASKTYPE_ROTOR attachments). The retail game spins a
+        // Rotor magic object about its own local X axis, post-multiplied, and only
+        // for the DRAWING copy — the frame its children inherit stays unspun. See
+        // renderer/atta_children.h (retail engine src/rotor/rotor.c:139-152, :180-181).
+        // Classification comes from MAGICOBJ.QVM, not from the parent object's
+        // type (retail engine src/magicobj/rigidcoll.c:385-434).
+        glm::mat4 drawWorldMat = childWorldMat;
+        if (RotorAttachmentIds().count(att.modelId) > 0) {
+            // Preview rate only: the retail rate is `dir * speed * car speed`, with
+            // dir/speed read from the rotor's DefinePhysicsObjType entry; the editor
+            // has no vehicle speed. Axis, sign and composition order are the game's.
+            constexpr float kRotorPreviewRadPerSec = 15.0f;
+            drawWorldMat = igi::IgiRotorSpinMatrix(
+                childWorldMat, elapsed_time_secs_ * kRotorPreviewRadPerSec);
+        }
+        const glm::vec3 worldPos(childWorldMat[3]);
 
         // If this ATTA has a proxy object editing it, skip rendering it here —
         // the proxy renders it — but still recurse into children.
         if (IsAttaPromoted(att.modelId, worldPos) ||
             promoted_atta_records_.count(parentModelId + ":" + std::to_string(rri)) > 0) {
-            std::string childKey = parentModelId + ">" + att.modelId;
-            if (drawn.insert(childKey).second) {
-                DrawAttachmentsRecursive(topLevelModelId, att.modelId, isBuilding, childWorldMat, isTransparentPass,
-                                         loc_model, loc_dirlight, loc_ambient,
-                                         loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
-            }
+            recurse_children();
             continue;
         }
 
@@ -743,12 +1480,7 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         // vertices). These render as misshapen boxes with fabricated UVs.  Still recurse
         // into their children — those may have proper render geometry.
         if (!subMesh.fromRenderMesh) {
-            std::string childKey = parentModelId + ">" + att.modelId;
-            if (drawn.insert(childKey).second) {
-                DrawAttachmentsRecursive(topLevelModelId, att.modelId, isBuilding, childWorldMat, isTransparentPass,
-                                         loc_model, loc_dirlight, loc_ambient,
-                                         loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
-            }
+            recurse_children();
             continue;
         }
 
@@ -772,18 +1504,14 @@ void Renderer_Objects::DrawAttachmentsRecursive(
             EnsureAiModelIdsLoaded();
             const bool isAiModel = (ai_model_ids_.count(topLevelModelId) > 0);
             if (!subHasTex && (!isAiModel || isLargeSlab)) {
-                std::string childKey = parentModelId + ">" + att.modelId;
-                if (drawn.insert(childKey).second) {
-                    DrawAttachmentsRecursive(topLevelModelId, att.modelId, isBuilding, childWorldMat, isTransparentPass,
-                                             loc_model, loc_dirlight, loc_ambient,
-                                             loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
-                }
+                recurse_children();
                 continue;
             }
         }
 
         // Scaled model matrix: X uses leafScale.x (intervalLen for splines, 40.96 for buildings)
-        glm::mat4 attModel = glm::scale(childWorldMat, leafScale);
+        // Rotor attachments draw with the spun frame; every other child draws unspun.
+        glm::mat4 attModel = glm::scale(drawWorldMat, leafScale);
 
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(attModel));
 
@@ -802,37 +1530,22 @@ void Renderer_Objects::DrawAttachmentsRecursive(
                 if (s.alphaMode == 2) { attHasAlpha = true; break; }
             }
         }
-        if (current_level_ == 12 && !attIsWindow) {
-            attHasAlpha = false;
-        }
+        // No level-12 forced-opaque case: it discarded the winch-house ARGB
+        // glass in the opaque pass (invisible until ATTA promotion).
 
-        // Skip this sub-model if it doesn't belong in the current pass:
-        //   Windows: transparent pass only
-        //   Alpha attachments: both passes
-        //   Opaque attachments: opaque pass only
-        const bool drawInThisPass = attIsWindow
-            ? isTransparentPass
-            : (!isTransparentPass || attHasAlpha);
+        // Skip this sub-model if it doesn't belong in the current pass. Window
+        // models can contain both opaque structural blocks and genuinely alpha
+        // blended panes, so the model-level window classification must not force
+        // the opaque blocks through the transparent pass.
+        const bool drawInThisPass = !isTransparentPass || attHasAlpha;
         if (!drawInThisPass) {
             // Still recurse into children — they may need a different pass
-            std::string childKey = parentModelId + ">" + att.modelId;
-            if (drawn.insert(childKey).second) {
-                DrawAttachmentsRecursive(topLevelModelId, att.modelId, isBuilding, childWorldMat, isTransparentPass,
-                                          loc_model, loc_dirlight, loc_ambient,
-                                          loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
-            }
+            recurse_children();
             continue;
         }
 
-        if (attIsWindow) {
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            glUniform1f(loc_alpha, 0.55f); // visible reflectivity, still see-through
-            glUniform1f(loc_glass_min_, 0.30f); // clean glass sheen floor
-        } else {
-            glUniform1f(loc_alpha, 1.0f);
-            glUniform1f(loc_glass_min_, 0.0f);
-        }
+        glUniform1f(loc_alpha, 1.0f);
+        glUniform1f(loc_glass_min_, 0.0f);
 
         // Draw sub-model submeshes
         if (!subMesh.subMeshes.empty()) {
@@ -840,25 +1553,28 @@ void Renderer_Objects::DrawAttachmentsRecursive(
                 if (sub.VAO == 0 || sub.vertexCount == 0) continue;
 
                 // In the transparent pass, only draw alpha submeshes (with blending).
-                // In the opaque pass, draw everything — the shader discards α<0.5 pixels.
+                // Opaque blocks of a mixed window model belong in the opaque pass so
+                // they write depth and remain visible through the normal scene path.
                 bool subNeedsBlend = (sub.alphaMode == 2);
-                if (current_level_ == 12 && !attIsWindow) {
-                    subNeedsBlend = false;
-                }
                 if (attIsTree) subNeedsBlend = false;
-                if (isTransparentPass && !attIsWindow && !subNeedsBlend) continue;
+                if (attIsWindow) {
+                    if (isTransparentPass != subNeedsBlend) continue;
+                } else if (isTransparentPass && !subNeedsBlend) {
+                    continue;
+                }
 
                 if (subNeedsBlend) {
                     glEnable(GL_BLEND);
                     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                    glUniform1f(loc_alpha, sub.baseColorFactor.a);
+                    glUniform1f(loc_alpha, attIsWindow ? 0.55f : sub.baseColorFactor.a);
+                    if (attIsWindow) glUniform1f(loc_glass_min_, 0.30f);
                 }
 
                 if (sub.textureID > 0) {
                     // Same normal lighting for window/glass attachments so they stay
                     // clear and see-through (see top-level path — flat-gray reverted).
                     glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                    glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+                    glUniform3f(loc_ambient,  global_ambient_.r, global_ambient_.g, global_ambient_.b);
                     glUniform1i(loc_useTex, 1);
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, sub.textureID);
@@ -867,11 +1583,11 @@ void Renderer_Objects::DrawAttachmentsRecursive(
                     // Untextured accessory (e.g. sunglasses): hash-color fallback, matching
                     // the untextured submesh path used for top-level objects above.
                     size_t hash = std::hash<std::string>{}(att.modelId);
-                    float hr = 0.4f + (float)(hash & 0xFF) / 255.0f * 0.4f;
-                    float hg = 0.4f + (float)((hash >> 8) & 0xFF) / 255.0f * 0.4f;
-                    float hb = 0.4f + (float)((hash >> 16) & 0xFF) / 255.0f * 0.4f;
+                    float hr = global_ambient_.r + (float)(hash & 0xFF) / 255.0f * global_ambient_.r;
+                    float hg = global_ambient_.g + (float)((hash >> 8) & 0xFF) / 255.0f * global_ambient_.g;
+                    float hb = global_ambient_.b + (float)((hash >> 16) & 0xFF) / 255.0f * global_ambient_.b;
                     glUniform3f(loc_dirlight, hr * 0.6f, hg * 0.6f, hb * 0.6f);
-                    glUniform3f(loc_ambient,  hr * 0.4f, hg * 0.4f, hb * 0.4f);
+                    glUniform3f(loc_ambient,  hr * global_ambient_.r, hg * global_ambient_.g, hb * global_ambient_.b);
                     glUniform1i(loc_useTex, 0);
                 }
                 glBindVertexArray(sub.VAO);
@@ -880,12 +1596,15 @@ void Renderer_Objects::DrawAttachmentsRecursive(
                 if (subNeedsBlend) {
                     glDisable(GL_BLEND);
                     glUniform1f(loc_alpha, 1.0f);
+                    if (attIsWindow) glUniform1f(loc_glass_min_, 0.0f);
                 }
             }
             glBindVertexArray(0);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
         } else if (subMesh.textureID > 0) {
             glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-            glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+            glUniform3f(loc_ambient,  global_ambient_.r, global_ambient_.g, global_ambient_.b);
             glUniform1i(loc_useTex, 1);
             GL_BindTexture2D(0, subMesh.textureID);
             glUniform1i(loc_tex, 0);
@@ -895,16 +1614,23 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         if (attIsWindow) {
             glDisable(GL_BLEND);
             glUniform1f(loc_alpha, 1.0f);
+            glUniform1f(loc_glass_min_, 0.0f); // don't leak the glass sheen floor
         }
 
         // Recurse into this attachment's own children
-        std::string childKey = parentModelId + ">" + att.modelId;
-        if (drawn.insert(childKey).second) {
-            DrawAttachmentsRecursive(topLevelModelId, att.modelId, isBuilding, childWorldMat, isTransparentPass,
-                                      loc_model, loc_dirlight, loc_ambient,
-                                      loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
-        }
+        recurse_children();
     }
+}
+
+Renderer_Objects::SplineAttachmentLocs Renderer_Objects::ResolveSplineAttachmentLocs() const {
+    SplineAttachmentLocs locs;
+    locs.model    = glGetUniformLocation(shader_program_, "u_model");
+    locs.dirlight = glGetUniformLocation(shader_program_, "u_dirlight");
+    locs.ambient  = glGetUniformLocation(shader_program_, "u_ambient");
+    locs.useTex   = glGetUniformLocation(shader_program_, "u_useTexture");
+    locs.tex      = glGetUniformLocation(shader_program_, "u_texture");
+    locs.alpha    = glGetUniformLocation(shader_program_, "u_alpha");
+    return locs;
 }
 
 void Renderer_Objects::DrawAttachmentsForSpline(
@@ -912,19 +1638,25 @@ void Renderer_Objects::DrawAttachmentsForSpline(
     const glm::mat4& unscaledWorldMat, GLuint ubo_mats,
     glm::vec3 leafScale)
 {
+    const SplineAttachmentLocs locs = ResolveSplineAttachmentLocs();
+    DrawAttachmentsForSpline(modelId, isBuilding, unscaledWorldMat, ubo_mats, locs, leafScale, false);
+}
+
+void Renderer_Objects::DrawAttachmentsForSpline(
+    const std::string& modelId, bool isBuilding,
+    const glm::mat4& unscaledWorldMat, GLuint ubo_mats,
+    const SplineAttachmentLocs& locs,
+    glm::vec3 leafScale,
+    bool retainProgram)
+{
     EnsureWindowModelIdsLoaded();
 
-    glUseProgram(shader_program_);
-    glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
+    if (!retainProgram) {
+        glUseProgram(shader_program_);
+        glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
+    }
 
-    GLint loc_model    = glGetUniformLocation(shader_program_, "u_model");
-    GLint loc_dirlight = glGetUniformLocation(shader_program_, "u_dirlight");
-    GLint loc_ambient  = glGetUniformLocation(shader_program_, "u_ambient");
-    GLint loc_useTex   = glGetUniformLocation(shader_program_, "u_useTexture");
-    GLint loc_tex      = glGetUniformLocation(shader_program_, "u_texture");
-    GLint loc_alpha    = glGetUniformLocation(shader_program_, "u_alpha");
-
-    glUniform1f(loc_alpha, 1.0f);
+    glUniform1f(locs.alpha, 1.0f);
 
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(-2.0f, -2.0f);
@@ -933,25 +1665,27 @@ void Renderer_Objects::DrawAttachmentsForSpline(
     {
         std::unordered_set<std::string> drawn;
         DrawAttachmentsRecursive(modelId, modelId, isBuilding, unscaledWorldMat, /*isTransparentPass=*/false,
-                                 loc_model, loc_dirlight, loc_ambient, loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
+                                 locs.model, locs.dirlight, locs.ambient,
+                                 locs.useTex, locs.tex, locs.alpha, drawn, leafScale);
     }
 
     // Transparent pass (windows / glass)
     {
         std::unordered_set<std::string> drawn;
         DrawAttachmentsRecursive(modelId, modelId, isBuilding, unscaledWorldMat, /*isTransparentPass=*/true,
-                                 loc_model, loc_dirlight, loc_ambient, loc_useTex, loc_tex, loc_alpha, drawn, leafScale);
+                                 locs.model, locs.dirlight, locs.ambient,
+                                 locs.useTex, locs.tex, locs.alpha, drawn, leafScale);
     }
 
     // Restore blend/depth state — transparent pass may leave them dirty.
     glDisable(GL_BLEND);
     glDepthMask(GL_TRUE);
-    glUniform1f(loc_alpha, 1.0f);
+    glUniform1f(locs.alpha, 1.0f);
     glDisable(GL_POLYGON_OFFSET_FILL);
-    glUseProgram(0);
+    if (!retainProgram) {
+        glUseProgram(0);
+    }
 }
-
-
 
 
 

@@ -11,11 +11,12 @@
 #include "logger.h"
 #include "utils.h"
 #include "cli/asset_extractor.h"
-#include "parsers/qvm_parser.h"
-#include "parsers/qvm_decompiler.h"
-#include "parsers/qsc_lexer.h"
-#include "parsers/qsc_parser.h"
-#include "parsers/qvm_compiler.h"
+#include "qvm_parser.h"
+#include "qvm_decompiler.h"
+#include "qsc_lexer.h"
+#include "qsc_parser.h"
+#include "qvm_compiler.h"
+#include "fog_qsc.h"
 
 
 
@@ -42,14 +43,8 @@ Level::~Level() {
 }
 
 static std::string GetExeDirectory() {
-	char exePath[MAX_PATH];
-	GetModuleFileNameA(NULL, exePath, MAX_PATH);
-	std::string exeDir(exePath);
-	size_t lastSlash = exeDir.find_last_of("\\/");
-	if (lastSlash != std::string::npos) {
-		exeDir = exeDir.substr(0, lastSlash);
-	}
-	return exeDir;
+	// One portable implementation lives in utils.h; see the .app note there.
+	return Utils::GetExeDirectory();
 }
 
 static void CleanDirectory(const std::string& dirPath) {
@@ -91,17 +86,14 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 	char filename[1024];
 	std::string exeDir = GetExeDirectory();
 
-	// Extract textures and models from IGI .res archives (cached per-level)
-	AssetExtractor::EnsureLevelAssets(params.level_no_, Utils::GetIGIRootPath(), exeDir);
-	// Extract textures from all other levels once per session so cross-level
-	// texture references (e.g. model 618 in level 3 whose textures live in level 6)
-	// are available for the FindTextureFile cross-level search.
-	// AssetExtractor::EnsureAllLevelTextures(Utils::GetIGIRootPath(), exeDir);
+	// Textures and models are now loaded directly from .res archives into memory
+	// by Renderer_Objects::LoadResCache (called in app_level.cpp before BeginLoadLevel).
+	// No disk extraction to editor/textures or editor/models is performed.
 
 	// Verify terrain folder exists in game directory
 	try {
 		std::string terrainPath = Utils::GetIGIRootPath() + "\\missions\\location0\\level" + std::to_string(params.level_no_) + "\\terrain";
-		if (!std::filesystem::exists(terrainPath)) {
+		if (!std::filesystem::exists(Utils::ToNativePath(terrainPath))) {
 			Logger::Get().Log(LogLevel::ERR, "[Level] FATAL: ERROR Missing terrain folder at: " + terrainPath);
 			return false;
 		}
@@ -124,7 +116,7 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 	DecompileObjects(params.level_no_);
 	Str_SPrintf(filename, 1024, "%s\\editor\\qed\\temp\\objects.qsc", exeDir.c_str());
 
-	qsc_path_ = filename;
+	qsc_path_ = Utils::ToNativePath(filename);
 
 	if (!File_Exists(filename)) {
 		Logger::Get().Log(LogLevel::ERR, "[Level] FATAL: ERROR Missing 'objects.qsc' file at: " + qsc_path_);
@@ -140,6 +132,8 @@ bool Level::Load(load_params_s& params, glm::vec3& start_pos, float& start_yaw) 
 
 	try {
 		LoadStartPosInfo(qsc_objects, start_pos, start_yaw);
+		start_pos_ = start_pos;
+		start_yaw_ = start_yaw;
 		LoadFogInfo(qsc_objects, params.render_res_loader_);
 		LoadSkydomeInfo(qsc_objects, params.render_res_loader_);
 		LoadFlatSkyLayersInfo(qsc_objects, params.render_res_loader_);
@@ -186,8 +180,12 @@ void Level::DecompileObjects(int levelNo) {
 
 	std::string exeDir = GetExeDirectory();
 	char destPath[1024];
-	std::filesystem::create_directories(exeDir + "\\editor\\qed\\temp");
+	std::filesystem::create_directories(Utils::ToNativePath(exeDir + "\\editor\\qed\\temp"));
 	Str_SPrintf(destPath, 1024, "%s\\editor\\qed\\temp\\objects.qsc", exeDir.c_str());
+	// The decompiler and TrimFileInPlace both open this path directly, so make
+	// it native here rather than patching each consumer.
+	const std::string nativeDest = Utils::ToNativePath(destPath);
+	std::snprintf(destPath, sizeof(destPath), "%s", nativeDest.c_str());
 
 	try {
 		// Use internal C++ decompiler
@@ -402,6 +400,25 @@ int Level::GetTerrainNodeId(double x, double y) {
 	return terrain_.GetLastLeafNodeIndex();
 }
 
+bool Level::RaycastTerrain(const glm::vec3& ray_origin, const glm::vec3& ray_dir, glm::vec3& out_hit, int& out_node_id) {
+	if (!root_dyn_cube_) return false;
+	glm::vec3 current_pos = ray_origin;
+	const float step_size = 1000.0f;
+	for (int i = 0; i < 5000; ++i) {
+		current_pos += ray_dir * step_size;
+		float terrain_z = 0.0f;
+		if (terrain_.GetZ(root_dyn_cube_, current_pos.x, current_pos.y, terrain_z)) {
+			if (current_pos.z <= terrain_z + 100.0f) {
+				current_pos.z = terrain_z;
+				out_hit = current_pos;
+				out_node_id = terrain_.GetLastLeafNodeIndex();
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 void Level::EditorRaycastAndModify(const glm::vec3& ray_origin, const glm::vec3& ray_dir, int brush_type, double radius, double strength) {
 	if (root_dyn_cube_) {
 		terrain_.EditorRaycastAndModify(root_dyn_cube_, ray_origin, ray_dir, brush_type, radius, strength);
@@ -451,46 +468,90 @@ void Level::LoadStartPosInfo(const QSC* qsc_objects, glm::vec3& start_pos, float
 }
 
 void Level::LoadFogInfo(const QSC* qsc_objects, IRenderResLoader* render_res_loader) {
+	// ONE fog path. The authored GlobalLightKeyframe is parsed by
+	// igi::ResolveMissionFog (source/runtime/mission_fog.cpp) through the QSC
+	// bridge in fog_qsc.h; this function no longer carries its own copy of the
+	// parse. Both halves of the rule are retail engine's:
+	//
+	//   * which keyframe: the level's default state is the one with the smallest
+	//     Time. A level can list more than one keyframe (every retail level
+	//     authors a daytime one and a Time=100 night one) and NOT in
+	//     chronological order, so "the first one found" is not a safe rule.
+	//     GlobalLightKeyframe declares 51 parameters ending in "Time" (Real32)
+	//     (src/animcam/globallight.c:264-282).
+	//   * what the values are: "Fog color terrain" is declared parameters 4..6
+	//     and "Fog density terrain" is parameter 7 (src/animcam/globallight.c:
+	//     266-270), i.e. QSC args 7..9 and 10 once the three leading Task_New
+	//     arguments (id, type, name) are counted.
+	//
+	// These are the pre-refactor defaults, kept for a level that authors no
+	// usable keyframe.
 	glm::vec4 fog_color(0.15f, 0.15f, 0.15f, 1.0f);
-	float fog_far = 30000.0f;
+	float fog_far_meters = 30000.0f;
+	// The object pass fogs with a DIFFERENT set from the terrain pass: the engine's
+	// gFogColor / gFogDensity are gFogColors[1] / gFogDensities[1], i.e. "object
+	// category 1" (address arithmetic in source/runtime/mission_fog.h,
+	// kObjectLightSet; readers at src/render/render.c:775-780 and
+	// src/dxinit/polylist.c:243-245). Its own default is the same "no fog" state.
+	glm::vec4 object_fog_color(0.15f, 0.15f, 0.15f, 1.0f);
+	float object_fog_far_meters = 30000.0f;
 
-	const QSC::func_s* qsc_funcs[1024];
-	int num_func = qsc_objects->FindFuncByStr("GlobalLightKeyframe", qsc_funcs);
-	if (num_func) {
-		const QSC::func_s* f = qsc_funcs[0];	// read first function
+	const igi::MissionFog authored_fog = igi::ResolveAuthoredFogFromQsc(*qsc_objects);
 
-		int arg_idx = 0;
-		const QSC::arg_s * a = f->args_;
-		while (a) {
+	if (authored_fog.authored) {
+		fog_color = glm::vec4(authored_fog.sets[0].fog[0],
+				      authored_fog.sets[0].fog[1],
+				      authored_fog.sets[0].fog[2],
+				      1.0f);
 
-			if (a->type_ == QSC::arg_s::type_t::DBL) {
-				switch (arg_idx) {
-				case 7:
-					fog_color.r = (float)a->dbl_;
-					break;
-				case 8:
-					fog_color.g = (float)a->dbl_;
-					break;
-				case 9:
-					fog_color.b = (float)a->dbl_;
-					break;
-				case 10:
-					// tune this
-					fog_far = (1.0f / (float)a->dbl_) * 7200.0f;
-					break;
-				}
-			}
+		// The engine's fog is exponential: the terrain vertex fog attenuates by
+		//      1 / exp(vz * gWorldScale * gTerrainFogScale)
+		// (src/glowmesh/terraind3d.c:164) with gWorldScale = 0.001f
+		// (src/d3d/direct3d.c:532) and gTerrainFogScale = authored_density *
+		// 0.0005 (src/animcam/globallight.c:115,125 -- the 0x1.0624dep-11
+		// constant), clamped to 0..16384 by TerrainMesh_SetFog
+		// (src/glowmesh/terrainmesh.c:302-320). The exponent reaches 1 -- the
+		// e-folding point -- at vz = 2e6 / density world units.
+		//
+		// This renderer's fog is LINEAR, so it gets that e-folding distance in
+		// metres: 2e6 / 4096 = 488.28125 / density. It is the honest bridge, not
+		// an equivalence -- matching retail exactly would need exponential fog in
+		// the shader. This replaced an invented 120.0f, which had the right
+		// 1/density shape but made the fog 4.069x too thick on every level
+		// (LEVEL1: 63.5 m instead of 258.35 m).
+		//
+		// A density of 0 is a valid "no fog at this keyframe" state (the night
+		// keyframe of every retail level), and keeps the far/no-fog default.
+		fog_far_meters = igi::LinearFogFarMetresForAuthoredDensity(
+			authored_fog.sets[0].density, fog_far_meters);
 
-			a = a->next_;
-			arg_idx++;
-
-			if (arg_idx > 10) {
-				break;
-			}
-		}
+		// The object set. Same rule, same conversion, different authored set --
+		// and NOT clamped to 16384, because that ceiling is TerrainMesh_SetFog's
+		// and applies to gTerrainFogScale only (mission_fog.h kObjectLightSet).
+		const float* object_fog = authored_fog.object_fog_color();
+		object_fog_color = glm::vec4(object_fog[0], object_fog[1], object_fog[2], 1.0f);
+		object_fog_far_meters = igi::LinearFogFarMetresForAuthoredDensity(
+			authored_fog.sets[igi::kObjectLightSet].density, object_fog_far_meters);
 	}
 
-	render_res_loader->SetupFog(fog_color, fog_far);
+	// fog_far_meters is derived from the QSC fog-density value in meters; the
+	// renderer's fog distance check operates in world units (v_fragPos/u_cameraPos
+	// are WORLD_UNITS_PER_METER per meter), so convert before handing it off.
+	render_res_loader->SetupFog(fog_color, fog_far_meters * WORLD_UNITS_PER_METER);
+	render_res_loader->SetupObjectFog(object_fog_color,
+					  object_fog_far_meters * WORLD_UNITS_PER_METER);
+
+	// The resolved fog is otherwise invisible (nothing prints it, and the GUI
+	// cannot run on this host), which is how an invented 120.0f constant survived
+	// here for so long. Report it.
+	char fog_log[256];
+	Str_SPrintf(fog_log, sizeof(fog_log),
+		    "[Level] authored GlobalLightKeyframe fog: %s, terrain far %.2f m (density %.6f), object far %.2f m (density %.6f)\n",
+		    authored_fog.authored ? "present" : "absent", fog_far_meters,
+		    authored_fog.authored ? authored_fog.sets[0].density : 0.0f,
+		    object_fog_far_meters,
+		    authored_fog.authored ? authored_fog.sets[igi::kObjectLightSet].density : 0.0f);
+	Logger::Get().Log(LogLevel::INFO, fog_log);
 }
 
 void Level::LoadSkydomeInfo(const QSC* qsc_objects, IRenderResLoader* render_res_loader) {
@@ -508,16 +569,16 @@ void Level::LoadSkydomeInfo(const QSC* qsc_objects, IRenderResLoader* render_res
 		while (a) {
 
 			if (a->type_ == QSC::arg_s::type_t::DBL) {
+				// Task_New args are [0]=task id, [1]=func name, [2]=instance name,
+				// THEN the declared FlatSky parameters begin (confirmed via raw
+				// arg dump against objects.qsc): [3]=FogAmount, [4]=ZPos,
+				// [5]=Distance, [6-8]=FogColor RGB, [9]=SnapBool, [10]=Angle,
+				// [11-13]=TopColor RGB, [14-16]=MidColor1 RGB,
+				// [17-19]=MidColor2 RGB, [20-22]=BotColor1 RGB, [23-25]=BotColor2 RGB
+				// Note: fog_amount/z_pos/distance (args 3-5) are intentionally not
+				// parsed so the flat-sky layer stays invisible; the editor uses the
+				// skydome gradient for the sky background instead.
 				switch (arg_idx) {
-				case 3:
-					flat_sky_fog_amount_ = (float)a->dbl_;
-					break;
-				case 4:
-					flat_sky_z_pos_ = (float)a->dbl_;
-					break;
-				case 5:
-					flat_sky_distance_ = (float)a->dbl_;
-					break;
 				case 6:
 					flat_sky_fog_color.r = (float)a->dbl_;
 					break;
@@ -527,6 +588,7 @@ void Level::LoadSkydomeInfo(const QSC* qsc_objects, IRenderResLoader* render_res
 				case 8:
 					flat_sky_fog_color.b = (float)a->dbl_;
 					break;
+				// arg 9 = SkyDome Snap Colours (bool8) — not DBL, skipped automatically
 				case 10:
 					sd.angle_ = glm::radians((float)a->dbl_);
 					break;
@@ -578,7 +640,7 @@ void Level::LoadSkydomeInfo(const QSC* qsc_objects, IRenderResLoader* render_res
 				case 25:
 					sd.bottom_color2_[2] = (float)a->dbl_;
 					break;
-				}	// end swith
+				}
 			}
 
 			a = a->next_;
@@ -670,6 +732,20 @@ void Level::LoadFlatSkyLayersInfo(const QSC* qsc_objects, IRenderResLoader* rend
 // if not exists then allocate a cube
 dyn_cube_s* Level::GetDynCube(const double pos[3], int cube_lod_level, glm::ivec3& cube_ctr) {
 	const Terrain::ctr_node_s* ctr_head = terrain_.GetCtr();
+
+	// DynCube_Add -> DynCube_Move (src/terrain/dyncube.c:141-147, HOOK 0x4C6940)
+	// only descends the *terrain* quad tree to pick a cube; when the level has no
+	// collision tree the engine's own walks are skipped too - QCube_Begin tests
+	// `if (w->ctr && full)` (src/lod/qcube.c:366) and the collision entry points
+	// guard on a NULL ctr (src/coll/coll.c:171).  Terrain::LoadCTRFile leaves
+	// ctr_ null for a .ctr that is missing or is not the engine's 32-byte
+	// CollNode array (terrain_ctr_rules.h), so place into the root cube and stop
+	// instead of reading ctr_head + 1.
+	if (!ctr_head) {
+		cube_ctr = glm::ivec3(0);
+		return root_dyn_cube_;
+	}
+
 	const Terrain::ctr_node_s* ctr_node = ctr_head + 1;	// + 1: root node
 	int cube_half_size = root_dyn_cube_->cube_half_size_;
 	int lod_bit_shift = 30;
@@ -678,19 +754,20 @@ dyn_cube_s* Level::GetDynCube(const double pos[3], int cube_lod_level, glm::ivec
 
 	dyn_cube_s* dyn_cube = root_dyn_cube_;
 
-	// round to nearest integer
+	// Terrain_Round (src/terrain/terrain.h:16-22) is the x87 `fistpll` in the
+	// current rounding mode: round to nearest, ties to even. Every engine
+	// placement into the dynamic cube tree uses it with the terrain origin --
+	// DynCube_Add -> DynCube_Move (src/terrain/dyncube.c:141-147):
+	//     x = Terrain_Round(pos->x) + t->offset[0];
+	//     y = Terrain_Round(pos->y) + t->offset[1];
+	//     z = Terrain_Round(pos->z) + t->offset[2];
+	// This used to floor (truncate towards -inf) instead, which selects the
+	// neighbouring cube for a negative fractional coordinate. The editor has no
+	// Terrain.offset[]; the engine only ever reads it (no assignment exists in
+	// the reference), so only the rounding is transcribed.
 	glm::ivec3 rounded_pos;
-
 	for (int i = 0; i < 3; ++i) {
-		rounded_pos[i] = (int)pos[i];
-		if (pos[i] < 0.0 && (double)rounded_pos[i] != pos[i]) {
-			
-			// pos[i] is negative and has decimal part
-			// (int)pos[i] is the ceil
-			// rounded_pos[i]-- is the floor
-
-			rounded_pos[i]--;
-		}
+		rounded_pos[i] = (int)std::nearbyint(pos[i]);
 	}
 
 	int lod_level = 0;

@@ -1,13 +1,35 @@
 #pragma once
+// A classic guard as well as `#pragma once`, and it is load-bearing: tests include
+// headers as "../source/..." while the library includes them as "source/...",
+// and `#pragma once` dedupes by FILE IDENTITY -- so the same header reached by two
+// spellings is two files to it, which produced hard `redefinition of 'class
+// Renderer_Objects'` errors (tests/../source/renderer/renderer_objects.h vs
+// source/renderer/renderer_objects.h).
+#ifndef IGI_RENDERER_OBJECTS_H
+#define IGI_RENDERER_OBJECTS_H
 #include "../pch.h"
 #include "model.h"
+#include "mef_native.h"
 #include "../level/level_objects.h"
-#include "../parsers/dat_parser.h"
+#include "../lod/lod_chain.h"
+#include "../runtime/lightmap_rules.h"
+// The placed-helicopter flight preview's state (GitHub issue #60). Portable and
+// GL-free, so it can be built and stepped from the host test lane.
+#include "../runtime/heli_preview.h"
+// The engine's blob shadow quad (GitHub issue #63). Portable and GL-free, so the
+// host lane pins its fade, clamp, colour and geometry (tests/test_human_shadow.cpp).
+#include "../runtime/human_shadow.h"
+#include "dat_writer.h"
+#include "res_writer.h"
+#include "model_texture_resolution.h"
+#include <array>
 #include <map>
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <unordered_set>
 #include <set>
+#include <cstdint>
 
 struct AttachInfo {
     std::string modelId;
@@ -55,7 +77,12 @@ public:
     // so a model that renders in-editor but is absent from the packed archive becomes
     // visible in-game. Returns true on success (or if already present). (issue 2)
     bool AddModelToLevelRes(const std::string& modelId,
-                            const std::function<void(size_t,size_t)>& onProgress = nullptr);
+                            const std::function<void(size_t,size_t)>& onProgress = nullptr,
+                            int sourceLevel = 0);
+    const std::vector<ModelTextureSource>& GetModelTextureSources() const {
+        EnsureGlobalTextureMapLoaded();
+        return texture_sources_;
+    }
     bool UpdateAttaLocalPosInMef(const std::string& parentModelId, bool isBuilding, int recordIndex, const glm::vec3& newLocalPos, const glm::mat3& newLocalRot);
     // Stable key "model@roundedWorldPos" used to match an ATTA against an EditRigidObj.
     static std::string AttaOccupancyKey(const std::string& modelId, const glm::vec3& worldPos);
@@ -65,23 +92,230 @@ public:
     bool Init();
     void Shutdown();
 
-    void SetLevel(int level) { current_level_ = level; }
+    // Changing level invalidates the flight preview: the object indices the
+    // cache is keyed by belong to the level being replaced, and the physics
+    // config is resolved from that level's game tree. See runtime/heli_preview.h
+    // (GitHub issue #60).
+    void SetLevel(int level) {
+        if (level != current_level_) {
+            heli_preview_cache_.clear();
+            heli_preview_secs_ = 0.0f;
+            heli_preview_ticks_ = 0;
+            heli_preview_config_loaded_ = false;
+            heli_preview_config_ = igi::HeliVehicleConfig{};
+        }
+        current_level_ = level;
+    }
     void ClearCaches();
+
+    // Build an in-memory index for the level's .res archives so textures and
+    // models are loaded directly from the archive on demand — no disk extraction.
+    // Call once after level assets are available (replacing EnsureLevelAssets).
+    void LoadResCache(int levelNo, const std::string& igi_path);
+    // Clear all .res indexes (called on level switch before LoadResCache for new level).
+    void ClearResCache();
+    // Re-index the current level's texture archive after an editor-side append.
+    void RefreshTextureResCache();
+
+    // Find texture/mesh bytes from the in-memory .res index.
+    // Returns empty vector if not found (callers fall back to on-disk paths).
+    // `sourceRes` (optional) receives the archive a mesh came from.
+    std::vector<uint8_t> FindTextureData(const std::string& textureId,
+                                         std::string* sourceRes = nullptr) const;
+    // Resolve texture bytes from one explicit level archive, preserving source
+    // provenance when a foreign destination contains the same texture name.
+    std::vector<uint8_t> FindTextureDataFromLevel(const std::string& textureId,
+                                                  int levelNo) const;
+    std::vector<uint8_t> FindMeshData(const std::string& modelId,
+                                      std::string* sourceRes = nullptr) const;
+    std::vector<uint8_t> FindMeshDataFromLevel(const std::string& modelId,
+                                               int levelNo) const;
+
+    // Pre-fill the attachment cache from already-parsed geometry (avoids re-reading
+    // MEF bytes that were already loaded for mesh creation in GetOrLoadMesh).
+    void PrePopulateAttaFromParsed(const std::string& modelId, bool isBuilding,
+                                   const std::vector<MefAttachment>& mefAttachments);
 
     // Diagnostics: live cache occupancy (for level-switch logging).
     size_t GetMeshCacheCount() const { return mesh_cache_.size(); }
     size_t GetTextureCacheCount() const { return texture_cache_.size(); }
 
-    void Draw(GLuint ubo_mats, bool overlay_wireframe, const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts, const glm::vec3& camera_pos, bool show_magic_obj_spheres = false);
+    // The game's SHARED textures — the ones Game_AddTexture interns
+    // (src/game/game.c:835-848, HOOK 0x416930) and Game_LoadTextures loads
+    // (src/game/game.c:524-534, HOOK 0x416130). "snow.tex" is the weather
+    // system's (RainEffect_Init, src/fxobj/rain.c:82). This is a DIFFERENT
+    // resource identity from a model's texture — "LOCAL:common/textures/<name>"
+    // against "LOCAL:textures/<id>.tex" (src/model/model.c:467) — and it comes
+    // out of the pack "LOCAL:common/textures/textures.res" that the game mounts
+    // at load (src/game/game.c:430). Returns 0 only where the engine's own
+    // Texture_LoadFile would raise (src/file/texture.c:245-249), so a caller can
+    // fall back to the engine's null-texture branch.
+    GLuint GetOrLoadGameTexture(const std::string& name);
+
+    // tan_half_fovx is the frame's `gTransContext.fov` (view_define_.tan_half_fovx_,
+    // set in app.cpp): lod_select needs it to turn a view-space depth into the
+    // engine's distance test (src/lod/mesh3d.c:216-222).
+    void Draw(GLuint ubo_mats, bool overlay_wireframe, const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts, const glm::vec3& camera_pos, bool show_magic_obj_spheres = false, const std::unordered_set<int>* skip_static_draw_indices = nullptr, const glm::vec3& camera_forward = glm::vec3(0.0f), bool fast_preview = false, float tan_half_fovx = 0.0f);
     int PickObjectAtScreen(int x, int y, int w, int h,
                            GLuint ubo_mats,
                            const std::vector<LevelObject>& objects,
                            int draw_parts,
-                           const glm::vec3& camera_pos);
+                           const glm::vec3& camera_pos,
+                           int selected_object_index,
+                           const glm::vec3& camera_forward = glm::vec3(0.0f));
+    int CountObjectVisiblePixels(GLuint ubo_mats,
+                                 const std::vector<LevelObject>& objects,
+                                 int draw_parts,
+                                 const glm::vec3& camera_pos,
+                                 int selected_object_index,
+                                 int target_object_index,
+                                 int viewport_width,
+                                 int viewport_height,
+                                 const std::vector<float>& scene_depth,
+                                 int* target_id_pixels = nullptr);
+    // Target-only material/submesh evidence for the native visual-integrity
+    // gate. IDs are one-based submesh indices and are never shared with scene
+    // object IDs, so unrelated objects cannot satisfy a part requirement.
+    struct VisualEvidence {
+        struct PartInventory {
+            int id = 0;
+            int vertexCount = 0;
+            int triangleCount = 0;
+            int materialSlot = -1;
+            int alphaMode = 0;
+            std::string textureIdentity;
+            bool textureResolved = true;
+            float textureChromaticPixelRatio = 0.0f;
+            glm::vec3 localBoundsMin{0.0f};
+            glm::vec3 localBoundsMax{0.0f};
+        };
+        int width = 0;
+        int height = 0;
+        std::vector<int> expectedPartIds;
+        std::vector<int> strictPartIds;
+        std::vector<PartInventory> expectedParts;
+        std::vector<uint8_t> targetMask;
+        std::vector<int> partIds;
+        std::vector<float> targetDepth;
+    };
+    VisualEvidence CaptureObjectVisualEvidence(GLuint ubo_mats,
+                                               const std::vector<LevelObject>& objects,
+                                               int target_object_index,
+                                               int viewport_width,
+                                               int viewport_height,
+                                               const std::vector<float>& scene_depth);
     static bool IsSkippedModelId(const std::string& modelId);
     glm::vec3 GetMeshExtents(const std::string& modelId, bool isBuilding);
+    float GetMeshRadius(const std::string& modelId, bool isBuilding);
+    // The engine's VirModel_GetRadius 0x4D0950 (src/lod/mesh3d.c:381-387):
+    // the LOD0 MeshHeader.radius, or 1.0f when the model does not resolve
+    // (mesh3d.c:88 `kOne`). This is NOT GetMeshRadius above, which is the
+    // extent diagonal; the pickup touch range is built from THIS value
+    // (src/comprun/pickup.c:172-177). Cached per model id because the lookup
+    // reads the .res entry off disk and the pickup pass runs every tick.
+    float GetMeshHeaderRadius(const std::string& modelId, bool isBuilding);
+    // LOD-0 MeshHeader of `modelId` (`lod_header(vm->lods[0])`, retail engine
+    // src/lod/mesh3d.c:220-224), cached per (level, model id).  The draw path
+    // needs its center/sphere/valid words for every placement on every frame;
+    // reading them costs a .res entry read off disk, so it is done once per
+    // (level, model) instead of once per object per pass per frame.  Cleared
+    // with the .res indexes it is derived from (ClearResCache).
+    const igi::lod::MefMeshHeader& GetLod0MeshHeader(const std::string& modelId);
+    // The engine's per-frame draw LOD for ONE object, exactly as this class's Draw
+    // computes it: `ModelObj_GetLOD` HOOK 0x4CFCB0 (src/lod/mesh3d.c:209-227) over
+    // `lod_select` (src/lod/mesh3d.c:161-208).  -1 is the engine's "culled this
+    // frame" (src/render/render.c:955-956); 0 is "draw LOD 0", which is also what
+    // an unreadable LOD0 header or an empty mesh returns (the Draw loop leaves
+    // `drawnLod` at 0 there too).  `cameraFwd` is the normalised camera forward
+    // and `tan_half_fovx` is the frame's `gTransContext.fov`
+    // (`view_define_.tan_half_fovx_`).
+    //
+    // Exposed so the ANIMATION POSE SET can ask the same question the draw pass
+    // answers: the engine poses only what it draws (`Human_WakeIfVisible`
+    // 0x45F140 -> `Mesh3D_GetBoneMeshLOD` 0x4CFF70, src/humanbase/human.c:262-287),
+    // and one implementation is what keeps "posed" a subset of "drawn".
+    int SelectObjectDrawLod(const LevelObject& obj, const glm::vec3& camera_pos,
+                            const glm::vec3& cameraFwd, float tan_half_fovx);
+    glm::vec3 GetMeshCenter(const std::string& modelId, bool isBuilding);
+    bool IsCameraInsideBuildingBounds(const std::vector<LevelObject>& objects,
+                                      const glm::vec3& cameraPos);
     float GetMeshZOffset(const std::string& modelId, bool isBuilding);
-    Mesh GetOrLoadMesh(const std::string& modelId, bool isBuilding);
+    const Mesh& GetOrLoadMesh(const std::string& modelId, bool isBuilding);
+
+    // ── LOD virtual-model chains (issue #62) ─────────────────────────────────
+    // The engine resolves a model's detail levels by walking its name: LOD 1 is
+    // the requested name, LOD i+1 is the previous name with its LAST CHARACTER
+    // incremented, stopping at the first name that does not resolve and at five
+    // levels (VirModel_InitLods, retail engine src/model/model.c:145-163, HOOK 0x4CED50;
+    // ported in source/lod/lod_chain.h). Resolution is an exact strcmp against
+    // every LOD of every loaded model file (ModelLod_Find, retail engine
+    // src/model/model.c:165-178, HOOK 0x4CEE30).
+
+    // True when `modelId` resolves in the editor's loaded model set by EXACT
+    // name: a `<modelId>.mef` entry in the indexed level/common .res archives,
+    // or an exact on-disk `<modelId>.mef`. Deliberately never fuzzy —
+    // FindModelFile's fuzzy pass would resolve `435_01_6` to `435_01_1` and
+    // invent chain levels the engine's strcmp never sees.
+    bool MeshNameResolves(const std::string& modelId) const;
+
+    // The model's chain under that rule, cached per level. `count == 0` means the
+    // model's own name did not resolve, which VirModel_Get reports as not-found
+    // (retail engine src/model/model.c:118-139); `count == 1` is a model with no
+    // lower-detail sibling. `names[i]` is LOD i+1, `distance[i]` is
+    // VirModel.lod_dist (written but never read by the engine).
+    const igi::lod::LodChain& GetLodChain(const std::string& modelId, bool isBuilding);
+
+    // The mesh name of LOD `level` (0-based) in that chain, or "" when out of
+    // range. level 0 is always the requested model name.
+    std::string GetLodMeshName(const std::string& modelId, bool isBuilding, int level);
+
+    // ── The mesh side of the engine's `.olm` accept test ─────────────────────
+    // `Lightmap_BuildLod` will only use an `.olm` already on disk when four
+    // conjuncts hold (lightmapbuild.c:63-64), three of which come from the mesh:
+    //
+    //     feq(mh->version, file->version)                MeshHeader.version, +0x00
+    //     DateTime_Compare(mh->time, file->time) < 0     MeshHeader.time[7], +0x04
+    //     mesh->texCount == file->count                  LightmapMesh.texCount
+    //
+    // `LightmapMesh` is the view `Lightmap_BuildLod` takes of `mh->data`
+    // (lightmapbuild.c:55), which for format 3 is the RD3D chunk
+    // (Direct3DRender_LoadModel case 3, HOOK 0x49FB10, src/bonemesh/d3drender.c:225-230),
+    // so `texCount` is RD3D + 0x04 (src/litmap/litmaptypes.h:139). All three are
+    // read out of the LOD's own `.mef` by `igi::lod::ReadMefMeshHeader`.
+    //
+    // Fills `*out` for LOD `level` of `modelId` and returns true. Returns false
+    // when the LOD's `.mef` cannot be read, when the mesh is not format 3, or when
+    // it carries no RD3D chunk -- in each of those cases the engine's own
+    // `Lightmap_BuildLod` returns NULL before it looks at any file
+    // (lightmapbuild.c:53-56), so there is no file for the editor to accept.
+    bool GetLodOlmAcceptInput(const std::string& modelId, bool isBuilding, int level,
+                              igi::lightmap_rules::OlmAcceptInput* out);
+
+    // The authored ModelLODSettings table for `modelId` in raw world units
+    // (metres x 4096): monotonized and scaled exactly as
+    // ModelLODSettings_Changed does (retail engine src/animtrig/lodsettings.c:157-171,
+    // HOOK 0x4EDB60). False when the model has no authored entry, in which case
+    // VirModel.unk24 stays 0 and lod_select takes its complexity branch -- see
+    // SelectLodForDistance, which implements BOTH branches.
+    bool GetAuthoredLodDistances(const std::string& modelId, float out[5]);
+
+    // The LOD to draw for a mesh at view depth `dist` with bounding radius
+    // `radius`, by lod_select's authored branch (retail engine src/lod/mesh3d.c:172-184,
+    // ported as igi::lod::SelectAuthoredLod). `fov` and `k` are the engine's
+    // gTransContext.fov and gLodScale (src/lod/mesh3d.c:224); dist/radius are in
+    // raw world units, the same units as GetAuthoredLodDistances' output.
+    // Returns -1 for "too far to draw".  BOTH of lod_select's branches are
+    // implemented: the authored one when the model has a table, and the complexity
+    // branch otherwise -- which is the common case, since lod.qvm names only 450
+    // distinct models of the retail corpus.  (An earlier revision of this comment
+    // claimed the complexity branch was not ported and that the editor "always has
+    // lod.qvm"; both were wrong, and the unauthored models were being culled.)
+    int SelectLodForDistance(const std::string& modelId, bool isBuilding,
+                             float fov, float dist, float radius, float k);
+
+    std::vector<AttachInfo> GetModelAttachments(const std::string& modelId, bool isBuilding);
+    std::vector<glm::vec3> GetModelMagicVertices(const std::string& modelId, bool isBuilding);
+    bool IsLadderMagicObject(const std::string& modelId);
     // Render one model centered in a viewport rectangle, auto-rotated by (rotX,rotY)
     // radians, for the model-picker preview. Uploads its own preview camera into the
     // shared matrices UBO (overwritten next frame by the scene), so it must be called
@@ -89,21 +323,318 @@ public:
     void DrawModelPreview(const std::string& modelId, GLuint ubo_mats,
                           int vpX, int vpY, int vpW, int vpH,
                           float rotX, float rotY);
+    // Draws one static prop mesh at an arbitrary world matrix within the normal
+    // scene pass — used to attach a weapon mesh to a live bone transform (e.g. an
+    // AI's hand). Binds the shared Matrices UBO (ubo_mats) so the shader gets the
+    // scene's Proj*View*GlobalScale; worldMat is the model matrix in raw world units.
+    void DrawAttachedMesh(const std::string& modelId, bool isBuilding, const glm::mat4& worldMat, GLuint ubo_mats);
+    // Draws every placed StationaryGun's MOUNTED weapon: the gun's matrix x the
+    // weapon's local mount matrix, exactly StationaryGun_Aim 0x474420
+    // (retail engine src/statgun/statgun.c:241-258) hands to Weapon_Move 0x4F2310 and
+    // Gun_MoveHandler 0x478A90 adopts verbatim (src/guncasing/gun.c:511-512).
+    // The composition is `igi::statgun::ComposeWeaponMount`
+    // (runtime/statgun_mount.h); this pass performs no arithmetic of its own
+    // beyond mesh-local -> world scaling. Called once per frame by Draw, after
+    // the object passes, so the attached-weapon state changes cannot leak into
+    // them.
+    void DrawMountedStationaryGuns(const std::vector<LevelObject>& objects, int draw_parts,
+                                   GLuint ubo_mats);
+    // Draws the MOUNTED WEAPON of every placed `AIStationaryGunHolder` whose
+    // holder model carries a TASKTYPE_AISTATIONARYGUN attachment: the holder
+    // model's ATTA record is looked up in MAGICOBJ.QVM (CreateMagicObjs,
+    // retail engine src/magicobj/rigidcoll.c:381-434), the definition's first data
+    // argument is a WeaponType key, and the weapon model is that type's `key`
+    // field (AIStationaryGun_Create HOOK 0x46EAE0, src/binocular/stationarygun.c:
+    // 123-155; AIStationaryGun_PlaceWeapon HOOK 0x470050, :464-487). Level 14's
+    // sentry gun is holder `456_11_1` + turret `456_12_1` + this weapon
+    // `456_13_1`. The rest pose is pitch = yaw = spin = 0, which puts the weapon
+    // at the gun's position with the HOLDER's matrix.
+    void DrawMountedSentryGuns(const std::vector<LevelObject>& objects, int draw_parts,
+                               GLuint ubo_mats);
+    // Draws every placed SCamera's LENS: the child task the engine always creates
+    // (SCamera_Create `c->lens = Task_New(c, gLensType, NULL)`, retail engine
+    // src/scamera/scamera.c:204, HOOK 0x4423F0) and loads the authored "Camera
+    // Model" into (SCameraLens_ParamsChanged HOOK 0x4420D0,
+    // src/scamera/scameralens.c:393-419). Only the holder/body model was drawn
+    // before, so every shipped camera was missing its head. `yawOffset`
+    // (LevelObject, QSC arg 9 "Camera Gamma") separates the holder frame (pure
+    // yaw, scamera.c:242) from the lens frame (yaw + yaw_offset, scameralens.c:414).
+    void DrawSCameraLenses(const std::vector<LevelObject>& objects, int draw_parts,
+                           GLuint ubo_mats);
+    // The engine's blob shadow (GitHub issue #63): one flat, texture-alpha-blended
+    // quad per placement, exactly the Shadow task's geometry (see
+    // runtime/human_shadow.h for the oracle). The placements are built by the caller
+    // because the ground query belongs to the App
+    // (draw_params_s::terrain_z_at_world_xy_); nothing here is guessed. A missing
+    // shadow1.tex is the engine's own null-texture branch: nothing is drawn.
+    void DrawHumanShadowQuads(GLuint ubo_mats,
+                              const std::vector<igi::HumanShadowPlacement>& shadows);
     GLuint GetShaderProgram() const { return shader_program_; }
     void DrawAttachmentsForSpline(const std::string& modelId, bool isBuilding,
                                   const glm::mat4& unscaledWorldMat, GLuint ubo_mats,
                                   glm::vec3 leafScale = glm::vec3(40.96f));
+    struct SplineAttachmentLocs {
+        GLint model = -1;
+        GLint dirlight = -1;
+        GLint ambient = -1;
+        GLint useTex = -1;
+        GLint tex = -1;
+        GLint alpha = -1;
+    };
+    SplineAttachmentLocs ResolveSplineAttachmentLocs() const;
+    void DrawAttachmentsForSpline(const std::string& modelId, bool isBuilding,
+                                  const glm::mat4& unscaledWorldMat, GLuint ubo_mats,
+                                  const SplineAttachmentLocs& locs,
+                                  glm::vec3 leafScale,
+                                  bool retainProgram);
+    // Skeletal-skin vertex/bone data for live animation playback (CPU skinning).
+    // Looks up and parses the model's .mef once, then caches it (rest-pose
+    // RenderVertex array + per-bone rest pivots, same data the static mesh
+    // cache was built from). Returns nullptr if the model can't be found.
+    const ParsedGeometry* GetOrLoadSkinGeometry(const std::string& modelId, bool isBuilding);
+    const ParsedGeometry* GetOrLoadParsedGeometry(const std::string& modelId, bool isBuilding);
+
+    // The model's raw .mef bytes, through the SAME resolution the draw and the
+    // collision pass must agree on: the mounted .res index first, then the
+    // cross-level archives, then a loose .mef on disk (GetOrExtractMefTemp,
+    // source/renderer/renderer_objects_mesh.cpp:689-734; the engine itself only
+    // ever asks the mounted archive, Mesh_Load HOOK 0x4CF390,
+    // src/model/model.c:364).  Used by the collision world to read ONLY the
+    // HSMC collision chunks, without parsing the render streams of every placed
+    // model up front.  Returns false when the model does not resolve.
+    bool GetModelMefBytes(const std::string& modelId, bool isBuilding, std::vector<uint8_t>& out);
+
+    // Lightmap textures for the "Calculate Light Mapping" button, keyed by
+    // the EXACT placement's taskId (not modelId) — mesh_cache_ is shared per
+    // modelId across every placement of a building, so storing these on
+    // SubMesh would make two placements of the same model show whichever
+    // lightmap was calculated last. The draw loop looks this up per-object.
+    // taskId -> {pages per LOD, pos/rot at calculation time}. The outer index is
+    // the LOD (one `.olm` per ref, `fill_refs` src/sector/sector.c:544-563) and the
+    // inner index is the page inside that file (`LmGroup.lightmap`,
+    // src/render/render.c:1033), because the engine binds one page per render
+    // group. The pos/rot are recorded so the draw loop can detect a moved/rotated
+    // object and drop its now-stale bake back to dynamic lighting instead of
+    // rendering the wrong-orientation bake.
+    void SetLightmapForTask(const std::string& taskId, std::vector<std::vector<GLuint>> lod_pages,
+                            const glm::dvec3& bakedPos, const glm::dvec3& bakedRot);
+    void ClearLightmapForTask(const std::string& taskId);
+    // Free all baked lightmap textures + per-task bake/stale state (Escape-menu
+    // Lightmaps OFF, and level switch). Leaves indoor-ambient metadata intact.
+    void ClearAllLightmaps();
+    const std::vector<std::vector<GLuint>>* GetLightmapForTask(const std::string& taskId) const;
+    // Returns false if taskId has no recorded bake pose (treated as not stale).
+    bool IsLightmapStale(const std::string& taskId, const glm::dvec3& curPos, const glm::dvec3& curRot) const;
+    bool HasLightmapForTask(const std::string& taskId) const {
+        const auto* v = GetLightmapForTask(taskId);
+        if (!v) return false;
+        for (const auto& pages : *v) {
+            for (GLuint tex : pages) {
+                if (tex != 0) return true;
+            }
+        }
+        return false;
+    }
+    // Retrieve the pos/rot recorded at the time taskId's lightmap was baked
+    // (needed as recalc's --rot-orig). Returns false if no bake is recorded.
+    bool GetLightmapBakePose(const std::string& taskId, glm::dvec3& pos, glm::dvec3& rot) const {
+        auto it = lightmap_bake_pose_by_task_.find(taskId);
+        if (it == lightmap_bake_pose_by_task_.end()) return false;
+        pos = it->second.pos; rot = it->second.rot; return true;
+    }
+    // Public access to model-file resolution + the resolved level sun (for the
+    // editor's lightmap recalc pipeline).
+    std::string GetModelFilePath(const std::string& modelId, bool isBuilding) {
+        return FindModelFile(modelId, isBuilding);
+    }
+    // Like GetModelFilePath but falls back to extracting the MEF from the
+    // res cache to a temp file when there are no extracted disk files.
+    // Returns the path (disk or temp). Caller must NOT delete it (temp files
+    // are tracked in tmp_mef_paths_ and cleaned on ClearCaches).
+    std::string GetOrExtractMefTemp(const std::string& modelId, bool isBuilding);
+
+    // ── Headless resolution probe (CLI `--smoke-level`) ──────────────────────
+    // Resolve one model through the same resolution path the draw code uses — the
+    // archive identity lookup FindMeshData performs, the cross-level .res fallback
+    // GetOrLoadMesh performs, then the on-disk FindModelFile — plus the model's DAT
+    // texture list and which of those ids resolve.  NOTHING here touches OpenGL:
+    // no mesh parse into VAO/VBO, no texture upload, so it runs without a GL
+    // context (Init() is never called).  Used by the CLI loader smoke check so a
+    // resolution regression (e.g. the bare "<id>.mef" lookup that made 61 models
+    // resolve to nothing) fails a headless command instead of only the viewport.
+    struct SmokeModelResolution {
+        bool meshResolved = false;
+        std::string meshSource;                 // "res:<archive>" or an on-disk path
+        bool meshFromLooseFile = false;         // meshSource is a disk path, not "res:..."
+        std::vector<std::string> textureIds;    // DAT list, or the model id itself
+        std::vector<std::string> resolvedTextureIds;
+        std::vector<std::string> missingTextureIds;
+    };
+    SmokeModelResolution ResolveModelForSmoke(const std::string& modelId, bool isBuilding);
+
+    // ── Smoke probe diagnostics (CLI `--smoke-level`) ────────────────────────
+    // One indexed .res archive: which file, whether it is the texture or the model
+    // archive, and how many members it holds.  `--smoke-level` prints the set so a
+    // resolution can be traced to the archive that answered it, and the level each
+    // archive belongs to.
+    struct SmokeArchiveInfo {
+        std::string resPath;
+        bool isTexture = false;
+        size_t entries = 0;
+    };
+    // Every .res archive currently indexed.  LoadResCache is append-only, so this
+    // is the level's own four plus anything a cross-level lookup pulled in; the
+    // caller diffs before/after to show which ones the resolution walk added.
+    std::vector<SmokeArchiveInfo> SmokeIndexedArchives() const;
+    // The level the global DAT map names as this model's owner; 0 when the map has
+    // no entry.  The smoke check uses it to tell "resolved from the archive that
+    // owns it" from "resolved from some other level's archive".
+    int SmokeModelOwnerLevel(const std::string& modelId);
+    glm::vec3 GetSunDir() const { return sun_dir_; }
+    glm::vec3 GetSunFrontColor() const { return sun_front_color_; }
+    glm::vec3 GetSunBackColor() const { return sun_back_color_; }
+    glm::vec3 GetGlobalAmbient() const { return global_ambient_; }
+    void SetGlobalAmbient(const glm::vec3& amb) { global_ambient_ = amb; }
+
+    // Escape-menu "Lightmaps" checkbox — when false, calculated lightmaps are
+    // never bound during render regardless of SetLightmapForTask state.
+    void SetLightmapsEnabled(bool enabled) { lightmaps_enabled_ = enabled; }
+    bool LightmapsEnabled() const { return lightmaps_enabled_; }
+
+    // Real level sun direction/color, parsed from the level's Dirlight/DirlightKeyframe
+    // QSC task. Replaces the previous hardcoded shader light direction/colors so
+    // dynamic-lit (non-lightmapped, or stale-lightmap) faces match the game.
+    void SetSunLight(const glm::vec3& dir, const glm::vec3& frontColor, const glm::vec3& backColor) {
+        sun_dir_ = dir; sun_front_color_ = frontColor; sun_back_color_ = backColor;
+    }
+
+    // The level's GlobalLight "Texture filter gamma" (e.g. 0.675) — the game applies
+    // this as a post-lighting pow() curve; gamma < 1 brightens mid-tones. Without it
+    // our raw linear lighting looks noticeably flatter/darker than in-game.
+    void SetGlobalGamma(float gamma) { global_gamma_ = gamma; }
+
+    // Atmospheric fog color and far-clip distance (from GlobalLightKeyframe).
+    // Used by the object shader to match the game's warm haze over buildings.
+    void SetFogParams(const glm::vec3& color, float far_dist) {
+        fog_color_ = color; fog_far_ = far_dist;
+    }
+    void SetFogEnabled(bool enabled) { fog_enabled_ = enabled; }
+
+    // Indoor ambient fallback: each Building/EditRigidObj's LightmapInfo child
+    // declares a dim "Indoors ambient light" (e.g. 0.08) used as fallback when
+    // no baked lightmap exists, so interiors look dark/warm like the game instead
+    // of receiving full outdoor sun. Populated per level load from app_level.cpp.
+    void SetIndoorAmbientForTask(const std::string& taskId, const glm::vec3& rgb) {
+        indoor_ambient_by_task_[taskId] = rgb;
+    }
+    const glm::vec3* GetIndoorAmbientForTask(const std::string& taskId) const {
+        auto it = indoor_ambient_by_task_.find(taskId);
+        return it != indoor_ambient_by_task_.end() ? &it->second : nullptr;
+    }
 
 private:
+    // Per-level .res index (name→offset) — avoids extracting to editor/textures or editor/models.
+    // Multiple .res files (current level + common) are merged into one flat map.
+    struct ResIndex {
+        std::string                                     res_path;
+        std::unordered_map<std::string, ResEntryInfo>  index;
+    };
+    std::vector<ResIndex> res_tex_indexes_;   // level + common texture .res indexes
+    std::vector<ResIndex> res_model_indexes_; // level + common model .res indexes
+    std::vector<std::string> tmp_mef_paths_;  // temp files created by GetOrExtractMefTemp
+
     int current_level_ = 1;
-    std::map<std::string, Mesh> mesh_cache_;
+    bool lightmaps_enabled_ = false;
+    glm::vec3 sun_dir_ = glm::vec3(0.5f, 1.0f, 0.5f);
+    glm::vec3 sun_front_color_ = glm::vec3(0.6f, 0.6f, 0.6f);
+    glm::vec3 sun_back_color_  = glm::vec3(0.4f, 0.4f, 0.4f);
+    glm::vec3 global_ambient_  = glm::vec3(0.15f, 0.15f, 0.15f);
+    float global_gamma_ = 1.0f;
+    glm::vec3 fog_color_ = glm::vec3(0.15f, 0.15f, 0.15f);
+    float fog_far_ = 1e9f; // huge default = no fog until SetupFog() is called from level.cpp
+	bool fog_enabled_ = true;
+	float elapsed_time_secs_ = 0.0f;      // rotor animation accumulator (Heli main/tail)
+	// The placed-helicopter flight preview's own clock (GitHub issue #60), in
+	// seconds, plus the tick count derived from it. Separate from
+	// `elapsed_time_secs_` on purpose: the preview is a finite flight that parks
+	// on its last pose, not an endless spin. `heli_preview_ticks_` is what the
+	// draw path hands to `igi::HeliPreviewTick` (runtime/heli_preview.h).
+	float heli_preview_secs_ = 0.0f;
+	int heli_preview_ticks_ = 0;
+	int heli_preview_ticks_max_ = 1800;   // 60 s at 30 Hz; the editor's choice, not the engine's
+	// One placed helicopter's flight preview, cached by object index and stepped
+	// forward only (see the draw path in renderer_objects.cpp). The authored
+	// tokens are the cache key, so an inspector edit restarts the flight.
+	struct HeliPreviewCacheEntry {
+		std::vector<std::string> tokens;
+		igi::HeliPreviewState state;
+		int tick = -1;
+		// The pose the preview produced for the frame currently being drawn. The
+		// visual pass and the picking pass read this SAME pose, so what the user
+		// clicks is what the user sees; the flight itself is stepped exactly once
+		// per frame by `AdvanceHeliPreviewClock`.
+		bool pose_valid = false;
+		glm::vec3 pose_pos = glm::vec3(0.0f);
+		glm::mat4 pose_rot = glm::mat4(1.0f);
+	};
+	std::unordered_map<int, HeliPreviewCacheEntry> heli_preview_cache_;
+	// The tick the frame currently being drawn uses. Written once per frame by
+	// `AdvanceHeliPreviewClock`, read by both draw passes.
+	int heli_preview_frame_tick_ = 0;
+	// The vehicle config a "Heli" physics definition parses to, resolved once per
+	// level from <IGI>/physicsobj/HELIS/*/HELI.QVM (`ParseHeliVehicleConfig`).
+	// Empty until resolved; the draw path then previews with the engine's own
+	// arithmetic on zero rates rather than inventing rates.
+	igi::HeliVehicleConfig heli_preview_config_;
+	bool heli_preview_config_loaded_ = false;
+	// Returns `heli_preview_config_`, loading the first HELI.QVM the level's
+	// helicopters reference when it has not been resolved yet. The value the
+	// engine reads is `phys->data`, i.e. the config of the helicopter's OWN
+	// physics definition; the editor does not track which definition each
+	// placement uses, so the first one found is used and that is recorded here.
+	const igi::HeliVehicleConfig& HeliPreviewConfig();
+	// Advances the flight preview to this frame's tick, exactly once per frame.
+	// Called at the top of Draw(), before the two draw passes, so the preview is
+	// not stepped twice for one rendered frame.
+	void AdvanceHeliPreviewClock(float delta_seconds);
+	// The preview pose for one placed helicopter, computed from the authored
+	// tokens and the CURRENT frame's tick. Pure: it never advances the flight, so
+	// the picking pass can ask for the same pose the visual pass drew.
+	// `out_pose` is left with `pose_valid == false` when the placement is not a
+	// helicopter whose parameters parse, and the caller then uses the authored
+	// pose.
+	void GetHeliPreviewPose(int object_index, const std::string& type,
+	                        const std::vector<std::string>& tokens, HeliPreviewCacheEntry* out_pose);
+	std::map<std::string, glm::vec3> indoor_ambient_by_task_; // taskId -> LightmapInfo "Indoors ambient light"
+    struct BakePose {
+        glm::dvec3 pos;
+        glm::dvec3 rot;
+        glm::vec3  sun_dir; // sun direction at bake time — stale if sun moved significantly
+    };
+    std::map<std::string, BakePose> lightmap_bake_pose_by_task_;
+    std::string level_model_key_scratch_;
+    uint64_t occupancy_sig_ = 0;
+    std::unordered_map<std::string, Mesh> mesh_cache_;
     std::map<std::string, GLuint> texture_cache_;
+    // Game_AddTexture/Game_LoadTextures textures, keyed by the registered name
+    // alone: the pack they come from (igi_res::kGameTexturePackName) is
+    // level-independent, unlike texture_cache_'s "<level>:<id>" keys.
+    std::map<std::string, GLuint> game_texture_cache_;
+    std::unordered_map<std::string, ResEntryInfo> game_texture_pack_index_;
+    std::string game_texture_pack_path_;
+    bool game_texture_pack_indexed_ = false;
     std::map<std::string, std::vector<std::string>> model_texture_map_cache_;
     mutable std::map<std::string, std::vector<std::string>> global_texture_map_;
     mutable bool global_texture_map_loaded_ = false;
+    mutable std::vector<ModelTextureSource> texture_sources_;
     mutable std::map<std::string, int> model_level_map_;
     mutable std::map<std::string, int> texture_level_map_;
-    std::map<std::string, std::vector<AttachInfo>> attachment_cache_;
+    std::unordered_map<std::string, std::vector<AttachInfo>> attachment_cache_;
+    std::map<std::string, ParsedGeometry> skin_geometry_cache_;
+    std::unordered_map<std::string, ParsedGeometry> parsed_geometry_cache_;
+    // taskId -> one page vector per LOD (outer index = LOD, inner = the `.olm`'s
+    // pages, `LmGroup.lightmap` indexing it; src/render/render.c:1033).
+    std::map<std::string, std::vector<std::vector<GLuint>>> lightmap_textures_by_task_;
     // Per-pick-pass capture of pickable ATTA sub-models (see AttaPickEntry).
     std::vector<AttaPickEntry> atta_pick_entries_;
     // Keys (model@pos) of EditRigidObj tasks; an ATTA matching one is suppressed
@@ -136,10 +667,30 @@ private:
     std::map<std::string, float> portal_distances_;
     bool portal_distances_loaded_ = false;
 
+    // LOD chains (issue #62), keyed by "<level>:<modelId>" — existence does not
+    // depend on isBuilding, so the two kinds share one chain. Cleared whenever
+    // the loaded .res model set changes (LoadResCache / ClearResCache), because
+    // a chain is built over that set.
+    std::map<std::string, igi::lod::LodChain> lod_chain_cache_;
+    // VirModel_GetRadius values (MeshHeader.radius), keyed by "<level>:<modelId>".
+    // Cached because the lookup reads the .res entry off disk and the pickup
+    // touch pass asks for it once per placed pickup per tick. Cleared with the
+    // .res indexes it is derived from.
+    std::unordered_map<std::string, float> mesh_header_radius_cache_;
+    // LOD-0 MeshHeader (center/sphere/valid) keyed by "<level>:<modelId>", the
+    // words the per-frame LOD switch reads.  Same lifetime as the .res indexes
+    // and the radius cache above: the header comes out of the .res entry.
+    std::unordered_map<std::string, igi::lod::MefMeshHeader> lod0_mesh_header_cache_;
+    // Authored ModelLODSettings tables from lod.qvm, in world units (metres x
+    // 4096), monotonized exactly as ModelLODSettings_Changed leaves
+    // VirModel.unk28. Level-independent, like portal_distances_.
+    std::map<std::string, std::array<float, 5>> authored_lod_distances_;
+
     std::unordered_set<std::string> deathzone_ids_;
     bool deathzone_ids_loaded_ = false;
 
     std::set<std::string> magicobj_ids_;
+    std::set<std::string> ladder_magicobj_ids_;
     bool magicobj_ids_loaded_ = false;
     GLuint sphere_vao_ = 0;
     GLuint sphere_vbo_ = 0;
@@ -159,6 +710,7 @@ private:
                                    GLint loc_ambient, GLint loc_useTex, GLint loc_tex, GLint loc_alpha,
                                    std::unordered_set<std::string>& drawn,
                                    glm::vec3 leafScale = glm::vec3(40.96f));
+
     // Like DrawAttachmentsRecursive but uses the picking shader. Each ATTA sub-model
     // that has no matching EditRigidObj (occupancy check) gets a UNIQUE pick ID
     // (kAttaPickBase + entry) and is recorded in atta_pick_entries_ with its world
@@ -167,7 +719,8 @@ private:
     void DrawAttachmentsForPicking(const std::string& parentModelId, bool isBuilding,
                                    const glm::mat4& parentWorldMat, float parentScale,
                                    GLint loc_model, GLint loc_id, int parentObjIndex,
-                                   std::unordered_set<std::string>& drawn);
+                                   std::unordered_set<std::string>& drawn,
+                                   int selected_object_index);
     // True if this ATTA has been promoted/duplicated (live occupancy OR persistent).
     bool IsAttaPromoted(const std::string& modelId, const glm::vec3& worldPos) const {
         const std::string k = AttaOccupancyKey(modelId, worldPos);
@@ -186,19 +739,66 @@ private:
     Mesh CreateTextMesh(const std::string& text);
     void AddCharacterVertices(std::vector<float>& vertices, char c, float x, float y, float scale);
     std::string FindModelFile(const std::string& modelId, bool isBuilding);
+    // Resolution-only halves of the load path, shared with ResolveModelForSmoke so
+    // the smoke check and the draw path resolve through the same code (no GL).
+    ModelEntryHit FindMeshEntryAcrossLevels(const std::string& modelId);
+    // DEBUG provenance for a model that resolved from an archive other than the
+    // level's own: the engine resolves a model only from the archive of the level
+    // that owns it (Mesh_Load HOOK 0x4CF390, src/model/model.c:364, matched on the
+    // folded full resource name, String_ToUpper 0x4B5AF0, src/res/resource.c:98-104,
+    // Resource_IsLoaded 0x4B5B90, :136-138), so a cross-level hit is the editor's
+    // fallback and must be nameable from the log instead of silent.
+    void LogCrossLevelModelResolution(const std::string& modelId, int resolvedFromLevel,
+                                      const std::string& resPath) const;
+    bool TextureResolvesForSmoke(const std::string& textureId);
+    // Resolution-only half of GetOrLoadTexture (its steps 1, 1b and 2): does this id
+    // resolve to texture bytes, from any indexed archive or a loose .tex on disk? No
+    // decode, no GL upload. Shared by the smoke check and by the draw path where it
+    // has to answer the same question the loader would (TextureResolvesForSmoke is
+    // the historical name and stays as the smoke entry point).
+    bool TextureIdResolves(const std::string& textureId);
     std::string FindTextureFile(const std::string& textureId) const;
+    std::string FindTextureFileInLevel(const std::string& textureId, int levelNo) const;
     std::string GetLevelTexturesPath() const;
     std::string GetLevelTextureDatPath() const;
     void LoadDatIntoMap(const std::string& datPath, std::map<std::string, std::vector<std::string>>& outMap);
     void EnsureTextureMapLoaded();
     void EnsureGlobalTextureMapLoaded() const;
-    std::vector<std::string> GetTextureIdsForModel(const std::string& modelId);
-    GLuint GetOrLoadTexture(const std::string& textureId);
-    void ApplyTexturesToMesh(Mesh& mesh, const std::string& modelId, const std::string& parentModelId = "");
+    // The model's texture list, in the engine's own MTP order (ModelFile_Setup,
+    // HOOK 0x4CF080, src/model/model.c:271-314).
+    //
+    // `foundInDat` (optional) answers a different question from "is the list
+    // non-empty": true when a DAT entry for this model was found — the editor's
+    // transcription of the model's own INST record — which may legitimately be an
+    // EMPTY list (a model with no textures at all, e.g. "waypoint"). It stays false
+    // when only another model's list was inferred by the sibling/variant/prefix
+    // fallbacks, because those say nothing about this model's own record.
+    std::vector<std::string> GetTextureIdsForModel(const std::string& modelId,
+                                                   bool* foundInDat = nullptr);
+    std::vector<std::string> GetTextureIdsForSourceModel(const std::string& modelId, int sourceLevel);
+    // `ownerLevel` is the level whose archive supplied the MODEL's bytes
+    // (ModelArchiveOwnerLevel over the archive the mesh was read from), 0 when that
+    // archive is not a level archive. retail engine: a model's textures come from the same
+    // level directory as the model's own file — ModelFile_Load / ModelFile_Setup
+    // read the `.mtp`, `models/<name>.res` and `textures/<name>.res` out of
+    // `gModelDir` (src/model/model.c:233, :261, :267, HOOK 0x4CF080), which
+    // Model_SetDir set to that level — so the model's archive decides the texture
+    // archive, not the first level whose DAT lists the texture id
+    // (TextureOwnerLevelForModel, source/renderer/model_texture_resolution.h).
+    GLuint GetOrLoadTexture(const std::string& textureId, int ownerLevel = 0);
+    // `meshOwnerLevel` is the level whose archive supplied this mesh's bytes
+    // (ModelArchiveOwnerLevel); it decides which archive the textures are searched
+    // in first (see GetOrLoadTexture). 0 keeps the editor's texture-id fallback.
+    void ApplyTexturesToMesh(Mesh& mesh, const std::string& modelId,
+                             const std::string& parentModelId = "", int meshOwnerLevel = 0);
     void InitSelectionBox();
     void InitPickingFBO(int w, int h);
     void DrawForPicking(GLuint ubo_mats,
                         const std::vector<LevelObject>& objects,
                         int draw_parts,
-                        const glm::vec3& camera_pos);
+                        const glm::vec3& camera_pos,
+                        int selected_object_index,
+                        const glm::vec3& camera_forward = glm::vec3(0.0f));
 };
+
+#endif  // IGI_RENDERER_OBJECTS_H

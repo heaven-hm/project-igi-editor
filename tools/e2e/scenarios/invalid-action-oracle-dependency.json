@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "invalid-action-oracle-dependency",
+      "level": 1,
+      "requiresMutation": false,
+      "steps": [
+        { "id": "launch", "type": "launch_editor", "level": 1 },
+        { "id": "screen", "type": "screenshot", "name": "screen" },
+        { "id": "proof", "type": "assert_process", "oracleRole": "action-result", "dependsOnStepId": "not-an-earlier-step" }
+      ]
+    }
+  ]
+}

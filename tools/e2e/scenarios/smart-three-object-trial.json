@@ -1,0 +1,7 @@
+{
+  "targets": [
+    { "level": 1, "taskId": "1105", "type": "Building" },
+    { "level": 2, "taskId": "778", "type": "Car" },
+    { "level": 3, "taskId": "777", "type": "EditRigidObj" }
+  ]
+}

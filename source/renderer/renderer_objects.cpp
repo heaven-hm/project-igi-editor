@@ -1,16 +1,79 @@
 #include "renderer_objects_internal.h"
+#include "igi_transform.h"
+#include "object_lightmap.h"
+#include "lightmap_ref_index.h"
+#include "res_chunks.h"
+#include "../lod/lod_select.h"
+#include "../lod/mef_mesh_header.h"
+#include "../capture_camera.h"
+#include "../level/terrain_snap_rules.h"
+// The ONE view-cone test the visual pass and the animation pose set share
+// (source/runtime/anim_pose_set.h).  Sharing it is what makes "posed" a subset
+// of "drawn" by construction instead of by two copies of the same arithmetic.
+#include "../runtime/anim_pose_set.h"
 
 
 
 
-static bool IsMetalSlideUpDoorModel(const std::string& modelId) {
-    if (modelId.empty()) return false;
-    return modelId.rfind("506_", 0) == 0;
-}
 
 bool Renderer_Objects::IsSkippedModelId(const std::string& modelId) {
-    if (modelId.empty()) return false;
-    return modelId == "colbox" || modelId == "colbox2" || modelId == "colbox4" || modelId == "colbox66";
+    // The engine's collision proxies are never drawn -- they carry no geometry worth
+    // rendering (mef_native.cpp:681: the only geometry is the collision mesh).  colbox3
+    // was missing from this list, so a level that places one (level 12 does) treated it
+    // as a real model, failed to resolve it and logged "Model NOT FOUND: 'colbox3'" as an
+    // ERROR on every load.  It is a proxy like the others.
+    //
+    // The list lives in level/terrain_snap_rules.h so the terrain-snap pass (which must
+    // also leave proxies alone) shares this one definition instead of keeping its own.
+    return igi::IsCollisionProxyModelId(modelId);
+}
+
+// Per-frame delta seconds feeder for continuous animations (e.g. helicopter rotor spin).
+// Written by App::Frame before each Draw; consumed inside DrawAttachmentsRecursive via the
+// elapsed_time_secs_ accumulator. Defined here so the extern reference in the draw path links.
+float g_renderer_delta_secs = 0.0f;
+
+void Renderer_Objects::SetLightmapForTask(const std::string& taskId,
+                                          std::vector<std::vector<GLuint>> lod_pages,
+                                          const glm::dvec3& bakedPos, const glm::dvec3& bakedRot) {
+    ClearLightmapForTask(taskId);
+    lightmap_textures_by_task_[taskId] = std::move(lod_pages);
+    lightmap_bake_pose_by_task_[taskId] = { bakedPos, bakedRot, sun_dir_ };
+}
+
+void Renderer_Objects::ClearLightmapForTask(const std::string& taskId) {
+    auto it = lightmap_textures_by_task_.find(taskId);
+    if (it == lightmap_textures_by_task_.end()) return;
+    for (auto& pages : it->second) {
+        for (GLuint tex : pages) {
+            if (tex != 0) glDeleteTextures(1, &tex);
+        }
+    }
+    lightmap_textures_by_task_.erase(it);
+    lightmap_bake_pose_by_task_.erase(taskId);
+}
+
+const std::vector<std::vector<GLuint>>* Renderer_Objects::GetLightmapForTask(
+    const std::string& taskId) const {
+    auto it = lightmap_textures_by_task_.find(taskId);
+    return it != lightmap_textures_by_task_.end() ? &it->second : nullptr;
+}
+
+bool Renderer_Objects::IsLightmapStale(const std::string& taskId, const glm::dvec3& curPos, const glm::dvec3& curRot) const {
+    auto it = lightmap_bake_pose_by_task_.find(taskId);
+    if (it == lightmap_bake_pose_by_task_.end()) return false;
+    constexpr double kPosEpsilon = 1.0;    // world units
+    constexpr double kRotEpsilon = 0.01;   // radians
+    constexpr float  kSunEpsilon = 0.05f;  // angle change (dot-product threshold ~3 degrees)
+    const auto& bp = it->second;
+    if (glm::length(curPos - bp.pos) > kPosEpsilon) return true;
+    if (glm::length(curRot - bp.rot) > kRotEpsilon) return true;
+    // Sun direction change: if sun moved more than ~3° since bake, lightmap is stale.
+    if (glm::length(sun_dir_) > 1e-6f && glm::length(bp.sun_dir) > 1e-6f) {
+        float dot = glm::dot(glm::normalize(sun_dir_), glm::normalize(bp.sun_dir));
+        if (dot < 1.0f - kSunEpsilon) return true;
+    }
+    return false;
 }
 
 // ─── Shader Sources ───────────────────────────────────────────────────────────
@@ -19,6 +82,7 @@ static const char* OBJ_VERT_SRC = R"(
 layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_normal;
 layout(location = 2) in vec2 a_uv;
+layout(location = 3) in vec2 a_uv2;
 
 layout(std140) uniform Matrices {
     mat4 u_unused1;
@@ -31,14 +95,16 @@ uniform mat4 u_model;
 
 out vec3 v_normal;
 out vec2 v_uv;
+out vec2 v_uv2;
 out vec3 v_fragPos;
 
 void main() {
     vec4 worldPos   = u_model * vec4(a_pos, 1.0);
     v_fragPos       = worldPos.xyz;
-    v_normal        = mat3(transpose(inverse(u_model))) * a_normal;
+    v_normal        = mat3(u_model) * a_normal;
     v_uv            = a_uv;
-    gl_Position     = u_mvp * u_model * vec4(a_pos, 1.0);
+    v_uv2           = a_uv2;
+    gl_Position     = u_mvp * worldPos;
 }
 
 )";
@@ -47,49 +113,131 @@ static const char* OBJ_FRAG_SRC = R"(
 #version 330 core
 in vec3 v_normal;
 in vec2 v_uv;
+in vec2 v_uv2;
 in vec3 v_fragPos;
 
-uniform vec3 u_dirlight;   // directional light RGB
-uniform vec3 u_ambient;    // ambient light RGB
+uniform vec3  u_dirlight;      // directional light RGB (sun)
+uniform vec3  u_ambient;       // ambient light RGB
+uniform vec3  u_lightDir;      // direction toward the sun (world space)
 uniform sampler2D u_texture;
-uniform int u_useTexture;
-uniform float u_alpha;     // material alpha (1.0 = opaque, <1.0 = transparent)
-uniform vec4 u_baseColor;  // Base color when no texture
-uniform vec3 u_tint; // per-object multiplicative tint (default white); magenta = missing-in-res warning
-uniform float u_glassMin;  // glass sheen floor: clean (low-alpha) glass renders at
-                           // least this opaque so the pane is visible. 0 = not glass.
-
+uniform int   u_useTexture;
+uniform sampler2D u_lightmap;
+uniform int   u_useLightmap;   // 0 = no baked lightmap for this submesh
+uniform vec3  u_lightmapScale; // live re-light scale when object was moved since bake
+uniform int   u_lm_authentic;  // Baked mode: exact diffuse x lightmap multiply, like the original engine
+uniform float u_alpha;
+uniform vec4  u_baseColor;
+uniform vec3  u_tint;
+uniform float u_glassMin;
+uniform float u_gamma;
+// The level's OBJECT fog (issue: "the fog ... should be exactly how the level is").
+// Retail fogs objects with a different GlobalLight set from the terrain's:
+//   set_fog()  src/render/render.c:773-785 reads gFogColor / gFogDensity
+//   polylist.c:243-245 reads the same two globals
+// and gFogColor == gFogColors[1], gFogDensity == gFogDensities[1] -- i.e. "Fog color
+// object category 1" / "Fog density object category 1". The aliasing is proven by
+// address arithmetic in source/runtime/mission_fog.h (kObjectLightSet).
+//
+// The falloff is the engine's exponential, the same expression the terrain uses
+// (src/glowmesh/terraind3d.c:164, `1 / exp(vz * gWorldScale * gTerrainFogScale)`),
+// with `vz` the view-space z in game units -- here dot(v_fragPos - u_cameraPos,
+// u_viewDir), both in world units (4096/m). u_fogFar is the e-folding distance,
+// 2e6 / authored_density world units, i.e. 1 / (gWorldScale * gFogDensity).
+//
+// The engine could not do that in D3D7: it sets FOGVERTEXMODE = D3DFOG_LINEAR
+// (render.c:781) and linearises per batch with Fog_SetRange HOOK 0x49B2D0
+// (d3drender.c:108-131), which solves for the ramp that passes through the
+// exponential's value at the near and far side of a sphere around the object. The
+// exponential below is what that ramp approximates, without the approximation; the
+// ported FogSetRangeForDepth (source/runtime/mission_fog.cpp) is the engine's
+// linearisation and its tests pin the two together at the sphere's edges.
+uniform vec3  u_fogColor;      // set 1's "Fog color object category 1"
+uniform float u_fogFar;        // e-folding distance in world units; <= 0 = no fog
+uniform vec3  u_cameraPos;     // world units
+uniform vec3  u_viewDir;       // camera forward, world space, unit length
+uniform int   u_fogEnabled;
 out vec4 fragColor;
 
 void main() {
     vec3 N = normalize(v_normal);
-    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5));
-    float diff = max(dot(N, lightDir), 0.0);
+    vec3 lightDir = normalize(u_lightDir);
 
+    // Hemisphere ambient: sky (up) is warmer/brighter, ground (down) is dimmer.
+    // This ensures every face — including side walls — always gets meaningful light.
+    float hemiT = dot(N, vec3(0.0, 0.0, 1.0)) * 0.5 + 0.5; // 0=down, 1=up
+    vec3 hemi = mix(u_ambient * 0.75, u_ambient * 1.35, hemiT);
+
+    // Sun: front faces bright, back faces get 40% warm fill (no black backs).
+    float diff     = max(dot(N, lightDir), 0.0);
+    float backFill = max(-dot(N, lightDir), 0.0) * 0.40;
+
+    // Subtle specular
     vec3 viewDir = normalize(vec3(0.0, 1.0, 1.0));
     vec3 halfVec = normalize(lightDir + viewDir);
-    float spec = pow(max(dot(N, halfVec), 0.0), 32.0) * 0.25;
+    float spec = pow(max(dot(N, halfVec), 0.0), 32.0) * 0.08;
 
-    vec3 light = u_ambient + u_dirlight * (diff + spec);
+    vec3 light = hemi + u_dirlight * (diff + backFill + spec);
 
     vec4 texColor = (u_useTexture != 0) ? texture(u_texture, v_uv) : u_baseColor;
+    // Alpha of blended submeshes (glass, alpha-routed floors) must not decay
+    // with mip level: glGenerateMipmap averages the alpha channel, so distant
+    // fragments faded and then hit the cutout discard — whole building floors
+    // washed out / vanished at range. Sample mip 0 for the blended case;
+    // true opaque cutouts (u_alpha ~ 1.0) keep mip-filtered cutout behavior.
+    float texA = (u_alpha >= 0.99) ? texColor.a
+                                   : textureLod(u_texture, v_uv, 0.0).a;
+    float finalAlpha = (u_useTexture != 0 ? texA : 1.0) * u_alpha;
 
-    float finalAlpha = (u_useTexture != 0 ? texColor.a : 1.0) * u_alpha;
-
-    // Glass: even a perfectly clear pane (texture alpha ~0) must show a faint
-    // reflective sheen, so floor the alpha. Add a subtle specular highlight so the
-    // glass reads as a surface, not an empty hole.
     if (u_glassMin > 0.0) {
         finalAlpha = max(finalAlpha, u_glassMin);
         light += vec3(spec * 1.5);
     }
 
-    fragColor = vec4(light * texColor.rgb * u_tint, finalAlpha);
+    vec3 litColor;
+    if (u_useLightmap != 0) {
+        // NO V FLIP. The engine samples the lightmap at the vertex's own second
+        // texture coordinate: stage 1 is set to D3DTSS_TEXCOORDINDEX = 1
+        // (Direct3DRender_SetLightmapStages HOOK 0x49D960, src/render/render.c:854)
+        // and Direct3DRender_UploadLightmapMesh scales that coordinate and nothing
+        // else (HOOK 0x49EB50, src/render/render.c:1117-1118). D3DTex_Upload copies
+        // source row y to surface row y (src/sysmisc/d3dtex.c:660-668) and D3D
+        // samples v = 0 at row 0, so the row order of the `.olm` bytes IS the
+        // engine's v order. The diffuse channel is flipped once at the model
+        // boundary (source/renderer/model.cpp:83-84); uv2 is not, so flipping it
+        // here would cancel that and mirror the bake. Measured on the retail
+        // corpus: sampling at uv2.y puts up-facing texels 13.0 levels brighter
+        // than down-facing ones, sampling at 1 - uv2.y inverts it to -5.0
+        // (tests/test_lightmap_uv_orientation.cpp, 333 model/.olm pairs).
+        vec3 lm = texture(u_lightmap, v_uv2).rgb * u_lightmapScale;
+        if (u_lm_authentic == 0) {
+            // Warm ambient floor: no lightmapped face should be black.
+            // OLM stores absolute lighting; dark faces get lifted to warm minimum.
+            lm = max(lm, u_ambient * 0.90);
+        }
+        litColor = texColor.rgb * lm * u_tint;
+    } else {
+        litColor = light * texColor.rgb * u_tint;
+    }
 
-    // Alpha-test cutout for foliage / fences / grilles only (alpha >= 0.9). Glass
-    // (lower alpha or u_glassMin set) is NEVER cut out — it blends so you can see
-    // through it while still seeing the pane.
-    if (u_glassMin <= 0.0 && u_alpha >= 0.9 && texColor.a < 0.75) discard;
+    if (u_lm_authentic == 0) {
+        litColor = pow(max(litColor, 0.0), vec3(u_gamma));
+    }
+
+    // Atmospheric fog, AFTER the gamma curve: in the engine the gamma is a texture
+    // filter (Texture_SetColorParams, src/animcam/globallight.c:329-336) while the
+    // fog is a D3D render state applied to the finished pixel (render.c:773-785),
+    // so the fog colour is never gamma-corrected.
+    if (u_fogEnabled != 0 && u_fogFar > 0.0) {
+        float viewDepth = dot(v_fragPos - u_cameraPos, u_viewDir);
+        if (viewDepth > 0.0) {
+            float fogA = 1.0 - exp(-viewDepth / u_fogFar);
+            litColor = mix(litColor, u_fogColor, clamp(fogA, 0.0, 1.0));
+        }
+    }
+
+    fragColor = vec4(litColor, finalAlpha);
+
+    if (u_glassMin <= 0.0 && u_alpha >= 0.99 && texA < 0.75) discard;
     if (fragColor.a < 0.01) discard;
 }
 )";
@@ -129,6 +277,180 @@ void main() {
 }
 )";
 
+// ─── GLSL 1.20 variants (legacy 2.1 context) ──────────────────────────────────
+// Selected at runtime when g_gl_info.legacy_gl21_ is set.  These are language
+// ports only: identical uniforms, identical arithmetic, identical varyings.
+// The shared `Matrices` uniform block does not exist in GLSL 1.20 (and this
+// context has no GL_ARB_uniform_buffer_object), so its third matrix becomes the
+// plain uniform `u_mvp`, matching what gl_helper.cpp's UBO emulation uploads;
+// u_unused1 and u_unused2 are never read.  Attribute indices come from
+// GL_LegacyBindInlineAttribLocations() before glLinkProgram.
+static const char* OBJ_VERT_SRC_120 = R"(
+#version 120
+attribute vec3 a_pos;
+attribute vec3 a_normal;
+attribute vec2 a_uv;
+attribute vec2 a_uv2;
+
+uniform mat4 u_mvp; // Proj * View * GlobalScale
+
+
+uniform mat4 u_model;
+
+varying vec3 v_normal;
+varying vec2 v_uv;
+varying vec2 v_uv2;
+varying vec3 v_fragPos;
+
+void main() {
+    vec4 worldPos   = u_model * vec4(a_pos, 1.0);
+    v_fragPos       = worldPos.xyz;
+    v_normal        = mat3(u_model) * a_normal;
+    v_uv            = a_uv;
+    v_uv2           = a_uv2;
+    gl_Position     = u_mvp * worldPos;
+}
+
+)";
+
+static const char* OBJ_FRAG_SRC_120 = R"(
+#version 120
+// GLSL 1.20 has no textureLod(); explicit-LOD sampling needs this extension,
+// which is core only from GLSL 1.30 on.  Everything else here is 1.20 core.
+#extension GL_ARB_shader_texture_lod : enable
+varying vec3 v_normal;
+varying vec2 v_uv;
+varying vec2 v_uv2;
+varying vec3 v_fragPos;
+
+uniform vec3  u_dirlight;      // directional light RGB (sun)
+uniform vec3  u_ambient;       // ambient light RGB
+uniform vec3  u_lightDir;      // direction toward the sun (world space)
+uniform sampler2D u_texture;
+uniform int   u_useTexture;
+uniform sampler2D u_lightmap;
+uniform int   u_useLightmap;   // 0 = no baked lightmap for this submesh
+uniform vec3  u_lightmapScale; // live re-light scale when object was moved since bake
+uniform int   u_lm_authentic;  // Baked mode: exact diffuse x lightmap multiply, like the original engine
+uniform float u_alpha;
+uniform vec4  u_baseColor;
+uniform vec3  u_tint;
+uniform float u_glassMin;
+uniform float u_gamma;
+// The level's OBJECT fog; see the GLSL 3.30 copy above for the oracle citations
+// (render.c:773-785, polylist.c:243-245, mission_fog.h kObjectLightSet,
+// terraind3d.c:164).
+uniform vec3  u_fogColor;
+uniform float u_fogFar;
+uniform vec3  u_cameraPos;
+uniform vec3  u_viewDir;
+uniform int   u_fogEnabled;
+
+void main() {
+    vec3 N = normalize(v_normal);
+    vec3 lightDir = normalize(u_lightDir);
+
+    // Hemisphere ambient: sky (up) is warmer/brighter, ground (down) is dimmer.
+    // This ensures every face — including side walls — always gets meaningful light.
+    float hemiT = dot(N, vec3(0.0, 0.0, 1.0)) * 0.5 + 0.5; // 0=down, 1=up
+    vec3 hemi = mix(u_ambient * 0.75, u_ambient * 1.35, hemiT);
+
+    // Sun: front faces bright, back faces get 40% warm fill (no black backs).
+    float diff     = max(dot(N, lightDir), 0.0);
+    float backFill = max(-dot(N, lightDir), 0.0) * 0.40;
+
+    // Subtle specular
+    vec3 viewDir = normalize(vec3(0.0, 1.0, 1.0));
+    vec3 halfVec = normalize(lightDir + viewDir);
+    float spec = pow(max(dot(N, halfVec), 0.0), 32.0) * 0.08;
+
+    vec3 light = hemi + u_dirlight * (diff + backFill + spec);
+
+    vec4 texColor = (u_useTexture != 0) ? texture2D(u_texture, v_uv) : u_baseColor;
+    // Alpha of blended submeshes (glass, alpha-routed floors) must not decay
+    // with mip level: glGenerateMipmap averages the alpha channel, so distant
+    // fragments faded and then hit the cutout discard — whole building floors
+    // washed out / vanished at range. Sample mip 0 for the blended case;
+    // true opaque cutouts (u_alpha ~ 1.0) keep mip-filtered cutout behavior.
+    float texA = (u_alpha >= 0.99) ? texColor.a
+                                   : texture2DLod(u_texture, v_uv, 0.0).a;
+    float finalAlpha = (u_useTexture != 0 ? texA : 1.0) * u_alpha;
+
+    if (u_glassMin > 0.0) {
+        finalAlpha = max(finalAlpha, u_glassMin);
+        light += vec3(spec * 1.5);
+    }
+
+    vec3 litColor;
+    if (u_useLightmap != 0) {
+        // NO V FLIP -- see the GLSL 3.30 copy above for the oracle citations
+        // (src/render/render.c:854, :1117-1118; src/sysmisc/d3dtex.c:660-668).
+        vec3 lm = texture2D(u_lightmap, v_uv2).rgb * u_lightmapScale;
+        if (u_lm_authentic == 0) {
+            // Warm ambient floor: no lightmapped face should be black.
+            // OLM stores absolute lighting; dark faces get lifted to warm minimum.
+            lm = max(lm, u_ambient * 0.90);
+        }
+        litColor = texColor.rgb * lm * u_tint;
+    } else {
+        litColor = light * texColor.rgb * u_tint;
+    }
+
+    if (u_lm_authentic == 0) {
+        litColor = pow(max(litColor, 0.0), vec3(u_gamma));
+    }
+
+    // Atmospheric fog, after the gamma curve -- see the GLSL 3.30 copy above.
+    if (u_fogEnabled != 0 && u_fogFar > 0.0) {
+        float viewDepth = dot(v_fragPos - u_cameraPos, u_viewDir);
+        if (viewDepth > 0.0) {
+            float fogA = 1.0 - exp(-viewDepth / u_fogFar);
+            litColor = mix(litColor, u_fogColor, clamp(fogA, 0.0, 1.0));
+        }
+    }
+
+    gl_FragColor = vec4(litColor, finalAlpha);
+
+    if (u_glassMin <= 0.0 && u_alpha >= 0.99 && texA < 0.75) discard;
+    if (gl_FragColor.a < 0.01) discard;
+}
+)";
+
+static const char* PICK_VERT_SRC_120 = R"(
+#version 120
+attribute vec3 a_pos;
+attribute vec3 a_normal;
+attribute vec2 a_uv;
+
+uniform mat4 u_mvp;
+
+uniform mat4 u_model;
+
+void main() {
+    gl_Position = u_mvp * u_model * vec4(a_pos, 1.0);
+}
+)";
+
+static const char* PICK_FRAG_SRC_120 = R"(
+#version 120
+uniform int u_object_id;
+void main() {
+    // GLSL 1.20 has no bitwise operators (they arrive with GLSL 1.30), so the
+    // shifts and masks become floor/mod arithmetic.  Pick ids are i+1 or
+    // kAttaPickBase + n with kAttaPickBase = 0x800000, i.e. integers below
+    // 2^24, which float represents exactly; every intermediate here is an
+    // integer-valued float, so the bytes written are the same as the original
+    // (verified numerically over the whole id domain).
+    float id = float(u_object_id);
+    gl_FragColor = vec4(
+        mod(floor(id / 65536.0), 256.0) / 255.0,
+        mod(floor(id /   256.0), 256.0) / 255.0,
+        mod(           id       , 256.0) / 255.0,
+        1.0
+    );
+}
+)";
+
 // ─── Shader Compile Helper ────────────────────────────────────────────────────
 static GLuint CompileShader(GLenum type, const char* src) {
     GLuint s = glCreateShader(type);
@@ -147,13 +469,20 @@ static GLuint CompileShader(GLenum type, const char* src) {
 }
 
 static GLuint BuildShaderProgram() {
-    GLuint vert = CompileShader(GL_VERTEX_SHADER,   OBJ_VERT_SRC);
-    GLuint frag = CompileShader(GL_FRAGMENT_SHADER, OBJ_FRAG_SRC);
+    const char* vs_src = g_gl_info.legacy_gl21_ ? OBJ_VERT_SRC_120 : OBJ_VERT_SRC;
+    const char* fs_src = g_gl_info.legacy_gl21_ ? OBJ_FRAG_SRC_120 : OBJ_FRAG_SRC;
+    GLuint vert = CompileShader(GL_VERTEX_SHADER,   vs_src);
+    GLuint frag = CompileShader(GL_FRAGMENT_SHADER, fs_src);
     if (!vert || !frag) return 0;
 
     GLuint prog = glCreateProgram();
     glAttachShader(prog, vert);
     glAttachShader(prog, frag);
+    // GLSL 1.20 has no layout(location = N), so the attribute indices the 330
+    // originals declare must be re-bound by name before linking.
+    if (g_gl_info.legacy_gl21_) {
+        GL_LegacyBindInlineAttribLocations(prog);
+    }
     glLinkProgram(prog);
 
     GLint ok = 0;
@@ -172,13 +501,18 @@ static GLuint BuildShaderProgram() {
 }
 
 static GLuint BuildPickShaderProgram() {
-    GLuint vert = CompileShader(GL_VERTEX_SHADER,   PICK_VERT_SRC);
-    GLuint frag = CompileShader(GL_FRAGMENT_SHADER, PICK_FRAG_SRC);
+    const char* vs_src = g_gl_info.legacy_gl21_ ? PICK_VERT_SRC_120 : PICK_VERT_SRC;
+    const char* fs_src = g_gl_info.legacy_gl21_ ? PICK_FRAG_SRC_120 : PICK_FRAG_SRC;
+    GLuint vert = CompileShader(GL_VERTEX_SHADER,   vs_src);
+    GLuint frag = CompileShader(GL_FRAGMENT_SHADER, fs_src);
     if (!vert || !frag) return 0;
 
     GLuint prog = glCreateProgram();
     glAttachShader(prog, vert);
     glAttachShader(prog, frag);
+    if (g_gl_info.legacy_gl21_) {
+        GL_LegacyBindInlineAttribLocations(prog);
+    }
     glLinkProgram(prog);
 
     GLint ok = 0;
@@ -214,10 +548,27 @@ bool Renderer_Objects::Init() {
 
     // Bind UBO block "Matrices" to binding point 0
     // This MUST match the binding point used by terrain renderer
+    //
+    // On the GL 2.1 fallback there is no such block to find, and that is by design:
+    // the 120-tier object shader declares `uniform mat4 u_mvp` instead of a
+    // `Matrices` block (renderer_objects.cpp:222-229, and the vertex/fragment source
+    // selection at :394-395), and the emulation delivers the matrix to it by name
+    // (LegacyUploadUboToCurrentProgram, gl_helper.cpp:101-126, reached through the
+    // patched glBindBufferBase, gl_helper.cpp:160-172 + :270).  So
+    // glGetUniformBlockIndex legitimately answers GL_INVALID_INDEX on every legacy
+    // run -- the program has no such block -- and the old unconditional warning was
+    // an artefact of the emulation path, not a missing binding (it fired once per
+    // Renderer_Objects::Init, i.e. once per editor start via Renderer::Init,
+    // renderer.cpp:106, so 1-3 bogus "[WARN] UBO 'Matrices' block not found" lines
+    // in a log = 1-3 launches).
+    // Warn only when a real GL 3.0+ context links a shader that genuinely should
+    // declare the block.
     GLuint blockIdx = glGetUniformBlockIndex(shader_program_, "Matrices");
     if (blockIdx != GL_INVALID_INDEX) {
         glUniformBlockBinding(shader_program_, blockIdx, ubo_binding_point_);
         Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] UBO 'Matrices' bound to point " + std::to_string(ubo_binding_point_));
+    } else if (g_gl_info.legacy_gl21_) {
+        Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] GL 2.1 fallback: 'Matrices' is the emulated plain uniform u_mvp; no UBO block to bind.");
     } else {
         Logger::Get().Log(LogLevel::WARNING, "[Renderer_Objects] WARNING: UBO 'Matrices' block not found.");
     }
@@ -252,6 +603,7 @@ void Renderer_Objects::ClearCaches() {
     }
     mesh_cache_.clear();
     attachment_cache_.clear();
+    occupancy_sig_ = 0;
 
     for (auto& pair : texture_cache_) {
         if (pair.second) {
@@ -259,6 +611,16 @@ void Renderer_Objects::ClearCaches() {
         }
     }
     texture_cache_.clear();
+    // The game-texture namespace (Game_AddTexture/Game_LoadTextures) is
+    // level-independent, but the GL names are not: drop the handles with the rest
+    // so a level switch cannot bind a deleted texture. The pack index itself is
+    // rebuilt lazily.
+    for (auto& pair : game_texture_cache_) {
+        if (pair.second) {
+            glDeleteTextures(1, &pair.second);
+        }
+    }
+    game_texture_cache_.clear();
     model_texture_map_cache_.clear();
     
     // We explicitly DO NOT clear global_texture_map_, model_level_map_,
@@ -271,7 +633,267 @@ void Renderer_Objects::ClearCaches() {
     persistent_dat_ = DATFile{};
     persistent_dat_path_.clear();
     logged_draw_buildings_.clear();
+    skin_geometry_cache_.clear();
+    parsed_geometry_cache_.clear();
 
+    // Lightmaps are keyed by taskId, which is only unique WITHIN a level — task
+    // 1104 in level1 and task 1104 in level6 are unrelated. Without clearing
+    // these on a level switch, a previous level's baked lightmap (and its bake
+    // pose) would bind to the new level's same-numbered task.
+    // indoor_ambient_by_task_ is also per-level (rebuilt from LightmapInfo tasks
+    // on each level load in app_level.cpp), so clear it here too.
+    ClearAllLightmaps();
+    indoor_ambient_by_task_.clear();
+    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Cleared per-task lightmap caches on level switch");
+    ClearResCache();
+}
+
+void Renderer_Objects::ClearResCache() {
+    res_tex_indexes_.clear();
+    res_model_indexes_.clear();
+    // LOD chains are built over the loaded .res model set (issue #62), so they
+    // are stale the moment that set changes.
+    lod_chain_cache_.clear();
+    // MeshHeader.radius (VirModel_GetRadius) is read through the same .res
+    // indexes, so it is stale at the same moment.
+    mesh_header_radius_cache_.clear();
+    // Same reason: the LOD-0 header words come out of the .res entry.
+    lod0_mesh_header_cache_.clear();
+    for (const auto& p : tmp_mef_paths_) {
+        std::error_code ec;
+        std::filesystem::remove(p, ec);
+    }
+    tmp_mef_paths_.clear();
+    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] ResCache cleared");
+}
+
+void Renderer_Objects::RefreshTextureResCache() {
+    res_tex_indexes_.clear();
+    res_model_indexes_.clear();
+    // Everything derived from the model .res set is stale the moment those
+    // indexes are dropped: the LOD chains are built by asking whether each LOD
+    // name resolves in that set, and the two header caches hold words read out
+    // of the .res entries themselves.  The import path (AddModelToLevelRes)
+    // rewrites the level's models .res and refreshes through here, so without
+    // this an imported model would keep the previous header until the level was
+    // reloaded.  All three are pure caches and are rebuilt lazily.
+    lod_chain_cache_.clear();
+    mesh_header_radius_cache_.clear();
+    lod0_mesh_header_cache_.clear();
+    // Cached texture MISSES (value 0, see GetOrLoadTexture) are dropped here too:
+    // the archives this call re-indexes are exactly what a miss was a statement
+    // about, and the import path rewrites them (AddModelToLevelRes appends the
+    // model's textures to the level archive and refreshes through here). Loaded
+    // textures keep their GL names and stay cached.
+    for (auto it = texture_cache_.begin(); it != texture_cache_.end();) {
+        if (it->second == 0) {
+            it = texture_cache_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    LoadResCache(current_level_, Utils::GetIGIRootPath());
+    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Refreshed texture and model .res index for level " +
+        std::to_string(current_level_));
+}
+
+void Renderer_Objects::LoadResCache(int levelNo, const std::string& igi_path) {
+    // APPEND-ONLY: never clear existing indexes. Cross-level lazy calls add new
+    // .res archives without evicting the current level's already-indexed files.
+    const std::string levelName = "level" + std::to_string(levelNo);
+    const std::string missionDir = igi_path + "\\missions\\location0\\" + levelName;
+    const std::string commonDir  = igi_path + "\\missions\\location0\\common";
+
+    // Helper: only add a path if not already in the index list.
+    auto addTex = [&](const std::string& p) {
+        for (const auto& ri : res_tex_indexes_)
+            if (ri.res_path == p) return; // already indexed
+        ResIndex ri;
+        ri.res_path = p;
+        std::string err;
+        if (RES_BuildIndex(p, ri.index, err)) {
+            Logger::Get().Log(LogLevel::INFO, "[ResCache] Indexed " +
+                std::to_string(ri.index.size()) + " entries from " + p);
+            res_tex_indexes_.push_back(std::move(ri));
+        } else if (!err.empty()) {
+            Logger::Get().Log(LogLevel::WARNING, "[ResCache] Texture index failed: " + err);
+        }
+    };
+    auto addModel = [&](const std::string& p) {
+        for (const auto& ri : res_model_indexes_)
+            if (ri.res_path == p) return; // already indexed
+        ResIndex ri;
+        ri.res_path = p;
+        std::string err;
+        if (RES_BuildIndex(p, ri.index, err)) {
+            Logger::Get().Log(LogLevel::INFO, "[ResCache] Indexed " +
+                std::to_string(ri.index.size()) + " entries from " + p);
+            res_model_indexes_.push_back(std::move(ri));
+        } else if (!err.empty()) {
+            Logger::Get().Log(LogLevel::WARNING, "[ResCache] Model index failed: " + err);
+        }
+    };
+
+    // Level-specific comes first so it wins over common on name collisions.
+    addTex  (missionDir + "\\textures\\" + levelName + ".res");
+    addTex  (commonDir  + "\\textures\\location0.res");
+    addModel(missionDir + "\\models\\" + levelName + ".res");
+    addModel(commonDir  + "\\models\\location0.res");
+
+    // A lazy cross-level call can add model names that a previously built LOD
+    // chain (issue #62) saw as absent, so drop the cached chains. They are
+    // rebuilt on the next lookup; this runs once per level load.
+    lod_chain_cache_.clear();
+
+}
+
+// Try to find texture bytes in the in-memory .res index.
+// `sourceRes` (optional) receives the archive the bytes came from, so a caller can
+// tell the level's own archive from a cross-level or shared-common hit.
+std::vector<uint8_t> Renderer_Objects::FindTextureData(const std::string& textureId,
+                                                       std::string* sourceRes) const {
+    if (sourceRes) sourceRes->clear();
+    std::vector<ModelSourceArchiveIndex> archives;
+    archives.reserve(res_tex_indexes_.size());
+    for (const auto& index : res_tex_indexes_) {
+        archives.push_back({index.res_path, index.index});
+    }
+    return FindPreviewTextureEntry(archives, textureId,
+        [](const std::string& resPath, const ResEntryInfo& info) {
+            return RES_ReadEntry(resPath, info);
+        },
+        sourceRes);
+}
+
+std::vector<uint8_t> Renderer_Objects::FindTextureDataFromLevel(
+    const std::string& textureId, int levelNo) const {
+    const std::string igiRoot = Utils::GetIGIRootPath();
+    const std::string levelRes = igiRoot +
+        "\\missions\\location0\\level" + std::to_string(levelNo) +
+        "\\textures\\level" + std::to_string(levelNo) + ".res";
+    // Source textures that are shared across levels live in the common
+    // archive, not in any level archive (e.g. several 001_02_1 textures are
+    // only in location0.res). Without this second bundle entry, a lookup for
+    // such a texture misses its own source level and falls through to
+    // same-name bytes from an unrelated level's archive.
+    const std::string commonRes = igiRoot +
+        "\\missions\\location0\\common\\textures\\location0.res";
+    const std::string bundleRes[2] = { levelRes, commonRes };
+    auto equalsCI = [](const std::string& a, const std::string& b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(a[i])) !=
+                std::tolower(static_cast<unsigned char>(b[i]))) return false;
+        }
+        return true;
+    };
+    // bundle[0] is the selected level archive, bundle[1] is common, and the
+    // search walks them in that order: the level archive wins. That is the
+    // oracle-correct precedence — the game resolves a model's textures from the
+    // single archive of the level that owns the model file, with no cross-level
+    // search (`retail engine src/model/model.c:261,450-461,300-306`; measured on the
+    // retail install, `001_02_1.tex` is a 128x32 strip in common and the
+    // 128x128 sheet in level7). An earlier version of this comment claimed the
+    // opposite order; the code was always right.
+    // See docs/parity/CHARACTER_TEXTURE_RESOLUTION.md.
+    std::array<ModelSourceArchiveIndex, 2> bundle;
+    for (size_t slot = 0; slot < 2; ++slot) {
+        bundle[slot].resPath = bundleRes[slot];
+        for (const auto& index : res_tex_indexes_) {
+            if (!equalsCI(index.res_path, bundleRes[slot])) continue;
+            bundle[slot].entries = index.index;
+            break;
+        }
+    }
+    return FindModelSourceEntry(bundle, textureId, true,
+        [](const std::string& resPath, const ResEntryInfo& info) {
+            return RES_ReadEntry(resPath, info);
+        });
+}
+
+// Try to find mesh bytes in the in-memory .res index.
+// `sourceRes` (optional) receives the archive the bytes came from; the headless
+// --smoke-level probe reports it, and taking it here keeps that probe on THIS
+// function so a regression in it is caught.
+std::vector<uint8_t> Renderer_Objects::FindMeshData(const std::string& modelId,
+                                                    std::string* sourceRes) const {
+    if (sourceRes) sourceRes->clear();
+    // The archive index is keyed by the engine's own resource identity: the member name
+    // built the way the engine builds it, upper-cased and backslash-folded
+    // (String_ToUpper 0x4B5AF0, src/res/resource.c:98-104; compared by Resource_IsLoaded
+    // at :136-138).  Mesh_Load (HOOK 0x4CF390) asks for "LOCAL:models/%s.mef"
+    // (src/model/model.c:364), so that is the key to look up.
+    //
+    // This looked up the bare "<id>.mef" and so matched nothing once RES_BuildIndex was
+    // re-keyed -- the same mistake already fixed for textures in
+    // model_texture_resolution.cpp:235-248 and for the menu labels.  It made every model
+    // resolve to nothing, which is why the viewport loaded terrain but no objects.
+    //
+    // The rule itself now lives in model_texture_resolution.cpp
+    // (FindModelEntryByIdentity), which is host-portable, so the identity is pinned by a
+    // unit test instead of only by the Windows renderer target.
+    std::vector<ModelSourceArchiveIndex> archives;
+    archives.reserve(res_model_indexes_.size());
+    for (const auto& ri : res_model_indexes_)
+        archives.push_back({ri.res_path, ri.index});
+    const ModelEntryHit hit = FindModelEntryByIdentity(
+        archives, modelId,
+        [](const std::string& resPath, const ResEntryInfo& info) {
+            return RES_ReadEntry(resPath, info);
+        });
+    if (sourceRes) *sourceRes = hit.resPath;
+    return hit.bytes;
+}
+
+std::vector<uint8_t> Renderer_Objects::FindMeshDataFromLevel(
+    const std::string& modelId, int levelNo) const {
+    const std::string igiRoot = Utils::GetIGIRootPath();
+    const std::string levelRes = igiRoot +
+        "\\missions\\location0\\level" + std::to_string(levelNo) +
+        "\\models\\level" + std::to_string(levelNo) + ".res";
+    // Shared models live in the common archive; without it a source-level
+    // mesh lookup misses and falls through to a same-name mesh from an
+    // unrelated level's archive.
+    const std::string commonRes = igiRoot +
+        "\\missions\\location0\\common\\models\\location0.res";
+    const std::string bundleRes[2] = { levelRes, commonRes };
+    auto equalsCI = [](const std::string& a, const std::string& b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(a[i])) !=
+                std::tolower(static_cast<unsigned char>(b[i]))) return false;
+        }
+        return true;
+    };
+    // Level-specific comes first so it wins over common on name collisions.
+    std::array<ModelSourceArchiveIndex, 2> bundle;
+    for (size_t slot = 0; slot < 2; ++slot) {
+        bundle[slot].resPath = bundleRes[slot];
+        for (const auto& index : res_model_indexes_) {
+            if (!equalsCI(index.res_path, bundleRes[slot])) continue;
+            bundle[slot].entries = index.index;
+            break;
+        }
+    }
+    return FindModelSourceEntry(bundle, modelId, false,
+        [](const std::string& resPath, const ResEntryInfo& info) {
+            return RES_ReadEntry(resPath, info);
+        });
+}
+
+// Free every baked lightmap's GL textures and drop the per-task bake state.
+// Used on level switch (above) and by the Escape-menu Lightmaps checkbox when
+// toggled OFF (so OFF reverts to the default bright look).
+void Renderer_Objects::ClearAllLightmaps() {
+    for (auto& pair : lightmap_textures_by_task_) {
+        for (auto& pages : pair.second) {
+            for (GLuint tex : pages) {
+                if (tex != 0) glDeleteTextures(1, &tex);
+            }
+        }
+    }
+    lightmap_textures_by_task_.clear();
+    lightmap_bake_pose_by_task_.clear();
 }
 
 // ─── Shutdown ─────────────────────────────────────────────────────────────────
@@ -280,6 +902,7 @@ void Renderer_Objects::Shutdown() {
         destroyModel(pair.second);
     mesh_cache_.clear();
     attachment_cache_.clear();
+    occupancy_sig_ = 0;
 
     for (auto& pair : texture_cache_) {
         if (pair.second) {
@@ -287,10 +910,18 @@ void Renderer_Objects::Shutdown() {
         }
     }
     texture_cache_.clear();
+    for (auto& pair : game_texture_cache_) {
+        if (pair.second) {
+            glDeleteTextures(1, &pair.second);
+        }
+    }
+    game_texture_cache_.clear();
     model_texture_map_cache_.clear();
     texture_map_level_ = -1;
     persistent_dat_ = DATFile{};
     persistent_dat_path_.clear();
+    skin_geometry_cache_.clear();
+    parsed_geometry_cache_.clear();
 
     if (shader_program_) {
         glDeleteProgram(shader_program_);
@@ -338,9 +969,57 @@ void Renderer_Objects::Shutdown() {
 }
 
 // ─── InitPickingFBO ───────────────────────────────────────────────────────────
+int Renderer_Objects::SelectObjectDrawLod(const LevelObject& obj,
+                                          const glm::vec3& camera_pos,
+                                          const glm::vec3& cameraFwd,
+                                          float tan_half_fovx) {
+    // The engine's per-frame LOD for one object, extracted verbatim from the draw
+    // loop below so that the animation pose set can ask the same question with the
+    // same inputs and the same arithmetic — see source/runtime/anim_pose_set.h for
+    // why the pose set has to be a subset of what this pass draws.
+    //
+    // `ModelObj_GetLOD` HOOK 0x4CFCB0 (src/lod/mesh3d.c:209-227) builds the query
+    // and `lod_select` (src/lod/mesh3d.c:161-208) answers it; the draw then uses
+    // `vm->lods[lod]` (src/render/render.c:957) and a NEGATIVE result is the
+    // engine's "culled this frame" (render.c:955-956), not an error.
+    //
+    // Returns 0 — i.e. "draw LOD 0", never "culled" — in the two cases the loop
+    // also leaves `drawnLod` at 0: a mesh with no vertices, and a model whose LOD0
+    // header is unreadable.  That is deliberate and matches the loop's behaviour
+    // before this extraction.
+    if (!(tan_half_fovx > 0.0f)) return 0;
+    if (GetOrLoadMesh(obj.modelId, obj.isBuilding).vertexCount == 0) return 0;
+    const igi::lod::MefMeshHeader lod0h = GetLod0MeshHeader(obj.modelId);
+    if (!lod0h.valid) return 0;
+
+    igi::lod::RigidLodQuery q;
+    q.hasModel = true;
+    q.objPos[0] = obj.pos.x;
+    q.objPos[1] = obj.pos.y;
+    q.objPos[2] = obj.pos.z;
+    q.camPos[0] = camera_pos.x;
+    q.camPos[1] = camera_pos.y;
+    q.camPos[2] = camera_pos.z;
+    // gTransContext.matrix.m[6..8]: the view matrix's Z row.
+    q.viewZ[0] = cameraFwd.x;
+    q.viewZ[1] = cameraFwd.y;
+    q.viewZ[2] = cameraFwd.z;
+    q.lod0Center[0] = lod0h.center[0];
+    q.lod0Center[1] = lod0h.center[1];
+    q.lod0Center[2] = lod0h.center[2];
+    q.lod0Sphere = lod0h.sphere;
+    q.objScale[0] = q.objScale[1] = q.objScale[2] = static_cast<float>(obj.scale);
+    q.fov = tan_half_fovx;
+    return SelectLodForDistance(
+        obj.modelId, obj.isBuilding, tan_half_fovx,
+        static_cast<float>(igi::lod::RigidViewDepth(q)),
+        static_cast<float>(igi::lod::MaxScale(q.objScale) * lod0h.sphere), 1.0f);
+}
+
 void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                             const std::vector<LevelObject>& objects, int selected_object_index, int hover_object_index, int draw_parts,
-                            const glm::vec3& camera_pos, bool show_magic_obj_spheres)
+                            const glm::vec3& camera_pos, bool show_magic_obj_spheres, const std::unordered_set<int>* skip_static_draw_indices,
+                            const glm::vec3& camera_forward, bool fast_preview, float tan_half_fovx)
 {
     // Define the flags (must match renderer.h)
     const int DRAW_OBJECTS = 4;
@@ -360,16 +1039,52 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
     if (!shader_program_) return;
 
+    // IGI_PROFILE instrumentation (opt-in, IGI_PROFILE=1).  The per-frame object
+    // pass is the whole frame on a slow GL translation layer, and "it is slow" is
+    // not a diagnosis: this splits it into CPU resolution, GL submission and
+    // attachment work so a fix can be aimed at the part that actually costs.
+    // Everything below is a no-op when the flag is unset (no clock reads, no
+    // counters), and the report is one log line per kProfileFrames frames.
+    const bool profileObjects = []() {
+        static const bool enabled = std::getenv("IGI_PROFILE") != nullptr;
+        return enabled;
+    }();
+    using ObjProfileClock = std::chrono::steady_clock;
+    constexpr int kProfileFrames = 5;
+    auto profMark = profileObjects ? ObjProfileClock::now() : ObjProfileClock::time_point{};
+    int64_t profResolveUs = 0, profDrawUs = 0, profAttaUs = 0;
+    int profObjects = 0, profSubmeshDraws = 0;
+    // IGI_PROFILE-only: how much of the level the VISUAL pass declines to draw.
+    // The pick pass re-submits the scene without these filters, so this is the
+    // size of the gap between what is on screen and what picking walks.
+    int profCulledLod = 0, profSkipped = 0;
+    const auto profDeltaUs = [](ObjProfileClock::time_point a, ObjProfileClock::time_point b) {
+        return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
+    };
+
     // Rebuild EditRigidObj occupancy so any ATTA that has been promoted to (or is
     // duplicated by) a real EditRigidObj is suppressed in the attachment render —
     // otherwise the promoted object would draw on top of its original ATTA.
-    editrigid_occupancy_.clear();
-    suppressed_atta_keys_.clear();
-    for (const auto& o : objects) {
-        if (o.deleted || o.type != "EditRigidObj" || o.modelId.empty()) continue;
-        editrigid_occupancy_.insert(AttaOccupancyKey(o.modelId, glm::vec3(o.pos)));
-        if (o.name.rfind("ATTA:", 0) == 0) {
-            suppressed_atta_keys_.insert(o.name.substr(5));
+    if (!fast_preview) {
+        uint64_t occSig = objects.size();
+        for (const auto& o : objects) {
+            occSig = occSig * 1099511628211ull + static_cast<uint64_t>(o.deleted);
+            if (o.deleted || o.type != "EditRigidObj" || o.modelId.empty()) continue;
+            union { double d; uint64_t u; } x{o.pos.x}, y{o.pos.y}, z{o.pos.z};
+            occSig ^= x.u + y.u * 3ull + z.u * 7ull;
+            occSig ^= static_cast<uint64_t>(reinterpret_cast<uintptr_t>(o.modelId.data()));
+        }
+        if (occSig != occupancy_sig_) {
+            occupancy_sig_ = occSig;
+            editrigid_occupancy_.clear();
+            suppressed_atta_keys_.clear();
+            for (const auto& o : objects) {
+                if (o.deleted || o.type != "EditRigidObj" || o.modelId.empty()) continue;
+                editrigid_occupancy_.insert(AttaOccupancyKey(o.modelId, glm::vec3(o.pos)));
+                if (o.name.rfind("ATTA:", 0) == 0) {
+                    suppressed_atta_keys_.insert(o.name.substr(5));
+                }
+            }
         }
     }
 
@@ -396,8 +1111,33 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     GLint loc_model    = glGetUniformLocation(shader_program_, "u_model");
     GLint loc_dirlight = glGetUniformLocation(shader_program_, "u_dirlight");
     GLint loc_ambient  = glGetUniformLocation(shader_program_, "u_ambient");
+
+    static bool logged_light_once = false;
+    if (!logged_light_once) {
+        Logger::Get().Log(LogLevel::INFO, "[Renderer] Lighting params: front=(" + std::to_string(sun_front_color_.r) + "," + std::to_string(sun_front_color_.g) + "," + std::to_string(sun_front_color_.b) + ") back=(" + std::to_string(sun_back_color_.r) + "," + std::to_string(sun_back_color_.g) + "," + std::to_string(sun_back_color_.b) + ") gamma=" + std::to_string(global_gamma_));
+        logged_light_once = true;
+    }
+
+    glUniform3f(loc_dirlight, sun_front_color_.x, sun_front_color_.y, sun_front_color_.z);
+    glUniform3f(loc_ambient,  global_ambient_.x,  global_ambient_.y,  global_ambient_.z);
+    // Use the level's actual sun direction so dynamic-lit (non-lightmapped) objects
+    // face the same light source as the game. Falls back to a sensible default if
+    // the level hasn't set a sun direction yet.
+    GLint loc_lightDir = glGetUniformLocation(shader_program_, "u_lightDir");
+    {
+        glm::vec3 sdir = (glm::length(sun_dir_) > 0.01f)
+            ? glm::normalize(sun_dir_) : glm::vec3(0.5f, 1.0f, 0.5f);
+        glUniform3f(loc_lightDir, sdir.x, sdir.y, sdir.z);
+    }
+    GLint loc_gamma = glGetUniformLocation(shader_program_, "u_gamma");
+    glUniform1f(loc_gamma, global_gamma_);
+    GLint loc_lm_authentic = glGetUniformLocation(shader_program_, "u_lm_authentic");
+    glUniform1i(loc_lm_authentic, 0);
+    GLint loc_lightmap_scale = glGetUniformLocation(shader_program_, "u_lightmapScale");
     GLint loc_useTex   = glGetUniformLocation(shader_program_, "u_useTexture");
     GLint loc_tex      = glGetUniformLocation(shader_program_, "u_texture");
+    GLint loc_lightmap    = glGetUniformLocation(shader_program_, "u_lightmap");
+    GLint loc_useLightmap = glGetUniformLocation(shader_program_, "u_useLightmap");
     GLint loc_alpha    = glGetUniformLocation(shader_program_, "u_alpha");
     GLint loc_baseColor = glGetUniformLocation(shader_program_, "u_baseColor");
     GLint loc_tint     = glGetUniformLocation(shader_program_, "u_tint");
@@ -407,9 +1147,33 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     glUniform4f(loc_baseColor, 1.0f, 1.0f, 1.0f, 1.0f); // default: white
     glUniform3f(loc_tint, 1.0f, 1.0f, 1.0f); // default: no tint
 
+    // The level's object fog (fog_color_ / fog_far_ / fog_enabled_, published by
+    // Renderer::ApplyFogIntensity from GlobalLight set 1). This was dead state and
+    // the comment here used to read "Fog is terrain-only — objects/buildings are
+    // never fogged"; retail fogs them (render.c:773-785), so it is applied now.
+    // u_fogFar <= 0 is the engine's "no fog" state (a keyframe with density 0).
+    glm::vec3 cameraFwd(0.0f);
+    const float cameraFwdLen = glm::length(camera_forward);
+    if (cameraFwdLen > 0.01f) cameraFwd = camera_forward / cameraFwdLen;
+    {
+        GLint loc_fogColor   = glGetUniformLocation(shader_program_, "u_fogColor");
+        GLint loc_fogFar     = glGetUniformLocation(shader_program_, "u_fogFar");
+        GLint loc_camPos     = glGetUniformLocation(shader_program_, "u_cameraPos");
+        GLint loc_viewDir    = glGetUniformLocation(shader_program_, "u_viewDir");
+        GLint loc_fogEnabled = glGetUniformLocation(shader_program_, "u_fogEnabled");
+        glUniform3f(loc_fogColor, fog_color_.r, fog_color_.g, fog_color_.b);
+        glUniform1f(loc_fogFar, (fog_enabled_ && fog_far_ > 0.0f) ? fog_far_ : -1.0f);
+        glUniform3f(loc_camPos, camera_pos.x, camera_pos.y, camera_pos.z);
+        glUniform3f(loc_viewDir, cameraFwd.x, cameraFwd.y, cameraFwd.z);
+        glUniform1i(loc_fogEnabled, fog_enabled_ ? 1 : 0);
+    }
+
     EnsurePortalDistancesLoaded();
 
-    for (int pass = 0; pass < 2; ++pass) {
+    const bool skipSkinned = skip_static_draw_indices && !skip_static_draw_indices->empty();
+    const auto lightmapMode = igi::ObjectLightmapManager::Get().GetRenderMode();
+    const int passCount = 2;
+    for (int pass = 0; pass < passCount; ++pass) {
         bool isTransparentPass = (pass == 1);
         if (isTransparentPass) {
             glDepthMask(GL_FALSE);
@@ -417,8 +1181,29 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             glDepthMask(GL_TRUE);
         }
 
+        // Accumulate elapsed time for continuous animations (helicopter rotor spin).
+        {
+            extern float g_renderer_delta_secs;
+            elapsed_time_secs_ += g_renderer_delta_secs;
+            // The placed-helicopter flight preview's own clock (GitHub issue #60),
+            // advanced ONCE per frame from the same delta: this loop runs two draw
+            // passes, so consuming the delta per pass would run the preview at
+            // double speed. The rate is the game's own `kFps`
+            // (src/math/mathvars.h:8); the rule that consumes a tick is
+            // `igi::HeliPreviewTick` (runtime/heli_preview.h, retail engine Heli_Control
+            // 0x431B70 src/heli/heli.c:358-405).
+            AdvanceHeliPreviewClock(g_renderer_delta_secs);
+            g_renderer_delta_secs = 0.0f;  // consume once per frame
+        }
         for (const auto& obj : objects) {
             if (obj.deleted) continue;
+            if (profileObjects) profMark = ObjProfileClock::now();
+
+            const int objIndex = static_cast<int>(&obj - &objects[0]);
+            // This object's rigid mesh is being replaced by a live skinned/animated
+            // draw elsewhere this frame (see Renderer::DrawSkinnedMesh) — skip it
+            // here so the two don't render on top of each other.
+            if (skipSkinned && skip_static_draw_indices->count(objIndex)) continue;
 
             // Reset tint to white at the start of EVERY iteration so a magenta tint
             // set for a previous object can never leak into this one, regardless of
@@ -443,13 +1228,81 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         if (obj.modelId.empty()) continue;
         if (obj.modelId == "colbox" || obj.name == "colbox" ||
             obj.modelId == "colbox2" || obj.name == "colbox2" ||
+            obj.modelId == "colbox3" || obj.name == "colbox3" ||
             obj.modelId == "colbox4" || obj.name == "colbox4" ||
             obj.modelId == "colbox66" || obj.name == "colbox66") {
             continue;
         }
 
-        Mesh mesh = GetOrLoadMesh(obj.modelId, obj.isBuilding);
+        const bool keepVisible = objIndex == selected_object_index || objIndex == hover_object_index;
+        if (!igi::ShouldResolveMissingSceneModel(
+                obj.modelMissingInRes,
+                objIndex == selected_object_index,
+                objIndex == hover_object_index)) {
+            if (profileObjects) ++profSkipped;
+            continue;
+        }
+
+        // Per-frame LOD switch.  ModelObj_GetLOD (HOOK 0x4CFCB0, src/lod/mesh3d.c:209-227)
+        // feeds lod_select (src/lod/mesh3d.c:161-208), and the draw then uses
+        // vm->lods[lod] (src/render/render.c:957).  A negative result is the engine's
+        // "culled this frame" (render.c:955-956), not an error.
+        //
+        // The query itself is `SelectObjectDrawLod` so that the animation pose set
+        // (App::GetEditorDrawnAnimationIndices) asks the SAME question this pass
+        // answers: the pose set must be a subset of what is drawn here.
+        const Mesh* meshPtr = &GetOrLoadMesh(obj.modelId, obj.isBuilding);
+        int drawnLod = 0;
+        if (meshPtr->vertexCount != 0 && tan_half_fovx > 0.0f) {
+            const int lod = SelectObjectDrawLod(obj, camera_pos, cameraFwd, tan_half_fovx);
+            if (lod < 0) {  // render.c:955-956
+                if (profileObjects) ++profCulledLod;
+                continue;
+            }
+            drawnLod = lod;
+            const std::string lodName = GetLodMeshName(obj.modelId, obj.isBuilding, lod);
+            if (!lodName.empty() && lodName != obj.modelId) {
+                meshPtr = &GetOrLoadMesh(lodName, obj.isBuilding);
+            }
+        }
+        const Mesh& mesh = *meshPtr;
         if (mesh.vertexCount == 0) continue;
+
+        // `toObject` and `distSq` are ALSO read further down by the ATTA
+        // attachment distance cull, so they stay here; the view test itself is the
+        // one the animation pose set shares (source/runtime/anim_pose_set.h):
+        // reject only a bounding sphere wholly behind the eye plane, or outside a
+        // cone of half-angle atan(1/2) widened by the radius.
+        //
+        // The sphere is the one the ENGINE keeps for the object. For a Wire that
+        // is NOT a sphere at `obj.pos`: Wire_ParamsChanged centres it on the
+        // anchor MIDPOINT and grows it by the stretched Y scale
+        // (`DynCube_Move(world, w, &mid, VirModel_GetRadius(model) * max_scale)`,
+        // HOOK 0x43F3D0, retail engine src/props/wire.c:187-189). `obj.pos` is only the
+        // start anchor, and the model is drawn stretched from it to the end
+        // anchor, so testing the unstretched bound at the start anchor culled the
+        // whole wire whenever that one end left the view -- the "Wire missing
+        // models" symptom. igi::props::WireDrawBounds is that engine rule.
+        glm::vec3 boundCenter((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z);
+        float boundRadius = glm::length(mesh.halfExtents) * 40.96f * std::max(obj.scale, 0.001f);
+        if (obj.isWire) {
+            glm::dvec3 wa, wb;
+            if (obj.WireAnchors(wa, wb)) {
+                const igi::props::WireDrawSphere wireBounds =
+                    igi::props::WireDrawBounds(wa, wb, glm::length(mesh.halfExtents),
+                                               obj.scale, obj.scale);
+                boundCenter = glm::vec3((float)wireBounds.center.x,
+                                        (float)wireBounds.center.y,
+                                        (float)wireBounds.center.z);
+                boundRadius = (float)wireBounds.radius;
+            }
+        }
+        const glm::vec3 toObject = boundCenter - camera_pos;
+        const float distSq = glm::dot(toObject, toObject);
+        if (!keepVisible &&
+            !igi::PassesEditorViewCone(toObject, boundRadius, cameraFwd, cameraFwdLen)) {
+            continue;
+        }
 
         // Flag objects whose model is absent from the level .res: tint magenta so the
         // user sees it will be invisible in-game (issue 2). Reset to white at the top
@@ -471,31 +1324,122 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         // so we use it directly without adding zOffset again.
         model = glm::translate(model, glm::vec3(obj.pos.x, obj.pos.y, obj.pos.z));
 
-        // 2. Apply IGI rotations (Yaw, Pitch, Roll)
-        // IGI rotation order: Yaw (Z), then Pitch (X), then Roll (Y)
-        if (IsMetalSlideUpDoorModel(obj.modelId)) {
-            // Slide-up metal doors (levels 12/13/14) carry genuine multi-axis Euler
-            // tuples and seat correctly only with Z->Y->X order. Yaw-only objects are
-            // order-invariant, so scoping this to the door model regresses nothing else.
-            // FALLBACK if still wrong: try order X->Y->Z, or append a +/-90° spin about Z.
-            model = glm::rotate(model, (float)obj.rot.z, glm::vec3(0.0f, 0.0f, 1.0f)); // Yaw
-            model = glm::rotate(model, (float)obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f)); // Roll
-            model = glm::rotate(model, (float)obj.rot.x, glm::vec3(1.0f, 0.0f, 0.0f)); // Pitch
-        } else {
-            model = glm::rotate(model, (float)obj.rot.z, glm::vec3(0.0f, 0.0f, 1.0f)); // Yaw
-            model = glm::rotate(model, (float)obj.rot.x, glm::vec3(1.0f, 0.0f, 0.0f)); // Pitch
-            model = glm::rotate(model, (float)obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f)); // Roll
+        // 2. Apply the authored IGI rotation.
+        // retail engine `Matrix_SetEuler` (HOOK 0x4B38E0, src/math/matrix.c) composes
+        // Rz(az) * Ry(ay) * Rx(ax) for EVERY authored object — there is no
+        // per-model rotation order in the game (`ParamReal32x9_Parse`,
+        // HOOK 0x4EFBA0, feeds the QSC triple straight into it). See
+        // renderer/igi_transform.h for the full evidence. The previous
+        // Z->X->Y default plus the `IsZyxEulerModel` whitelist was the
+        // mis-orientation reported in issue #37.
+        model = model * igi::IgiEulerRotationMatrix(obj.rot);
+
+        // ── Helicopter flight preview (GitHub issue #60) ─────────────────────
+        // A placed "Heli" runs the ENGINE's own per-tick control and motion rule
+        // on its authored parameters: `Heli_Control` 0x431B70
+        // (src/heli/heli.c:358-405) and `Heli_Move` 0x431E30 (:412-520). The
+        // rule itself is `igi::HeliPreviewTick` (runtime/heli_preview.h); this
+        // block only asks for the pose the preview produced for this frame.
+        //
+        // The pose the engine ends a tick with is `v.pos` and `v.matrix`, so the
+        // placed object's authored translation and Euler rotation are REPLACED,
+        // not composed with, once the preview has run: at tick 0 the engine's own
+        // reset puts the helicopter back at exactly the authored pose
+        // (heli.c:370-376), and from then on `v.pos`/`v.matrix` are the flight.
+        // Until the first tick the authored pose is what the editor shows.
+        // ONLY the selected or hovered helicopter flies.  The preview used to be applied to
+        // EVERY placed Heli, which flies each one away from its authored placement as soon as
+        // the level loads -- and the level's own layout is authored data.  A human the level
+        // places inside the vehicle is a separate task-tree child drawn at its own authored
+        // world position (retail authors it that way: MISSIONS/location0/level1/objects.qsc:913
+        // Heli and :926 its HumanSoldier, ~1 m apart; and Vehicle_NewParts HOOK 0x4F4800
+        // src/vehbase/vehicle.c:251-256 builds v->attached from the MODEL's ATTA list only, so a
+        // script child never receives the move event).  So the occupant does NOT follow, and the
+        // aircraft flying off is what the user sees as the passenger drifting out of its seat.
+        // Gating the preview on selection keeps the authored level intact and still previews the
+        // flight on the one object being worked on.
+        const bool previewThisHeli = (objIndex == selected_object_index) ||
+                                     (objIndex == hover_object_index);
+        if (previewThisHeli) {
+            HeliPreviewCacheEntry pose;
+            GetHeliPreviewPose(objIndex, obj.type, obj.argTokens, &pose);
+            if (pose.pose_valid) {
+                model = glm::translate(glm::mat4(1.0f), pose.pose_pos);
+                model = model * pose.pose_rot;
+            }
         }
 
-        // Weapon/ammo pickups are authored with barrel along model +Y (standing upright).
-        // Rotate 90° around world Z so barrel maps to world +X — weapon lies flat on ground.
-        bool isWeapon = IsWeaponModel(obj.modelId) || obj.type == "GunPickup" || obj.type == "AmmoPickup" || obj.type == "GenericPickup";
-        if (isWeapon) {
-            model = glm::rotate(model, glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        // RotatingObject preview: radar dishes etc. spin continuously in-game via
+        // runtime; we preview the same motion in-editor by adding a live yaw spin
+        // on top of the placed orientation (mirrors the Heli rotor preview above).
+        if (obj.type == "RotatingObject") {
+            model = glm::rotate(model, elapsed_time_secs_ * 1.0f, glm::vec3(0.0f, 0.0f, 1.0f));
         }
+
+        // A 90-degree Z turn for weapon/ammo pickups used to be applied here, on the
+        // theory that the authored model stands on its barrel.  It was invented: the
+        // engine draws a rigid object with the object's own matrix and scale only --
+        // scale_matrix(&rot, &o->matrix, o->scale) then
+        // Direct3D_MakeMatrix(&mat, rot.m, pos) (Direct3DRender_DrawRigidMesh
+        // HOOK 0x49DF60, src/render/render.c:965-966).  The +/-90-degree turn exists
+        // only in GunPickup_New HOOK 0x46C980 (src/comprun/pickup.c:423-429), which is
+        // the engine's *dropped* pickup path, not the placed one this draws.
+        //
+        // `isWeapon` is kept: it gates the attachment pass below, which pickups do not
+        // take part in.
+        const bool isWeapon = IsWeaponModel(obj.modelId) || obj.type == "GunPickup" ||
+                              obj.type == "AmmoPickup" || obj.type == "GenericPickup";
 
         // 3. Scale
-        model = glm::scale(model, glm::vec3(total_scale));
+        // Wire props are stretched between their two authored anchors by the game
+        // itself: Wire_ParamsChanged (0x43F3D0, retail engine src/props/wire.c:160-191)
+        // puts the object at the anchor midpoint, points its local +Y axis along
+        // end - start, and sets obj.scale[1] = |end-start| * kWireScale (1/4096).
+        // Only Y is scaled; X/Z keep the authored thickness. Without this the
+        // editor drew every wire as an unstretched stub at its start anchor — the
+        // "Wire Width" symptom in docs/KNOWN_ISSUES.md.
+        bool wire_placed = false;
+        if (obj.isWire) {
+            glm::dvec3 wa, wb;
+            glm::mat4 wireModel(1.0f);
+            if (obj.WireAnchors(wa, wb) &&
+                igi::props::WireModelMatrix(wa, wb, obj.scale, &wireModel)) {
+                // The whole placement is Wire_ParamsChanged (0x43F3D0,
+                // src/props/wire.c:160-191) in one host-tested function
+                // (source/runtime/props_preview.h), shared with the pick pass.
+                model = wireModel;
+                wire_placed = true;
+            }
+        }
+        if (!wire_placed)
+            model = glm::scale(model, glm::vec3(total_scale));
+
+        // ── A human the level authors INSIDE a vehicle (the seat frame) ───────
+        // The engine draws such a human with its OBJECT ORIGIN at the authored
+        // position, and that origin is the skeleton's ROOT (the pelvis): the pose
+        // places the root bone at `pos = {0,0,0}` of the object's frame
+        // (`BoneObj_Update` HOOK 0x4D38C0, src/boneobj/boneobj.c:371-419;
+        // `BoneObj_UpdateBone` HOOK 0x4D3A90, :434-439) and the draw uses
+        // `obj->pos` unchanged (`BoneDynCubeObj_EnterHandler` HOOK 0x5124C0,
+        // src/glowmesh/bonedynd3d.c:41-42). `Human_ProbeGround` HOOK 0x462390
+        // puts that origin at `foot[2] + groundZ` (:1816, :1693), i.e. the
+        // floor plus bone 0's animated height — never at the mesh's feet.
+        //
+        // The editor's static bake is re-based to the FEET
+        // (`SkinSkinnedVertices` sums the rig's root pivot, (0,0,3990.4), into
+        // every vertex) and `App::SnapObjectsToTerrain` compensates for a human
+        // standing on the ground. Neither reaches a passenger, so the authored
+        // position keeps the engine's meaning and the bake's lift must be undone
+        // here: one model-local translation of -rig_origin, INSIDE the scale,
+        // which is exactly `IgiObjectMatrixAtModelOrigin`'s origin term.
+        // See renderer/human_seat_frame.h and tests/test_seated_human.cpp.
+        if (igi::HumanSitsInVehicle(objects, objIndex)) {
+            const ParsedGeometry* seat_geo = GetOrLoadSkinGeometry(obj.modelId, obj.isBuilding);
+            const glm::vec3 seat_origin = igi::StaticModelOriginMetres(
+                seat_geo != nullptr ? &seat_geo->bones : nullptr, /*engine_origin_frame=*/true);
+            if (seat_origin != glm::vec3(0.0f))
+                model = glm::translate(model, seat_origin);
+        }
 
         // Native MEF geometry is already authored in the game's coordinate space.
         // Do not apply the legacy OBJ Y-up -> Z-up correction here or buildings/AI
@@ -504,27 +1448,17 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         // Upload model matrix
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
 
+        // Wire/zipline + machinegun interactable previews (GitHub issue #42).
+        DrawPropsGizmos(obj, ubo_mats, ubo_binding_point_);
+
         // ── Lighting and Color ────────────────────────────────────────────────
         // Compute a hash-based fallback color for models/submeshes without textures.
-        float r = 0.5f, g = 0.5f, b = 0.5f;
-        if (!obj.modelId.empty()) {
-            size_t hash = std::hash<std::string>{}(obj.modelId);
-            r = 0.4f + (float)(hash & 0xFF) / 255.0f * 0.4f;
-            g = 0.4f + (float)((hash >> 8) & 0xFF) / 255.0f * 0.4f;
-            b = 0.4f + (float)((hash >> 16) & 0xFF) / 255.0f * 0.4f;
-        }
+        float r = 0.6f, g = 0.6f, b = 0.6f;
 
         // Hull buildings that have no textures of their own but carry ATTA sub-models are
         // underground container shells — skip rendering them entirely. The ATTA sub-models
         // supply all visible geometry; rendering a hash-colored hull on top obscures them.
         bool skipHullRender = false;
-        bool hasAnyTexture = (mesh.textureID > 0);
-        if (!hasAnyTexture) {
-            for (const auto& sub : mesh.subMeshes) {
-                if (sub.textureID > 0) { hasAnyTexture = true; break; }
-            }
-        }
-        
         // Skip any model built from collision fallback geometry (XTVC/ECFC — no XTRV/DNER
         // render vertices). These produce misshapen meshes with fabricated UVs and render
         // as flat-colored or wrongly-tiled boxes. Covers vehicle hulls, train cargo objects,
@@ -562,9 +1496,10 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 if (sub.alphaMode == 2) { hasArgbSubMeshes = true; break; }
             }
         }
-        if (current_level_ == 12 && !isWindowModel) {
-            hasArgbSubMeshes = false;
-        }
+        // NOTE: no level-12 forced-opaque special case here anymore. It routed
+        // the winch-house ARGB glass (463_0x_1) into the opaque pass, where the
+        // shader's alpha cutout discarded every texel — the building rendered
+        // invisible until an ATTA promotion redrew it as a normal object.
         // A model belongs in this pass if: it's a uniform transparent/opaque
         // object that matches the pass, OR it has mixed sub-meshes and we draw
         // it in both passes (filtering per-sub-mesh below).
@@ -572,6 +1507,11 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             isTransparentObject == isTransparentPass ||
             (hasArgbSubMeshes && !isTransparentObject)
         );
+        if (profileObjects) {
+            const auto now = ObjProfileClock::now();
+            profResolveUs += profDeltaUs(profMark, now);
+            profMark = now;
+        }
         if (drawInThisPass) {
             if (isTransparentObject) {
                 glEnable(GL_BLEND);
@@ -589,22 +1529,64 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
             // Draw each submesh with its own texture and lighting
             if (!mesh.subMeshes.empty()) {
-                // For mixed textured/untextured meshes, skip large untextured
-                // submeshes that are likely foundations (they should be underground).
-                int maxTexturedVerts = 0;
-                bool hasTextured = false, hasUntextured = false;
-                for (const auto& sub : mesh.subMeshes) {
-                    if (sub.textureID > 0) {
-                        hasTextured = true;
-                        maxTexturedVerts = std::max(maxTexturedVerts, sub.vertexCount);
-                    } else {
-                        hasUntextured = true;
+                // taskId="-1" marks a nested/non-addressable task (DirlightKeyframe,
+                // LightmapInfo, ATTA proxies, etc. all use this literal string) — it is
+                // NOT unique, so looking it up here would apply whichever unrelated
+                // object's lightmap/indoor-ambient happened to be registered under "-1"
+                // to every other "-1" object too (e.g. unrelated crates turning the same
+                // flat blue as some other building's interior ambient).
+                // Lightmaps are keyed by LightmapTaskKey (task id, or authored position
+                // for non-unique "-1" tasks) — the same key the apply path stores under.
+                // Display is NOT gated on the global "Lightmaps" checkbox: any baked
+                // lightmap present is shown (so the per-object Calculate button works
+                // even with the checkbox off). The checkbox governs bulk calculate (ON)
+                // and bulk clear (OFF). A baked lightmap stays bound even after the
+                // object is moved/rotated — never deleted — and is modulated LIVE per
+                // submesh by u_lightmapScale (below), so lighting adjusts smoothly as you
+                // drag an object, with no "stale" fallback and no subprocess.
+                const std::string lmKey = LightmapTaskKey(obj);
+                const std::vector<std::vector<GLuint>>* lightmaps = GetLightmapForTask(lmKey);
+                bool hasWorkingLightmap = lightmaps && !lightmaps->empty();
+                glm::dvec3 bakedPos, bakedRot;
+                const bool haveBakePose = hasWorkingLightmap &&
+                    GetLightmapBakePose(lmKey, bakedPos, bakedRot);
+
+                // Default lighting matches the pre-lightmap look:
+                // Exterior — neutral ambient (0.4) + full sun diffuse from QSC sun color.
+                // Interior — no direct sun, dim ambient only (clearly darker than outside).
+                glm::vec3 kDefDirlight = sun_front_color_;
+                // Warm floor matching the game's feel — no harsh flat daylight
+                // Match the pre-lightmap default: every face was at least 40% ambient.
+                // That commit hardcoded ambient=0.4/dirlight=0.6 so nothing looked dark.
+                glm::vec3 kDefAmbient  = glm::max(global_ambient_, glm::vec3(0.40f, 0.40f, 0.40f));
+                {
+                    const glm::vec3* indoorAmb = GetIndoorAmbientForTask(obj.taskId);
+                    if (indoorAmb && !hasWorkingLightmap) {
+                        kDefDirlight = glm::vec3(0.0f);
+                        // Interior: use authored ambient, clamped well below exterior floor.
+                        kDefAmbient = glm::clamp(*indoorAmb, glm::vec3(0.22f), glm::vec3(0.40f, 0.40f, 0.40f));
                     }
                 }
-                bool mixedMesh = hasTextured && hasUntextured;
-                for (const auto& sub : mesh.subMeshes) {
+
+                // Precompute the per-channel modulation lambda for lightmapped submeshes.
+                auto blockScale = [&](const glm::vec3& nLocal) -> glm::vec3 {
+                    if (!haveBakePose) return glm::vec3(1.0f);
+                    auto eul = [](const glm::dvec3& e) {
+                        return igi::IgiEulerRotationMat3(e);
+                    };
+                    glm::vec3 nO = glm::normalize(eul(bakedRot) * nLocal);
+                    glm::vec3 nN = glm::normalize(eul(obj.rot)  * nLocal);
+                    glm::vec3 sd = glm::length(sun_dir_) > 1e-6f ? glm::normalize(sun_dir_) : glm::vec3(0,0,1);
+                    auto L = [&](const glm::vec3& n){ return global_ambient_ + sun_front_color_ * std::max(glm::dot(n, sd), 0.0f); };
+                    glm::vec3 lo = L(nO), ln = L(nN);
+                    const float eps = 1e-3f, maxF = 4.0f;
+                    return glm::vec3(std::min(ln.x/std::max(lo.x,eps),maxF),
+                                     std::min(ln.y/std::max(lo.y,eps),maxF),
+                                     std::min(ln.z/std::max(lo.z,eps),maxF));
+                };
+                for (size_t si = 0; si < mesh.subMeshes.size(); ++si) {
+                    const auto& sub = mesh.subMeshes[si];
                     if (sub.VAO == 0 || sub.vertexCount == 0) continue;
-                    (void)mixedMesh; // render all submeshes — floors/stories must not be skipped
 
                     // For mixed models: ARGB sub-meshes only in transparent pass,
                     // opaque sub-meshes only in opaque pass (unless the whole model
@@ -615,9 +1597,6 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                     }
 
                     bool isBlendSub = (sub.alphaMode == 2);
-                    if (current_level_ == 12 && !isWindowModel) {
-                        isBlendSub = false;
-                    }
                     if (isTreeModel) isBlendSub = false;
 
                     if (isBlendSub) {
@@ -641,29 +1620,73 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                         // Textured submesh: neutral lighting so the texture looks natural.
                         // Windows/glass keep their transparency (alpha 0.4 above) but render
                         // with the SAME normal lighting as everything else, so glass stays
-                        // clear and see-through. The earlier flat-gray override (dirlight 0 /
-                        // ambient 0.45) darkened panes into murky panels — reverted to the
-                        // pre-3986cd9 "before" look the user asked to restore.
-                        glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                        glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+                        // clear and see-through.
+                        const auto mode = lightmapMode;
+                        float dirI = (mode == igi::LightmapRenderMode::Baked) ? 0.15f : (mode == igi::LightmapRenderMode::Hybrid ? 0.6f : 0.8f);
+                        float ambI = (mode == igi::LightmapRenderMode::Baked) ? 0.85f : (mode == igi::LightmapRenderMode::Hybrid ? 0.4f : 0.3f);
+                        if (mode == igi::LightmapRenderMode::Off) { dirI = 0.6f; ambI = 0.6f; }
+
+                        glUniform3f(loc_dirlight, dirI, dirI, dirI);
+                        glUniform3f(loc_ambient,  ambI, ambI, ambI);
                         glUniform1i(loc_useTex, 1);
                         glActiveTexture(GL_TEXTURE0);
                         glBindTexture(GL_TEXTURE_2D, sub.textureID);
                         glUniform1i(loc_tex, 0);
                     } else {
-                        // Untextured submesh: use material baseColorFactor if available,
-                        // otherwise fall back to the hash-based color.
+                        // Untextured submesh: material baseColorFactor if set, else neutral
+                        // GRAY (not the per-object hash color, which tinted buildings blue).
                         glm::vec3 color(sub.baseColorFactor.r, sub.baseColorFactor.g, sub.baseColorFactor.b);
                         if (color.r >= 0.99f && color.g >= 0.99f && color.b >= 0.99f) {
-                            color = glm::vec3(r, g, b);
+                            color = glm::vec3(0.6f, 0.6f, 0.6f);
                         }
-                        glUniform3f(loc_dirlight, color.r * 0.6f, color.g * 0.6f, color.b * 0.6f);
-                        glUniform3f(loc_ambient,  color.r * 0.4f, color.g * 0.4f, color.b * 0.4f);
+                        const auto mode = lightmapMode;
+                        float dirMult = (mode == igi::LightmapRenderMode::Baked) ? 0.15f : (mode == igi::LightmapRenderMode::Hybrid ? 0.6f : 0.8f);
+                        float ambMult = (mode == igi::LightmapRenderMode::Baked) ? 0.85f : (mode == igi::LightmapRenderMode::Hybrid ? 0.4f : 0.3f);
+                        if (mode == igi::LightmapRenderMode::Off) { dirMult = 0.6f; ambMult = 0.6f; }
+
+                        glUniform3f(loc_dirlight, color.r * dirMult, color.g * dirMult, color.b * dirMult);
+                        glUniform3f(loc_ambient,  color.r * ambMult, color.g * ambMult, color.b * ambMult);
                         glUniform1i(loc_useTex, 0);
+                    }
+
+                    // Lightmap: bind unit 1 if the DRAWN LOD has a baked lightmap and
+                    // mode is not Off.  The FILE follows the drawn LOD, not the LOD-0
+                    // submesh: fill_refs (src/sector/sector.c:544-563) gives the object
+                    // one LightmapRef per LOD and the draw binds
+                    // o->lightmaps[lod].lightmaps (src/render/render.c:1019,1033).  A LOD
+                    // with no bake is drawn with no atlas (render.c:1052-1054) -- the
+                    // engine never falls back to another LOD's.  The PAGE inside that
+                    // file is the submesh's own render group: the engine binds
+                    // set->tex[g->lightmap] per group (render.c:1033), so a multi-page
+                    // `.olm` gives each group its own atlas rather than page 0 for all.
+                    const auto curMode = lightmapMode;
+                    const int lmEntry = igi::lightmap::OwnerLightmapEntryForDrawnLod(drawnLod);
+                    const int lmPage = igi::lightmap::PageIndexForGroup(sub.lightmapPage);
+                    GLuint lmTex = 0;
+                    if (hasWorkingLightmap && lmEntry >= 0 &&
+                        lmEntry < static_cast<int>(lightmaps->size())) {
+                        const std::vector<GLuint>& pages = (*lightmaps)[lmEntry];
+                        if (lmPage >= 0 && lmPage < static_cast<int>(pages.size()))
+                            lmTex = pages[lmPage];
+                    }
+                    if (curMode != igi::LightmapRenderMode::Off && lmTex != 0) {
+                        // Baked mode reproduces the original engine exactly: the bake is
+                        // used verbatim, with no live sun re-light modulation.
+                        const bool authentic = (curMode == igi::LightmapRenderMode::Baked);
+                        glm::vec3 scale = authentic ? glm::vec3(1.0f) : blockScale(sub.avgNormal);
+                        glActiveTexture(GL_TEXTURE1);
+                        glBindTexture(GL_TEXTURE_2D, lmTex);
+                        glUniform1i(loc_lightmap, 1);
+                        glUniform1i(loc_useLightmap, 1);
+                        glUniform1i(loc_lm_authentic, authentic ? 1 : 0);
+                        glUniform3f(loc_lightmap_scale, scale.r, scale.g, scale.b);
+                    } else {
+                        glUniform1i(loc_useLightmap, 0);
                     }
 
                     glBindVertexArray(sub.VAO);
                     glDrawArrays(GL_TRIANGLES, 0, sub.vertexCount);
+                    if (profileObjects) ++profSubmeshDraws;
 
                     if (isBlendSub) {
                         glDisable(GL_BLEND);
@@ -671,15 +1694,21 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                     }
                 }
                 glBindVertexArray(0);
+                glBindBuffer(GL_ARRAY_BUFFER, 0);
+                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
             } else {
                 // Legacy single-texture path (e.g. old OBJ models)
+                const auto mode = lightmapMode;
+                float dirI = (mode == igi::LightmapRenderMode::Baked) ? 0.15f : (mode == igi::LightmapRenderMode::Hybrid ? 0.6f : 0.8f);
+                float ambI = (mode == igi::LightmapRenderMode::Baked) ? 0.85f : (mode == igi::LightmapRenderMode::Hybrid ? 0.4f : 0.3f);
+
                 bool hasTexture = (mesh.textureID > 0);
                 if (hasTexture) {
-                    glUniform3f(loc_dirlight, 0.6f, 0.6f, 0.6f);
-                    glUniform3f(loc_ambient,  0.4f, 0.4f, 0.4f);
+                    glUniform3f(loc_dirlight, dirI, dirI, dirI);
+                    glUniform3f(loc_ambient,  ambI, ambI, ambI);
                 } else {
-                    glUniform3f(loc_dirlight, 0.7f, 0.7f, 0.7f);
-                    glUniform3f(loc_ambient,  r * 0.4f, g * 0.4f, b * 0.4f);
+                    glUniform3f(loc_dirlight, dirI, dirI, dirI);
+                    glUniform3f(loc_ambient,  r * ambI, g * ambI, b * ambI);
                 }
                 if (mesh.textureID > 0) {
                     glUniform1i(loc_useTex, 1);
@@ -699,39 +1728,60 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
             glDisable(GL_POLYGON_OFFSET_FILL);
         }
+        if (profileObjects) {
+            const auto now = ObjProfileClock::now();
+            profDrawUs += profDeltaUs(profMark, now);
+            profMark = now;
+        }
 
         // Only buildings with portal/ATTA sub-models need distance-based culling.
         // Non-buildings (AI, static props, containers) never have ATTA records.
         bool isCloseEnough = true;
         if (obj.isBuilding && Config::Get().enableLOD) {
-            float distToCamera = glm::distance(camera_pos, glm::vec3(obj.pos));
+            float distToCamera = std::sqrt(distSq);
             float portalDistance = 100.0f;
-            if (portal_distances_.count(obj.modelId)) {
-                portalDistance = portal_distances_[obj.modelId];
+            auto pit = portal_distances_.find(obj.modelId);
+            if (pit != portal_distances_.end()) {
+                portalDistance = pit->second;
             }
-            isCloseEnough = (distToCamera <= (portalDistance * WORLD_UNITS_PER_METER));
+            isCloseEnough = igi::ShouldDrawBuildingAttachments(
+                distToCamera, boundRadius, portalDistance * WORLD_UNITS_PER_METER, Config::Get().enableLOD);
+        } else if (isCloseEnough) {
+            const float maxAtta = (80.0f * WORLD_UNITS_PER_METER) + boundRadius;
+            isCloseEnough = distSq < maxAtta * maxAtta;
         }
 
-        // ── Render ATTA sub-models (recursively) ─────────────────────────────
-        // Any object type (Buildings, Vehicles, Magic Models, Doors, Weapons, etc.) can have ATTA sub-models.
-        std::string prefix = obj.isBuilding ? "building:" : "object:";
-        std::string attCacheKey = std::to_string(current_level_) + ":" + prefix + obj.modelId;
-        bool hasAttachments = attachment_cache_.find(attCacheKey) != attachment_cache_.end();
-        
-        if (hasAttachments && isCloseEnough && !isWeapon) {
-            if (attachment_cache_.find(attCacheKey) != attachment_cache_.end()) {
+        if (isCloseEnough && !isWeapon) {
+            FillLevelModelKey(level_model_key_scratch_, current_level_, obj.isBuilding, obj.modelId);
+            if (attachment_cache_.find(level_model_key_scratch_) != attachment_cache_.end()) {
                 glEnable(GL_POLYGON_OFFSET_FILL);
                 glPolygonOffset(-2.0f, -2.0f); // Prevent z-fighting with hull walls
 
-                // Build the root object's unscaled world matrix (translate + rotate)
-                glm::mat4 parentRot(1.0f);
-                parentRot = glm::rotate(parentRot, (float)obj.rot.z, glm::vec3(0,0,1));
-                parentRot = glm::rotate(parentRot, (float)obj.rot.x, glm::vec3(1,0,0));
-                parentRot = glm::rotate(parentRot, (float)obj.rot.y, glm::vec3(0,1,0));
-
+                // Build the root object's unscaled world matrix (translate + rotate).
+                // Rotation order is the game's Rz * Ry * Rx (see renderer/igi_transform.h).
+                //
+                // A placed helicopter's ATTAs (its rotors) must hang off the FLIGHT
+                // PREVIEW pose, not the authored placement, or the rotor would be
+                // left behind where the fuselage used to be: the engine broadcasts
+                // the move event with `&h->v.pos` and `&h->v.matrix` every tick
+                // (heli.c:502-507), which is exactly what re-parents its parts. The
+                // preview has already run by this point in the loop, so reuse the
+                // pose it produced.
                 glm::mat4 rootWorldMat(1.0f);
-                rootWorldMat = glm::translate(rootWorldMat, glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z));
-                rootWorldMat = rootWorldMat * parentRot;
+                bool rootFromPreview = false;
+                if (obj.type == "Heli") {
+                    HeliPreviewCacheEntry pose;
+                    GetHeliPreviewPose(objIndex, obj.type, obj.argTokens, &pose);
+                    if (pose.pose_valid) {
+                        rootWorldMat = glm::translate(glm::mat4(1.0f), pose.pose_pos);
+                        rootWorldMat = rootWorldMat * pose.pose_rot;
+                        rootFromPreview = true;
+                    }
+                }
+                if (!rootFromPreview) {
+                    rootWorldMat = glm::translate(rootWorldMat, glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z));
+                    rootWorldMat = rootWorldMat * igi::IgiEulerRotationMatrix(obj.rot);
+                }
 
                 std::unordered_set<std::string> drawn;
                 DrawAttachmentsRecursive(obj.modelId, obj.modelId, obj.isBuilding, rootWorldMat, isTransparentPass,
@@ -746,8 +1796,17 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
                 glDisable(GL_BLEND);
                 glDepthMask(GL_TRUE);
                 glUniform1f(loc_alpha, 1.0f);
+                // Window ATTA children leave u_glassMin raised (0.30), which
+                // would make every later object skip the alpha cutout.
+                glUniform1f(loc_glass_min_, 0.0f);
                 glDisable(GL_POLYGON_OFFSET_FILL);
             }
+        }
+
+        if (profileObjects) {
+            const auto now = ObjProfileClock::now();
+            profAttaUs += profDeltaUs(profMark, now);
+            ++profObjects;
         }
 
         // Companion parts (_XX_2.._XX_5) are NOT rendered alongside the main body.
@@ -755,6 +1814,47 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         // the face. Companion parts duplicate the head geometry at a different depth,
         // which produces a visible double-face overdraw artifact.
     }
+    }
+
+    if (profileObjects) {
+        static int pframes = 0;
+        static int64_t pResolve = 0, pDraw = 0, pAtta = 0;
+        static int64_t pObjects = 0, pDraws = 0;
+        static int64_t pCulledLod = 0, pSkipped = 0;
+        // IGI_PROFILE-only: archive-entry reads during this window.  A count, not
+        // a time: the memoized LOD-header cache took the object pass from ~2832
+        // .res reads a frame to none, and a count cannot be moved by host load.
+        // Seeded on the first pass so the level-load reads are not charged to the
+        // first window.
+        static uint64_t pLastReads = RES_EntryReadCount();
+        static uint64_t pResReads = 0;
+        const uint64_t reads_now = RES_EntryReadCount();
+        pResReads += reads_now - pLastReads;
+        pLastReads = reads_now;
+        pResolve += profResolveUs;
+        pDraw += profDrawUs;
+        pAtta += profAttaUs;
+        pObjects += profObjects;
+        pDraws += profSubmeshDraws;
+        pCulledLod += profCulledLod;
+        pSkipped += profSkipped;
+        if (++pframes == kProfileFrames) {
+            const auto perFrame = [](int64_t total) {
+                return std::to_string(total / kProfileFrames / 1000) + "ms";
+            };
+            Logger::Get().Log(LogLevel::INFO,
+                "[ObjectProfile] " + std::to_string(kProfileFrames) + " frames: resolve=" +
+                perFrame(pResolve) + " draw=" + perFrame(pDraw) + " atta=" + perFrame(pAtta) +
+                " objects=" + std::to_string(pObjects / kProfileFrames) + "/frame" +
+                " submeshDraws=" + std::to_string(pDraws / kProfileFrames) + "/frame" +
+                " culledLod=" + std::to_string(pCulledLod / kProfileFrames) + "/frame" +
+                " skipped=" + std::to_string(pSkipped / kProfileFrames) + "/frame" +
+                " resReads=" + std::to_string(pResReads / kProfileFrames) + "/frame");
+            pframes = 0;
+            pResolve = pDraw = pAtta = pObjects = pDraws = 0;
+            pCulledLod = pSkipped = 0;
+            pResReads = 0;
+        }
     }
 
     // Always reset polygon mode after draw
@@ -765,9 +1865,120 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     // Unbind shader
     glUseProgram(0);
 
+    // The weapon a placed StationaryGun mounts (retail engine StationaryGun_Aim
+    // 0x474420, src/statgun/statgun.c:241-258). Drawn here, once per frame and
+    // after both object passes, because it is its own Gun task in the engine
+    // and because DrawAttachedMesh changes GL state that the object loop's
+    // shader/uniform bindings must not inherit.
+    DrawMountedStationaryGuns(objects, draw_parts, ubo_mats);
+
+    // The mounted WEAPON of every AIStationaryGunHolder (Level 14's sentry
+    // guns): the holder's ATTA turret mounts a Gun task for the definition's
+    // weapon key, whose model the ATTA pass cannot reach (AIStationaryGun_Create
+    // 0x46EAE0, retail engine src/binocular/stationarygun.c:145-147;
+    // AIStationaryGun_PlaceWeapon 0x470050, :464-487).
+    DrawMountedSentryGuns(objects, draw_parts, ubo_mats);
+
+    // The SCameraLens child every SCamera task creates at runtime
+    // (SCamera_Create, retail engine src/scamera/scamera.c:204). Same post-object-pass
+    // placement as the mounted weapons above, for the same GL-state reason.
+    DrawSCameraLenses(objects, draw_parts, ubo_mats);
+
     if (show_magic_obj_spheres) {
         DrawMagicObjSpheres(objects, ubo_mats);
     }
+
+    // Rail polylines (GitHub issue #59, acceptance criterion 2). Independent of
+    // the magic-objects overlay above: the rail is its own editor view with its
+    // own switch (igi::SetRailPathGizmosEnabled), default on, so a level with a
+    // Train shows its rail without anything else being enabled. See
+    // DrawRailPathGizmos for why this is presentation and not engine behaviour.
+    DrawRailPathGizmos(objects, selected_object_index, ubo_mats, ubo_binding_point_);
+}
+
+// ─── Helicopter flight preview: the vehicle config (GitHub issue #60) ─────────
+// `Heli_Move` reads `phys->data`, the `VehicleConfig` parsed from the
+// helicopter's own `DefinePhysicsObjType` entry (retail engine `Heli_ParseArgs`
+// 0x432F60 -> `Heli_ParseConfig` 0x433030, src/plane/heli.c:34-88). The retail
+// tree ships two: `<IGI>/physicsobj/HELIS/BELL/HELI.QVM` (model 709_01_1) and
+// `<IGI>/physicsobj/HELIS/MIL/HELI.QVM` (model 700_01_1). This resolves them
+// once per level, from the first one that yields a `TASKTYPE_HELI` definition.
+//
+// The editor does not record which physics definition a placement resolves to,
+// so the first helicopter definition found is used. That is an editor
+// limitation, recorded here rather than hidden: `docs/parity/
+// HELICOPTER.md` lists the per-model values and the corpus test pins both.
+const igi::HeliVehicleConfig& Renderer_Objects::HeliPreviewConfig() {
+    if (heli_preview_config_loaded_) return heli_preview_config_;
+    heli_preview_config_loaded_ = true;  // resolve once, even on failure
+
+    const char* kHeliPhysicsQvms[] = {
+        "physicsobj\\HELIS\\BELL\\HELI.QVM",
+        "physicsobj\\HELIS\\MIL\\HELI.QVM",
+    };
+    for (const char* relative : kHeliPhysicsQvms) {
+        const std::string path = Utils::GetIGIRootPath() + "\\" + relative;
+        if (!std::filesystem::is_regular_file(path)) continue;
+        const QVMFile qvm = QVM_Parse(path);
+        if (!qvm.valid) continue;
+        if (igi::ResolveHeliVehicleConfig(QVM_DecompileToString(qvm), "", &heli_preview_config_)) {
+            Logger::Get().Log(LogLevel::INFO,
+                std::string("[Renderer_Objects] Heli preview config from ") + relative);
+            return heli_preview_config_;
+        }
+    }
+    Logger::Get().Log(LogLevel::WARNING,
+        "[Renderer_Objects] Heli preview: no HELI.QVM physics config resolved; "
+        "the flight preview will run on the engine's arithmetic with zero rates");
+    return heli_preview_config_;
+}
+
+// ─── Helicopter flight preview: the clock and the pose (GitHub issue #60) ─────
+void Renderer_Objects::AdvanceHeliPreviewClock(float delta_seconds) {
+    if (heli_preview_ticks_ >= heli_preview_ticks_max_) return;
+    if (delta_seconds > 0.0f) heli_preview_secs_ += delta_seconds;
+    heli_preview_ticks_ = igi::HeliPreviewTickFromSeconds(heli_preview_secs_);
+    if (heli_preview_ticks_ > heli_preview_ticks_max_) heli_preview_ticks_ = heli_preview_ticks_max_;
+    heli_preview_frame_tick_ = heli_preview_ticks_;
+}
+
+void Renderer_Objects::GetHeliPreviewPose(int object_index, const std::string& type,
+                                          const std::vector<std::string>& tokens,
+                                          HeliPreviewCacheEntry* out_pose) {
+    if (out_pose == nullptr) return;
+    out_pose->pose_valid = false;
+    if (type != "Heli") return;
+
+    // One state per object index, keyed by the authored tokens so an inspector
+    // edit of any parameter restarts the flight from tick 0. The flight is only
+    // ever stepped FORWARD, so a long preview costs one `Heli_Move` per tick, not
+    // one per tick per frame -- and asking for the same tick twice (the visual
+    // pass and the picking pass) is free.
+    HeliPreviewCacheEntry& entry = heli_preview_cache_[object_index];
+    if (entry.tokens != tokens) {
+        entry.tokens = tokens;
+        entry.state = igi::BuildHeliPreviewState(tokens, HeliPreviewConfig());
+        entry.tick = -1;
+    }
+    if (!entry.state.valid) return;
+
+    // The preview's throttle is the engine's own "no request" sentinel, the value
+    // `Heli_ReadKeys` parks in axes[3] when the throttle keys are idle
+    // (heli.c:696): the helicopter flies at the authored "Original Thrust" with
+    // no turn input.
+    igi::HeliPreviewInput input;   // defaults: no steer, kHeliThrustNone
+    igi::HeliPreviewRunToTick(&entry.state, heli_preview_frame_tick_, input);
+    entry.tick = entry.state.tick;
+
+    entry.pose_pos = glm::vec3(static_cast<float>(entry.state.pos[0]),
+                               static_cast<float>(entry.state.pos[1]),
+                               static_cast<float>(entry.state.pos[2]));
+    entry.pose_rot = igi::IgiEngineMatrixToGlm4(entry.state.move.matrix);
+    entry.pose_valid = true;
+
+    // Hand the caller a copy: the cache entry must not be aliased into a caller
+    // that then triggers a rehash by touching another object's entry.
+    *out_pose = entry;
 }
 
 bool Renderer_Objects::IsVehicleType(const std::string& type) {

@@ -1,0 +1,337 @@
+/******************************************************************************
+ * @file    anim_playback.cpp
+ * @brief   `AnimPlayback` - the editor's per-object playback state - driven by
+ *          the ENGINE's own animation methods (#73).
+ *
+ * `AnimPlayback` is declared in source/animation.h next to the editor's own
+ * `AnimationClip` and BEF reader. Its implementation lives HERE, with the engine
+ * driver, for one concrete reason: animation.cpp includes utils.h (windows.h)
+ * and is therefore not host-portable, so a playback implementation in that file
+ * could only ever be exercised by the Windows test binary. Everything this file
+ * needs - the clip data (animation.h), the engine records and the pose/skin
+ * arithmetic (anim_rules.h), the player that runs them (anim_player.h) - is
+ * portable, so `tests/test_anim_playback.cpp` runs in the host lane too.
+ *
+ * Every step is a call into the engine translation, never a re-implementation:
+ *
+ *   Anim_Play             0x4D61D0  src/boneobj/anim.c:38-58
+ *   BoneObj_InitAnimInst  0x4D4F60  src/boneobj/boneobj.c:988-1021
+ *   BoneObj_Update        0x4D38C0  src/boneobj/boneobj.c:371-419
+ *   BoneObj_GetEvents     0x4D3210  src/boneobj/boneobj.c:112-129
+ *   Anim_SetSpeed         0x4D6580  src/boneobj/anim.c:172-179
+ *   Anim_SetTime          0x4D65B0  src/boneobj/anim.c:181-185
+ *   Anim_GetTime          0x4D6500  src/boneobj/anim.c:149-153
+ *   BoneObj_SetFrameRate  0x4D2D30  src/lod/boneobj.c:86-90
+ *   HumanPlayer_AnimDone  0x489F50  src/loadscreen/human.c:196-204  (the end test)
+ *   kTicksPerSecond       4800.0f   src/boneobj/anim.c:9
+ *
+ * THE CLOCK IS THE ENGINE'S. `Update` hands real elapsed milliseconds to
+ * `AnimPlayer::AdvanceSeconds`, which steps WHOLE engine frames of
+ * gTicksPerFrame (160 ticks at the 30 fps the game installs once,
+ * src/game/game.c:449 `BoneObj_SetFrameRate(30.0f)`), exactly as the retail game
+ * loop does. `currentTimeMs` is then read back out of the engine with
+ * `Anim_GetTime`; the editor never adds to it itself.
+ *
+ * THE POSE IS PER FRAME, NOT PER ENGINE FRAME. Of the N engine frames a long
+ * editor frame covers, only the LAST is the frame this draw shows, and only it is
+ * posed: the engine builds a pose once per frame for each object it DRAWS
+ * (`Human_WakeIfVisible` 0x45F140 -> `Human_Wake` 0x45F240 -> `BoneObj_Update`
+ * 0x4D38C0, src/humanbase/human.c:262-297) while the clock advances exactly once
+ * per frame for every active AI (`inst->time = inst->speed + inst->time`,
+ * src/boneobj/boneobj.c:884-885; retail's loop has no elapsed time at all,
+ * src/win/appmain.c:224-227). Posing all N cost N-1 discarded full poses per
+ * drawn object per frame and made the loop's cost grow with the frame time - see
+ * `AnimPlayer::AdvanceSeconds` for the rule and the bit-identity argument.
+ *****************************************************************************/
+#include "animation.h"
+
+#include <utility>
+
+#include "runtime/anim_panel.h"
+#include "runtime/anim_player.h"
+
+namespace {
+
+// Anim_Play's instance flags word (src/boneobj/anim.c:38-58). kAnimLoop is the
+// only bit this driver sets: the loop flag is what `BoneObj_AnimEventsCB`
+// (boneobj.c:873-941, ported at anim_rules.cpp:1282) tests when the clock
+// reaches the clip length.
+uint32_t PlayFlagsFor(const AnimationClip& clip, bool force_loop) {
+    return (force_loop || clip.loop()) ? igi::kAnimLoop : 0u;
+}
+
+}  // namespace
+
+AnimPlayback::AnimPlayback() = default;
+
+AnimPlayback::~AnimPlayback() = default;
+
+AnimPlayback::AnimPlayback(AnimPlayback&& other) noexcept
+    : clip(other.clip),
+      currentTimeMs(other.currentTimeMs),
+      playing(other.playing),
+      speed(other.speed),
+      forceLoop(other.forceLoop),
+      engine_(std::move(other.engine_)),
+      engine_flags_(other.engine_flags_),
+      engine_speed_(other.engine_speed_),
+      pose_current_(other.pose_current_) {
+    other.clip = nullptr;
+    other.currentTimeMs = 0.0f;
+    other.playing = false;
+}
+
+AnimPlayback& AnimPlayback::operator=(AnimPlayback&& other) noexcept {
+    if (this != &other) {
+        clip = other.clip;
+        currentTimeMs = other.currentTimeMs;
+        playing = other.playing;
+        speed = other.speed;
+        forceLoop = other.forceLoop;
+        engine_ = std::move(other.engine_);
+        engine_flags_ = other.engine_flags_;
+        engine_speed_ = other.engine_speed_;
+        pose_current_ = other.pose_current_;
+        other.clip = nullptr;
+        other.currentTimeMs = 0.0f;
+        other.playing = false;
+    }
+    return *this;
+}
+
+void AnimPlayback::BuildEnginePlayer() {
+    engine_.reset();
+    engine_flags_ = 0;
+    engine_speed_ = 1.0f;
+    // `Anim_Play`'s immediate path poses once (src/humanplayer/humanplayer.c:1214-1215),
+    // so a freshly built player has a pose at tick 0. Restored here rather than
+    // after Play() so a failed build (engine_ == nullptr) cannot leave a stale
+    // "posed" claim behind for the next clip.
+    pose_current_ = true;
+    if (clip == nullptr) return;
+
+    // `AnimPlayer::Build` constructs the engine's own records - the Bone array
+    // (`BoneObj_Build`, lod/boneobj.c:153-188), the BOTD/BORD/BOED tracks and
+    // the Anim_PrepareSlerps tables - and refuses the two clips retail would
+    // fault on (no bones, no position track: boneobj.c:1014 dereferences
+    // `desc->pos->keys[count - 1]`).
+    auto player = std::make_unique<igi::AnimPlayer>();
+    if (!player->Build(*clip, clip->animId)) return;
+
+    // Anim_Play 0x4D61D0 with blend 0 (the immediate path): the instance is
+    // installed at tick 0 with `flags`, and the engine poses once immediately
+    // afterwards - src/humanplayer/humanplayer.c:1214-1215 plays and then calls
+    // BoneObj_Update, so the first frame is never a rest pose.
+    engine_flags_ = PlayFlagsFor(*clip, forceLoop);
+    if (!player->Play(engine_flags_)) return;
+    // InitAnimInst overwrites `inst.speed` with gTicksPerFrame (boneobj.c:1013),
+    // so the multiplier has to be applied after the play, not before.
+    player->SetSpeed(speed);
+    engine_speed_ = speed;
+    engine_ = std::move(player);
+}
+
+void AnimPlayback::SyncEngineFlags() {
+    if (!engine_) return;
+
+    // Anim_Play bakes the loop bit into the instance (anim.c:38-58 ->
+    // BoneObj_InitAnimInst, boneobj.c:1013) and there is no setter for it, so a
+    // change to the editor's `forceLoop` is a re-play - which is also what a
+    // retail caller does when it wants a different loop mode. It rewinds to
+    // tick 0; the editor only ever flips this flag before the first frame.
+    const uint32_t flags = (clip != nullptr) ? PlayFlagsFor(*clip, forceLoop) : 0u;
+    if (flags != engine_flags_) {
+        engine_->Play(flags);
+        engine_flags_ = flags;
+        engine_speed_ = 1.0f;   // Play reset inst.speed; force a re-apply below
+    }
+    if (speed != engine_speed_) {
+        // Anim_SetSpeed 0x4D6580: `inst->speed = gTicksPerFrame * speed`.
+        engine_->SetSpeed(speed);
+        engine_speed_ = speed;
+    }
+}
+
+void AnimPlayback::Reset() {
+    currentTimeMs = 0.0f;
+    playing = false;
+    BuildEnginePlayer();
+    // Rewound and paused: the player sits at tick 0 and `playing` is false, so
+    // Update will not advance it. (Play() leaves the instance itself "playing";
+    // the editor's gate is the only thing that stops the clock.)
+    if (engine_) engine_->PoseFromLastStep();
+}
+
+void AnimPlayback::Start(const AnimationClip* c) {
+    clip = c;
+    currentTimeMs = 0.0f;
+    playing = true;
+    BuildEnginePlayer();
+}
+
+int AnimPlayback::Update(float dtMs) {
+    if (clip == nullptr) return 0;
+    if (!engine_) return 0;        // the engine refuses this clip; see EngineReady
+    SyncEngineFlags();
+
+    int steps = 0;
+    if (playing && dtMs > 0.0f) {
+        // REAL milliseconds in, engine ticks out: one engine frame per whole
+        // frame of elapsed time at the current frame rate, which is the only way
+        // the retail loop advances the clock. A long frame therefore moves the
+        // clock several engine frames - but only the frame this draw shows is
+        // POSED (`AnimPlayer::AdvanceSeconds`), because the engine poses a drawn
+        // object once per frame at draw time (`Human_WakeIfVisible` 0x45F140 ->
+        // `Human_Wake` 0x45F240 -> `BoneObj_Update` 0x4D38C0,
+        // src/humanbase/human.c:262-297) while the clock advances once per frame
+        // (`inst->time = inst->speed + inst->time`, src/boneobj/boneobj.c:884-885).
+        // Posing every one of those frames was N-1 discarded poses per drawn
+        // object per frame, and made the loop's cost grow with the frame time.
+        steps = engine_->AdvanceSeconds(dtMs * 0.001f);
+        if (steps > 0) {
+            // The drawn frame was posed (Step() is pose-then-advance), so the
+            // bones hold the frame this draw should show (see the header).
+            pose_current_ = true;
+        }
+    }
+
+    FinishAdvance();
+    return steps;
+}
+
+int AnimPlayback::AdvanceClock(float dtMs) {
+    if (clip == nullptr) return 0;
+    if (!engine_) return 0;
+    SyncEngineFlags();
+
+    int steps = 0;
+    if (playing && dtMs > 0.0f) {
+        // The engine's per-frame clock for an object it does not draw:
+        // `Soldier_Update` 0x45D080 -> `Human_FireAnimTrigger` 0x4613D0 ->
+        // `BoneObj_GetEvents` 0x4D3210 (src/humanbase/human.c:1368-1387,
+        // src/boneobj/boneobj.c:112-129). No pose - that is `Human_Wake`'s job
+        // at draw time (0x45F240, src/humanbase/human.c:289-297).
+        steps = engine_->AdvanceSecondsClockOnly(dtMs * 0.001f);
+        // The bones no longer sit at the tick the next drawn frame should show,
+        // so the first getter call poses them (retail's wake-at-draw).
+        pose_current_ = false;
+    }
+
+    FinishAdvance();
+    return steps;
+}
+
+void AnimPlayback::PoseNow() {
+    if (!engine_) return;
+    // Human_Wake 0x45F240 (src/humanbase/human.c:289-297): pose the current
+    // clock without moving it.
+    engine_->StepPose();
+    pose_current_ = true;
+}
+
+int AnimPlayback::StepFrames(int direction) {
+    if (clip == nullptr || !engine_) return 0;
+    if (direction == 0) return 0;
+    SyncEngineFlags();
+
+    const bool forward = direction > 0;
+    const bool looping = Looping();
+    const float step = igi::AnimFrameStepTicks(speed, engine_->TicksPerFrame());
+    const float target =
+        igi::AnimStepTargetTick(currentTimeMs, step, engine_->Length(), looping, forward);
+    if (target == currentTimeMs) {
+        // The engine's own end test already holds this playhead where it is: a
+        // one-shot clamped on the end it is stepping towards does not move
+        // (`!(inst->time < d->length)` forward, `!(inst->time > 0)` in reverse,
+        // src/boneobj/boneobj.c:892-897). Reported as "nothing to step" rather
+        // than run a frame the engine would spend clamping.
+        return 0;
+    }
+
+    // The engine performs the step, not this function: `BoneObj_GetEvents`
+    // 0x4D3210 -> `BoneObj_AnimEventsCB` 0x4D4B60 is the one addition plus the
+    // end test, the single-subtraction wrap and the root fixup
+    // (src/boneobj/boneobj.c:873-941). The check above only decides whether
+    // there is anywhere to go.
+    if (!engine_->StepClockFrame(direction)) return 0;
+
+    // The pose of the frame the step landed on: retail poses at draw time from
+    // the clock the per-frame update has already moved (`Human_Wake` 0x45F240,
+    // src/humanbase/human.c:289-297). `Update`'s pose-then-advance order is the
+    // other half of the same rule - there a frame was drawn before the advance.
+    engine_->StepPose();
+    pose_current_ = true;
+
+    FinishAdvance();
+    return 1;
+}
+
+float AnimPlayback::EngineLength() const {
+    // Anim_GetLength 0x4D64E0 (src/boneobj/anim.c:143-147) when the engine has
+    // the clip; otherwise the BEF's stored engine length (`AnimInit`'s third
+    // field is the engine length + 1, so `length_ms - 1`, the same conversion
+    // `IsFinished` uses).
+    if (engine_) return engine_->Length();
+    return (clip != nullptr) ? static_cast<float>(clip->duration_ms() - 1) : 0.0f;
+}
+
+float AnimPlayback::TicksPerFrame() const {
+    // BoneObj_SetFrameRate 0x4D2D30 (src/lod/boneobj.c:86-90) computes the
+    // global; the player mirrors it per clip and starts at the 30 fps value the
+    // game installs (src/game/game.c:449).
+    return engine_ ? engine_->TicksPerFrame() : igi::kAnimDefaultTicksPerFrame;
+}
+
+void AnimPlayback::FinishAdvance() {
+    // Mirror the engine clock. Anim_GetTime 0x4D6500 returns the instance's
+    // tick count; the pose drawn this frame is one Step() behind it by design
+    // (retail poses, then advances - freecam/bonemagic.c:105,110).
+    currentTimeMs = engine_->Time();
+
+    if (playing && !forceLoop && !clip->loop() && engine_->Done()) {
+        // The engine's own end test: HumanPlayer_AnimDone 0x489F50 reads
+        // BONE_EVENTS_DONE off the root bone, which `BoneObj_AnimEventsCB` sets
+        // when a NON-looping clock passes the clip length (boneobj.c:873-941).
+        playing = false;
+    }
+}
+
+bool AnimPlayback::EngineReady() const {
+    return engine_ != nullptr && engine_->valid();
+}
+
+int AnimPlayback::EnginePoseSteps() const {
+    return engine_ ? engine_->PoseSteps() : 0;
+}
+
+const std::vector<glm::mat4>& AnimPlayback::WorldTransforms() {
+    if (!engine_) {
+        static const std::vector<glm::mat4> kEmpty;
+        return kEmpty;
+    }
+    // A clock that moved without a pose (`AdvanceClock`, i.e. this object was
+    // not drawn last frame) leaves the bones older than the frame about to be
+    // drawn. Retail poses at draw time for exactly this reason:
+    // `Human_WakeIfVisible` 0x45F140 -> `Human_Wake` 0x45F240 ->
+    // `BoneObj_Update(h->matrix.m, h->anim)` (src/humanbase/human.c:289-297).
+    if (!pose_current_) PoseNow();
+    // Otherwise: the pose the last Step produced, NOT a fresh pose at the
+    // mirrored clock: retail draws the frame it posed before advancing (see the
+    // header).
+    return engine_->PoseFromLastStep();
+}
+
+const std::vector<igi::BoneTransform>& AnimPlayback::RawBoneTransforms() {
+    static const std::vector<igi::BoneTransform> kEmpty;
+    if (!engine_) return kEmpty;
+    // Same wake-at-draw as `WorldTransforms()`: the skinner reads `Bone::matrix`
+    // and `Bone::pos`, which are written by the pose.
+    if (!pose_current_) PoseNow();
+    // `Skin()`'s stale guard (anim_player.cpp) re-poses only when the bone
+    // records were never captured; after Play()/Update() they always are.
+    if (engine_->RawBoneTransforms().size() !=
+        static_cast<std::size_t>(engine_->BoneCount())) {
+        engine_->PoseFromLastStep();
+    }
+    return engine_->RawBoneTransforms();
+}

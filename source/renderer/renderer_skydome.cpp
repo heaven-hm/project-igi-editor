@@ -128,6 +128,13 @@ void Renderer_Skydome::Shutdown() {
 }
 
 void Renderer_Skydome::UpdateVertices(const skydome_define_s& d) {
+	last_sd_ = d;
+	BakeVertices();
+}
+
+void Renderer_Skydome::BakeVertices() {
+	const skydome_define_s& d = last_sd_;
+
 	auto InterplateColor = [](
 		const float clr1[3], const float clr2[3],
 		const float clr3[3], const float clr4[3],
@@ -148,6 +155,7 @@ void Renderer_Skydome::UpdateVertices(const skydome_define_s& d) {
 	glBindBuffer(GL_ARRAY_BUFFER, vbo_);
 	vert_pos_rgb_s* vb = (vert_pos_rgb_s*)glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
 	if (vb) {
+		// zenith vertex — no fog (s=1 → fog_a=0)
 		vb[0].pos_[0] = 0.0f;
 		vb[0].pos_[1] = 0.0f;
 		vb[0].pos_[2] = RADIUS;
@@ -161,7 +169,7 @@ void Renderer_Skydome::UpdateVertices(const skydome_define_s& d) {
 		float t1 = 0.0f;
 
 		for (int i = 0; i < STACKS; ++i) {
-			pitch -= pitch_step;	
+			pitch -= pitch_step;
 
 			float c = (float)std::cos(pitch);
 			float s = (float)std::sin(pitch);
@@ -195,8 +203,21 @@ void Renderer_Skydome::UpdateVertices(const skydome_define_s& d) {
 
 				float f1 = t1 >= 1.0f ? t1 - 1.0f : 1.0f - t1;
 
+				glm::vec3 sky_col;
 				InterplateColor(start_color, start_color + 3,
-					start_color + 6, start_color + 9, f1, f2, vb[v_idx].color_);
+					start_color + 6, start_color + 9, f1, f2, sky_col);
+
+				// The AUTHORED colour, with no fog blend. Retail draws the skydome
+				// with D3DRENDERSTATE_FOGENABLE = 0 (SkyDome_Render HOOK 0x52CF80,
+				// src/terredit/skydome.c:242) and its vertex colours come only from
+				// the level's FlatSky gradient (SkyDome_Fill HOOK 0x52CB60,
+				// skydome.c:94-135: d->color[0..4], the horizon picking which pair).
+				// The editor used to mix toward the scene fog colour here and to
+				// fill the skirt below the horizon with it, which is why the sky's
+				// horizon showed the fog colour instead of the level's own bottom
+				// colour -- an invention with no oracle, and the opposite of what
+				// the engine's fog state says.
+				vb[v_idx].color_ = sky_col;
 
 				yaw += yaw_step;
 			}
@@ -204,7 +225,9 @@ void Renderer_Skydome::UpdateVertices(const skydome_define_s& d) {
 			t1 += 0.1f;
 		}
 
-		// extrude downward
+		// Extrude downward. The skirt keeps the last ring's AUTHORED colour (the
+		// engine's below-horizon rows use d->color + 2, skydome.c:121-125); it is not
+		// filled with the fog colour.
 		for (int i = 0; i < SLICES; ++i) {
 			int pri_v_idx = 1 + (STACKS-1) * SLICES + i;
 			int v_idx = 1 + STACKS * SLICES + i;

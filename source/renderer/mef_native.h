@@ -1,0 +1,272 @@
+#pragma once
+#include <cstdint>
+#include <string>
+#include <vector>
+#include <array>
+#define GLM_FORCE_SWIZZLE
+#include <glm/glm.hpp>
+
+#include "runtime/anim_rules.h"   // igi::SkinTransformInput (the engine's SkinVertex)
+
+// Scale applied to raw MEF coordinates (game units -> world units)
+constexpr float kMefNativeScale = 1.0f / 40.96f;
+
+struct RenderVertex {
+    glm::vec3 pos{0.f};
+    glm::vec3 rawPos{0.f};      // raw XTRV position (NOT scaled, NOT baked) — for ASCII export
+    glm::vec3 normal{0.f};      // from XTRV bytes +12..+23
+    glm::vec2 uv{0.f};
+    glm::vec2 uv2{0.f};         // lightmap atlas UV, modelType==3 only, XTRV bytes +32..+39
+    uint16_t boneIndex{0};
+    uint16_t localVertexId{0};  // XTRV.vn @+36
+    float    weight{1.0f};      // XTRV.w  @+32
+};
+
+struct BoneInfo {
+    std::string name;       // from MANB (16 bytes, null-trimmed)
+    int parent{-1};         // -1 = root; computed from REIH num_child traversal
+    glm::vec3 pivot{0.f};   // raw pivot from REIH part2 (NOT divided by 40.96)
+    uint8_t numChild{0};
+};
+
+struct Attachment {
+    std::string name;       // from ATTA, 16 bytes
+    glm::vec3 pos{0.f};     // bytes +16..+27 in 72-byte ATTA record
+    int32_t boneId{-1};     // bytes +68..+71 in 72-byte ATTA record
+};
+
+// ---- New structs for ASCII MEF exporter ----
+
+// XTVC collision vertices: 16 bytes per vertex in IGI 1
+struct XtvcVertex {
+    float    px{0.f}, py{0.f}, pz{0.f};
+    uint32_t boneIndex{0};
+    uint32_t reserved{0};
+};
+
+// XTVM: 16 bytes per magic vertex — 12 bytes position (px,py,pz) + 4 bytes magic type (unconfirmed)
+struct XtvmVertex {
+    float px{0.f}, py{0.f}, pz{0.f};
+    int32_t magicType{0}; // magic vertex type ID (TASKTYPE_GUNCLIP, TASKTYPE_LADDER, etc.) — unconfirmed
+};
+
+struct MefAttachment {
+    char name[16];
+    float px, py, pz;
+    float r00, r01, r02;
+    float r03, r04, r05;
+    float r06, r07, r08;
+    int32_t boneId;
+};
+
+// ECFC: 8 bytes per face in IGI 1
+struct EcfcFace {
+    uint16_t a{0}, b{0}, c{0};
+    uint16_t mat{0};   // material index into TAMC
+    uint16_t lmp{0};   // lightmap (ignored)
+    uint16_t vrt{0};   // deprecated
+};
+
+// ECAF: 6 bytes per face
+struct EcafFace {
+    uint16_t a{0}, b{0}, c{0};
+};
+
+// DNER type0/type1: 32 bytes per record
+struct DnerRecord {
+    uint8_t  opacity{0}, mshine{0}, scolor{0}, opacitd{0};
+    float    px{0.f}, py{0.f}, pz{0.f};
+    uint16_t offsetIndex{0};  // starting uint16 index into ECAF (divide by 3 for face index)
+    uint16_t numFace{0};
+    uint16_t offVerts{0};
+    uint16_t numVerts{0};
+    int16_t  td{-1}, tb{-1}, tr{-1};
+    uint8_t  trd{0}, tbd{0};
+    uint16_t rawOpacity{0};
+    uint8_t  eflame{0};
+};
+
+// TAMC: 12 bytes per record in IGI 1
+struct TamcRecord {
+    float    opacity{0.f};
+    uint16_t portal{0};
+    int16_t  diffuse{-1};
+    uint16_t unknown0{0}, unknown1{0};
+    int16_t  matId{-1};
+    uint16_t unknown{0};
+};
+
+struct PortalRecord {
+    uint32_t portalId   = 0;
+    uint32_t materialId = 0;
+    std::vector<glm::vec3>               verts;
+    std::vector<std::array<uint32_t, 3>> faces;
+};
+
+struct ParsedGeometry {
+    // One REND group record: MeshGroup (src/render/rendertypes.h:6-18) for
+    // formats 0/1, LmGroup (src/render/render.c:40-54) for format 3.  The
+    // engine issues one DrawIndexedPrimitiveVB per group, drawing the group's
+    // inline index array offset by g->base.
+    struct RenderBlock {
+        size_t triangleStart = 0;
+        size_t triangleCount = 0;
+        int materialSlot = 0;  // g->texture; -1 when 0xFFFF (untextured)
+        // EDITOR CONVENTION, not an engine field: g->sorted selects the engine's
+        // depth-sorted alpha-blended pass (src/render/render.c:994,1030); the
+        // editor expresses that as opacity < 1.
+        float opacity = 1.0f;
+        int lightmapSlot = -1;  // format 3: g->lightmap (0xFFFF = none)
+        uint16_t sorted = 0;    // raw g->sorted
+        uint8_t flags = 0;      // raw g->flags; bit 0 = additive (render.c:1185)
+        uint8_t alpha = 0;      // raw g->alpha; alpha-test value (render.c:1203)
+    };
+
+    std::vector<RenderVertex> vertices;
+    std::vector<std::array<uint32_t, 3>> triangles;
+    std::vector<RenderBlock> renderBlocks;
+    bool fromRenderMesh = false;
+    uint32_t modelType = 0;
+    size_t renderBlockCount = 0;
+    size_t collisionVertexCount = 0;
+    size_t collisionFaceCount = 0;
+    std::string renderLayout;
+    std::vector<BoneInfo> bones;          // populated from REIH+MANB
+    std::vector<Attachment> attachments;  // populated from ATTA
+    // Type-1 XTRV is two runs, exactly as BoneMesh_Skin reads them
+    // (HOOK 0x49B700, src/dxinit/d3drender.c:232-245):
+    //   unk10 base vertices that the draw call indexes, then unkC extra
+    //   weighted influences that accumulate into a base vertex.
+    uint32_t baseVertexCount = 0;
+    uint32_t extraInfluenceCount = 0;
+    // format 3 only: the ID_LTMP ("PMTL") chunk the loader stores in
+    // MeshRender::unk18 (src/bonemesh/d3drender.c:229).  Never read by the
+    // engine; exposed for completeness of the per-format field mapping.
+    size_t lightmapChunkSize = 0;
+    // The HSMC chunk exists.  A missing HSMC is a clean return with coll = NULL
+    // (src/bonemesh/d3drender.c:246-250), not an error.
+    bool collisionPresent = false;
+    // A chunk link failed the engine's own checks (gChunkError, BSS 0xA43E5C).
+    bool chunkError = false;
+
+    // ---- Collision/material data for ASCII export ----
+    std::vector<XtvcVertex>  xtvcVerts;    // XTVC type1 (set 0)
+    std::vector<XtvmVertex>  xtvmVerts;    // XTVM (magic vertices)
+    std::vector<MefAttachment> mefAttachments; // ATTA (attachments)
+    std::vector<EcfcFace>    ecfcFaces;    // ECFC (set 0)
+    std::vector<EcafFace>    ecafFaces;    // ECAF render face indices
+    std::vector<DnerRecord>  dnerRecords;  // DNER (all records)
+    std::vector<TamcRecord>  tamcRecords;  // TAMC (set 0)
+    // Also keep set 1 for the second mesh
+    std::vector<XtvcVertex>  xtvcVerts1;
+    std::vector<EcfcFace>    ecfcFaces1;
+    std::vector<TamcRecord>  tamcRecords1;
+    std::vector<PortalRecord> portals;
+    std::vector<std::string> pmtlTextures; // Textures explicitly requested in the MEF
+};
+
+// Return the number of complete, drawable triangles in a parsed skinned mesh.
+// A skinned replacement must prove that every emitted vertex and bone reference
+// is valid before the caller suppresses the original mesh.
+inline size_t CountRenderableSkinnedTriangles(const ParsedGeometry& geometry) {
+    if (geometry.vertices.empty() || geometry.bones.empty() || geometry.triangles.empty())
+        return 0;
+
+    auto validRange = [&](size_t start, size_t count) {
+        return count > 0 && start <= geometry.triangles.size() &&
+               count <= geometry.triangles.size() - start;
+    };
+    size_t count = 0;
+    auto countRange = [&](size_t start, size_t rangeCount) {
+        if (!validRange(start, rangeCount)) return;
+        for (size_t t = start; t < start + rangeCount; ++t) {
+            const auto& triangle = geometry.triangles[t];
+            bool valid = true;
+            for (uint32_t vertexIndex : triangle) {
+                if (vertexIndex >= geometry.vertices.size() ||
+                    geometry.vertices[vertexIndex].boneIndex >= geometry.bones.size()) {
+                    valid = false;
+                    break;
+                }
+            }
+            if (valid) ++count;
+        }
+    };
+    if (geometry.renderBlocks.empty()) {
+        countRange(0, geometry.triangles.size());
+    } else {
+        for (const auto& block : geometry.renderBlocks)
+            countRange(block.triangleStart, block.triangleCount);
+    }
+    return count;
+}
+
+inline bool HasRenderableSkinnedGeometry(const ParsedGeometry& geometry) {
+    return CountRenderableSkinnedTriangles(geometry) > 0;
+}
+
+// Parse a binary MEF file and return all geometry + bone data.
+// Throws std::runtime_error on any fatal parse error.
+ParsedGeometry ParseMefFile(const std::string& filepath);
+
+// Parse a MEF that is already in memory (no disk I/O).
+ParsedGeometry ParseMefFileFromMemory(const std::vector<uint8_t>& bytes,
+                                      const std::string& modelId = {});
+
+// Cumulative parent-chain sum of each bone's (parent-relative) rest pivot,
+// giving each bone's absolute rest-pose position (raw, unscaled units).
+std::vector<glm::vec3> ComputeBoneWorldPositionsPublic(const std::vector<BoneInfo>& bones);
+
+// The model-space point the rig's ROOT bone sits at, in RAW units: the constant
+// by which the editor's STATIC bind-pose bake is lifted relative to a pose that
+// comes out of the engine's skeleton.
+//
+// WHY THE TWO SPACES DIFFER, with the engine as the authority:
+//
+//   * `ParseMefGeometry` replaces every base vertex's position with
+//     `SkinSkinnedVertices(geometry, nullptr, ...)` (mef_native.cpp:1122-1129),
+//     which is `(rawPos + ComputeBoneWorldPositions(rig)[bone]) * kMefNativeScale`
+//     -- the bind pose of the EDITOR's rig, with the rig's root pivot summed into
+//     every vertex.
+//   * The engine's own skinned vertices live in the SKELETON's frame instead:
+//     `BoneMesh_Skin` HOOK 0x49B700 (src/dxinit/d3drender.c:259-264) computes
+//     `Bone::matrix * v + Bone::pos`, and the bone chain starts from the
+//     skeleton's root offset, which `BoneObj_Load` 0x4D67A0
+//     (src/boneobj/boneobj.c:1570-1576) copies straight out of the BOBJ's TLST.
+//   * For every shipped human rig the editor's table and that TLST agree on
+//     EVERY bone except the root: the editor's root pivot is (0, 0, 3990.4) and
+//     the TLST's is (0, 0, 0) (measured against COMMON/ANIMS/{000,001,006}.IFF;
+//     tests/test_skinned_static_parity.cpp asserts it). 3990.4 raw units is
+//     0.974 m at the engine's 4096 units/m (kUnitsToMeters, src/humanbase/human.c:165).
+//
+// So a pose built from the retail skeleton lands exactly this far below the
+// static mesh, and a caller that has to place one against the other adds this
+// back (see `igi::IgiObjectMatrixAtModelOrigin`).
+glm::vec3 RigRootOriginRaw(const std::vector<BoneInfo>& bones);
+
+// The mesh as the engine's own skinner wants it. `BoneMesh_Skin` (HOOK 0x49B700,
+// src/dxinit/d3drender.c:226-313) reads ONE array of SkinVertex records laid out
+// as `base_count` base vertices followed by `extra_count` extra weighted
+// influences (mesh+0x10 base, mesh+0x0C extra, mesh+0x18 the array), so the two
+// runs are kept in that order and the counts travel with the records.
+//
+// The conversion is a field-for-field copy: RenderVertex already carries the
+// engine's SkinVertex fields in the engine's own order (anim_rules.h:640-649 -
+// {p[3], n[3], uv[2], w, target, bone}). No transform is applied here; the
+// positions stay in RAW game units, which is the space `Bone::matrix`/`Bone::pos`
+// operate in.
+struct EngineSkinVertices {
+    std::vector<igi::SkinTransformInput> records;  // base run, then extra run
+    int base_count = 0;
+    int extra_count = 0;
+};
+EngineSkinVertices BuildEngineSkinVertices(const ParsedGeometry& geometry);
+
+// Pose type-1 vertices the way OpenIGI does: one bone per base vertex, then extra
+// influences accumulate into TargetVertex. boneWorldTransforms null means rest
+// pose (identity rotation, hardcoded-rig world translations).
+void SkinSkinnedVertices(
+    const ParsedGeometry& geometry,
+    const std::vector<glm::mat4>* boneWorldTransforms,
+    std::vector<glm::vec3>& outPos,
+    std::vector<glm::vec3>& outNormal);

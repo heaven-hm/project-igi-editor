@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Black-box visual regressions that must fail when the editor violates authored runtime behavior.",
+  "scenarios": [
+    {
+      "name": "terrain-hotkey-opens-editor",
+      "level": 9,
+      "requiresMutation": false,
+      "steps": [
+        { "id": "launch", "type": "launch_editor", "level": 9 },
+        { "id": "window", "type": "wait_for_window", "timeoutSeconds": 45 },
+        { "id": "load", "type": "wait", "seconds": 15 },
+        { "id": "healthy", "type": "assert_process" },
+        { "id": "terrain-hotkey", "type": "key", "key": "T" },
+        { "id": "settle", "type": "wait", "seconds": 0.5 },
+        { "id": "screen", "type": "screenshot", "name": "terrain-hotkey" },
+        { "id": "palette-visible", "type": "assert_screenshot_color_ratio", "region": [1440, 580, 90, 270], "rgb": [211, 124, 57], "tolerance": 18, "minRatio": 0.01 },
+        { "id": "close", "type": "close_editor", "force": true }
+      ]
+    },
+    {
+      "name": "level12-indoor-weather-occlusion",
+      "level": 12,
+      "requiresMutation": false,
+      "inputScale": 0.8,
+      "steps": [
+        { "id": "launch", "type": "launch_editor", "level": 12 },
+        { "id": "window", "type": "wait_for_window", "timeoutSeconds": 45 },
+        { "id": "load", "type": "wait", "seconds": 15 },
+        { "id": "healthy", "type": "assert_process" },
+        { "id": "select-building", "type": "click", "button": "right", "x": 900, "y": 400 },
+        { "id": "select-settle", "type": "wait", "seconds": 1 },
+        { "id": "enter-building-view", "type": "key", "key": "F11" },
+        { "id": "view-settle", "type": "wait", "seconds": 1 },
+        { "id": "inside-a", "type": "screenshot", "name": "inside-a" },
+        { "id": "building-selected", "type": "assert_screenshot_color_ratio", "region": [0, 0, 460, 450], "rgb": [255, 215, 0], "tolerance": 60, "minRatio": 0.01 },
+        { "id": "weather-interval", "type": "wait", "seconds": 1 },
+        { "id": "inside-b", "type": "screenshot", "name": "inside-b" },
+        { "id": "weather-stopped-inside", "type": "assert_screenshot_difference", "from": "inside-a", "to": "inside-b", "region": [460, 80, 1040, 700], "changedPixelThreshold": 12, "maxChangedRatio": 0.0003 },
+        { "id": "close", "type": "close_editor", "force": true }
+      ]
+    },
+    {
+      "name": "level12-building-floor-persists-at-distance",
+      "level": 12,
+      "requiresMutation": false,
+      "inputScale": 0.8,
+      "steps": [
+        { "id": "launch", "type": "launch_editor", "level": 12 },
+        { "id": "window", "type": "wait_for_window", "timeoutSeconds": 45 },
+        { "id": "load", "type": "wait", "seconds": 15 },
+        { "id": "healthy", "type": "assert_process" },
+        { "id": "select-building", "type": "click", "button": "right", "x": 900, "y": 400 },
+        { "id": "select-settle", "type": "wait", "seconds": 1 },
+        { "id": "focus-building", "type": "key", "key": "F11" },
+        { "id": "focus-settle", "type": "wait", "seconds": 1 },
+        { "id": "near", "type": "screenshot", "name": "near" },
+        { "id": "building-selected", "type": "assert_screenshot_color_ratio", "region": [0, 0, 460, 450], "rgb": [255, 215, 0], "tolerance": 60, "minRatio": 0.01 },
+        { "id": "move-away", "type": "key_hold", "key": "SHIFT+ALT+DOWN", "seconds": 0.35 },
+        { "id": "far-settle", "type": "wait", "seconds": 1 },
+        { "id": "far", "type": "screenshot", "name": "far" },
+        { "id": "far-floor-visible", "type": "assert_screenshot_color_ratio", "region": [500, 0, 900, 500], "rgb": [100, 120, 80], "tolerance": 35, "minRatio": 0.10 },
+        { "id": "close", "type": "close_editor", "force": true }
+      ]
+    }
+  ]
+}

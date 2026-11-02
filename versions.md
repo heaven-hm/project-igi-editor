@@ -1,14 +1,33 @@
 # Project IGI Editor - Version History
 
-## Current Version: 2.9.0
+> **Source of truth.** The machine-readable version lives in the `version` file at the
+> repository root, and `CMakeLists.txt` reads it (`project(... VERSION ...)`) and generates
+> the Windows resource version from it. This file is the human-readable history and must
+> not disagree with it; before #44 it said 3.6.9-pre while `version` said 3.6.11-pre, the
+> build said 3.0 and `assets/igi-editor.rc` said 3.6.7-pre.
+>
+> `version` now reads **4.0.0-pre** and this file agrees with it. Per-release detail for the
+> current line lives in `CHANGELOGS.md` (top entry: `4.0.0-pre`).
+
+## Current Version: 4.0.0-pre
 
 ---
 
 ## Version Timeline
 
 | Version | Release Date | Status | Major Features |
-|---------|--------------|--------|-----------------|
-| **2.9.0** | 2026-06-09 | Latest | New Terrain editor, support for foreign models from other levels, pause menu terrain expand/collapse fix, immediate 3D brush rings refresh |
+|---------|--------------|--------|----------------|
+| **4.0.0-pre** | 2026-11-02 | Pre-release | Retail parity campaign & native macOS release — vehicle seating parity, play mode performance optimizations, terrain ID inspection, native Apple Silicon macOS bundle, and full 14-level asset verification. Tested on Windows and macOS. Full detail in `CHANGELOGS.md` (`4.0.0-pre`) |
+| **3.6.11-pre** | 2026-10-25 | Pre-release | Live weather controls and OpenIGI precipitation parity, indoor weather shelter suppression, accurately aligned rail tracks and spline spans, F11 rigid-center framing, foreign-model texture resolution (see `RELEASE_NOTES_3.6.11-pre.md`) |
+| **3.6.10-pre** | 2026-08-30 | Pre-release | Game-font fallback and retail-style menu rendering, sniper/AI skinned-model rendering, cross-level model/texture/ATTA provenance, staged RES/DAT/MTP publication (see `RELEASE_NOTES_3.6.10-pre.md`) |
+| **3.6.9-pre** | 2026-08-29 | Pre-release | Reliable editor logging with writable-location fallback and immediate startup flush; shipped editable `qedconfig.qsc`; corrected default mission path to `missions/location0` |
+| **3.6.8-pre** | 2026-08-25 | Pre-release | MCP game-data integration, authenticated loopback HTTP, transactional mutations, and cross-family ATTA dependency fixes |
+| **3.4.1-pre** | 2026-06-21 | Pre-release | Live graph-overlay sync when AIGraph task moves (F7 view follows the task live via property panel / position pad / Z slider / Undo / Redo); exact-match `TaskFindByTaskID` (pixel-perfect IDs, no substring); AI Script editor notepad surface (Ctrl+A/C/X/V/Z/Y + mouse drag selection) scoped to the AI Script text only; local AI Script undo/redo stack (capped at 100); selection highlight rendered on the correct visual lines |
+| **3.4.0-pre** | 2026-06-21 | Pre-release | `source/parsers/` folder removed; every file conversion (dat/mtp/qsc/qvm/res/graph/tex/fnt/mef/terrain) now goes through the bundled `igi1conv.exe` via the new `source/utils_igi1conv.{h,cpp}` shared runner; in-process loaders kept only where no CLI subcommand can supply the runtime data (mef_native, fnt_parser, qsc_lexer/parser, terrain_files, qvm_pipeline); dead `mef_parser`/`mef_exporter`/`mtp_tool` deleted |
+| **3.3.0-pre** | 2026-06-19 | Pre-release | Auto-save system (toggle + interval), unified undo/redo (objects/AI/terrain/graphs/ATTA), AI script save via Ctrl+W/Ctrl+S, full-folder level reset with backup, hotkey-driven from qedkeybindings.qsc, recursive HumanAI child search, pause-menu reorder, centering & alignment polish |
+| **3.2.0-pre** | 2026-06-17 | Pre-release | Graph link editing (add/remove), legacy tagged graph format support, edge visibility fix |
+| **3.1.0-pre** | 2026-06-16 | Pre-release | Visual 3D Graph Editor (nodes, edges, area labels) |
+| **2.9.0** | 2026-06-09 | Stable | New Terrain editor, support for foreign models from other levels, pause menu terrain expand/collapse fix, immediate 3D brush rings refresh |
 | **2.8.0** | 2026-06-04 | Stable | Inline AI Script Editor, mini-notepad with scrolling & arrow keys, autocomplete everywhere, find-shortcut fixes |
 | **2.7.0** | 2026-06-04 | Stable | 3D Model Viewer, Autocomplete Task, exact keybinding match & task tree fixes |
 | **2.6.0** | 2026-06-03 | Stable | Properties Editor UI, Attachments support, SplineObjs & Font/Sprite fixes |

@@ -7,6 +7,7 @@
 #include "config.h"
 #include "logger.h"
 #include "pch.h"
+#include "runtime/pause_menu_cursor.h"
 #include "utils.h"
 #include <freeglut.h>
 #include <filesystem>
@@ -16,7 +17,7 @@
  global variables & constants
 ================================================================================
 */
-static App g_app;
+App g_app;
 
 // menu ids
 
@@ -135,8 +136,51 @@ static void OnKeyboardUp(unsigned char key, int x, int y) {
 }
 
 static void OnDisplay() {
-  glutSetCursor(GLUT_CURSOR_NONE);  // keep system cursor hidden; SPR cursor draws it
+  glutSetCursor((igi::ShouldUseNativeCursor(g_app.GetPauseMode()) ||
+                 g_app.GetCursorLoadedCount() == 0)
+                    ? GLUT_CURSOR_INHERIT
+                    : GLUT_CURSOR_NONE);
   g_app.OnDisplay();
+}
+
+static void OnGameplayDisplay() {
+  g_app.OnGameplayDisplay();
+}
+
+static void OnGameplayReshape(int width, int height) {
+  g_app.OnGameplayWindowResize(width, height);
+}
+
+static void OnGameplayMouse(int button, int state, int x, int y) {
+  g_app.Input_OnMouse(button, state, x, y);
+}
+
+static void OnGameplayMouseWheel(int wheel, int direction, int x, int y) {
+  g_app.Input_OnMouseWheel(wheel, direction, x, y);
+}
+
+static void OnGameplayMotion(int x, int y) {
+  g_app.Input_OnMotion(x, y);
+}
+
+static void OnGameplaySpecial(int key, int x, int y) {
+  g_app.Input_OnSpecial(key, x, y);
+}
+
+static void OnGameplaySpecialUp(int key, int x, int y) {
+  g_app.Input_OnSpecialUp(key, x, y);
+}
+
+static void OnGameplayKeyboard(unsigned char key, int x, int y) {
+  g_app.Input_OnKeyboard(key, x, y);
+}
+
+static void OnGameplayKeyboardUp(unsigned char key, int x, int y) {
+  g_app.Input_OnKeyboardUp(key, x, y);
+}
+
+static void OnGameplayClose() {
+  g_app.OnGameplayWindowClose();
 }
 
 static void UpdateOverlayWireframeMenuText();
@@ -314,6 +358,13 @@ static void OnMenu(int menu) {
     break;
   case MENU_DRAW_TERRAIN_OPT_FOG:
     g_app.ToggleTerrainDrawOption(Renderer_Terrain::DRAW_TERRAIN_OPT_FOG);
+    // Sync object renderer fog with the terrain fog toggle and persist to config.
+    {
+        int dOpts = g_app.GetTerrainDrawOptions();
+        bool fogOn = (dOpts & Renderer_Terrain::DRAW_TERRAIN_OPT_FOG) != 0;
+        g_app.SetFogEnabled(fogOn);
+        Config::Get().enableFog = fogOn;
+    }
     g_update_menu_flags |= UPDATE_MENU_TERRAIN_OPTS;
     break;
   case MENU_TERRAIN_TEX_MOD:
@@ -518,7 +569,7 @@ int main(int argc, char **argv) {
 
   // Initialize logger early (handles both GUI and Headless modes)
   std::string exeDir = Utils::GetExeDirectory();
-  Logger::Get().Init(exeDir + "\\igi1ed.log");
+  Logger::Get().Init(Utils::ToNativePath(exeDir + "\\igi1ed.log"));
 
   // Initialize config first (before Folders_Init which uses Config)
   Config::Init();
@@ -534,14 +585,19 @@ int main(int argc, char **argv) {
     g_isCLIMode = true;
     int result = CLIHandler::Process(argc, argv);
 #if defined(_WIN32) && defined(_DEBUG)
-    system("pause");
+    // Do not pause in CLI mode: automated invocations (e.g. the level
+    // verification test) spawn with a new console and would block forever
+    // waiting for a keystroke.
+    if (!g_isCLIMode) {
+      system("pause");
+    }
 #endif
     return result;
   }
 
   // Check if the game executable (igi.exe) exists in the configured game path
   std::string igiRoot = Utils::GetIGIRootPath();
-  std::string igiExePath = igiRoot + "\\igi.exe";
+  std::string igiExePath = Utils::ToNativePath(igiRoot + "\\igi.exe");
   if (!std::filesystem::exists(igiExePath)) {
     std::string errorMsg = "Fatal Error: 'igi.exe' not found in game directory:\n" + igiRoot +
                            "\n\nPlease make sure the editor is placed in the main Project IGI game directory next to 'igi.exe'.";
@@ -553,7 +609,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  std::string contentPath = exeDir + "\\editor";
+  std::string contentPath = Utils::ToNativePath(exeDir + "\\editor");
   if (!std::filesystem::exists(contentPath) || !std::filesystem::is_directory(contentPath)) {
     std::string errorMsg = "Fatal Error: 'editor' directory not found in:\n" + exeDir +
                            "\n\nPlease make sure the 'editor' directory is present next to the editor executable.";
@@ -568,11 +624,16 @@ int main(int argc, char **argv) {
     const std::vector<std::string> requiredEditorPaths = {
       "\\editor\\shaders",
       "\\editor\\qed",
+#if defined(_WIN32)
       "\\editor\\tools\\igi1conv\\igi1conv.exe",
+#endif
     };
     for (const auto& rel : requiredEditorPaths) {
-      if (!std::filesystem::exists(exeDir + rel)) {
-        std::string errorMsg = "Fatal Error: Required editor file missing:\n" + exeDir + rel +
+      // The relative fragments are written with Windows separators; convert at
+      // the filesystem boundary so the same list serves both platforms.
+      const std::string requiredPath = Utils::ToNativePath(exeDir + rel);
+      if (!std::filesystem::exists(requiredPath)) {
+        std::string errorMsg = "Fatal Error: Required editor file missing:\n" + requiredPath +
                                "\n\nPlease reinstall or restore the 'editor' directory.";
 #if defined(_WIN32)
         Utils::LogAndShowError(errorMsg, "IGI Editor - Launch Error");
@@ -602,8 +663,8 @@ int main(int argc, char **argv) {
 #endif
 
   // read window width & height from command line
-  int wnd_w = Arg_ReadInt(argc, argv, "-w", 800);
-  int wnd_h = Arg_ReadInt(argc, argv, "-h", 600);
+  int wnd_w = Arg_ReadInt(argc, argv, "-w", 1280);
+  int wnd_h = Arg_ReadInt(argc, argv, "-h", 720);
 
   // read level from command line
   int level_no = Arg_ReadInt(argc, argv, "-level", 1);
@@ -630,6 +691,7 @@ int main(int argc, char **argv) {
 
   glutInit(&argc, argv);
   glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA | GLUT_DEPTH | GLUT_STENCIL);
+  glutSetOption(GLUT_ACTION_ON_WINDOW_CLOSE, GLUT_ACTION_GLUTMAINLOOP_RETURNS);
 
   // center display
   int screen_cx = glutGet(GLUT_SCREEN_WIDTH);
@@ -639,6 +701,7 @@ int main(int argc, char **argv) {
   glutInitWindowPosition(pos_x, pos_y);
   glutInitWindowSize(wnd_w, wnd_h);
   glutCreateWindow("IGI Editor");
+  Utils::ActivateApp();
 
 #if defined(_WIN32)
   // Load icon from file and set it
@@ -689,7 +752,12 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  if (g_gl_info.support_version_45_) {
+  if (g_gl_info.legacy_gl21_) {
+    // Apple's legacy profile (GL 2.1 / GLSL 1.20) cannot compile either of the
+    // other tiers; shaders/21 is the GLSL 1.20 port.  See gl_helper.cpp.
+    Str_Cat(g_folders.shader_folder_, count_of(g_folders.shader_folder_),
+            "/21");
+  } else if (g_gl_info.support_version_45_) {
     Str_Cat(g_folders.shader_folder_, count_of(g_folders.shader_folder_),
             "/45");
   } else {
@@ -708,8 +776,50 @@ int main(int argc, char **argv) {
 
   printf("%s", HINT);
 
+  // setup glut callbacks that might be needed during Init
+  glutDisplayFunc(OnDisplay);
+
   if (!g_app.Init(argc, argv)) {
+    // Exit code 2 with no explanation was the worst possible failure mode: the user
+    // saw the process vanish and, because the log was never flushed, usually an empty
+    // log file too.  Report to stderr (the log may be the thing that is broken) and
+    // flush whatever the log did get, including any shader compile error above.
+    const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+    std::fprintf(stderr,
+        "\n[igi1ed] startup failed during App::Init and the editor cannot continue.\n"
+        "  GL_RENDERER: %s\n"
+        "  GL_VERSION:  %s\n"
+        "  Shader tiers are '21' (GLSL 1.20), '41' and '45'.  A context below\n"
+        "  OpenGL 3.0 uses the 2.1 fallback, selected automatically.  Check the\n"
+        "  shader compile errors and the log file next to this executable for the\n"
+        "  specific failure; docs/parity/GL21_FALLBACK.md records what the\n"
+        "  fallback emulates.\n\n",
+        renderer ? renderer : "(null)", version ? version : "(null)");
+    Logger::Get().LogAlways(LogLevel::ERR,
+        std::string("[igi1ed] startup failed during App::Init (GL_VERSION=") +
+        (version ? version : "?") + ")");
+    Logger::Get().Flush();
     return 2;
+  }
+
+  igi::GameplayWindowCallbacks gameplay_window_callbacks;
+  gameplay_window_callbacks.display = OnGameplayDisplay;
+  gameplay_window_callbacks.reshape = OnGameplayReshape;
+  gameplay_window_callbacks.mouse = OnGameplayMouse;
+  gameplay_window_callbacks.mouse_wheel = OnGameplayMouseWheel;
+  gameplay_window_callbacks.motion = OnGameplayMotion;
+  gameplay_window_callbacks.passive_motion = OnGameplayMotion;
+  gameplay_window_callbacks.special = OnGameplaySpecial;
+  gameplay_window_callbacks.special_up = OnGameplaySpecialUp;
+  gameplay_window_callbacks.keyboard = OnGameplayKeyboard;
+  gameplay_window_callbacks.keyboard_up = OnGameplayKeyboardUp;
+  gameplay_window_callbacks.close = OnGameplayClose;
+  if (!g_app.InitializeGameplayWindow(
+          glutGetWindow(), wnd_w, wnd_h, gameplay_window_callbacks)) {
+    Logger::Get().Log(
+        LogLevel::WARNING,
+        "[Main] Gameplay window unavailable; editor remains usable");
   }
 
   // Apply command line settings
@@ -720,8 +830,12 @@ int main(int argc, char **argv) {
     g_app.SetInitialStickToGround(true);
   }
   if (level_no > 0) {
-    g_app.LoadLevel(level_no);
     g_app.SetGameLevel(level_no);
+  }
+
+  // -play: enter Game Play once the level is loaded (profiling / quick test).
+  if (Arg_OptionIdx(argc, argv, "-play") > -1) {
+    g_app.SetEditMode(false);
   }
 
   // setup glut callbacks
@@ -735,7 +849,6 @@ int main(int argc, char **argv) {
   glutSpecialUpFunc(OnSpecialUp);
   glutKeyboardFunc(OnKeyboard);
   glutKeyboardUpFunc(OnKeyboardUp);
-  glutDisplayFunc(OnDisplay);
   glutIdleFunc(OnIdle);
   glutCloseFunc(OnClose);
 
@@ -800,9 +913,17 @@ int main(int argc, char **argv) {
   UpdateChooseLevelMenuText();
   UpdateScaleMenuText();
 
-  // Start in fullscreen (ALT+ENTER toggles back to the windowed size below).
-  g_app.SetInitialFullscreen(wnd_w, wnd_h);
-  glutFullScreen();
+  // Start in windowed mode (ALT+ENTER toggles fullscreen).
+  //
+  // This must NOT re-apply the requested -w/-h here.  App::Init has already run
+  // the borderless-fullscreen path, which resizes the window to the monitor with
+  // a direct SetWindowPos and applies the matching viewport; stamping the -w/-h
+  // default (1280x720) over it afterwards leaves the viewport smaller than the
+  // window, so only that rectangle is painted and the rest of the screen stays
+  // black -- the reported "half screen and half black".  Apply the window's real
+  // client size instead (App::ApplyClientViewport falls back to the last
+  // known-good size, which is what -w/-h seeded in App::Init).
+  g_app.ApplyClientViewport("startup after Init");
 
   try {
     // enter main loop

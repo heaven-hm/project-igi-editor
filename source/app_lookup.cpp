@@ -4,6 +4,9 @@
  *          Split from app.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include "renderer/spline_geometry.h"
+#include "runtime/elevator_rules.h"
+#include "runtime/rail_source.h"
 
 static bool containsIgnoreCase(const std::string& str, const std::string& substr) {
     if (substr.empty()) return true;
@@ -130,7 +133,7 @@ static std::vector<ModelEntry> LoadAllModelsFromJson() {
 	std::vector<ModelEntry> entries;
 	std::string jsonPath = Utils::GetExeDirectory() + "\\editor\\tools\\IGIModels.json";
 
-	if (!std::filesystem::exists(jsonPath)) {
+	if (!std::filesystem::exists(Utils::ToNativePath(jsonPath))) {
 		Logger::Get().Log(LogLevel::ERR, "[App] IGIModels.json not found in executable directory: " + jsonPath);
 	} else {
 		Logger::Get().Log(LogLevel::INFO, "[App] Loading model database from: " + jsonPath);
@@ -217,7 +220,7 @@ void App::SearchModelById(std::optional<std::string> query) {
 		}
 	}
 	
-	MessageBoxA(NULL, resultMessage.c_str(), "IGIModels.json Search Results", MB_OK | MB_ICONINFORMATION);
+	Utils::ShowInfo(resultMessage, "IGIModels.json Search Results");
 }
 
 void App::SearchModelByName(std::optional<std::string> query) {
@@ -258,7 +261,7 @@ void App::SearchModelByName(std::optional<std::string> query) {
 		}
 	}
 	
-	MessageBoxA(NULL, resultMessage.c_str(), "IGIModels.json Search Results", MB_OK | MB_ICONINFORMATION);
+	Utils::ShowInfo(resultMessage, "IGIModels.json Search Results");
 }
 
 std::vector<int> App::GetVisibleTreeNodes() {
@@ -371,17 +374,61 @@ bool App::ValidateParentChildCompatibility(const LevelObject& parent, const std:
 void App::EvaluateTrainTrackPositions() {
 	auto& objects = level_.GetLevelObjects().GetObjects();
 
-	std::map<std::string, int> taskToIdx;
-	for (int i = 0; i < (int)objects.size(); ++i) {
-		if (!objects[i].taskId.empty())
-			taskToIdx[objects[i].taskId] = i;
-	}
+	// `task id -> object index`, shared with the viewport's rail preview so both
+	// resolve a "RailroadQTaskID" / "SplineObj taskid" reference the same way.
+	const std::unordered_map<std::string, int> taskToIdx = igi::BuildTaskIndex(objects);
 
 	struct SplineData {
-		std::vector<glm::dvec3> pts;
-		std::vector<double> cumDist;
+		// The rail as the engine sees it: one Hermite span per waypoint pair,
+		// built from the waypoints' own frames (see getSpline). Arc distances are
+		// the engine's SplineObj.length, the sum of the per-joint segment lengths
+		// (src/tagitem/spline.c:824-830), not the chord sum.
+		spline_geometry::RailPath rail;
 		double totalLen = 0.0;
+		// The AUTHORED first and last waypoint points (`w->point`, which
+		// SplineObj_GetWaypointPos HOOK 0x502200 returns, src/editobj/spline.c:155-163).
+		// An Elevator whose "Linear" flag is set interpolates between exactly these
+		// two, not between curve joints.
+		glm::dvec3 firstWaypoint{0.0};
+		glm::dvec3 lastWaypoint{0.0};
 	};
+
+	// The engine reads a train's Flip Direction (arg 9) and uses it to pick the
+	// sign of the rail spacing: offsets[0] = reverse ? +length : -length
+	// (Train_Place, src/missile/train.c:221). The editor does not model that flag
+	// as a field, so it is read from the raw tokens; when the token is absent the
+	// sign of the authored 1D position is used as the historical fallback. The
+	// result is captured BEFORE any placement runs, because the fallback reads the
+	// authored position that pass 1 is about to overwrite.
+	auto readReversedFlag = [](const LevelObject& obj) {
+		if (obj.argTokens.size() > 9) {
+			std::string flag = obj.argTokens[9];
+			std::transform(flag.begin(), flag.end(), flag.begin(),
+			               [](unsigned char c) { return std::tolower(c); });
+			if (flag == "true" || flag == "1") return true;
+			if (flag == "false" || flag == "0") return false;
+		}
+		return obj.pos.x < 0.0;
+	};
+
+	// Model-derived car length. The engine takes it from the model's local points
+	// 0 and 1: t->length = |a.x - b.x| (Train_ParamsChanged,
+	// src/missile/train.c:142-167). The editor does not parse those points, so the
+	// value stays a documented constant — it is the only remaining approximation
+	// here, and it only shifts the cars along the rail, never the rail itself.
+	const double kDefaultCarLength = 52756.0;
+
+	// Displacement X/Y (args 10/11), clamped to gTrainOffsetRange = +/-5 m by
+	// PlaceTrainOnRail. Read from the raw tokens for the same reason as the flip
+	// flag; absent or unparseable means no displacement.
+	auto trainOffsetArg = [](const LevelObject& obj, size_t argIdx) {
+		if (obj.argTokens.size() <= argIdx) return 0.0;
+		const std::string& token = obj.argTokens[argIdx];
+		char* end = nullptr;
+		const double value = std::strtod(token.c_str(), &end);
+		return (end && end != token.c_str()) ? value : 0.0;
+	};
+
 	std::map<std::string, SplineData> splineCache;
 
 	auto getSpline = [&](const std::string& id) -> const SplineData* {
@@ -389,43 +436,35 @@ void App::EvaluateTrainTrackPositions() {
 		if (cached != splineCache.end()) return &cached->second;
 		auto it = taskToIdx.find(id);
 		if (it == taskToIdx.end()) return nullptr;
-		const auto& spline = objects[it->second];
-		if (spline.childrenIndices.size() < 2) return nullptr;
+		// One span per waypoint pair, with the Hermite tangents taken from the
+		// waypoints' own local X axes, the container's "Number of Matrices /
+		// Segment" (arg 7) as the sub-segment count and its "Linear Segments"
+		// (arg 3) as the engine's `rigid` flag (src/editobj/spline.c:205). That
+		// construction lives in igi::BuildRailSource so the viewport's rail
+		// preview draws the same curve the cars are placed on
+		// (source/runtime/rail_source.h).
+		const igi::RailSource source = igi::BuildRailSource(objects, it->second);
+		if (!source.valid) return nullptr;
 		SplineData sd;
-		for (int ci : spline.childrenIndices)
-			sd.pts.push_back(objects[ci].pos);
-		sd.cumDist.resize(sd.pts.size(), 0.0);
-		for (int i = 1; i < (int)sd.pts.size(); ++i)
-			sd.cumDist[i] = sd.cumDist[i-1] + glm::length(sd.pts[i] - sd.pts[i-1]);
-		sd.totalLen = sd.cumDist.back();
+		sd.rail = source.path;
+		sd.totalLen = source.path.length;
+		// SplineObj_GetWaypointPos(graph, 0) and (graph, count - 1): the authored
+		// waypoint points, which the Elevator "Linear" branch interpolates.
+		sd.firstWaypoint = source.first_waypoint;
+		sd.lastWaypoint = source.last_waypoint;
 		splineCache[id] = sd;
 		return &splineCache[id];
 	};
 
-	// Evaluate world position+rotation for a given arc distance on a spline
-	auto evalOnSpline = [](const SplineData& sd, double arcLen, glm::dvec3& outPos, glm::dvec3& outRot) {
-		double clamped = glm::clamp(arcLen, 0.0, sd.totalLen);
-		int seg = 0;
-		for (int i = 1; i < (int)sd.cumDist.size(); ++i) {
-			if (sd.cumDist[i] >= clamped) { seg = i - 1; break; }
-			if (i == (int)sd.cumDist.size() - 1) { seg = i - 1; break; }
-		}
-		int segNext = std::min(seg + 1, (int)sd.pts.size() - 1);
-		double segLen = sd.cumDist[segNext] - sd.cumDist[seg];
-		double t = (segLen > 0.0) ? (clamped - sd.cumDist[seg]) / segLen : 0.0;
-		outPos = sd.pts[seg] + t * (sd.pts[segNext] - sd.pts[seg]);
-		glm::dvec3 diff = sd.pts[segNext] - sd.pts[seg];
-		glm::dvec3 fwd = (segLen > 1e-6) ? glm::normalize(diff) : glm::dvec3(1.0, 0.0, 0.0);
-		outRot.z = atan2(-fwd.y, -fwd.x); // face opposite to arc direction (cab toward trainyard)
-		outRot.x = asin(glm::clamp(-fwd.z, -1.0, 1.0));
-		outRot.y = 0.0;
-	};
-
-	// Save original rail positions from QSC (obj.pos.x) before modifying obj.pos
+	// Save original rail positions from QSC (obj.pos.x) before modifying obj.pos,
+	// together with each train's Flip Direction.
 	std::vector<double> rawRailPos(objects.size(), 0.0);
+	std::vector<char> railReversed(objects.size(), 0);
 	for (int i = 0; i < (int)objects.size(); ++i) {
-		if (objects[i].type == "Train" && !objects[i].deleted && !objects[i].splineTaskId.empty())
+		if (objects[i].type == "Train" && !objects[i].deleted && !objects[i].splineTaskId.empty()) {
 			rawRailPos[i] = objects[i].pos.x;
+			railReversed[i] = readReversedFlag(objects[i]) ? 1 : 0;
+		}
 	}
 
 	// Computed arc distances (from spline start) per object index — filled in pass 1
@@ -434,8 +473,13 @@ void App::EvaluateTrainTrackPositions() {
 	int evaluated = 0;
 
 	// Pass 1: trains with an explicit non-zero 1D position from QSC.
-	// Negative position = distance from the END of the track (game convention):
-	//   arcFromStart = totalLen + negativePos
+	// The 1D position is a SIGNED arc distance: a negative value is measured back
+	// from the end of the rail and wrapped into range by repeated addition
+	// (SplineObj_GetPoints, src/tagitem/spline.c:242-255). The old code added the
+	// rail length once and then clamped, so a |position| larger than one rail
+	// length collapsed to arc 0 — retail train 1499 authors -4045627.5 on a
+	// 4435504.8-unit rail, where the single add happens to work but any shorter
+	// rail would not. WrapRailDistance loops exactly like the engine.
 	for (int i = 0; i < (int)objects.size(); ++i) {
 		auto& obj = objects[i];
 		if (obj.type != "Train" || obj.deleted || obj.splineTaskId.empty()) continue;
@@ -444,23 +488,35 @@ void App::EvaluateTrainTrackPositions() {
 		const SplineData* sd = getSpline(obj.splineTaskId);
 		if (!sd || sd->totalLen <= 0.0) continue;
 
-		double rawPos = rawRailPos[i];
-		double arcPos = (rawPos < 0.0) ? sd->totalLen + rawPos : rawPos;
-		arcPos = glm::clamp(arcPos, 0.0, sd->totalLen);
+		const double arcPos = spline_geometry::WrapRailDistance(rawRailPos[i], sd->totalLen);
 		arcByObjIdx[i] = arcPos;
 
-		glm::dvec3 newPos, newRot;
-		evalOnSpline(*sd, arcPos, newPos, newRot);
-		obj.pos = newPos;
-		obj.original_pos = newPos;
-		obj.rot = newRot;
-		obj.original_rot = newRot;
+		// Train_Place (src/missile/train.c:209-274) with the car's own frac = 0
+		// (the model's local point 0 sits at the origin), the car's displacement
+		// clamped to gTrainOffsetRange = +/-5 m and scaled by kFixed = 4096, and
+		// the heading from Matrix_SetDirection + orient() rather than the old
+		// atan2/asin reconstruction, which ignored the engine's fixed axis remap.
+		const spline_geometry::TrainPlacement placed = spline_geometry::PlaceTrainOnRail(
+			sd->rail, rawRailPos[i], kDefaultCarLength, 0.0,
+			trainOffsetArg(obj, 10), trainOffsetArg(obj, 11), railReversed[i] != 0);
+		if (!placed.found) continue;
+
+		obj.pos = placed.position;
+		obj.original_pos = placed.position;
+		obj.rot = spline_geometry::EngineMatrixToEuler(placed.matrix);
+		obj.original_rot = obj.rot;
 		++evaluated;
 	}
 
 	// Pass 2: child wagons with position=0 — place them behind their parent lead car.
-	// Wagon length ~52,756 game units (644 local half-extent * 2 * scale 40.96).
-	const double WAGON_SPACING = 52756.0;
+	// In Train_Place each point is stepped off the previous one by the PREVIOUS car's
+	// length (offsets[m] = reverse ? +wagon_m.length : -wagon_m.length,
+	// src/missile/train.c:221-225), so the m-th car sits at
+	// arc = dist +/- m * length and its heading is the step to the next car. The old
+	// code took the sign from the sign of the parent's authored position instead of
+	// the Flip Direction flag and used a hardcoded spacing; the spacing constant
+	// remains (the editor does not parse model local points) but the sign, the
+	// chaining and the arithmetic now follow the engine.
 	std::map<int, int> wagonCountByParent;
 
 	for (int i = 0; i < (int)objects.size(); ++i) {
@@ -475,23 +531,84 @@ void App::EvaluateTrainTrackPositions() {
 		const SplineData* sd = getSpline(obj.splineTaskId);
 		if (!sd || sd->totalLen <= 0.0) continue;
 
-		int wagonIdx = wagonCountByParent[obj.parentIndex]++;
-		// Negative rawRailPos on the parent means the train moves toward arc=0 (Flip=TRUE),
-		// so wagons trail behind at HIGHER arc positions (where the train came from).
-		double dir = (rawRailPos[obj.parentIndex] < 0.0) ? 1.0 : -1.0;
-		double arcPos = glm::clamp(parentArcIt->second + dir * (wagonIdx + 1) * WAGON_SPACING, 0.0, sd->totalLen);
-		arcByObjIdx[i] = arcPos;
+		const LevelObject& parent = objects[obj.parentIndex];
+		const bool reversed = railReversed[obj.parentIndex] != 0;
+		const int wagonIdx = wagonCountByParent[obj.parentIndex]++;
+		const double carsBack = (wagonIdx + 1) * kDefaultCarLength;
+		// SplineObj_GetPoints walks the consist with target = dist + sum(offsets)
+		// and CLAMPS at the rail ends (`goto off_end`, src/tagitem/spline.c:441-443)
+		// — it never wraps a car, unlike the lead car's own scalar. Pre-clamping
+		// here makes the helper's internal wrap a no-op, which is what the engine
+		// does. Offset the distance, not the spacing: the heading must come from a
+		// single car-length step, exactly as Train_Place builds pts[m] -> pts[m+1].
+		const double leadArc = spline_geometry::WrapRailDistance(rawRailPos[obj.parentIndex], sd->totalLen);
+		const double carDist = std::clamp(leadArc + (reversed ? carsBack : -carsBack), 0.0, sd->totalLen);
 
-		glm::dvec3 newPos, newRot;
-		evalOnSpline(*sd, arcPos, newPos, newRot);
-		obj.pos = newPos;
-		obj.original_pos = newPos;
-		obj.rot = newRot;
-		obj.original_rot = newRot;
+		const spline_geometry::TrainPlacement placed = spline_geometry::PlaceTrainOnRail(
+			sd->rail, carDist, kDefaultCarLength, 0.0,
+			trainOffsetArg(obj, 10), trainOffsetArg(obj, 11), reversed);
+		if (!placed.found) continue;
+
+		arcByObjIdx[i] = carDist;
+
+		obj.pos = placed.position;
+		obj.original_pos = placed.position;
+		obj.rot = spline_geometry::EngineMatrixToEuler(placed.matrix);
+		obj.original_rot = obj.rot;
 		++evaluated;
 	}
 
 	if (evaluated > 0)
 		Logger::Get().Log(LogLevel::INFO, "[App] Evaluated track positions for " + std::to_string(evaluated) + " train objects.");
+
+	// ── Elevator / moving platform (GitHub issue #40) ────────────────────────
+	// `Elevator` is the retail "moving platform": the shipped missions place it in
+	// LEVEL3/5/8/11/12/13/14. Its authored fields are parsed into LevelObject by
+	// level_objects.cpp (see the elevator block there) and the placement rule is
+	// `Elevator_UpdatePlace` HOOK 0x43D960 (src/props/elevator.c:41-83), ported in
+	// runtime/elevator_rules.h. Before this pass an elevator had no rail at all,
+	// so it was drawn at its authored spot with no path — the issue's
+	// "moving platforms/conveyors have no path or animation preview".
+	//
+	// The placement is idempotent: the rail comes from the waypoints' authored
+	// points and the scalar from arg 13 ("Pos"), neither of which this pass
+	// writes, so a second call lands in the same place.
+	int elevatorsPlaced = 0;
+	for (int i = 0; i < (int)objects.size(); ++i) {
+		auto& obj = objects[i];
+		if (obj.type != "Elevator" || obj.deleted || obj.splineTaskId.empty()) continue;
+
+		igi::ElevatorParams params;
+		params.parsed = true;
+		params.graph = 0;   // non-(-1): the rail reference itself is resolved below
+		params.linear = obj.elevatorLinear;
+		params.force_orientation = obj.elevatorForceOrientation;
+		params.start_height = obj.elevatorStartHeight;
+
+		const SplineData* sd = getSpline(obj.splineTaskId);
+		if (!sd || sd->totalLen <= 0.0) continue;
+
+		igi::ElevatorRail rail;
+		rail.path = sd->rail;
+		rail.first_waypoint = sd->firstWaypoint;
+		rail.last_waypoint = sd->lastWaypoint;
+
+		// "Orientation" (args 6/7/8) is the authored `placeMatrix`, which
+		// `Elevator_ParamsChanged` HOOK 0x43DDB0 (src/props/elevator.c:114-144)
+		// copies into the object's frame before calling the placement rule.
+		const glm::dmat3 placeMatrix = spline_geometry::EngineEulerMatrix(obj.rot);
+
+		const igi::ElevatorPlacement placed = igi::PlaceElevatorOnRail(rail, params, placeMatrix);
+		if (!placed.found) continue;
+
+		obj.pos = placed.position;
+		obj.original_pos = placed.position;
+		obj.rot = spline_geometry::EngineMatrixToEuler(placed.matrix);
+		obj.original_rot = obj.rot;
+		++elevatorsPlaced;
+	}
+
+	if (elevatorsPlaced > 0)
+		Logger::Get().Log(LogLevel::INFO, "[App] Evaluated rail positions for " + std::to_string(elevatorsPlaced) + " elevator objects.");
 }
 

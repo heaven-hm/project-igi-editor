@@ -41,16 +41,25 @@ public:
 	bool					GetTerrainZ(double x, double y, float & z, bool ignore_discard = false);
 	// World (x,y) -> terrain CTR node index (the "terrain id"), or -1 if off-terrain.
 	int						GetTerrainNodeId(double x, double y);
+	bool					RaycastTerrain(const glm::vec3& ray_origin, const glm::vec3& ray_dir, glm::vec3& out_hit, int& out_node_id);
 	void					EditorRaycastAndModify(const glm::vec3& ray_origin, const glm::vec3& ray_dir, int brush_type, double radius, double strength);
 	void					TeleportToHMP(glm::vec3& pos) const;
 	void					CompileCurrentQSC(int level_no);
 
+	// Terrain height-map snapshot/restore for undo/redo. Returns an empty
+	// vector when the level has no .hmp file (no terrain edits to undo).
+	std::vector<uint8_t>	SnapshotTerrainHMP() const { return terrain_.SnapshotHMP(); }
+	void					RestoreTerrainHMP(const std::vector<uint8_t>& snap) { terrain_.RestoreHMP(snap); }
+
 	const LevelObjects&		GetLevelObjects() const { return level_objects_; }
 	LevelObjects&			GetLevelObjects() { return level_objects_; }
 
-
+	const glm::vec3&		GetStartPos() const { return start_pos_; }
+	float					GetStartYaw() const { return start_yaw_; }
 
 private:
+	glm::vec3				start_pos_ = glm::vec3(0.0f);
+	float					start_yaw_ = 0.0f;
 
 	int						cur_level_no_;
 	std::string				qsc_path_;

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "generator": "tests/test_fnt_parser.cpp:MinimalRgb565Font",
+  "fixtures": [
+    {
+      "format": "FNT",
+      "variant": "ILFF/FONT with FNTH, ANMF, TRAN, TEXH RGB565, BODY",
+      "expected": { "glyphs": 1, "width": 2, "height": 1, "lineHeight": 9 },
+      "byteEqualityRequired": false,
+      "provenance": "synthetic, authored from parser contract; no retail asset"
+    },
+    {
+      "format": "FNT",
+      "variant": "missing BODY",
+      "expected": { "valid": false },
+      "byteEqualityRequired": false,
+      "provenance": "synthetic negative variant"
+    }
+  ]
+}

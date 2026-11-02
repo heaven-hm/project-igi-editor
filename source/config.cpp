@@ -2,11 +2,14 @@
 #include "config.h"
 #include "logger.h"
 #include "utils.h"
-#include "parsers/qsc_lexer.h"
-#include "parsers/qsc_parser.h"
-#include "parsers/qvm_compiler.h"
-#include "parsers/qvm_parser.h"
-#include "parsers/qvm_decompiler.h"
+#include "level/qsc_lexer.h"
+#include "level/qsc_parser.h"
+#include "level/qvm_compiler.h"
+#include "level/qvm_parser.h"
+#include "level/qvm_decompiler.h"
+#include "runtime/log_policy.h"
+#include "runtime/mission_fog.h"
+#include "runtime/weather_mode.h"
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -14,6 +17,55 @@
 #include <algorithm>
 
 ConfigData Config::data_;
+
+static std::filesystem::path GetQEDDirectory() {
+    const std::filesystem::path gameQED =
+        std::filesystem::path(Utils::GetIGIRootPath()) / "editor" / "qed";
+    if (std::filesystem::is_directory(gameQED)) {
+        return gameQED;
+    }
+    return std::filesystem::path(Utils::GetExeDirectory()) / "editor" / "qed";
+}
+
+static bool CompileQscFile(const std::filesystem::path& qscPath) {
+    std::ifstream qscIn(qscPath);
+    if (!qscIn.is_open()) {
+        std::cerr << "[Config] Cannot open QSC: " << qscPath << "\n";
+        return false;
+    }
+
+    std::string qscSrc((std::istreambuf_iterator<char>(qscIn)),
+                       std::istreambuf_iterator<char>());
+    // Editors commonly save UTF-8 QSC files with a BOM. It is metadata, not
+    // part of the first token, so strip it before lexing rather than failing
+    // closed and silently ignoring an otherwise valid logging setting.
+    if (qscSrc.size() >= 3 &&
+        static_cast<unsigned char>(qscSrc[0]) == 0xEF &&
+        static_cast<unsigned char>(qscSrc[1]) == 0xBB &&
+        static_cast<unsigned char>(qscSrc[2]) == 0xBF) {
+        qscSrc.erase(0, 3);
+    }
+    const qsc::LexResult lexResult = qsc::Lex(qscSrc);
+    if (!lexResult.ok) {
+        std::cerr << "[Config] Cannot lex " << qscPath << ": " << lexResult.error << "\n";
+        return false;
+    }
+
+    const qsc::ParseResult parseResult = qsc::Parse(lexResult.tokens);
+    if (!parseResult.ok) {
+        std::cerr << "[Config] Cannot parse " << qscPath << ": " << parseResult.error << "\n";
+        return false;
+    }
+
+    std::string compileError;
+    const std::filesystem::path qvmPath = qscPath.parent_path() /
+                                          (qscPath.stem().string() + ".qvm");
+    if (!qvm::CompileToFile(*parseResult.program, qvmPath.string(), &compileError)) {
+        std::cerr << "[Config] Cannot compile " << qscPath << ": " << compileError << "\n";
+        return false;
+    }
+    return true;
+}
 
 static std::string Trim(const std::string& s) {
     auto start = s.find_first_not_of(" \t\r\n");
@@ -73,18 +125,32 @@ static KeyBinding ParseKeyBinding(const std::string& binding) {
     else if (keyPart == "MINUS" || keyPart == "SUBTRACT") kb.vkCode = VK_OEM_MINUS;
     else if (keyPart == "LEFTMOUSEBUTTON") kb.vkCode = VK_LBUTTON;
     else if (keyPart.length() == 1) {
+#if defined(_WIN32)
+#if defined(_WIN32)
         kb.vkCode = VkKeyScanA(keyPart[0]) & 0xFF;
+#else
+        // VkKeyScanA returns the VK code of a character; for the characters the
+        // config grammar allows (single alphanumerics) that is the upper-case
+        // ASCII value, which is also what the VK_* table uses.
+        kb.vkCode = static_cast<int>(static_cast<unsigned char>(toupper(static_cast<unsigned char>(keyPart[0]))));
+#endif
+#else
+        // VkKeyScanA returns the VK code of a character; for the characters the
+        // config grammar allows (single alphanumerics) that is the upper-case
+        // ASCII value, which is also what the VK_* table uses.
+        kb.vkCode = static_cast<int>(static_cast<unsigned char>(toupper(static_cast<unsigned char>(keyPart[0]))));
+#endif
     }
 
     return kb;
 }
 
 std::string Config::GetConfigPath() {
-    return Utils::GetExeDirectory() + "\\editor\\qed\\qedconfig.qsc";
+    return (GetQEDDirectory() / "qedconfig.qsc").string();
 }
 
 std::string Config::GetKeybindingsPath() {
-    return Utils::GetExeDirectory() + "\\editor\\qed\\qedkeybindings.qsc";
+    return (GetQEDDirectory() / "qedkeybindings.qsc").string();
 }
 
 void Config::CreateDefault() {
@@ -120,13 +186,29 @@ void Config::CreateDefault() {
     data_.keyRedo = {0x59, true, false, false};    // Ctrl+Y
     data_.enableLogging = true;
     data_.debugLogging = false;
+    data_.logLevelThreshold = igi::kLogLevelInfo;
     data_.enableLOD = true;
+    data_.enableLightmaps = false;
+    data_.enableFog = true;
+    // 100 == the level's authored fog, which is the engine's own density: the
+    // default was 200, i.e. every level started with TWICE the fog retail has
+    // (the exponent is doubled). The engine has no fog-intensity control at all
+    // (igi::kFogIntensityLevelDefault, runtime/mission_fog.h), so 100 is the only
+    // default that matches the game at level start.
+    data_.fogIntensity = igi::kFogIntensityLevelDefault;
+    data_.musicEnabled = true;
+    data_.weatherEnabled = true;
+    data_.weatherMode = 0;
+    // igi::kWeatherSpeedDefault == 1 == the engine's own fall rate (rain.c:122-123).
+    data_.weatherSpeed = igi::kWeatherSpeedDefault;
     data_.consoleAutoActivate = 2;
     data_.searchType = 133577004;
     data_.invertMouse = false;
     data_.displayTaskNote = true;
     data_.allowDynamicSwitching = false;
     data_.saveConfigOnExit = true;
+    data_.auto_save_enabled = false;
+    data_.auto_save_interval_seconds = 300;
     data_.runEvent = true;
     data_.cameraLock = false;
     data_.enableBackup = false;
@@ -140,6 +222,7 @@ void Config::CreateDefault() {
     data_.objectFilePath = "";
     data_.interpolation = 0;
     data_.renderZNear = 2.8672f;
+    data_.graphNodeSize = 14;
     data_.cameraOriX = data_.cameraOriY = data_.cameraOriZ = 0.0f;
     data_.cameraRadiusX = data_.cameraRadiusY = 0.0f;
     data_.cameraPosX = data_.cameraPosY = data_.cameraPosZ = 0.0f;
@@ -148,38 +231,39 @@ void Config::CreateDefault() {
 
 void Config::Init() {
     CreateDefault();
-    std::string contentDir = Utils::GetExeDirectory() + "\\editor";
-    if (!std::filesystem::exists(contentDir)) {
+    // Do not let startup diagnostics create a log until the authoritative
+    // qedconfig.qsc has been compiled and loaded successfully.
+    data_.enableLogging = false;
+    data_.debugLogging = false;
+    data_.logLevelThreshold = igi::kLogLevelFatal;
+    const std::filesystem::path qedDir = GetQEDDirectory();
+    const std::string contentDir = qedDir.parent_path().string();
+    if (!std::filesystem::is_directory(qedDir)) {
         Logger::Get().Log(LogLevel::FATAL, "FATAL: editor directory not found: " + contentDir);
         Utils::ShowError("ERROR: FATAL\neditor directory not found:\n" + contentDir + "\nEditor will now exit.", "IGI Editor - Launch Error");
         std::exit(1);
     }
-    std::string qedDir = contentDir + "\\qed";
 
-    // Compile all .qsc files to .qvm
+    const std::filesystem::path configQscPath = qedDir / "qedconfig.qsc";
+    const bool configQvmReady = CompileQscFile(configQscPath);
+    if (!configQvmReady) {
+        std::cerr << "[Config] qedconfig.qsc is invalid; global configuration "
+                     "and logging remain disabled.\n";
+    }
+
+    // Compile the remaining QSC files to sibling QVM files. These files hold
+    // task schemas and keybindings, not the global editor configuration.
     for (const auto& entry : std::filesystem::directory_iterator(qedDir)) {
-        if (entry.path().extension() == ".qsc") {
-            std::string qscPath = entry.path().string();
-            std::string qvmPath = entry.path().parent_path().string() + "\\" + entry.path().stem().string() + ".qvm";
-            std::ifstream qscIn(qscPath);
-            std::string qscSrc((std::istreambuf_iterator<char>(qscIn)), std::istreambuf_iterator<char>());
-            qscIn.close();
-            auto lexResult = qsc::Lex(qscSrc);
-            if (lexResult.ok) {
-                auto parseResult = qsc::Parse(lexResult.tokens);
-                if (parseResult.ok) {
-                    std::string compileErr;
-                    qvm::CompileToFile(*parseResult.program, qvmPath, &compileErr);
-                }
-            }
+        if (entry.path().extension() == ".qsc" && entry.path() != configQscPath) {
+            CompileQscFile(entry.path());
         }
     }
-    Load();
+    Load(configQvmReady);
 }
 
-void Config::Load() {
-    std::string qedDir = Utils::GetExeDirectory() + "\\editor\\qed";
-    if (!std::filesystem::exists(qedDir)) return;
+void Config::Load(bool configQvmReady) {
+    const std::filesystem::path qedDir = GetQEDDirectory();
+    if (!std::filesystem::is_directory(qedDir)) return;
 
     auto ParseLine = [&](const std::string& line) {
         std::string clean = Trim(line);
@@ -208,9 +292,39 @@ void Config::Load() {
                     RENDER_Z_NEAR = data_.renderZNear;
                     WORLD_Z_NEAR = RENDER_Z_NEAR / 0.001f;
                 }
-                else if (key == "Logs" || key == "Enable" || key == "SaveConfigOnExit") data_.enableLogging = (val == "TRUE" || val == "true" || val == "1");
-                else if (key == "Debug") data_.debugLogging = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "Logs" || key == "Enable") data_.enableLogging = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "SaveConfigOnExit") data_.saveConfigOnExit = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "Debug") {
+                    data_.debugLogging = (val == "TRUE" || val == "true" || val == "1");
+                    if (data_.debugLogging) data_.logLevelThreshold = igi::kLogLevelDebug;
+                }
+                else if (key == "LogLevel") {
+                    data_.logLevelThreshold = igi::ClampLogLevel(std::stoi(val));
+                    data_.debugLogging = data_.logLevelThreshold == igi::kLogLevelDebug;
+                }
                 else if (key == "Lod") data_.enableLOD = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "Lightmaps") data_.enableLightmaps = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "Fog") data_.enableFog = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "FogIntensity") { int v = std::stoi(val); data_.fogIntensity = std::max(0, std::min(1000, v)); }
+                else if (key == "Music") data_.musicEnabled = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "WeatherEnabled") {
+                    data_.weatherEnabled = (val == "TRUE" || val == "true" || val == "1");
+                    if (!data_.weatherEnabled) data_.weatherMode = 3;
+                }
+                else if (key == "WeatherMode") {
+                    if (val == "Default" || val == "0") { data_.weatherMode = 0; data_.weatherEnabled = true; }
+                    else if (val == "Rain" || val == "1") { data_.weatherMode = 1; data_.weatherEnabled = true; }
+                    else if (val == "Snow" || val == "2") { data_.weatherMode = 2; data_.weatherEnabled = true; }
+                    else if (val == "Off" || val == "OFF" || val == "3") { data_.weatherMode = 3; data_.weatherEnabled = false; }
+                }
+                // The editor's preview speed step. Out-of-range values fall back to
+                // the authored rate (igi::WeatherSpeedScale does the same), so a
+                // hand-edited config can never freeze the preview by accident.
+                else if (key == "WeatherSpeed") {
+                    int v = std::stoi(val);
+                    data_.weatherSpeed = (v >= 0 && v < igi::kWeatherSpeedCount)
+                                             ? v : igi::kWeatherSpeedDefault;
+                }
                 else if (key == "ConsoleAutoActivate") data_.consoleAutoActivate = std::stoi(val);
                 else if (key == "SearchType") data_.searchType = std::stoll(val);
                 else if (key == "InvertMouse") data_.invertMouse = (val == "TRUE" || val == "true" || val == "1");
@@ -221,6 +335,8 @@ void Config::Load() {
                 else if (key == "Backup") data_.enableBackup = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "UseEditorFont") data_.useEditorFont = (val == "TRUE" || val == "true" || val == "1");
                 else if (key == "SystemFontSize") { int s = std::stoi(val); data_.systemFontSize = std::max(8, std::min(32, s)); }
+                else if (key == "AutoSaveEnabled") data_.auto_save_enabled = (val == "TRUE" || val == "true" || val == "1");
+                else if (key == "AutoSaveInterval") data_.auto_save_interval_seconds = std::stoi(val);
                 else if (key == "FindTaskName") data_.findTaskName = val;
                 else if (key == "FindTaskNote") data_.findTaskNote = val;
                 else if (key == "FindTaskID") data_.findTaskID = val;
@@ -228,6 +344,10 @@ void Config::Load() {
                 else if (key == "TaskFileName") data_.taskFileName = val;
                 else if (key == "Interpolation") data_.interpolation = std::stoi(val);
                 else if (key == "SetObjectFile") data_.objectFilePath = val;
+                else if (key == "QGraphNodeSize") data_.graphNodeSize = std::max(1, std::stoi(val));
+            }
+            if (key == "LevelMusic" && args.size() >= 2) {
+                try { data_.levelMusicFiles[std::stoi(args[0])] = args[1]; } catch (...) {}
             }
             if (key == "SetCameraOrientation" && args.size() >= 3) {
                 data_.cameraOriX = std::stof(args[0]);
@@ -261,8 +381,9 @@ void Config::Load() {
                 else if (eventName == "CameraEnable") data_.keyEnableCamera = parsed;
                 else if (eventName == "CameraMoveForward") data_.keyMoveCameraForward = parsed;
                 else if (eventName == "CameraMoveBackward") data_.keyMoveCameraBackward = parsed;
-                else if (eventName == "CameraAdjustRadius") data_.keyAdjustCameraRadius = parsed;
-                else if (eventName == "CameraLookDown") data_.keyLookDown = parsed;
+                // CameraAdjustRadius and CameraLookDown have no named field: their
+                // handlers read the event map directly (source/app_input.cpp), so
+                // mirroring them here only created dead config surface (task-11).
                 else if (eventName == "CameraSnapToObject") data_.keySnapToObject = parsed;
                 else if (eventName == "CameraSnapToGround") data_.keySnapToGround = parsed;
                 else if (eventName == "ToggleDisplay") data_.keyClipMode = parsed;
@@ -302,8 +423,16 @@ void Config::Load() {
                 RENDER_Z_NEAR = data_.renderZNear;
                 WORLD_Z_NEAR = RENDER_Z_NEAR / 0.001f;
             }
-            else if (key == "Logs" || key == "Enable" || key == "SaveConfigOnExit") data_.enableLogging = (val == "TRUE" || val == "true" || val == "1");
-            else if (key == "Debug") data_.debugLogging = (val == "TRUE" || val == "true" || val == "1");
+            else if (key == "Logs" || key == "Enable") data_.enableLogging = (val == "TRUE" || val == "true" || val == "1");
+            else if (key == "SaveConfigOnExit") data_.saveConfigOnExit = (val == "TRUE" || val == "true" || val == "1");
+            else if (key == "Debug") {
+                data_.debugLogging = (val == "TRUE" || val == "true" || val == "1");
+                if (data_.debugLogging) data_.logLevelThreshold = igi::kLogLevelDebug;
+            }
+            else if (key == "LogLevel") {
+                data_.logLevelThreshold = igi::ClampLogLevel(std::stoi(val));
+                data_.debugLogging = data_.logLevelThreshold == igi::kLogLevelDebug;
+            }
             else if (key == "ConsoleAutoActivate") data_.consoleAutoActivate = std::stoi(val);
             else if (key == "SearchType") data_.searchType = std::stoll(val);
             else if (key == "InvertMouse") data_.invertMouse = (val == "TRUE" || val == "true" || val == "1");
@@ -321,36 +450,55 @@ void Config::Load() {
         }
     };
 
-    for (const auto& entry : std::filesystem::directory_iterator(qedDir)) {
-        if (entry.path().extension() == ".qvm") {
-            QVMFile qvm = QVM_Parse(entry.path().string());
-            if (qvm.valid) {
-                std::string decompiled = QVM_DecompileToString(qvm);
-                std::stringstream ss(decompiled);
-                std::string line;
-                while (std::getline(ss, line)) ParseLine(line);
-                Logger::Get().Log(LogLevel::INFO, "[Config] Loaded from memory-decompiled: " + entry.path().filename().string());
-            }
+    if (configQvmReady) {
+        const std::filesystem::path configQvmPath = qedDir / "qedconfig.qvm";
+        QVMFile qvm = QVM_Parse(configQvmPath.string());
+        if (qvm.valid) {
+            std::string decompiled = QVM_DecompileToString(qvm);
+            std::stringstream ss(decompiled);
+            std::string line;
+            while (std::getline(ss, line)) ParseLine(line);
+            Logger::Get().Log(LogLevel::INFO, "[Config] Loaded from memory-decompiled: qedconfig.qvm");
+        } else {
+            data_.enableLogging = false;
+            data_.debugLogging = false;
+            data_.logLevelThreshold = igi::kLogLevelFatal;
+            std::cerr << "[Config] Cannot load qedconfig.qvm: " << qvm.error
+                      << "; logging remains disabled.\n";
         }
     }
 
-    // Event bindings are authoritative from the human-readable keybindings file.
-    // Parse it last so it overrides any stale bindings from a compiled .qvm and so
-    // the full set (TaskMagicObjToggle, AutoComplete*, SaveSubTask*, ...) is loaded.
+    // Event bindings are compiled from qedkeybindings.qsc into qedkeybindings.qvm
+    // during Config::Init() (lines 256-260). Load them from the compiled .qvm file
+    // via QVM_Parse + QVM_DecompileToString (matching qedconfig.qvm above), falling
+    // back to qedkeybindings.qsc only if the compiled .qvm is absent or invalid.
     {
-        std::ifstream kbFile(GetKeybindingsPath());
-        if (kbFile.is_open()) {
+        const std::filesystem::path kbQvmPath = qedDir / "qedkeybindings.qvm";
+        QVMFile kbQvm = QVM_Parse(kbQvmPath.string());
+        if (kbQvm.valid) {
+            std::string decompiled = QVM_DecompileToString(kbQvm);
+            std::stringstream ss(decompiled);
             std::string line;
             int n = 0;
-            while (std::getline(kbFile, line)) { ParseLine(line); ++n; }
-            Logger::Get().Log(LogLevel::INFO, "[Config] Loaded event bindings from qedkeybindings.qsc (" + std::to_string(n) + " lines)");
+            while (std::getline(ss, line)) { ParseLine(line); ++n; }
+            Logger::Get().Log(LogLevel::INFO, "[Config] Loaded event bindings from memory-decompiled: qedkeybindings.qvm (" + std::to_string(n) + " lines)");
         } else {
-            Logger::Get().Log(LogLevel::WARNING, "[Config] qedkeybindings.qsc not found at: " + GetKeybindingsPath());
+            std::ifstream kbFile(GetKeybindingsPath());
+            if (kbFile.is_open()) {
+                std::string line;
+                int n = 0;
+                while (std::getline(kbFile, line)) { ParseLine(line); ++n; }
+                Logger::Get().Log(LogLevel::INFO, "[Config] Loaded event bindings from qedkeybindings.qsc (" + std::to_string(n) + " lines)");
+            } else {
+                Logger::Get().Log(LogLevel::WARNING, "[Config] qedkeybindings.qvm/.qsc not found at: " + GetKeybindingsPath());
+            }
         }
     }
 }
 
 void Config::Save() {
+    data_.logLevelThreshold = igi::ClampLogLevel(data_.logLevelThreshold);
+    data_.debugLogging = data_.logLevelThreshold == igi::kLogLevelDebug;
     std::string qscPath = GetConfigPath();
     std::ofstream file(qscPath);
     if (file.is_open()) {
@@ -362,15 +510,32 @@ void Config::Save() {
         file << "QEDFontColorB(" << data_.fontColorB << ");\n";
         file << "QEDLogs(" << (data_.enableLogging ? "TRUE" : "FALSE") << ");\n";
         file << "QEDDebug(" << (data_.debugLogging ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDLogLevel(" << data_.logLevelThreshold << ");\n";
         file << "QEDConsoleAutoActivate(" << data_.consoleAutoActivate << ");\n";
         file << "QEDSearchType(" << data_.searchType << ");\n";
         file << "QEDInvertMouse(" << (data_.invertMouse ? "TRUE" : "FALSE") << ");\n";
         file << "QEDDisplayTaskNote(" << (data_.displayTaskNote ? "TRUE" : "FALSE") << ");\n";
         file << "QEDAllowDynamicSwitching(" << (data_.allowDynamicSwitching ? "TRUE" : "FALSE") << ");\n";
         file << "QEDSaveConfigOnExit(" << (data_.saveConfigOnExit ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDAutoSaveEnabled(" << (data_.auto_save_enabled ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDAutoSaveInterval(" << data_.auto_save_interval_seconds << ");\n";
         file << "QEDRunEvent(" << (data_.runEvent ? "TRUE" : "FALSE") << ");\n";
         file << "QEDCameraLock(" << (data_.cameraLock ? "TRUE" : "FALSE") << ");\n";
         file << "QEDBackup(" << (data_.enableBackup ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDLightmaps(" << (data_.enableLightmaps ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDFog(" << (data_.enableFog ? "TRUE" : "FALSE") << ");\n";
+        file << "QEDFogIntensity(" << data_.fogIntensity << ");\n";
+        file << "QEDMusic(" << (data_.musicEnabled ? "TRUE" : "FALSE") << ");\n";
+        if (!data_.weatherEnabled && data_.weatherMode != 3) data_.weatherMode = 3;
+        else if (data_.weatherEnabled && data_.weatherMode == 3) data_.weatherMode = 0;
+        data_.weatherEnabled = (data_.weatherMode != 3);
+        file << "QEDWeatherEnabled(" << (data_.weatherEnabled ? "TRUE" : "FALSE") << ");\n";
+        const char* wmodeName = "Default";
+        if (data_.weatherMode == 1) wmodeName = "Rain";
+        else if (data_.weatherMode == 2) wmodeName = "Snow";
+        else if (data_.weatherMode == 3) wmodeName = "Off";
+        file << "QEDWeatherMode(\"" << wmodeName << "\");\n";
+        file << "QEDWeatherSpeed(" << data_.weatherSpeed << ");\n";
         file << "QEDUseEditorFont(" << (data_.useEditorFont ? "TRUE" : "FALSE") << ");\n";
         file << "QEDSystemFontSize(" << data_.systemFontSize << ");\n";
         file << "QEDFindTaskName(\"" << data_.findTaskName << "\");\n";
@@ -381,10 +546,14 @@ void Config::Save() {
         file << "QEDSetObjectFile(\"" << data_.objectFilePath << "\");\n";
         file << "QEDInterpolation(" << data_.interpolation << ");\n";
         file << "QEDRenderZNear(" << data_.renderZNear << ");\n";
+        file << "QGraphNodeSize(" << data_.graphNodeSize << ");\n";
         file << "QEDSetCameraOrientation(" << data_.cameraOriX << ", " << data_.cameraOriY << ", " << data_.cameraOriZ << ");\n";
         file << "QEDSetCameraRadius(" << data_.cameraRadiusX << ", " << data_.cameraRadiusY << ");\n";
         file << "QEDSetCameraPosition(" << data_.cameraPosX << ", " << data_.cameraPosY << ", " << data_.cameraPosZ << ");\n";
         file << "QEDSetCameraMatrix(" << data_.cameraMatX << ", " << data_.cameraMatY << ", " << data_.cameraMatZ << ");\n";
+        for (const auto& [lvl, fname] : data_.levelMusicFiles) {
+            file << "QEDLevelMusic(" << lvl << ", \"" << fname << "\");\n";
+        }
         file.close();
     }
     // NOTE: qedkeybindings.qsc is a user-authored source of truth and is deliberately
@@ -392,19 +561,9 @@ void Config::Save() {
     // named bindings, which silently dropped TaskMagicObjToggle, AutoComplete*,
     // SaveSubTask*, TaskMove*, find variants, etc. — leaving most hotkeys unbound on the
     // next launch. The editor now only reads that file (see Config::Init).
-    for (const auto& path : { qscPath }) {
-        std::string qvmPath = std::filesystem::path(path).parent_path().string() + "\\" + std::filesystem::path(path).stem().string() + ".qvm";
-        std::ifstream qscIn(path);
-        std::string qscSrc((std::istreambuf_iterator<char>(qscIn)), std::istreambuf_iterator<char>());
-        qscIn.close();
-        auto lexResult = qsc::Lex(qscSrc);
-        if (lexResult.ok) {
-            auto parseResult = qsc::Parse(lexResult.tokens);
-            if (parseResult.ok) {
-                std::string compileErr;
-                qvm::CompileToFile(*parseResult.program, qvmPath, &compileErr);
-            }
-        }
+    if (!CompileQscFile(qscPath)) {
+        std::cerr << "[Config] Saved QSC but could not regenerate sibling QVM: "
+                  << qscPath << "\n";
     }
 }
 

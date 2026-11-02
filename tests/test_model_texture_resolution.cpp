@@ -1,0 +1,419 @@
+#include "../source/renderer/model_texture_resolution.h"
+#include "../source/renderer/res_compiler.h"
+
+#include <gtest/gtest.h>
+
+#include "support/temp_directory.h"
+
+TEST(ModelTextureResolution, KeepsSelectedVariantAndMaterialOrder) {
+    const std::vector<ModelTextureSource> sources{
+        {2, "001_02_1", {"face_b", "vest_b", "trousers_b"}},
+        {1, "001_01_1", {"face_a", "vest_a"}},
+        {9, "001_02_1", {"different_face", "different_vest"}}
+    };
+
+    const auto* chosen = FindExactTextureSource(sources, 2, "001_02_1");
+    ASSERT_NE(chosen, nullptr);
+    EXPECT_EQ(chosen->textures,
+              (std::vector<std::string>{"face_b", "vest_b", "trousers_b"}));
+    EXPECT_EQ(FindExactTextureSource(sources, 3, "001_02_1"), nullptr);
+}
+
+TEST(ModelTextureResolution, StripsOnlyRecognizedFormatSuffixes) {
+    EXPECT_EQ(StripTextureFormatSuffix("004_13_1"), "004_13_1");
+    EXPECT_EQ(StripTextureFormatSuffix("009_09_1_argb8888"), "009_09_1");
+    EXPECT_EQ(StripTextureFormatSuffix("009_09_1_RGB565"), "009_09_1");
+    EXPECT_EQ(StripTextureFormatSuffix("004_13_1_1"), "004_13_1_1");
+    EXPECT_EQ(StripTextureFormatSuffix("004_13_1_custom"), "004_13_1_custom");
+}
+
+TEST(ModelTextureResolution, RequiredMetadataFailureCannotReportImportSuccess) {
+    EXPECT_FALSE(IsCompleteModelImportMetadata({false, true}));
+    EXPECT_FALSE(IsCompleteModelImportMetadata({true, false}));
+    EXPECT_TRUE(IsCompleteModelImportMetadata({true, true}));
+}
+
+TEST(ModelTextureResolution, RejectsMaterialSlotsOutsideOrderedMapping) {
+    EXPECT_TRUE(IsTextureMappingCompatible({0, 2, 12}, 13));
+    EXPECT_FALSE(IsTextureMappingCompatible({0, 13}, 13));
+    EXPECT_FALSE(IsTextureMappingCompatible({-1}, 13));
+    EXPECT_FALSE(IsTextureMappingCompatible({0}, 0));
+}
+
+TEST(ModelTextureResolution, UntaggedSourceRequiresByteEquivalentBundles) {
+    const std::vector<ModelSourceBundle> equivalent{
+        {1, {"skin", "gear"}, {1, 2}, {{3}, {4}}},
+        {8, {"skin", "gear"}, {1, 2}, {{3}, {4}}}
+    };
+    EXPECT_EQ(SelectUnambiguousModelSourceLevel(equivalent), 1);
+    EXPECT_EQ(SelectUnambiguousModelSourceLevel({}), 0);
+
+    auto divergentPixels = equivalent;
+    divergentPixels[1].textureBytes[0] = {9};
+    EXPECT_EQ(SelectUnambiguousModelSourceLevel(divergentPixels), 0);
+
+    auto divergentMesh = equivalent;
+    divergentMesh[1].meshBytes = {9};
+    EXPECT_EQ(SelectUnambiguousModelSourceLevel(divergentMesh), 0);
+
+    auto divergentMapping = equivalent;
+    std::swap(divergentMapping[1].textureIds[0], divergentMapping[1].textureIds[1]);
+    EXPECT_EQ(SelectUnambiguousModelSourceLevel(divergentMapping), 0);
+}
+
+TEST(ModelTextureResolution, DedupePickerRowsKeepsOneRowPerModelId) {
+    const std::vector<ModelPickerEntry> entries{
+        {"001_01_1", 1, "001_01_1  [Level 1]"},
+        {"001_02_1", 1, "001_02_1  [Level 1]"},
+        {"001_02_1", 2, "001_02_1  [Level 2]"},
+        {"001_02_1", 8, "001_02_1  [Level 8]"},
+        {"009_01_1", 0, "009_01_1"}
+    };
+
+    // The current level owns the model: the single kept row must carry it so
+    // Enter applies without a redundant foreign re-import.
+    const auto deduped = DedupeModelPickerEntries(entries, 2);
+    ASSERT_EQ(deduped.size(), 3u);
+    EXPECT_EQ(deduped[0].modelId, "001_01_1");
+    EXPECT_EQ(deduped[0].sourceLevel, 1);
+    EXPECT_EQ(deduped[0].label, "001_01_1");
+    EXPECT_EQ(deduped[1].modelId, "001_02_1");
+    EXPECT_EQ(deduped[1].sourceLevel, 2);
+    EXPECT_EQ(deduped[1].label, "001_02_1");
+    EXPECT_EQ(deduped[2].modelId, "009_01_1");
+    EXPECT_EQ(deduped[2].sourceLevel, 0);
+
+    // Otherwise the smallest owning level wins, keeping the import source
+    // deterministic for models the destination level does not own.
+    const auto dedupedForeign = DedupeModelPickerEntries(entries, 7);
+    ASSERT_EQ(dedupedForeign.size(), 3u);
+    EXPECT_EQ(dedupedForeign[1].modelId, "001_02_1");
+    EXPECT_EQ(dedupedForeign[1].sourceLevel, 1);
+}
+
+TEST(ModelTextureResolution, ModelPickerClickSelectsTheDisplayedFilteredRow) {
+    const std::vector<ModelPickerEntry> entries = DedupeModelPickerEntries(
+        {
+            {"001_01_1", 1, "001_01_1  [Level 1]"},
+            {"001_02_1", 1, "001_02_1  [Level 1]"},
+            {"001_02_1", 8, "001_02_1  [Level 8]"},
+            {"009_01_1", 2, "009_01_1  [Level 2]"}
+        },
+        7);
+
+    const auto filtered = FilterModelPickerEntries(entries, "001_02");
+    ASSERT_EQ(filtered.size(), 1u);
+    EXPECT_EQ(filtered[0].modelId, "001_02_1");
+    EXPECT_EQ(filtered[0].sourceLevel, 1);
+
+    // The model panel is the rightmost 280px; its rows begin below the 50px
+    // header. A click on the first filtered row must select that exact entry.
+    EXPECT_EQ(ModelPickerSelectionAt(entries, "001_02", 1100, 55,
+                                      1280, 720, 0, 16), 0);
+    EXPECT_EQ(ModelPickerSelectionAt(entries, "001_02", 900, 55,
+                                      1280, 720, 0, 16), -1);
+    EXPECT_EQ(ModelPickerSelectionAt(entries, "001_02", 1100, 710,
+                                      1280, 720, 0, 16), -1);
+}
+
+TEST(ModelTextureResolution, ArrowNavigationChangesPreviewedModel) {
+    // One row per unique model ID: every Up/Down step must change the
+    // previewed model instead of only changing a duplicated source label.
+    const std::vector<ModelPickerEntry> entries = DedupeModelPickerEntries(
+        {
+            {"001_01_1", 1, "001_01_1  [Level 1]"},
+            {"001_02_1", 1, "001_02_1  [Level 1]"},
+            {"001_02_1", 2, "001_02_1  [Level 2]"},
+            {"009_01_1", 2, "009_01_1  [Level 2]"}
+        },
+        7);
+    const auto filtered = FilterModelPickerEntries(entries, "");
+    ASSERT_EQ(filtered.size(), 3u);
+
+    int selected = 0;
+    selected = MoveModelPickerSelection(selected, (int)filtered.size(), 1);
+    EXPECT_EQ(filtered[selected].modelId, "001_02_1");
+    selected = MoveModelPickerSelection(selected, (int)filtered.size(), 1);
+    EXPECT_EQ(filtered[selected].modelId, "009_01_1");
+    selected = MoveModelPickerSelection(selected, (int)filtered.size(), -1);
+    EXPECT_EQ(filtered[selected].modelId, "001_02_1");
+}
+
+TEST(ModelTextureResolution, EnterAppliesTheSelectedModel) {
+    const std::vector<ModelPickerEntry> entries = DedupeModelPickerEntries(
+        {
+            {"001_01_1", 1, "001_01_1  [Level 1]"},
+            {"001_02_1", 1, "001_02_1  [Level 1]"},
+            {"001_02_1", 2, "001_02_1  [Level 2]"},
+            {"009_01_1", 2, "009_01_1  [Level 2]"}
+        },
+        7);
+
+    // Typing a model ID narrows the list; Enter commits the highlighted row
+    // with its deterministic source level for the import provenance.
+    const auto commit = ResolveModelPickerCommit(entries, "001_02", 0);
+    ASSERT_TRUE(commit.has_value());
+    EXPECT_EQ(commit->modelId, "001_02_1");
+    EXPECT_EQ(commit->sourceLevel, 1);
+
+    EXPECT_FALSE(ResolveModelPickerCommit(entries, "001_02", 1).has_value());
+    EXPECT_FALSE(ResolveModelPickerCommit(entries, "", 7).has_value());
+    EXPECT_FALSE(ResolveModelPickerCommit(entries, "no-such-model", 0).has_value());
+}
+
+TEST(ModelTextureResolution, ExplicitForeignSourceReplacesExistingModelId) {
+    EXPECT_TRUE(ModelSourceRequiresImport(true, false, 1, 0));
+    EXPECT_FALSE(ModelSourceRequiresImport(true, true, 1, 1));
+    EXPECT_TRUE(ModelSourceRequiresImport(true, true, 1, 7));
+    EXPECT_FALSE(ModelSourceRequiresImport(true, true, 1, 0));
+    EXPECT_TRUE(ModelSourceRequiresImport(false, false, 1, 7));
+    EXPECT_FALSE(ModelSourceRequiresImport(false, false, 1, 0));
+}
+
+TEST(ModelTextureResolution, ArrowNavigationChangesSelectionWithinFilteredList) {
+    EXPECT_EQ(MoveModelPickerSelection(0, 3, 1), 1);
+    EXPECT_EQ(MoveModelPickerSelection(1, 3, -1), 0);
+    EXPECT_EQ(MoveModelPickerSelection(2, 3, 1), 2);
+    EXPECT_EQ(MoveModelPickerSelection(0, 3, -1), 0);
+    EXPECT_EQ(MoveModelPickerSelection(0, 0, 1), 0);
+}
+
+namespace {
+
+std::array<ModelSourceArchiveIndex, 2> IndexSyntheticBundle(
+    const std::string& levelRes, const std::string& commonRes) {
+    std::array<ModelSourceArchiveIndex, 2> bundle;
+    const std::string paths[2] = {levelRes, commonRes};
+    for (size_t slot = 0; slot < 2; ++slot) {
+        bundle[slot].resPath = paths[slot];
+        std::string error;
+        EXPECT_TRUE(RES_BuildIndex(paths[slot], bundle[slot].entries, error)) << error;
+    }
+    return bundle;
+}
+
+std::vector<uint8_t> ReadFromDisk(const std::string& resPath, const ResEntryInfo& info) {
+    return RES_ReadEntry(resPath, info);
+}
+
+}  // namespace
+
+TEST(ModelTextureResolution, LevelMissingFallsBackToCommonArchive) {
+    test_support::TempDirectory temp;
+    const std::string levelRes = (temp.path() / "level.res").string();
+    const std::string commonRes = (temp.path() / "common.res").string();
+
+    // The texture lives only in the shared common archive; the level archive
+    // holds an unrelated entry, mirroring 001_02_1's polluted level reses.
+    std::string error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:textures/unrelated.tex", {7, 7, 7}}}, levelRes, error)) << error;
+    const std::vector<uint8_t> commonBytes = {1, 2, 3, 4};
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:textures/shared_tex.tex", commonBytes}}, commonRes, error)) << error;
+
+    const auto bundle = IndexSyntheticBundle(levelRes, commonRes);
+    EXPECT_EQ(FindModelSourceEntry(bundle, "shared_tex", true, ReadFromDisk), commonBytes);
+    EXPECT_TRUE(FindModelSourceEntry(bundle, "missing_tex", true, ReadFromDisk).empty());
+}
+
+TEST(ModelTextureResolution, IdentifiesSharedCommonTextureArchivePaths) {
+    EXPECT_TRUE(IsSharedCommonTextureArchive(
+        "D:\\IGI1\\missions\\location0\\common\\textures\\location0.res"));
+    EXPECT_TRUE(IsSharedCommonTextureArchive(
+        "d:/igi1/missions/location0/COMMON/textures/location0.res"));
+    EXPECT_FALSE(IsSharedCommonTextureArchive(
+        "D:\\IGI1\\missions\\location0\\level7\\textures\\level7.res"));
+    EXPECT_FALSE(IsSharedCommonTextureArchive(
+        "D:\\IGI1\\missions\\location0\\common\\models\\location0.res"));
+}
+
+TEST(ModelTextureResolution, PreviewTextureReportsTheArchiveThatAnswered) {
+    test_support::TempDirectory temp;
+    const auto levelDir = temp.path() / "level12" / "textures";
+    const auto commonDir = temp.path() / "common" / "textures";
+    std::filesystem::create_directories(levelDir);
+    std::filesystem::create_directories(commonDir);
+    const std::string levelRes = (levelDir / "level12.res").string();
+    const std::string commonRes = (commonDir / "location0.res").string();
+    const std::vector<uint8_t> levelBytes = {128, 128};
+    const std::vector<uint8_t> commonBytes = {128, 32};
+    std::string error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:textures/level_only.tex", levelBytes},
+         RESEntry{"LOCAL:textures/both.tex", levelBytes}}, levelRes, error)) << error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:textures/shared_only.tex", commonBytes},
+         RESEntry{"LOCAL:textures/both.tex", commonBytes}}, commonRes, error)) << error;
+
+    const auto bundle = IndexSyntheticBundle(levelRes, commonRes);
+    const std::vector<ModelSourceArchiveIndex> archives(bundle.begin(), bundle.end());
+
+    // The provenance must name the archive the bytes came from, not just the bytes:
+    // that is what lets the loader log a cross-level/fallback resolution instead of
+    // leaving it silent.
+    std::string source;
+    EXPECT_EQ(FindPreviewTextureEntry(archives, "level_only", ReadFromDisk, &source), levelBytes);
+    EXPECT_TRUE(SameArchivePath(source, levelRes));
+
+    source.clear();
+    EXPECT_EQ(FindPreviewTextureEntry(archives, "shared_only", ReadFromDisk, &source), commonBytes);
+    EXPECT_TRUE(SameArchivePath(source, commonRes));
+
+    // Level entries win over same-named common entries, and the report says so.
+    source.clear();
+    EXPECT_EQ(FindPreviewTextureEntry(archives, "both", ReadFromDisk, &source), levelBytes);
+    EXPECT_TRUE(SameArchivePath(source, levelRes));
+
+    // A miss reports no source at all.
+    source = "stale";
+    EXPECT_TRUE(FindPreviewTextureEntry(archives, "missing_tex", ReadFromDisk, &source).empty());
+    EXPECT_TRUE(source.empty());
+}
+
+TEST(ModelTextureResolution, ArchivePathsCompareCaseInsensitively) {
+    EXPECT_TRUE(SameArchivePath(
+        "D:\\IGI1\\missions\\location0\\level7\\textures\\level7.res",
+        "d:\\igi1\\MISSIONS\\location0\\LEVEL7\\textures\\level7.RES"));
+    EXPECT_FALSE(SameArchivePath(
+        "D:\\IGI1\\missions\\location0\\level7\\textures\\level7.res",
+        "D:\\IGI1\\missions\\location0\\level8\\textures\\level8.res"));
+    EXPECT_FALSE(SameArchivePath("", "D:\\IGI1\\x.res"));
+    EXPECT_TRUE(SameArchivePath("", ""));
+}
+
+TEST(ModelTextureResolution, PreviewTextureKeepsLevelSpecificOverride) {
+    test_support::TempDirectory temp;
+    const auto levelDir = temp.path() / "level12" / "textures";
+    const auto commonDir = temp.path() / "common" / "textures";
+    std::filesystem::create_directories(levelDir);
+    std::filesystem::create_directories(commonDir);
+    const std::string levelRes = (levelDir / "level12.res").string();
+    const std::string commonRes = (commonDir / "location0.res").string();
+    const std::vector<uint8_t> pollutedLevelBytes = {128, 32};
+    const std::vector<uint8_t> commonBytes = {128, 128};
+    std::string error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:textures/001_02_1.tex", pollutedLevelBytes}}, levelRes, error)) << error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:textures/001_02_1.tex", commonBytes}}, commonRes, error)) << error;
+
+    const auto bundle = IndexSyntheticBundle(levelRes, commonRes);
+    const std::vector<ModelSourceArchiveIndex> archives(bundle.begin(), bundle.end());
+    EXPECT_EQ(FindPreviewTextureEntry(archives, "001_02_1", ReadFromDisk), pollutedLevelBytes);
+}
+
+TEST(ModelTextureResolution, SelectedLevelTextureOverridesSharedCommonTexture) {
+    test_support::TempDirectory temp;
+    const std::string levelRes = (temp.path() / "level.res").string();
+    const std::string commonRes = (temp.path() / "common.res").string();
+
+    // An import must preserve the texture visible in the selected source
+    // scene, including level-specific overrides of a shared texture name.
+    const std::vector<uint8_t> levelBytes = {9, 9, 9};
+    const std::vector<uint8_t> commonBytes = {1, 2, 3, 4};
+    std::string error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:textures/face.tex", levelBytes}}, levelRes, error)) << error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:textures/face.tex", commonBytes}}, commonRes, error)) << error;
+
+    const auto bundle = IndexSyntheticBundle(levelRes, commonRes);
+    EXPECT_EQ(FindModelSourceEntry(bundle, "face", true, ReadFromDisk), levelBytes);
+}
+
+TEST(ModelTextureResolution, SelectedLevelFormatFallbackPrecedesCommonExactName) {
+    test_support::TempDirectory temp;
+    const std::string levelRes = (temp.path() / "level.res").string();
+    const std::string commonRes = (temp.path() / "common.res").string();
+    const std::vector<uint8_t> levelBytes = {7, 8, 9};
+    std::string error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:textures/face.tex", levelBytes}}, levelRes, error)) << error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:textures/face_argb8888.tex", {1, 2, 3}}}, commonRes, error)) << error;
+
+    const auto bundle = IndexSyntheticBundle(levelRes, commonRes);
+    EXPECT_EQ(FindModelSourceEntry(bundle, "face_argb8888", true, ReadFromDisk), levelBytes);
+}
+
+TEST(ModelTextureResolution, LevelArchiveWinsOverCommonArchive) {
+    test_support::TempDirectory temp;
+    const std::string levelRes = (temp.path() / "level.res").string();
+    const std::string commonRes = (temp.path() / "common.res").string();
+
+    // Same entry name in both archives with divergent bytes: the source bundle
+    // is the level archive, so its bytes must win.
+    const std::vector<uint8_t> levelMesh = {9, 8, 7};
+    std::string error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:models/dup_model.mef", levelMesh}}, levelRes, error)) << error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:models/dup_model.mef", {1, 1, 1}}}, commonRes, error)) << error;
+
+    const auto bundle = IndexSyntheticBundle(levelRes, commonRes);
+    EXPECT_EQ(FindModelSourceEntry(bundle, "dup_model", false, ReadFromDisk), levelMesh);
+}
+
+// ── The model-archive lookup must use the engine's resource identity ─────────
+//
+// Regression guard for the bug that made 61 models resolve to nothing and left the
+// viewport empty: Renderer_Objects::FindMeshData asked the .res index for a bare
+// "<id>.mef", while RES_BuildIndex keys entries by the engine's own identity —
+// Mesh_Load's "LOCAL:models/%s.mef" (HOOK 0x4CF390, src/model/model.c:364), folded
+// by String_ToUpper (0x4B5AF0, src/res/resource.c:98-104) and compared by
+// Resource_IsLoaded (0x4B5B90, :136-138). FindMeshData is now a thin wrapper over
+// FindModelEntryByIdentity, which is what this test pins.
+TEST(ModelTextureResolution, ModelLookupResolvesByEngineResourceIdentity) {
+    test_support::TempDirectory temp;
+    const std::string levelRes = (temp.path() / "level2.res").string();
+    const std::vector<uint8_t> meshBytes = {0x4D, 0x45, 0x46, 0x00};
+    std::string error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:models/001_02_1.mef", meshBytes}}, levelRes, error)) << error;
+
+    std::vector<ModelSourceArchiveIndex> archives(1);
+    archives[0].resPath = levelRes;
+    ASSERT_TRUE(RES_BuildIndex(levelRes, archives[0].entries, error)) << error;
+
+    const ModelEntryHit hit = FindModelEntryByIdentity(archives, "001_02_1", ReadFromDisk);
+    EXPECT_EQ(hit.bytes, meshBytes);
+    EXPECT_EQ(hit.resPath, levelRes);
+
+    // Nothing else resolves against this archive.
+    EXPECT_TRUE(FindModelEntryByIdentity(archives, "001_02_2", ReadFromDisk).bytes.empty());
+    EXPECT_TRUE(FindModelEntryByIdentity(archives, "", ReadFromDisk).bytes.empty());
+
+    // The bare leaf name is NOT a key. An index that only holds "<id>.mef" — the
+    // pre-fix lookup — must resolve nothing.
+    std::vector<ModelSourceArchiveIndex> bare(1);
+    bare[0].resPath = levelRes;
+    bare[0].entries["001_02_1.mef"] = ResEntryInfo{0, meshBytes.size()};
+    EXPECT_TRUE(FindModelEntryByIdentity(bare, "001_02_1", ReadFromDisk).bytes.empty())
+        << "a bare '<id>.mef' key must not resolve — that was the 61-model bug";
+}
+
+// Archives are searched in the order given (level before shared common), and the
+// hit reports which archive supplied the bytes.
+TEST(ModelTextureResolution, ModelIdentityLookupKeepsArchiveOrder) {
+    test_support::TempDirectory temp;
+    const std::string levelRes = (temp.path() / "level7.res").string();
+    const std::string commonRes = (temp.path() / "location0.res").string();
+    const std::vector<uint8_t> levelBytes = {7, 7, 7};
+    const std::vector<uint8_t> commonBytes = {1, 1, 1};
+    std::string error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:models/001_02_1.mef", levelBytes}}, levelRes, error)) << error;
+    ASSERT_TRUE(RES_WriteEntries(
+        {RESEntry{"LOCAL:models/001_02_1.mef", commonBytes}}, commonRes, error)) << error;
+
+    std::vector<ModelSourceArchiveIndex> archives(2);
+    archives[0].resPath = levelRes;
+    archives[1].resPath = commonRes;
+    ASSERT_TRUE(RES_BuildIndex(levelRes, archives[0].entries, error)) << error;
+    ASSERT_TRUE(RES_BuildIndex(commonRes, archives[1].entries, error)) << error;
+
+    const ModelEntryHit hit = FindModelEntryByIdentity(archives, "001_02_1", ReadFromDisk);
+    EXPECT_EQ(hit.bytes, levelBytes);
+    EXPECT_EQ(hit.resPath, levelRes);
+}

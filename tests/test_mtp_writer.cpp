@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "parsers/mtp_parser.h"
+#include "../source/level/mtp_writer.h"
 #include "utils.h"
 #include <filesystem>
 #include <fstream>

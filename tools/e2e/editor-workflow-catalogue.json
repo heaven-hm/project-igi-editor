@@ -1,0 +1,197 @@
+{
+  "schemaVersion": 1,
+  "actions": [
+    {
+      "name": "inspect-task",
+      "action": "select_task",
+      "applicability": "every Task_New instance",
+      "requiredSteps": ["select_task", "capture_properties"],
+      "uiOracle": "property_panel_identifies_task_type",
+      "stateOracle": "inventory_anchor_matches_decompiled_task"
+    },
+    {
+      "name": "model-picker",
+      "action": "select_model",
+      "applicability": "tasks with an authored model reference",
+      "requiredSteps": ["select_task", "open_model_picker"],
+      "uiOracle": "model_picker_shows_authored_model",
+      "stateOracle": "model_reference_is_in_inventory"
+    },
+    {
+      "name": "texture-resolution",
+      "action": "inspect_texture",
+      "applicability": "tasks with a texture reference",
+      "requiredSteps": ["select_task", "inspect_textures"],
+      "uiOracle": "texture_assignment_is_visible",
+      "stateOracle": "texture_reference_is_in_inventory"
+    },
+    {
+      "name": "sound-resolution",
+      "action": "inspect_sound",
+      "applicability": "tasks with a sound reference",
+      "requiredSteps": ["select_task", "inspect_sounds"],
+      "uiOracle": "sound_control_is_visible",
+      "stateOracle": "sound_reference_is_in_inventory"
+    },
+    {
+      "name": "graph-overlay",
+      "action": "open_graph",
+      "applicability": "levels with an AI graph",
+      "requiredSteps": ["open_graph", "select_node"],
+      "uiOracle": "graph_overlay_is_visible",
+      "stateOracle": "graph_file_is_in_inventory"
+    },
+    {
+      "name": "ai-animation",
+      "action": "inspect_animation",
+      "applicability": "animation-capable AI tasks",
+      "requiredSteps": ["select_task", "start_animation", "pause_animation"],
+      "uiOracle": "animation_frame_changes_while_playing",
+      "stateOracle": "ai_or_animation_anchor_is_in_inventory"
+    },
+    {
+      "name": "weather-classification",
+      "action": "inspect_weather",
+      "applicability": "levels with an authored RainEffect",
+      "requiredSteps": ["load_level", "inspect_weather"],
+      "uiOracle": "weather_effect_is_classified",
+      "stateOracle": "weather_anchor_is_in_inventory"
+    },
+    {
+      "name": "lightmap-inspection",
+      "action": "inspect_lightmaps",
+      "applicability": "levels with a lightmap archive",
+      "requiredSteps": ["select_task", "inspect_lightmaps"],
+      "uiOracle": "lightmap_mode_control_is_visible",
+      "stateOracle": "lightmap_archive_is_in_inventory"
+    },
+    {
+      "name": "editor-pause-resume",
+      "action": "toggle_pause",
+      "applicability": "every level (editor pause overlay)",
+      "requiredSteps": ["open_pause", "resume"],
+      "uiOracle": "pause_overlay_visible_then_hidden",
+      "stateOracle": "process_health_unchanged"
+    },
+    {
+      "name": "editor-task-tree",
+      "action": "open_task_tree",
+      "applicability": "every level (task tree panel)",
+      "requiredSteps": ["open_task_tree", "assert_task_anchor"],
+      "uiOracle": "task_tree_panel_visible",
+      "stateOracle": "inventory_anchor_is_present"
+    },
+    {
+      "name": "editor-terrain-shortcut",
+      "action": "toggle_terrain_edit",
+      "applicability": "every level (T shortcut)",
+      "requiredSteps": ["press_t", "assert_terrain_palette"],
+      "uiOracle": "terrain_palette_visible",
+      "stateOracle": "process_health_unchanged"
+    },
+    {
+      "name": "editor-font-size",
+      "action": "adjust_font_size",
+      "applicability": "every level (pause font size spinner)",
+      "requiredSteps": ["open_pause", "font_row_spinner", "assert_config"],
+      "uiOracle": "font_label_region_changes",
+      "stateOracle": "qedconfig_qsc_font_size_changes"
+    },
+    {
+      "name": "editor-autosave",
+      "action": "toggle_autosave",
+      "applicability": "every level (pause autosave row)",
+      "requiredSteps": ["open_pause", "autosave_row", "assert_config"],
+      "uiOracle": "autosave_label_changes",
+      "stateOracle": "qedconfig_qsc_autosave_changes"
+    },
+    {
+      "name": "editor-logging",
+      "action": "toggle_logging",
+      "applicability": "every level (pause logging row)",
+      "requiredSteps": ["open_pause", "logging_row", "assert_config"],
+      "uiOracle": "logging_status_message_changes",
+      "stateOracle": "qedconfig_qsc_logging_changes"
+    },
+    {
+      "name": "editor-music",
+      "action": "toggle_music",
+      "applicability": "every level (pause music row)",
+      "requiredSteps": ["open_pause", "music_row", "assert_config"],
+      "uiOracle": "music_label_changes",
+      "stateOracle": "qedconfig_qsc_music_changes"
+    },
+    {
+      "name": "editor-collision-clip",
+      "action": "toggle_clip",
+      "applicability": "every level (pause collision row)",
+      "requiredSteps": ["open_pause", "clip_row"],
+      "uiOracle": "collision_label_changes",
+      "stateOracle": "process_health_unchanged"
+    },
+    {
+      "name": "editor-lightmap-mode",
+      "action": "cycle_lightmap_mode",
+      "applicability": "levels with a lightmap archive",
+      "requiredSteps": ["open_pause", "lightmap_row"],
+      "uiOracle": "lightmap_label_changes",
+      "stateOracle": "process_health_unchanged"
+    },
+    {
+      "name": "editor-terrain-fog",
+      "action": "toggle_terrain_fog",
+      "applicability": "every level with a terrain directory",
+      "requiredSteps": ["open_pause", "expand_terrain", "fog_row", "assert_config"],
+      "uiOracle": "fog_label_changes",
+      "stateOracle": "qedconfig_qsc_fog_changes"
+    },
+    {
+      "name": "editor-level-change",
+      "action": "change_level",
+      "applicability": "every level 1-13 (next level exists)",
+      "requiredSteps": ["open_pause", "level_row", "commit_level", "wait_for_load"],
+      "uiOracle": "level_select_ui_changes",
+      "stateOracle": "target_level_load_log_present"
+    },
+    {
+      "name": "editor-save",
+      "action": "save_level",
+      "applicability": "every level",
+      "requiredSteps": ["open_pause", "save_row"],
+      "uiOracle": "save_status_confirmed",
+      "stateOracle": "level_save_log_present"
+    },
+    {
+      "name": "editor-reset",
+      "action": "reset_level",
+      "applicability": "every level",
+      "requiredSteps": ["open_pause", "reset_row", "reload_complete"],
+      "uiOracle": "reset_reloads_level",
+      "stateOracle": "level_reload_log_present"
+    },
+    {
+      "name": "editor-graceful-quit",
+      "action": "graceful_quit",
+      "applicability": "every level",
+      "requiredSteps": ["open_pause", "quit_row"],
+      "uiOracle": "editor_window_closes",
+      "stateOracle": "clean_exit_code"
+    },
+    {
+      "name": "editor-cursor-state",
+      "action": "pause_cursor_state",
+      "applicability": "every level (native/custom cursor transition)",
+      "requiredSteps": ["open_pause", "assert_cursor_visible", "close_pause", "assert_cursor_hidden"],
+      "uiOracle": "cursor_visible_in_pause",
+      "stateOracle": "cursor_hidden_after_resume"
+    },
+    {
+      "name": "object-visual-orbit",
+      "action": "orbit_object",
+      "applicability": "renderable Task_New instances with an authored model and 3-component world position",
+      "requiredSteps": ["find_task_by_id", "open_properties", "orbit_front", "orbit_back", "orbit_left", "orbit_right", "orbit_top", "orbit_bottom", "orbit_diagonal_x4"],
+      "uiOracle": "projected_object_pixels_nonempty_per_view",
+      "stateOracle": "authored_transform_and_model_anchor_match_inventory"
+    }
+  ]
+}

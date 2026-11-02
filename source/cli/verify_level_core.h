@@ -43,6 +43,7 @@ struct LevelReport {
     bool logError = false;
     std::string logErrorMsg;
     int logEntries = 0;
+    bool logChecksSkipped = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -80,9 +81,10 @@ void CrossRef(LevelReport::Category& cat,
               bool matchOri,
               long long posTol = 0);
 
-// Full single-level pipeline: decompile QVM → parse QSC → parse log → cross-ref.
+// Full single-level pipeline: decompile QVM → parse QSC → optionally parse log and cross-ref.
 LevelReport VerifyOneLevel(const std::string& igiPath,
                            const std::string& exeDir,
                            const std::string& logPath,
                            int levelNo,
-                           const std::map<std::string, std::string>& modelNames);
+                           const std::map<std::string, std::string>& modelNames,
+                           bool requireLog = true);

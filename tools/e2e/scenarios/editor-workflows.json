@@ -1,0 +1,224 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Runnable all-level editor control and persistence workflows (Task 3). Pause-menu row and spinner coordinates are computed from igi::BuildPauseMenuLayout / BuildPauseMenuSpinner for the editor's 1536x864 client window: menu_left=538, menu_width=460, 15 collapsed rows at 38px pitch starting menu_top+90, menu_top=90. Row order follows source/app_input_mouse.cpp: 0=Resume 1=Mode 2=Collision 3=Font 4=Select Level 5=Auto Save 6=Logging 7=Log Level 8=Music 9=Lightmap 10=Calculate Lightmaps 11=Terrain Options 12=Reset 13=Save 14=Quit.",
+  "viewport": { "width": 1536, "height": 864 },
+  "pauseMenu": {
+    "menuLeft": 538,
+    "menuTop": 90,
+    "menuWidth": 460,
+    "menuCenterX": 768,
+    "rowHeight": 38,
+    "firstRowOffset": 90,
+    "rowCentersY": [180, 218, 256, 294, 332, 370, 408, 446, 484, 522, 560, 598, 636, 674, 712]
+  },
+  "spinners": {
+    "fontRow": { "row": 3, "y": 294, "toggleX": 700 },
+    "autoSaveRow": { "row": 5, "y": 370, "toggleX": 700 },
+    "logLevelRow": { "row": 7, "y": 446, "toggleX": 700 },
+    "levelRow": { "row": 4, "y": 332, "plusX": 846 }
+  },
+  "scenarios": [
+    {
+      "name": "editor-pause-resume",
+      "level": 1,
+      "requiresMutation": false,
+      "steps": [
+        { "id": "launch", "type": "launch_editor", "level": 1 },
+        { "id": "window", "type": "wait_for_window", "timeoutSeconds": 45 },
+        { "id": "loaded", "type": "wait_for_log", "pattern": "\\[App\\] LoadLevel\\(\\) COMPLETE for level 1", "timeoutSeconds": 120 },
+        { "id": "healthy", "type": "assert_process" },
+        { "id": "open-pause", "type": "key", "key": "ESC" },
+        { "id": "pause-settle", "type": "wait", "seconds": 0.5 },
+        { "id": "pause-shot", "type": "screenshot", "name": "pause-open" },
+        { "id": "pause-visible", "type": "assert_screenshot_color_ratio", "region": [538, 90, 460, 684], "rgb": [0, 255, 0], "tolerance": 60, "minRatio": 0.01 },
+        { "id": "cursor-in-pause", "type": "assert_cursor_visible" },
+        { "id": "resume-click", "type": "click", "x": 768, "y": 180 },
+        { "id": "resume-settle", "type": "wait", "seconds": 0.5 },
+        { "id": "cursor-after-resume", "type": "assert_cursor_hidden" },
+        { "id": "close", "type": "close_editor" }
+      ]
+    },
+    {
+      "name": "editor-cursor-state",
+      "level": 1,
+      "requiresMutation": false,
+      "steps": [
+        { "id": "launch", "type": "launch_editor", "level": 1 },
+        { "id": "window", "type": "wait_for_window", "timeoutSeconds": 45 },
+        { "id": "loaded", "type": "wait_for_log", "pattern": "\\[App\\] LoadLevel\\(\\) COMPLETE for level 1", "timeoutSeconds": 120 },
+        { "id": "healthy", "type": "assert_process" },
+        { "id": "open-pause", "type": "key", "key": "ESC" },
+        { "id": "pause-settle", "type": "wait", "seconds": 0.5 },
+        { "id": "cursor-pause-shot", "type": "screenshot", "name": "cursor-pause" },
+        { "id": "cursor-pause-visible", "type": "assert_screenshot_color_ratio", "region": [538, 90, 460, 684], "rgb": [0, 255, 0], "tolerance": 60, "minRatio": 0.01 },
+        { "id": "cursor-in-pause", "type": "assert_cursor_visible" },
+        { "id": "close-pause", "type": "key", "key": "ESC" },
+        { "id": "resume-settle", "type": "wait", "seconds": 0.5 },
+        { "id": "cursor-after-pause", "type": "assert_cursor_hidden" },
+        { "id": "close", "type": "close_editor" }
+      ]
+    },
+    {
+      "name": "editor-collision-clip-toggle",
+      "level": 1,
+      "requiresMutation": false,
+      "steps": [
+        { "id": "launch", "type": "launch_editor", "level": 1 },
+        { "id": "window", "type": "wait_for_window", "timeoutSeconds": 45 },
+        { "id": "loaded", "type": "wait_for_log", "pattern": "\\[App\\] LoadLevel\\(\\) COMPLETE for level 1", "timeoutSeconds": 120 },
+        { "id": "healthy", "type": "assert_process" },
+        { "id": "open-pause", "type": "key", "key": "ESC" },
+        { "id": "pause-settle", "type": "wait", "seconds": 0.5 },
+        { "id": "clip-before", "type": "screenshot", "name": "clip-before" },
+        { "id": "clip-toggle", "type": "click", "x": 768, "y": 256 },
+        { "id": "clip-settle", "type": "wait", "seconds": 0.5 },
+        { "id": "clip-after", "type": "screenshot", "name": "clip-after" },
+        { "id": "clip-label-changed", "type": "assert_screenshot_difference", "from": "clip-before", "to": "clip-after", "region": [538, 240, 460, 32], "changedPixelThreshold": 12, "minChangedRatio": 0.01 },
+        { "id": "close", "type": "close_editor" }
+      ]
+    },
+    {
+      "name": "editor-font-toggle",
+      "level": 1,
+      "requiresMutation": true,
+      "mutatedFiles": ["qedconfig.qsc"],
+      "steps": [
+        { "id": "launch", "type": "launch_editor", "level": 1 },
+        { "id": "window", "type": "wait_for_window", "timeoutSeconds": 45 },
+        { "id": "loaded", "type": "wait_for_log", "pattern": "\\[App\\] LoadLevel\\(\\) COMPLETE for level 1", "timeoutSeconds": 120 },
+        { "id": "healthy", "type": "assert_process" },
+        { "id": "snapshot-config", "type": "snapshot_paths", "paths": ["qedconfig.qsc"] },
+        { "id": "open-pause", "type": "key", "key": "ESC" },
+        { "id": "pause-settle", "type": "wait", "seconds": 0.5 },
+        { "id": "font-before", "type": "screenshot", "name": "font-before" },
+        { "id": "font-toggle", "type": "click", "x": 700, "y": 294 },
+        { "id": "font-settle", "type": "wait", "seconds": 0.5 },
+        { "id": "font-after", "type": "screenshot", "name": "font-after" },
+        { "id": "font-label-changed", "type": "assert_screenshot_difference", "from": "font-before", "to": "font-after", "region": [538, 278, 300, 32], "changedPixelThreshold": 12, "minChangedRatio": 0.01 },
+        { "id": "restore-config", "type": "restore_paths" },
+        { "id": "close", "type": "close_editor" }
+      ]
+    },
+    {
+      "name": "editor-logging-toggle",
+      "level": 1,
+      "requiresMutation": true,
+      "mutatedFiles": ["qedconfig.qsc"],
+      "steps": [
+        { "id": "launch", "type": "launch_editor", "level": 1 },
+        { "id": "window", "type": "wait_for_window", "timeoutSeconds": 45 },
+        { "id": "loaded", "type": "wait_for_log", "pattern": "\\[App\\] LoadLevel\\(\\) COMPLETE for level 1", "timeoutSeconds": 120 },
+        { "id": "healthy", "type": "assert_process" },
+        { "id": "snapshot-config", "type": "snapshot_paths", "paths": ["qedconfig.qsc"] },
+        { "id": "open-pause", "type": "key", "key": "ESC" },
+        { "id": "pause-settle", "type": "wait", "seconds": 0.5 },
+        { "id": "logging-before", "type": "screenshot", "name": "logging-before" },
+        { "id": "logging-toggle", "type": "click", "x": 768, "y": 408 },
+        { "id": "logging-settle", "type": "wait", "seconds": 0.5 },
+        { "id": "logging-after", "type": "screenshot", "name": "logging-after" },
+        { "id": "logging-label-changed", "type": "assert_screenshot_difference", "from": "logging-before", "to": "logging-after", "region": [538, 394, 460, 32], "changedPixelThreshold": 12, "minChangedRatio": 0.01 },
+        { "id": "restore-config", "type": "restore_paths" },
+        { "id": "close", "type": "close_editor" }
+      ]
+    },
+    {
+      "name": "editor-music-toggle",
+      "level": 1,
+      "requiresMutation": true,
+      "mutatedFiles": ["qedconfig.qsc"],
+      "steps": [
+        { "id": "launch", "type": "launch_editor", "level": 1 },
+        { "id": "window", "type": "wait_for_window", "timeoutSeconds": 45 },
+        { "id": "loaded", "type": "wait_for_log", "pattern": "\\[App\\] LoadLevel\\(\\) COMPLETE for level 1", "timeoutSeconds": 120 },
+        { "id": "healthy", "type": "assert_process" },
+        { "id": "snapshot-config", "type": "snapshot_paths", "paths": ["qedconfig.qsc"] },
+        { "id": "open-pause", "type": "key", "key": "ESC" },
+        { "id": "pause-settle", "type": "wait", "seconds": 0.5 },
+        { "id": "music-before", "type": "screenshot", "name": "music-before" },
+        { "id": "music-toggle", "type": "click", "x": 768, "y": 484 },
+        { "id": "music-settle", "type": "wait", "seconds": 0.5 },
+        { "id": "music-after", "type": "screenshot", "name": "music-after" },
+        { "id": "music-label-changed", "type": "assert_screenshot_difference", "from": "music-before", "to": "music-after", "region": [538, 470, 460, 32], "changedPixelThreshold": 12, "minChangedRatio": 0.01 },
+        { "id": "restore-config", "type": "restore_paths" },
+        { "id": "close", "type": "close_editor" }
+      ]
+    },
+    {
+      "name": "editor-save-level",
+      "level": 1,
+      "requiresMutation": true,
+      "mutatedFiles": ["MISSIONS/location0/level1/objects.qvm"],
+      "steps": [
+        { "id": "launch", "type": "launch_editor", "level": 1 },
+        { "id": "window", "type": "wait_for_window", "timeoutSeconds": 45 },
+        { "id": "loaded", "type": "wait_for_log", "pattern": "\\[App\\] LoadLevel\\(\\) COMPLETE for level 1", "timeoutSeconds": 120 },
+        { "id": "healthy", "type": "assert_process" },
+        { "id": "snapshot-objects", "type": "snapshot_paths", "paths": ["MISSIONS/location0/level1/objects.qvm"] },
+        { "id": "open-pause", "type": "key", "key": "ESC" },
+        { "id": "pause-settle", "type": "wait", "seconds": 0.5 },
+        { "id": "save-row", "type": "click", "x": 768, "y": 674 },
+        { "id": "save-settle", "type": "wait", "seconds": 3 },
+        { "id": "save-shot", "type": "screenshot", "name": "save-confirmed" },
+        { "id": "restore-objects", "type": "restore_paths" },
+        { "id": "close", "type": "close_editor" }
+      ]
+    },
+    {
+      "name": "editor-reset-level",
+      "level": 1,
+      "requiresMutation": true,
+      "mutatedFiles": ["MISSIONS/location0/level1/objects.qvm"],
+      "steps": [
+        { "id": "launch", "type": "launch_editor", "level": 1 },
+        { "id": "window", "type": "wait_for_window", "timeoutSeconds": 45 },
+        { "id": "loaded", "type": "wait_for_log", "pattern": "\\[App\\] LoadLevel\\(\\) COMPLETE for level 1", "timeoutSeconds": 120 },
+        { "id": "healthy", "type": "assert_process" },
+        { "id": "snapshot-objects", "type": "snapshot_paths", "paths": ["MISSIONS/location0/level1/objects.qvm"] },
+        { "id": "open-pause", "type": "key", "key": "ESC" },
+        { "id": "pause-settle", "type": "wait", "seconds": 0.5 },
+        { "id": "reset-pause-shot", "type": "screenshot", "name": "reset-pause" },
+        { "id": "reset-row", "type": "click", "x": 768, "y": 636 },
+        { "id": "reset-settle", "type": "wait", "seconds": 3 },
+        { "id": "healthy-after-reset", "type": "assert_process" },
+        { "id": "restore-objects", "type": "restore_paths" },
+        { "id": "close", "type": "close_editor" }
+      ]
+    },
+    {
+      "name": "editor-level-change",
+      "level": 1,
+      "requiresMutation": false,
+      "steps": [
+        { "id": "launch", "type": "launch_editor", "level": 1 },
+        { "id": "window", "type": "wait_for_window", "timeoutSeconds": 45 },
+        { "id": "loaded", "type": "wait_for_log", "pattern": "\\[App\\] LoadLevel\\(\\) COMPLETE for level 1", "timeoutSeconds": 120 },
+        { "id": "healthy", "type": "assert_process" },
+        { "id": "open-pause", "type": "key", "key": "ESC" },
+        { "id": "pause-settle", "type": "wait", "seconds": 0.5 },
+        { "id": "level-pause-shot", "type": "screenshot", "name": "level-pause" },
+        { "id": "level-plus", "type": "click", "x": 846, "y": 332 },
+        { "id": "level-commit", "type": "key", "key": "ENTER" },
+        { "id": "level-settle", "type": "wait", "seconds": 5 },
+        { "id": "level2-loaded", "type": "wait_for_log", "pattern": "\\[App\\] LoadLevel\\(\\) COMPLETE for level 2", "timeoutSeconds": 90 },
+        { "id": "close", "type": "close_editor" }
+      ]
+    },
+    {
+      "name": "editor-graceful-quit",
+      "level": 1,
+      "requiresMutation": false,
+      "steps": [
+        { "id": "launch", "type": "launch_editor", "level": 1 },
+        { "id": "window", "type": "wait_for_window", "timeoutSeconds": 45 },
+        { "id": "loaded", "type": "wait_for_log", "pattern": "\\[App\\] LoadLevel\\(\\) COMPLETE for level 1", "timeoutSeconds": 120 },
+        { "id": "healthy", "type": "assert_process" },
+        { "id": "open-pause", "type": "key", "key": "ESC" },
+        { "id": "pause-settle", "type": "wait", "seconds": 0.5 },
+        { "id": "pre-quit", "type": "screenshot", "name": "pre-quit" },
+        { "id": "quit-row", "type": "click", "x": 768, "y": 712 },
+        { "id": "quit-settle", "type": "wait", "seconds": 4 },
+        { "id": "close", "type": "close_editor", "force": true }
+      ]
+    }
+  ]
+}

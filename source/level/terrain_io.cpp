@@ -4,6 +4,51 @@
  *          Split from terrain.cpp; shares terrain_internal.h.
  *****************************************************************************/
 #include "terrain_internal.h"
+#include "terrain_ctr_rules.h"
+#include <memory>
+#include <cmath>
+
+/*
+================================================================================
+ Terrain child-task cell grid  (transcribed from retail engine, retail IGI.exe)
+================================================================================
+
+ Every terrain child task is placed by snapping its script position to a
+ power-of-two cell grid and using the cell's *centre* as the object position;
+ the cell minimum then becomes the origin of the task's map (bitmap / lightmap
+ / heightmap):
+
+     int cell2 = (0x40000000 >> shift) * 2;    // cell edge; shift = QSC "Level"
+     min.x     = fistp(pos.x) & -cell2;        // pos already includes w->offset[]
+     max.x     = min.x + cell2;
+     centre.x  = min.x + cell2 / 2;
+     ...
+     <map>->x  = <task>->pos.x - (0x40000000 >> shift);    // == min.x
+
+   * TextureModifier_Changed   HOOK 0x5062A0  src/editcam/texmod.c:235-464
+   * TerrainLightMap_Changed   HOOK 0x4F8780  src/graphnode/lightmap.c:325-431
+   * HeightMap_Changed         HOOK 0x507410  src/editcam/heightmap.c:265-505
+   * DiscardTerrain_Changed    HOOK 0x52C290  src/terredit/discard.c:200-248
+
+ The engine's fistp (src/graphnode/lightmap.c:108-112) is `fistpll`, i.e. round
+ to nearest even, which is what `std::nearbyint` does in the default rounding
+ mode (the x87 asm itself is not portable off i686). `w->offset[]` is zero for a
+ freshly loaded world (World_New, HOOK 0x4C5B20, src/magicobj/world.c:183-185).
+*/
+static int Terrain_EngineFistp(double v) {
+	return (int)std::nearbyint(v);
+}
+
+// out_min: the 3 snapped cell minima; out_center: the engine's object position.
+static void Terrain_SnapCell(const double pos[3], int shift, double out_min[3], double out_center[3]) {
+	const int cell2 = (0x40000000 >> (shift & 31)) * 2;
+
+	for (int i = 0; i < 3; ++i) {
+		const int cell_min = Terrain_EngineFistp(pos[i]) & -cell2;
+		out_min[i] = (double)cell_min;
+		out_center[i] = (double)cell_min + (double)cell2 * 0.5;
+	}
+}
 
 bool Terrain::Load(load_params_s & params) {
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] ==========================================");
@@ -44,33 +89,29 @@ bool Terrain::Load(load_params_s & params) {
 	}
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] terrain.qsc exists, loading...");
 
-	QSC* qsc_terrain = new QSC();
-	if (!qsc_terrain) {
-		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: Failed to allocate QSC for terrain");
+	auto qsc_terrain = std::make_unique<QSC>();
+	qsc_terrain->Load(filename);
+	if (qsc_terrain->HadOverflow()) {
+		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: terrain.qsc parser overflow (too many functions/args)");
 		return false;
 	}
-
-	qsc_terrain->Load(filename);
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] terrain.qsc loaded successfully");
 
-	LoadMaterialInfo(qsc_terrain);
-	LoadTileMapInfo(qsc_terrain);
-
-	delete qsc_terrain;
-
-	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading CMD file...");
-	if (!LoadCMDFile(params)) {
-		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: LoadCMDFile failed");
-		return false;
-	}
-	Logger::Get().Log(LogLevel::INFO, "[Terrain] CMD file loaded");
-
-	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading CTR file...");
-	if (!LoadCTRFile(params)) {
-		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: LoadCTRFile failed");
-		return false;
-	}
-	Logger::Get().Log(LogLevel::INFO, "[Terrain] CTR file loaded");
+	// File order is the engine's, not ours.
+	//
+	// LevelStart 0x415B30 (src/game/game.c:405-407) runs
+	//     crt_sprintf(terrain, "%sterrain/terrain", gMissionPath);
+	//     World_LoadTextures(gGame->world, terrain);
+	//     Terrain_Load(gGame->world, terrain);
+	// so World_LoadTextures 0x4C5F00 (src/magicobj/world.c:295-343) runs BEFORE
+	// Terrain_Load 0x4C6240 (src/terrain/terrain.c:70-153):
+	//   World_LoadTextures: <path>.tex (TexSet_Load, :305-308), then <path>.lmp
+	//     (:317-322) whose full name is kept for the later Terrain_LoadLightmaps
+	//     pass 0x4C6160 (src/terrain/terrain.c:36-67).
+	//   Terrain_Load: .bit (:80-98), .hmp (:100-122), .cmd (:124-126),
+	//     .ctr (:128-130), then <path>.qsc (:132-140) whose run invokes
+	//     CreateTerrainMaterial / CreateTerrainTileMap.
+	// Net file order: tex, lmp, bit, hmp, cmd, ctr, qsc.
 
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading TEX file...");
 	if (!LoadTEXFile(params)) {
@@ -99,6 +140,33 @@ bool Terrain::Load(load_params_s & params) {
 		return false;
 	}
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] HMP file loaded");
+
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading CMD file...");
+	if (!LoadCMDFile(params)) {
+		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: LoadCMDFile failed");
+		return false;
+	}
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] CMD file loaded");
+
+	// LoadCTRFile also applies the engine's leaf fixup
+	// (Terrain_Load 0x4C6240, src/terrain/terrain.c:142-143:
+	//  t->ctr[i].leaf = (const short *)((const char *)t->ctr[i].leaf + (uintptr_t)t->cmd)).
+	// The engine does that after the qsc run below; the two qsc callbacks only
+	// write gTerrainMaterials / gTerrainTileMaps (src/terrain/terrain.c:165-195)
+	// and never touch the ctr, so the position of the fixup is immaterial.
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading CTR file...");
+	if (!LoadCTRFile(params)) {
+		Logger::Get().Log(LogLevel::ERR, "[Terrain] FATAL: LoadCTRFile failed");
+		return false;
+	}
+	Logger::Get().Log(LogLevel::INFO, "[Terrain] CTR file loaded");
+
+	// The engine's .qsc pass: Terrain_Load 0x4C6240 (src/terrain/terrain.c:132-140)
+	// registers CreateTerrainMaterial/CreateTerrainTileMap, runs the script,
+	// frees it and unregisters. The two passes below are that run.
+	LoadMaterialInfo(qsc_terrain.get());
+	LoadTileMapInfo(qsc_terrain.get());
+	// qsc_terrain freed automatically when it goes out of scope (RAII).
 
 	Logger::Get().Log(LogLevel::INFO, "[Terrain] Loading texture modifiers...");
 	LoadTextureModifier(params.level_dyn_cube_, params.qsc_objects_);
@@ -293,7 +361,56 @@ bool Terrain::LoadCTRFile(load_params_s & params) {
 
 	ctr_s ctr_file_contents = {};
 	if (!CTR_Load(filename, ctr_file_contents)) {
-		return false;
+		// Terrain_Load HOOK 0x4C6240 (src/terrain/terrain.c:128-130) loads the
+		// .ctr through Resource_Load with no existence check: a missing file
+		// yields NULL with size 0, the ctr loop runs zero times, and the level
+		// keeps loading.  The collision entry points guard on a NULL ctr
+		// (src/coll/coll.c:171: `if (!(flags & 0x80000000) || !t->ctr)`).
+		// So a .ctr problem is never fatal in the engine, and it must not be
+		// fatal here either: aborting Terrain::Load() leaves hmp_ null, and
+		// Terrain::Save then refuses to write the height map (the level-14
+		// session in the user's log lost the terrain exactly this way).
+		Logger::Get().Log(LogLevel::WARNING,
+			"[Terrain] terrain.ctr is missing or empty for level " +
+			std::to_string(params.level_no_) +
+			"; loading the terrain without a collision tree (engine: Terrain_Load 0x4C6240, "
+			"src/terrain/terrain.c:128-130)");
+		return true;
+	}
+
+	// The engine validates nothing and would happily build pointers out of
+	// garbage (src/terrain/terrain.c:142-143).  The editor dereferences the tree
+	// (RecursiveGetZ, GenerateRenderCube, Level::GetDynCube), so the invariants
+	// the engine merely assumes are checked here - see terrain_ctr_rules.h for
+	// the four places they come from.
+	const igi::ctr_violation_s violation = igi::ValidateCtrNodes(
+		ctr_file_contents.head_, ctr_file_contents.num_item_, cmd_sz_);
+	if (violation.node_ >= 0) {
+		if (violation.child_) {
+			Logger::Get().Log(LogLevel::ERR,
+				"[Terrain] CTR child index out of bounds: node " +
+				std::to_string(violation.node_) + " mask=0x" +
+				std::to_string((int)ctr_file_contents.head_[violation.node_].children_mask_) +
+				" child[" + std::to_string(violation.slot_) + "]=" +
+				std::to_string((int)violation.value_) + " (node count " +
+				std::to_string(ctr_file_contents.num_item_) + ")");
+		} else {
+			Logger::Get().Log(LogLevel::ERR,
+				"[Terrain] CTR cmd_offset out of bounds: node " +
+				std::to_string(violation.node_) + " leaf=" +
+				std::to_string(violation.value_) + " but terrain.cmd is " +
+				std::to_string(cmd_sz_) + " bytes (file has " +
+				std::to_string(ctr_file_contents.num_item_) + " 32-byte records)");
+		}
+		Logger::Get().Log(LogLevel::WARNING,
+			"[Terrain] keeping level " + std::to_string(params.level_no_) +
+			" without a collision tree: the .ctr does not hold the engine's 32-byte "
+			"CollNode records (Terrain_Load 0x4C6240, src/terrain/terrain.c:142-143; "
+			"CollNode src/coll/colltypes.h:95-101)");
+
+		CTR_Free(ctr_file_contents);
+		SAFE_FREE(ctr_);
+		return true;	// engine rule: a bad/missing ctr never fails the terrain load
 	}
 
 	ctr_ = (ctr_node_s*)MEM_ALLOC(sizeof(ctr_node_s) * ctr_file_contents.num_item_);
@@ -305,11 +422,6 @@ bool Terrain::LoadCTRFile(load_params_s & params) {
 	for (int i = 0; i < ctr_file_contents.num_item_; ++i) {
 		const ctr_item_s* src = ctr_file_contents.head_ + i;
 		ctr_node_s* dst = ctr_ + i;
-
-		if ((int)src->cmd_offset_ >= cmd_sz_) {
-			Log(log_type_t::LOG_ERROR, __FILE__, __LINE__, "CTR cmd_offset out of bounds\n");
-			return false;
-		}
 
 		memcpy(dst, src, sizeof(*src));
 
@@ -395,6 +507,23 @@ bool Terrain::LoadBITFile(load_params_s & params) {
 		return false;
 	}
 
+	// Terrain_Load 0x4C6240 (src/terrain/terrain.c:82-98). A .bit shorter than
+	// the 0x100-entry header (0x100 * sizeof(bit_item_s) = 0xC00) is replaced by
+	// a zeroed 0xC00 header and every slot is left non-resident: the engine sets
+	// gBitResident[i] = 0 for all 0x100 entries and links no item data.
+	if (bit_sz < 0xC00) {
+		File_FreeBuf(bit_);
+		bit_ = MEM_ALLOC(0xC00);
+		if (!bit_) {
+			return false;
+		}
+		memset(bit_, 0, 0xC00);
+		for (int i = 0; i < MAX_TEX_MOD; ++i) {
+			bitmap_items_[i] = nullptr;
+		}
+		return true;
+	}
+
 	bit_item_s* head = (bit_item_s*)bit_;
 
 	uint8_t* body = (uint8_t*)(head + MAX_TEX_MOD);
@@ -426,13 +555,39 @@ bool Terrain::LoadHMPFile(load_params_s & params) {
 		"%s/terrain.hmp",
 		terrainDir.c_str());
 
+	// Terrain_Load 0x4C6240 (src/terrain/terrain.c:100-104): the .hmp is optional,
+	// and a missing one leaves t->hmp == NULL with no height map items linked.
 	if (!File_Exists(filename)) {
+		hmp_ = nullptr;
+		hmp_sz_ = 0;
+		for (int i = 0; i < MAX_HMP; ++i) {
+			height_map_items_[i] = nullptr;
+		}
 		return true;	// not an error, hmp file can be omitted
 	}
 
 	int32_t hmp_sz = 0;
 	if (!File_LoadBinary(filename, hmp_, hmp_sz)) {
 		return false;
+	}
+	hmp_sz_ = hmp_sz;
+
+	// Terrain_Load 0x4C6240 (src/terrain/terrain.c:106-121). A .hmp shorter than
+	// the 0x100-entry header (0xC00) is replaced by a zeroed 0xC00 header and
+	// every slot is left non-resident (gHmpResident[i] = 0 for all 0x100).
+	if (hmp_sz < 0xC00) {
+		File_FreeBuf(hmp_);
+		hmp_ = MEM_ALLOC(0xC00);
+		if (!hmp_) {
+			hmp_sz_ = 0;
+			return false;
+		}
+		memset(hmp_, 0, 0xC00);
+		hmp_sz_ = 0xC00;
+		for (int i = 0; i < MAX_HMP; ++i) {
+			height_map_items_[i] = nullptr;
+		}
+		return true;
 	}
 
 	hmp_item_s* head = (hmp_item_s*)hmp_;
@@ -561,16 +716,24 @@ void Terrain::LoadTextureModifier(ILevelDynCube* level_dyn_cube, const QSC* qsc_
 	for (int i = 0; i < num_texture_modifier_; ++i) {
 		qtask_texture_modifier_s* qtask = qtask_texture_modifiers_ + i;
 
+		// TextureModifier_Changed 0x5062A0 (src/editcam/texmod.c:289-296) snaps
+		// the task to the cell grid; the engine's DynCube position is the cell
+		// centre, never the raw script point.
+		double cell_min[3];
+		double cell_center[3];
+		Terrain_SnapCell(qtask->script_defined_pos_, (int)qtask->lod_level_, cell_min, cell_center);
+
 		glm::ivec3 cube_ctr;
-		dyn_cube_s* dyn_cube = level_dyn_cube->GetDynCube(qtask->script_defined_pos_, qtask->lod_level_, cube_ctr);
+		dyn_cube_s* dyn_cube = level_dyn_cube->GetDynCube(cell_center, (int)qtask->lod_level_, cube_ctr);
 		if (dyn_cube) {
 			level_dyn_cube->AddQTaskToDynCube(dyn_cube, qtask);
 
 			texture_modifier_s * texture_modifier = texture_modifiers_ + qtask->idx_in_array_;
 
-			int cube_half_size = ROOT_CUBE_HALF_SIZE >> qtask->lod_level_;
-			texture_modifier->cube_min_x_ = cube_ctr[0] - cube_half_size;
-			texture_modifier->cube_min_y_ = cube_ctr[1] - cube_half_size;
+			// texmod.c:459-460: hole->x = tm->obj.pos.x - (0x40000000 >> shift)
+			// i.e. the snapped cell minimum, not the ctr bit-walk centre.
+			texture_modifier->cube_min_x_ = cell_min[0];
+			texture_modifier->cube_min_y_ = cell_min[1];
 		}
 	}
 }
@@ -658,17 +821,25 @@ void Terrain::LoadTerrainLightMapInfo(ILevelDynCube* level_dyn_cube, const QSC* 
 	for (int i = 0; i < num_terrain_light_map_; ++i) {
 		qtask_terrain_light_map_s * qtask = qtask_terrain_light_maps_ + i;
 
+		// TerrainLightMap_Changed 0x4F8780 (src/graphnode/lightmap.c:335-370):
+		// half = (0x40000000 >> shift) * 2; min = fistp(place) & -half; the box is
+		// [min, min + half) and its centre is what DynCube_AddBox/MoveBox store.
+		double cell_min[3];
+		double cell_center[3];
+		Terrain_SnapCell(qtask->script_defined_pos_, (int)qtask->lod_level_, cell_min, cell_center);
+
 		glm::ivec3 cube_ctr;	// return the cube center
 
-		dyn_cube_s* dyn_cube = level_dyn_cube->GetDynCube(qtask->script_defined_pos_, qtask->lod_level_, cube_ctr);
+		dyn_cube_s* dyn_cube = level_dyn_cube->GetDynCube(cell_center, (int)qtask->lod_level_, cube_ctr);
 		if (dyn_cube) {
 			level_dyn_cube->AddQTaskToDynCube(dyn_cube, qtask);
 
 			terrain_light_map_s * terrain_light_map = terrain_light_maps_ + qtask->idx_in_array_;
 
-			int cube_half_size = ROOT_CUBE_HALF_SIZE >> qtask->lod_level_;
-			terrain_light_map->cube_min_x_ = cube_ctr[0] - cube_half_size;
-			terrain_light_map->cube_min_y_ = cube_ctr[1] - cube_half_size;
+			// TerrainLightMap_SetDrawInfo 0x4F8EF0 (src/graphnode/lightmap.c:434-437):
+			// d->x = lm->pos.x - (0x40000000 >> shift) == the snapped cell minimum.
+			terrain_light_map->cube_min_x_ = cell_min[0];
+			terrain_light_map->cube_min_y_ = cell_min[1];
 
 		}
 	}
@@ -744,6 +915,18 @@ void Terrain::LoadHeightMapInfo(ILevelDynCube* level_dyn_cube, const QSC* qsc_ob
 			}
 		}
 
+		// HeightMap_Enter 0x506F00 (src/editcam/heightmap.c:126-137) only makes a
+		// height map take effect when its .hmp slot actually carries data:
+		//     if (hm->hmpIndex >= 0 && hm->world->hmp[hm->hmpIndex].data) { shown = 1; ... }
+		//     else { hm->shown = 0; }
+		// Terrain_Load 0x4C6240 leaves the data pointer unset for every .hmp slot
+		// whose header size is 0 (src/terrain/terrain.c:112-120), so an absent
+		// slot means no bump is applied. Skip the entry entirely, as the engine
+		// never enters it.
+		if (!height_map_items_[qtask_height_map->height_map_id_]) {
+			continue;
+		}
+
 #ifdef _DEBUG
 		if (qtask_height_map->height_map_size_ < 2) {
 			Log(log_type_t::LOG_INFOR, __FILE__, __LINE__, "height_map_size < 2\n");
@@ -768,17 +951,25 @@ void Terrain::LoadHeightMapInfo(ILevelDynCube* level_dyn_cube, const QSC* qsc_ob
 	for (int i = 0; i < num_height_map_; ++i) {
 		qtask_height_map_s * qtask_height_map = qtask_height_maps_ + i;
 
+		// HeightMap_Changed 0x507410 (src/editcam/heightmap.c:267-310): cell2 =
+		// (0x40000000 >> shift) * 2; min = fistp(place) & -cell2; the box is
+		// [min, min + cell2) and its centre is the DynCube position.
+		double cell_min[3];
+		double cell_center[3];
+		Terrain_SnapCell(qtask_height_map->script_defined_pos_, (int)qtask_height_map->lod_level_, cell_min, cell_center);
+
 		glm::ivec3 cube_ctr;
 
-		dyn_cube_s* dyn_cube = level_dyn_cube->GetDynCube(qtask_height_map->script_defined_pos_, qtask_height_map->lod_level_, cube_ctr);
+		dyn_cube_s* dyn_cube = level_dyn_cube->GetDynCube(cell_center, (int)qtask_height_map->lod_level_, cube_ctr);
 		if (dyn_cube) {
 			level_dyn_cube->AddQTaskToDynCube(dyn_cube, (qtask_s*)qtask_height_map);
 
 			height_map_s * height_map = height_maps_ + qtask_height_map->idx_in_array_;
 
-			int cube_half_size = ROOT_CUBE_HALF_SIZE >> qtask_height_map->lod_level_;
-			height_map->cube_min_x_ = cube_ctr[0] - cube_half_size;
-			height_map->cube_min_y_ = cube_ctr[1] - cube_half_size;
+			// heightmap.c:459-460: bump->x = hm->obj.pos.x - (0x40000000 >> shift)
+			// == the snapped cell minimum.
+			height_map->cube_min_x_ = cell_min[0];
+			height_map->cube_min_y_ = cell_min[1];
 		}
 	}
 }
@@ -836,9 +1027,21 @@ void Terrain::LoadDiscardTerrainInfo(ILevelDynCube* level_dyn_cube, const QSC* q
 	for (int i = 0; i < num_discard_terrain_; ++i) {
 		qtask_discard_terrain_s* qtask_discard_terrain = qtask_discard_terrains_ + i;
 
+		// DiscardTerrain_Changed 0x52C290 (src/terredit/discard.c:203-247):
+		// size = (0x40000000 >> (shift & 31)) * 2; min = fistp(pos) & -size;
+		// max = min + size; DynCube_MoveBox(w, dt, &centre, &min, &max).
+		// The walk drops the terrain of every cell inside that box
+		// (DiscardTerrain_Visit 0x52C0B0 sets gQCubeSkipCells, src/lod/qcubewalk.c:294),
+		// which is the cube at lod == shift and everything under it — the same
+		// subtree the editor marks with CUBE_FLAG_DISCARD_TERRAIN.
+		double cell_min[3];
+		double cell_center[3];
+		Terrain_SnapCell(qtask_discard_terrain->script_defined_pos_, (int)qtask_discard_terrain->lod_level_,
+			cell_min, cell_center);
+
 		glm::ivec3 cube_ctr;
 
-		dyn_cube_s* dyn_cube = level_dyn_cube->GetDynCube(qtask_discard_terrain->script_defined_pos_, qtask_discard_terrain->lod_level_, cube_ctr);
+		dyn_cube_s* dyn_cube = level_dyn_cube->GetDynCube(cell_center, (int)qtask_discard_terrain->lod_level_, cube_ctr);
 		if (dyn_cube) {
 			level_dyn_cube->AddQTaskToDynCube(dyn_cube, qtask_discard_terrain);
 			dyn_cube->flags_ |= CUBE_FLAG_DISCARD_TERRAIN;

@@ -4,10 +4,20 @@
  *          Split from terrain.cpp; shares terrain_internal.h.
  *****************************************************************************/
 #include "terrain_internal.h"
+#include "terrain_lod_settings.h"
 
 void Terrain::Update(update_params_s& params, const dyn_cube_s* root_dyn_cube) {
 	tan_half_fovx_ = params.view_define_->tan_half_fovx_;
 	tan_half_fovy_ = params.view_define_->tan_half_fovy_;
+
+	// The engine re-derives the terrain LOD cell-size threshold every frame, from
+	// the quality preset and the field of view (QCube_Begin HOOK 0x4D2540,
+	// src/lod/qcube.c:338-342). It is NOT a constant: a wider field of view gives
+	// a smaller threshold, i.e. finer terrain. The editor used to hardcode the
+	// preset value (CUBE_ACTIVE_COMPARE = 163) and so never scaled with fov at
+	// all. See source/level/terrain_lod_settings.h for the derivation that 163 IS
+	// QCubeMinSizeForFov(1.0f) and docs/parity/TERRAIN_LOD.md for the trace.
+	min_size_ = igi::terrain_lod::QCubeMinSizeForFov(tan_half_fovx_);
 
 	pre_frame_ = cur_frame_;
 	cur_frame_ = params.frame_;
@@ -75,7 +85,16 @@ void Terrain::Update(update_params_s& params, const dyn_cube_s* root_dyn_cube) {
 	float root_cube_ctr_horizontal_dist_to_clip_plane = (float)(UPDATE_ROOT_CUBE_RADIUS / std::cos(params.view_define_->fovx_ * 0.5));
 	float root_cube_ctr_vertical_dist_to_clip_plane   = (float)(UPDATE_ROOT_CUBE_RADIUS / std::cos(params.view_define_->fovy_ * 0.5));
 
-	GenerateRenderCube(root_dyn_cube, ctr_ + 1, root_cube_ctr_horizontal_dist_to_clip_plane, root_cube_ctr_vertical_dist_to_clip_plane);
+	// QCube_Begin HOOK 0x4D2540 (src/lod/qcube.c:366 `if (w->ctr && full)`) and
+	// QCube_DrawObjects (src/lod/qcube.c:392 `if (!w->ctr || full) { if (w->ctr)
+	// ... TerrainMesh_Render(); }`) both test the tree first: with no collision
+	// tree the engine still runs the frame, it simply has no terrain geometry to
+	// walk or draw.  Terrain::LoadCTRFile leaves ctr_ null in exactly that case
+	// (a .ctr that is missing, or one that does not hold 32-byte CollNodes), so
+	// do the same instead of dereferencing ctr_ + 1.
+	if (ctr_) {
+		GenerateRenderCube(root_dyn_cube, ctr_ + 1, root_cube_ctr_horizontal_dist_to_clip_plane, root_cube_ctr_vertical_dist_to_clip_plane);
+	}
 
 	// clear old hash data
 	for (int i = 0; i < CUBE_DATA_HASH_ITEM_COUNT; ++i) {
@@ -329,7 +348,13 @@ void Terrain::GenerateRenderCube(const dyn_cube_s* root_dyn_cube,
 					//    if delta to test_cube more small or cube_half_size more larger
 					//    nore less likely to draw test_cube
 
-					draw_cur_cube = v >= CUBE_ACTIVE_COMPARE_INT || ci.lod_level_ >= LEAF_CUBE_LOD_LEVEL;
+					// min_size_ is this frame's QCubeMinSizeForFov(tan_half_fovx_)
+					// -- the engine's gQCubeMinSize (QCube_Begin HOOK 0x4D2540,
+					// src/lod/qcube.c:342). At the editor's default field of view
+					// it is ~146, i.e. finer than the constant 163 that used to
+					// stand here; at tan == 1.0 (retail's default) it is 163, so
+					// the constant was the fov <= 1 case of this same rule.
+					draw_cur_cube = v >= min_size_ || ci.lod_level_ >= LEAF_CUBE_LOD_LEVEL;
 
 					ci.lod_checked_ = true;
 				}

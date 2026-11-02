@@ -2,9 +2,36 @@ cmake_minimum_required(VERSION 3.16)
 # target_precompile_headers
 #   Added in version 3.16
 
+# ---------------------------------------------------------------------------
+# Single source of truth for the version string (issue #44).
+#
+# The `version` file at the repo root is authoritative. It previously disagreed
+# with three other places -- `project(... VERSION 3.0)` here, `assets/igi-editor.rc`
+# (3.6.7-pre) and `versions.md` (3.6.9-pre) -- so the shipped build could report a
+# version that no file in the repo agreed with. The resource script is now
+# generated from this value too, so there is exactly one number to bump.
+# ---------------------------------------------------------------------------
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/version" IGI_EDITOR_VERSION_STRING LIMIT_COUNT 1)
+string(STRIP "${IGI_EDITOR_VERSION_STRING}" IGI_EDITOR_VERSION_STRING)
+if (NOT IGI_EDITOR_VERSION_STRING)
+  message(FATAL_ERROR "The `version` file at the repository root is missing or empty.")
+endif()
+string(REGEX MATCH "^[0-9]+\\.[0-9]+\\.[0-9]+" IGI_EDITOR_VERSION_NUMERIC "${IGI_EDITOR_VERSION_STRING}")
+if (NOT IGI_EDITOR_VERSION_NUMERIC)
+  message(FATAL_ERROR "The `version` file must start with a numeric MAJOR.MINOR.PATCH value; got '${IGI_EDITOR_VERSION_STRING}'.")
+endif()
+
 project (igi_editor
-  VERSION 3.0
+  VERSION ${IGI_EDITOR_VERSION_NUMERIC}
   LANGUAGES C CXX)
+
+# Full string including any pre-release suffix, for display and the .rc.
+set(IGI_EDITOR_VERSION "${IGI_EDITOR_VERSION_STRING}")
+
+if (NOT WIN32)
+  message(FATAL_ERROR
+    "igi-editor gameplay mode is supported on Windows only; configure with a Windows toolchain.")
+endif()
 
 # Designated initializers, introduced in C++20
 set(CMAKE_CXX_STANDARD 20)
@@ -37,33 +64,94 @@ if (WIN32)
   add_definitions(-DUNICODE -D_UNICODE)
 endif()
 
-file(GLOB SOURCES "source/*.h" "source/*.cpp")
-file(GLOB SOURCES_LEVEL "source/level/*.*")
-file(GLOB SOURCES_RENDERER "source/renderer/*.*")
-file(GLOB SOURCES_PARSERS "source/parsers/*.*")
-file(GLOB SOURCES_CLI "source/cli/*.*")
-file(GLOB SHADERS_41 "shaders/41/*.*")
-file(GLOB SHADERS_45 "shaders/45/*.*")
+# CONFIGURE_DEPENDS on every source glob: a bare file(GLOB) is evaluated only while
+# CMake configures, so a source file added afterwards is silently NOT compiled --
+# ninja has no rule for it, the build still succeeds, and the omission is invisible
+# in a green gate.  That happened for real: `source/menu/menu_ui_draw.cpp` existed,
+# was listed by `source/menu/*.*`, and was absent from build-mingw's
+# compile_commands.json until that tree was reconfigured.  CONFIGURE_DEPENDS makes
+# the build re-glob and re-run CMake when the set of matching files changes, so the
+# file is picked up without anyone remembering to reconfigure.
+file(GLOB SOURCES CONFIGURE_DEPENDS "source/*.h" "source/*.cpp")
+file(GLOB SOURCES_LEVEL CONFIGURE_DEPENDS "source/level/*.*")
+file(GLOB SOURCES_RUNTIME CONFIGURE_DEPENDS "source/runtime/*.*")
+file(GLOB SOURCES_RENDERER CONFIGURE_DEPENDS "source/renderer/*.*")
+file(GLOB SOURCES_CLI CONFIGURE_DEPENDS "source/cli/*.*")
+# The retail menu reader (`qvm_image.*`) and the menu presentation/navigation
+# model (`menu_ui.*`, `menu_ui_draw.*`) live in source/menu/, which the
+# source/*.cpp glob above does not reach.  `source/app_menu.cpp` is covered by
+# that glob.
+file(GLOB SOURCES_MENU CONFIGURE_DEPENDS "source/menu/*.*")
+file(GLOB SHADERS_41 CONFIGURE_DEPENDS "shaders/41/*.*")
+file(GLOB SHADERS_45 CONFIGURE_DEPENDS "shaders/45/*.*")
+# GLSL 1.20 tier for the GL 2.1 fallback (Apple's legacy profile, the only
+# context Wine offers on macOS).  Selected at runtime by GL_Init(); see the
+# compatibility block in source/renderer/gl_helper.cpp.
+file(GLOB SHADERS_21 CONFIGURE_DEPENDS "shaders/21/*.*")
 
-# Add Windows icon resource file
+# Windows icon + version resource, generated from `assets/igi-editor.rc.in` so the
+# FILEVERSION/PRODUCTVERSION values come from the `version` file (issue #44) and
+# cannot drift from it. The icon is referenced by absolute path because the
+# generated .rc lives in the build tree.
+#
+# The .rc is produced by a build-time `cmake -P` driver rather than by
+# `configure_file` directly. A `configure_file` output is written only while CMake
+# configures and carries no ninja rule, so deleting it -- a partial
+# `rm -rf build/generated`, or a restored CI build cache that dropped it -- fails the
+# build with
+#
+#     ninja: error: '.../generated/igi-editor.rc', needed by
+#     '.../igi-editor.rc.res', missing and no known rule to make it
+#
+# which no build command can fix; only `--reconfigure` recovers. This was observed,
+# not theorised. A build-time rule keeps the single source of truth and makes the
+# file self-healing.
 if (WIN32)
-  list(APPEND SOURCES "assets/igi-editor.rc")
+  string(REPLACE "." "," IGI_EDITOR_VERSION_COMMA "${IGI_EDITOR_VERSION_NUMERIC}")
+  set(IGI_EDITOR_VERSION_COMMA "${IGI_EDITOR_VERSION_COMMA},0")
+  set(IGI_EDITOR_RC_IN "${CMAKE_CURRENT_SOURCE_DIR}/assets/igi-editor.rc.in")
+  set(IGI_EDITOR_RC_OUT "${CMAKE_CURRENT_BINARY_DIR}/generated/igi-editor.rc")
+  set(IGI_EDITOR_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/igi-editor.ico")
+  set(IGI_EDITOR_RC_DRIVER "${CMAKE_CURRENT_BINARY_DIR}/generated/GenerateWindowsResource.cmake")
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateWindowsResource.cmake.in"
+    "${IGI_EDITOR_RC_DRIVER}"
+    @ONLY)
+  add_custom_command(
+    OUTPUT "${IGI_EDITOR_RC_OUT}"
+    COMMAND "${CMAKE_COMMAND}" -P "${IGI_EDITOR_RC_DRIVER}"
+    DEPENDS "${IGI_EDITOR_RC_IN}" "${IGI_EDITOR_RC_DRIVER}" "${IGI_EDITOR_ICON}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/version"
+    COMMENT "Generating Windows resource (version ${IGI_EDITOR_VERSION})"
+    VERBATIM)
+  list(APPEND SOURCES "${IGI_EDITOR_RC_OUT}")
+  # `version` and the template are read during configure, so a change to either must
+  # trigger a re-configure; otherwise the driver would keep the old version string.
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/version"
+    "${IGI_EDITOR_RC_IN}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateWindowsResource.cmake.in")
 endif()
 
 source_group("level" FILES ${SOURCES_LEVEL})
+source_group("runtime" FILES ${SOURCES_RUNTIME})
 source_group("renderer" FILES ${SOURCES_RENDERER})
-source_group("parsers" FILES ${SOURCES_PARSERS})
 source_group("cli" FILES ${SOURCES_CLI})
+source_group("menu" FILES ${SOURCES_MENU})
+source_group("shaders/21" FILES ${SHADERS_21})
 source_group("shaders/41" FILES ${SHADERS_41})
 source_group("shaders/45" FILES ${SHADERS_45})
 
-add_executable(igi-editor ${SOURCES} ${SOURCES_LEVEL} ${SOURCES_RENDERER} ${SOURCES_PARSERS} ${SOURCES_CLI} ${SHADERS_41} ${SHADERS_45})
+add_executable(igi-editor ${SOURCES} ${SOURCES_LEVEL} ${SOURCES_RUNTIME} ${SOURCES_RENDERER} ${SOURCES_CLI} ${SOURCES_MENU} ${SHADERS_21} ${SHADERS_41} ${SHADERS_45})
 
 if (WIN32)
   set_target_properties(igi-editor PROPERTIES
     ICON ${PROJECT_SOURCE_DIR}/assets/igi-editor.ico
     OUTPUT_NAME "igi1ed"
   )
+  if (MSVC)
+    target_link_options(igi-editor PRIVATE "/LARGEADDRESSAWARE")
+  endif()
 endif()
 
 target_precompile_headers(igi-editor PRIVATE source/pch.h)
@@ -82,6 +170,7 @@ set_source_files_properties(
   source/app_lookup.cpp
   source/app_editor.cpp
   source/app_ui.cpp
+  source/app_pause_menu.cpp
   source/app_level.cpp
   source/renderer/renderer_flat_sky_layers.cpp
   source/renderer/renderer_objects.cpp
@@ -91,40 +180,47 @@ set_source_files_properties(
   source/renderer/renderer_objects_picking.cpp
   source/renderer/renderer_objects_texture.cpp
   source/renderer/renderer_objects_visual.cpp
+  source/renderer/renderer_rain.cpp
   source/renderer/renderer_skydome.cpp
   source/renderer/renderer_splines.cpp
   source/renderer/renderer_terrain.cpp
   source/renderer/wic_loader.cpp
-  source/parsers/qvm_parser.cpp
-  source/parsers/res_parser.cpp
+  source/level/qvm_parser.cpp
+  source/renderer/res_writer.cpp
   source/level/res_model_set.cpp
-  source/parsers/res_compiler.cpp
-  source/parsers/dat_parser.cpp
-  source/parsers/mtp_parser.cpp
-  source/parsers/mtp_tool.cpp
-  source/parsers/tex_parser.cpp
-  source/parsers/graph_parser.cpp
+  source/renderer/res_compiler.cpp
+  source/renderer/dat_writer.cpp
+  source/level/mtp_writer.cpp
+  source/renderer/tex_writer.cpp
+  source/renderer/graph_writer.cpp
   source/cli/asset_extractor.cpp
   source/level/terrain.cpp
   source/level/terrain_io.cpp
   source/level/terrain_lod.cpp
   source/level/terrain_mesh.cpp
   source/level/terrain_query.cpp
-  source/parsers/qvm_decompiler.cpp
-  source/parsers/qsc_lexer.cpp
-  source/parsers/qsc_parser.cpp
-  source/parsers/qvm_compiler.cpp
+  source/level/qvm_decompiler.cpp
+  source/level/qsc_lexer.cpp
+  source/level/qsc_parser.cpp
+  source/level/qvm_compiler.cpp
   source/cli/cli_handler.cpp
   source/cli/cli_tests.cpp
   source/cli/verify_level.cpp
+  source/utils_igi1conv.cpp
+  source/runtime/config_qvm.cpp
+  source/runtime/pause_menu_font.cpp
+  source/runtime/pause_menu_rows.cpp
+  source/runtime/human_player_config.cpp
+  source/runtime/audio_system.cpp
+  source/runtime/audio_asset_resolver.cpp
+  source/renderer/object_lightmap.cpp
   PROPERTIES SKIP_PRECOMPILE_HEADERS ON
 )
 
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party/glm-1.0.1)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party/GL/include)
-target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/source)
-target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/source/parsers)
+target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/source/runtime)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/source/cli)
 target_include_directories(igi-editor PRIVATE ${PROJECT_SOURCE_DIR}/third_party/tinygltf)
 
@@ -139,7 +235,7 @@ if (WIN32)
   message("Selected GL library path: ${GL_LIB_DIR}")
 
   target_link_directories(igi-editor PRIVATE ${GL_LIB_DIR})
-  target_link_libraries(igi-editor PRIVATE freeglut glew32 OpenGL32)
+  target_link_libraries(igi-editor PRIVATE freeglut glew32 OpenGL32 winmm)
 
   # Increase PCH memory limit to fix compiler heap errors
   if (MSVC)
@@ -157,19 +253,23 @@ if (WIN32)
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
   )
 
-  # Embed admin manifest
+  # Embed admin manifest (MSVC linker only; MinGW's windres embeds the resource)
   set(MANIFEST_FILE "${PROJECT_SOURCE_DIR}/igi-editor.exe.manifest")
-  if(EXISTS ${MANIFEST_FILE})
+  if(MSVC AND EXISTS ${MANIFEST_FILE})
     set_target_properties(igi-editor PROPERTIES
       LINK_FLAGS "/MANIFEST:EMBED /MANIFESTINPUT:${MANIFEST_FILE} /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\""
     )
   endif()
 
-  # Use Console subsystem for both Debug and Release to support CLI mode
-  set_target_properties(igi-editor PROPERTIES
-    LINK_FLAGS_DEBUG "/SUBSYSTEM:CONSOLE"
-    LINK_FLAGS_RELEASE "/SUBSYSTEM:CONSOLE"
-  )
+  # Use Console subsystem for both Debug and Release to support CLI mode.
+  # MinGW's console subsystem is the default and it does not understand the
+  # MSVC /SUBSYSTEM switch, so this is MSVC-only.
+  if (MSVC)
+    set_target_properties(igi-editor PROPERTIES
+      LINK_FLAGS_DEBUG "/SUBSYSTEM:CONSOLE"
+      LINK_FLAGS_RELEASE "/SUBSYSTEM:CONSOLE"
+    )
+  endif()
 
   # Ensure Release mode entry point is correct for console app
   set_target_properties(igi-editor PROPERTIES
@@ -183,17 +283,33 @@ if (WIN32)
     set(DLL_SRC_DIR "${PROJECT_SOURCE_DIR}/assets/dlls/x86")
   endif()
 
+  # Runtime files copied next to the exe.  assets/dlls/<arch> is not tracked in
+  # this repository, so only copy the DLLs that actually exist.
+  set(IGI_RUNTIME_FILES "${PROJECT_SOURCE_DIR}/version")
+  if(EXISTS "${DLL_SRC_DIR}/freeglut.dll")
+    list(APPEND IGI_RUNTIME_FILES "${DLL_SRC_DIR}/freeglut.dll")
+  endif()
+  if(EXISTS "${DLL_SRC_DIR}/glew32.dll")
+    list(APPEND IGI_RUNTIME_FILES "${DLL_SRC_DIR}/glew32.dll")
+  endif()
+
   add_custom_command(TARGET igi-editor POST_BUILD
     # Copy assets/editor structure directly
     COMMAND ${CMAKE_COMMAND} -E copy_directory
       "${PROJECT_SOURCE_DIR}/assets/editor"
       "$<TARGET_FILE_DIR:igi-editor>/editor"
 
+    # The GLSL 1.20 tier is copied from shaders/21 rather than kept as a second
+    # copy under assets/editor/shaders, so the two cannot drift apart -- which is
+    # what made the old shaders/32 tier dead code (present in the repo, absent
+    # from assets/editor, and therefore never shipped).
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${PROJECT_SOURCE_DIR}/shaders/21"
+      "$<TARGET_FILE_DIR:igi-editor>/editor/shaders/21"
+
     # Copy files to root (DLLs and version)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${DLL_SRC_DIR}/freeglut.dll"
-      "${DLL_SRC_DIR}/glew32.dll"
-      "${PROJECT_SOURCE_DIR}/version"
+      ${IGI_RUNTIME_FILES}
       "$<TARGET_FILE_DIR:igi-editor>"
 
     COMMENT "Copying runtime files to editor/ structure"
@@ -222,28 +338,212 @@ FetchContent_Declare(
 # CRT), causing __imp__calloc_dbg / _CrtDbgReport link errors when mixing
 # gtest.lib with DLL-CRT object files.
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+option(FETCHCONTENT_FULLY_DISCONNECTED
+    "Use already provisioned FetchContent dependencies" ON)
+option(IGI_TEST_ASAN "Instrument test targets with AddressSanitizer" OFF)
 FetchContent_MakeAvailable(googletest)
 enable_testing()
 
 add_executable(igi_tests
+    tests/test_mcp_json.cpp
+    tests/test_mcp_json_rpc.cpp
+    tests/test_mcp_paths.cpp
+    tests/test_mcp_transaction.cpp
+    tests/test_mcp_game_snapshot.cpp
+    tests/test_mcp_session_tools.cpp
+    tests/test_mcp_server.cpp
+    tests/test_mcp_domain_tools.cpp
+    tests/test_mcp_player_tools.cpp
+    tests/test_mcp_runtime_tools.cpp
+    tests/test_mcp_audio_tools.cpp
+    tests/test_mcp_string_tools.cpp
+    tests/test_mcp_cutscene_tools.cpp
+    tests/test_mcp_http.cpp
     tests/test_qsc_lexer.cpp
     tests/test_qsc_parser.cpp
     tests/test_qvm_roundtrip.cpp
     tests/test_config.cpp
+    tests/test_logger.cpp
     tests/test_utils.cpp
     tests/test_verify_unit.cpp
     tests/test_verify_level.cpp
+    tests/test_smoke_level.cpp
     tests/test_dat_parser.cpp
     tests/test_dat_writer.cpp
     tests/test_graph_parser.cpp
+    tests/test_graph_overlay.cpp
+    tests/test_animation.cpp
+    tests/test_anim_playback.cpp
     tests/test_res_parser.cpp
+    tests/test_res_stream_append.cpp
     tests/test_tex_parser.cpp
+    # The weapon/item configurator's data layer (issue #49): the DefineWeaponType
+    # parameter table, the player's weapon/ammo slots, and the corpus check of
+    # the runtime catalog against the shipping WEAPONS/*/WEAPON.QVM files.
+    tests/test_weapon_config.cpp
+    # Third-party container compatibility (issue #49 part 3): the QVM bytecode
+    # minor the engine accepts and then misdecodes, and the v11 texture format
+    # 0x43 the engine converts through Pixel_Copy32.
+    tests/test_mod_asset_compat.cpp
     tests/test_mtp_parser.cpp
     tests/test_mtp_writer.cpp
     tests/test_fnt_parser.cpp
     tests/test_pickup_resolve.cpp
     tests/test_res_model_set.cpp
-    tests/test_res_stream_append.cpp
+    tests/test_atta_children.cpp
+    tests/test_mef_native_lightmap.cpp
+    tests/test_mef_dual_set.cpp
+    tests/test_mef_corpus.cpp
+    tests/test_mef_import.cpp
+    tests/test_igi1conv_lightmap.cpp
+    tests/test_debug_command_parser.cpp
+    tests/test_capture_camera.cpp
+    tests/test_editor_camera_start.cpp
+    tests/test_visual_integrity.cpp
+    tests/test_runtime_subsystems.cpp
+    tests/test_ai_patrol_port.cpp
+    tests/test_audio_asset_resolver.cpp
+    tests/test_igi_sound_bank.cpp
+    tests/test_vanilla_fixture_parity.cpp
+    tests/test_mission_objectives.cpp
+    tests/test_mission_text_resource.cpp
+    tests/test_mission_expression.cpp
+    tests/test_mission_state.cpp
+    tests/test_level_weather.cpp
+    tests/test_weather_toggle.cpp
+    tests/test_model_texture_resolution.cpp
+    tests/test_model_texture_policy.cpp
+    tests/test_character_texture_resolution.cpp
+    tests/test_lod_chain.cpp
+    tests/test_lightmap_ref_index.cpp
+    tests/test_spline_geometry.cpp
+    tests/test_placement_splines.cpp
+    tests/test_spline_waypoint_params.cpp
+    # The task-tree / inspector surface of the road and track spline objects
+    # (issue #79): the container + waypoint rows and the arg offsets they edit.
+    tests/test_spline_task_tree.cpp
+    tests/test_level_object_parse_paths.cpp
+    tests/test_train_rail.cpp
+    tests/test_rail_polyline.cpp
+    # Corpus-backed (Windows lane only): the shipped LEVEL1 QSC through the real
+    # loader into igi::BuildRailSource. Self-skips without IGI_GAME_PATH.
+    tests/test_rail_source_corpus.cpp
+    tests/test_igi_transform.cpp
+    # The posed (skinned) draw path vs the static bind-pose path, for one model
+    # at one placement: host-portable, corpus-backed (self-skips without
+    # IGI_GAME_PATH) plus a synthetic case that always runs.
+    tests/test_skinned_static_parity.cpp
+    tests/test_seated_human.cpp
+    tests/test_props_wire_interactables.cpp
+    # A placed StationaryGun's MOUNTED WEAPON: the gun-matrix x mount-local-matrix
+    # product of StationaryGun_Aim 0x474420 (retail engine src/statgun/statgun.c:241-258)
+    # against an independent transcription of the same oracle lines, plus the
+    # shipped LEVEL4 record and the retail WEAPONS/*/WEAPON.QVM model arguments.
+    # NEW FILE.
+    tests/test_statgun_mount.cpp
+    tests/test_scamera_params.cpp
+    tests/test_door_params.cpp
+    tests/test_ladder_placement.cpp
+    tests/test_ladder_runtime.cpp
+    tests/test_declared_position_fallback.cpp
+    tests/test_keybindings.cpp
+    # Issue #48: the pure half of the implemented quick actions (animation-timer
+    # speed ladder, camera clipboard text) — header-only, so it needs no engine
+    # source in the host lane's pool.
+    tests/test_editor_quick_actions.cpp
+    tests/test_menu_qvm.cpp
+    tests/test_menu_text_res.cpp
+    tests/test_menu_labels.cpp
+    tests/test_menu_ui.cpp
+    tests/test_pause_menu_style.cpp
+    # The pause menu's KEY contract (MenuManager_ReadInput HOOK 0x418580) and the
+    # GAME's own menu pointer (`LOCAL:menusystem/pointer.spr`, corpus-backed).
+    tests/test_pause_menu_input.cpp
+    # The pause menu's POINTER: the EDITOR's own `editor/qed/pointer.anm` -- its
+    # LOOP v9 per-frame records, the engine's per-format decode (D3DTex_DownloadTexture
+    # HOOK 0x50AD10 -> Pixel_1555To32 HOOK 0x517C90) and the hotspot.  Corpus-backed
+    # against the shipped .anm, and the refusal paths are hand-built in memory.
+    tests/test_loading_bar_style.cpp
+    tests/test_magic_object_expand.cpp
+    tests/test_mission_fog.cpp
+    tests/test_mission_fog_wiring.cpp
+    tests/test_elevator_rules.cpp
+    tests/test_spline_rules.cpp
+    tests/test_anim_rules.cpp
+    tests/test_lightmap_rules.cpp
+    # Which way up a `.olm` page is sampled: the engine's own V mapping
+    # (render.c:1117-1118, D3DTSS_TEXCOORDINDEX=1) against the editor shader's
+    # second flip (renderer_objects.cpp:172, :327), measured on the retail bake.
+    tests/test_lightmap_uv_orientation.cpp
+    tests/test_smoke_rules.cpp
+    # The same emitter RUNNING: the per-tick spawn, lifetime, velocity and cone
+    # rules of Smoke_Run 0x437DB0 + Particle2D_Run 0x4FD660 (#43).
+    tests/test_smoke_particles.cpp
+    # The sprite a Smoke particle is DRAWN with (#43, item 1): Sprite_Load
+    # 0x4B6720 + D3DTex_DownloadTexture 0x50AD90 + Grid_LoadCharMap 0x4B75C0,
+    # checked against the four shipped members of
+    # <IGI>/common/sprites/sprites.res.  NEW FILE, added together with
+    # source/runtime/smoke_sprite.cpp (both are listed in this file; staging one
+    # without the other is the failure this note exists to prevent).
+    tests/test_smoke_sprite.cpp
+    tests/test_heli_rules.cpp
+    # The flight preview that consumes heli_rules (#60): the engine's tick
+    # sequence pinned tick by tick, plus the retail corpus link.
+    tests/test_heli_preview.cpp
+    tests/test_cutscene_rules.cpp
+    tests/test_cutscene_camera.cpp
+    # The same link over the SHIPPED level data. A separate file on purpose: it
+    # calls LevelObjects::Load, which the host-native lane cannot link, and a
+    # combined file would take the pure-rule suite out of the host lane too.
+    # Self-skips without IGI_GAME_PATH.
+    tests/test_cutscene_camera_corpus.cpp
+    tests/test_alarm_light_rules.cpp
+    tests/test_rain_rules.cpp
+    tests/test_weather_texture.cpp
+    tests/test_pickup_rules.cpp
+    tests/test_sound_rules.cpp
+    tests/test_terrain_snap_rules.cpp
+    # The .ctr invariants the engine only *assumes* (Terrain_Load HOOK 0x4C6240,
+    # src/terrain/terrain.c:142-143; CollNode src/coll/colltypes.h:95-101;
+    # Coll_Descend src/coll/coll.c:230) plus the two shipped files that pin them:
+    # a level-1 .ctr that satisfies all of them and the level-14 .ctr that does
+    # not (486464 bytes = 11056 * 44, so the engine's 32-byte walk reaches two
+    # nodes). Reads <IGI_GAME_PATH> read-only and self-skips without a corpus.
+    tests/test_terrain_ctr_rules.cpp
+    # The engine's ONLY shadow: the blob quad Human_CreateHandler creates
+    # (HOOK 0x45EB30, src/soldier/human.c:357-358) and Shadow_MagicObjEnterHandler
+    # lays out (HOOK 0x4E09D0, src/shadow/shadow.c:84-146). GitHub issue #63's
+    # fixture half has no oracle and is refused; this is the half that does.
+    tests/test_human_shadow.cpp
+    # The engine's terrain (QCube) LOD detail scaling: the three performance
+    # presets, the per-frame fov-scaled cell-size threshold, and the terrain fog
+    # table that is derived from the same threshold. Oracle: QCube_Begin
+    # HOOK 0x4D2540 (src/lod/qcube.c:338-342), Profile_ApplyPerformance
+    # HOOK 0x406390 (src/profile/profile.c:412), TerrainMesh_SetupLighting
+    # HOOK 0x50FAE0 (src/glowmesh/terrainmesh.c:277-292).
+    tests/test_terrain_lod_settings.cpp
+    tests/test_collision_drop_rules.cpp
+    # The engine's OBJECT collision world and the nearest-hit rule that mixes it
+    # with the terrain: Coll_Drop HOOK 0x4CABF0 body (src/coll/coll.c:575-614),
+    # Coll_LinesEx HOOK 0x4CDB20 (src/model/coll.c:432-560),
+    # RigidDynCubeObj_LineHit HOOK 0x4C1840 (src/qasm/rigidhit.c:104-470).
+    # NEW FILE: synthetic box/slope probes plus the shipped LEVEL1 WaterTower
+    # placement whose sniper the terrain-only snap dropped 74,288 units.
+    # Host-portable; the corpus half self-skips without IGI_GAME_PATH.
+    tests/test_collision_world.cpp
+    # The C++/shader uniform contract (regression guard for commit 33368d7c):
+    # every uniform the C++ uploads must be declared by the shaders and every
+    # uniform the shaders declare must be uploaded, in ALL FOUR tiers, plus a
+    # byte-for-byte check that the SHIPPED copy under assets/editor/shaders --
+    # which is what the POST_BUILD step puts in <exe dir>/editor -- has not
+    # drifted from shaders/.  That divergence is what made the terrain render
+    # fully fogged on every GL 4.1 host, and the host cannot execute that tier
+    # (GL 2.1 here), so it can only be caught by reading the sources.
+    tests/test_shader_uniform_contract.cpp
+    # Every `source/...` and `tests/...` path CMakeLists.txt names must exist.
+    # Staging a CMakeLists.txt without the files it names left HEAD unable to
+    # configure four separate times.
+    tests/test_build_manifest_files.cpp
 )
 
 # Explicit runtime so igi_tests always matches igi-editor (/MDd Debug, /MD Release).
@@ -254,19 +554,49 @@ if (MSVC)
 endif()
 
 target_include_directories(igi_tests PRIVATE source)
-target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/source/parsers)
+target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/source/runtime)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/source/cli)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/glm-1.0.1)
 target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/GL/include)
-target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
-target_include_directories(igi_tests PRIVATE ${PROJECT_SOURCE_DIR}/third_party/tinygltf)
-target_link_libraries(igi_tests PRIVATE gtest_main)
+# gameplay_window.cpp uses FreeGLUT directly, so the test target needs the same
+# GL library path and libs as the editor target.
+if (WIN32)
+  if (CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(TESTS_GL_LIB_DIR "${PROJECT_SOURCE_DIR}/third_party/GL/lib/x64")
+  else()
+    set(TESTS_GL_LIB_DIR "${PROJECT_SOURCE_DIR}/third_party/GL/lib/x86")
+  endif()
+  target_link_directories(igi_tests PRIVATE ${TESTS_GL_LIB_DIR})
+  target_link_libraries(igi_tests PRIVATE gtest_main winmm ws2_32 bcrypt freeglut glew32 OpenGL32 gdiplus psapi wbemuuid ole32)
+else()
+  target_link_libraries(igi_tests PRIVATE gtest_main winmm)
+endif()
 target_sources(igi_tests PRIVATE
-    source/parsers/qsc_lexer.cpp
-    source/parsers/qsc_parser.cpp
-    source/parsers/qvm_parser.cpp
-    source/parsers/qvm_compiler.cpp
-    source/parsers/qvm_decompiler.cpp
+    source/mcp/mcp_json.cpp
+    source/mcp/mcp_json_rpc.cpp
+    source/mcp/game_data_service.cpp
+    source/mcp/mcp_transaction.cpp
+    source/mcp/mcp_tools_session.cpp
+    source/mcp/mcp_server.cpp
+    source/mcp/mcp_transport_stdio.cpp
+    source/mcp/mcp_transport_http.cpp
+    source/mcp/mcp_tools_objects.cpp
+    source/mcp/mcp_tools_ai.cpp
+    source/mcp/mcp_tools_player.cpp
+    source/mcp/mcp_tools_runtime.cpp
+    source/mcp/mcp_tools_audio.cpp
+    source/mcp/mcp_tools_strings.cpp
+    source/mcp/mcp_tools_cutscene.cpp
+    source/mcp/mcp_tools_mission.cpp
+    source/mcp/mcp_tools_graph.cpp
+    source/mcp/mcp_tools_assets.cpp
+    source/level/qsc_lexer.cpp
+    source/level/qsc_parser.cpp
+    source/level/qvm_parser.cpp
+    source/level/qvm_ai_bindings.cpp
+    source/level/qvm_compiler.cpp
+    source/level/qvm_decompiler.cpp
+    source/level/level_common.cpp
     source/config.cpp
     source/utils.cpp
     source/common.cpp
@@ -275,14 +605,175 @@ target_sources(igi_tests PRIVATE
     source/level/level_objects.cpp
     source/level/level_objects_serialize.cpp
     source/cli/verify_level_core.cpp
-    source/parsers/dat_parser.cpp
-    source/parsers/graph_parser.cpp
-    source/parsers/res_parser.cpp
-    source/parsers/res_compiler.cpp
+    source/cli/smoke_level_core.cpp
+    source/cli/verify_level.cpp
+    source/renderer/dat_writer.cpp
+    source/renderer/graph_writer.cpp
+    source/renderer/graph_project.cpp
+    source/renderer/res_writer.cpp
+    source/renderer/res_compiler.cpp
     source/level/res_model_set.cpp
-    source/parsers/tex_parser.cpp
-    source/parsers/mtp_parser.cpp
-    source/parsers/fnt_parser.cpp
+    source/renderer/tex_writer.cpp
+    # The LOOP parser core, split out of tex_writer.cpp so the host lane can link
+    # a parse WITHOUT Logger (Logger::Log -> Config::Get(), and config.cpp is not
+    # host-portable).  tests/test_pause_menu_input.cpp needs exactly this to
+    # parse LOCAL:menusystem/pointer.spr out of the retail menu archive.
+    source/renderer/tex_parser.cpp
+    source/renderer/model_texture_resolution.cpp
+    source/renderer/spline_geometry.cpp
+    source/level/mtp_writer.cpp
+    source/renderer/fnt_parser.cpp
+    source/level/terrain_files.cpp
+    source/renderer/mef_native.cpp
+    source/renderer/mef_writer.cpp
+    source/visual_integrity.cpp
+    source/utils_igi1conv.cpp
+    source/game_clock.cpp
+    source/level/qvm_native_registry.cpp
+    source/level/qvm_interpreter.cpp
+    source/level/task_tree.cpp
+    source/player_collision.cpp
+    source/player_fall_impact.cpp
+    source/player_motion.cpp
+    source/player_ladder.cpp
+    source/player_separation.cpp
+    source/animation_motion.cpp
+    source/player_animation_driver.cpp
+    source/animation.cpp
+    source/weapon_view_sway.cpp
+    source/weapon_view_recoil.cpp
+    source/player_controller.cpp
+    source/weapon_system.cpp
+    source/ai_events.cpp
+    source/ai_script_host.cpp
+    source/ai_system.cpp
+    source/level_flow.cpp
+    source/mission_objective_loader.cpp
+    source/mission_flow_loader.cpp
+    source/mission_state_loader.cpp
+    source/mission_text_resource.cpp
+    source/mission_expression.cpp
+    source/runtime/runtime_world.cpp
+    source/runtime/runtime_session.cpp
+    source/runtime/gameplay_window.cpp
+    source/runtime/editor_snapshot.cpp
+    source/runtime/window_input_router.cpp
+    source/runtime/simulation_scheduler.cpp
+    source/runtime/gameplay_host.cpp
+    source/runtime/gameplay_spawn.cpp
+    source/runtime/runtime_renderer.cpp
+    source/runtime/projectile_system.cpp
+    source/runtime/door_state.cpp
+    source/runtime/audio_system.cpp
+    source/runtime/audio_asset_resolver.cpp
+    source/runtime/config_qvm.cpp
+    source/runtime/pause_menu_font.cpp
+    source/runtime/human_player_config.cpp
+    source/runtime/magic_object_registry.cpp
+    source/runtime/magic_object_expand.cpp
+    source/runtime/map_computer_camera.cpp
+    source/runtime/map_computer_projection.cpp
+    source/runtime/level_weather.cpp
+    source/runtime/mission_fog.cpp
+    source/runtime/elevator_rules.cpp
+    # The shared SplineObj -> rail resolver (`igi::BuildRailSource`). Both
+    # App::EvaluateTrainTrackPositions and the viewport's rail overlay
+    # (renderer/renderer_objects_visual.cpp) call it, so the drawn polyline and
+    # the curve the cars are placed on are one construction; the host lane needs
+    # it for tests/test_rail_polyline.cpp. igi-editor picks it up through the
+    # source/runtime/*.* glob.
+    source/runtime/rail_source.cpp
+    source/runtime/spline_rules.cpp
+    # The engine's own span render path (`igi::spline`). The renderer's
+    # BuildEngineSpanMesh adapter calls it, so the host lane needs it to link
+    # tests/test_placement_splines.cpp; igi-editor picks it up through the
+    # source/level/*.* glob.
+    source/level/spline_geometry.cpp
+    source/runtime/anim_rules.cpp
+    # The engine's animation driver and the editor playback state built on it.
+    # `AnimPlayback` (animation.h) is implemented in runtime/anim_playback.cpp,
+    # so the host lane needs both to link tests/test_anim_playback.cpp;
+    # igi-editor picks them up through the source/runtime/*.* glob.
+    source/runtime/anim_player.cpp
+    source/runtime/anim_playback.cpp
+    source/runtime/lightmap_rules.cpp
+    source/runtime/smoke.cpp
+    # The live half of the Smoke emitter (#43): the per-tick state machine of
+    # Smoke_Run 0x437DB0 plus the Particle2D pool it drives. Pure logic, so the
+    # host lane needs it to link tests/test_smoke_particles.cpp; igi-editor
+    # picks it up through the source/runtime/*.* glob.
+    source/runtime/smoke_sim.cpp
+    # The TEXELS those particles are drawn with (#43, item 1): Sprite_Load
+    # 0x4B6720, D3DTex_DownloadTexture's format dispatch 0x50AD90 and
+    # Grid_LoadCharMap 0x4B75C0.  Pure logic over a .spr byte buffer, so the host
+    # lane needs it to link tests/test_smoke_sprite.cpp; igi-editor picks it up
+    # through the source/runtime/*.* glob and renderer_smoke.cpp is its caller.
+    # NEW FILE (with tests/test_smoke_sprite.cpp).
+    source/runtime/smoke_sprite.cpp
+    source/runtime/heli_rules.cpp
+    # The Heli task's first caller (#60): the authored -> per-tick flight preview.
+    # Pure logic, so the host lane needs it to link tests/test_heli_preview.cpp;
+    # igi-editor picks it up through the source/runtime/*.* glob.
+    source/runtime/heli_preview.cpp
+    source/runtime/cutscene_rules.cpp
+    # The authored CutScene -> engine timeline link (#80). It is what gives
+    # cutscene_rules.cpp its first caller, so the host lane needs it to link
+    # tests/test_cutscene_camera.cpp and tests/test_mission_state.cpp;
+    # igi-editor picks it up through the source/runtime/*.* glob.
+    source/runtime/cutscene_camera.cpp
+    source/runtime/alarm_light.cpp
+    # The engine's blob shadow (#63): the fade, the clamp chain, the colour and the
+    # quad geometry of Shadow_MagicObjEnterHandler (HOOK 0x4E09D0, src/shadow/shadow.c)
+    # plus the placement rule of Human_CreateHandler (HOOK 0x45EB30,
+    # src/soldier/human.c:357-358). Pure logic, so the host lane needs it to link
+    # tests/test_human_shadow.cpp; igi-editor picks it up through the
+    # source/runtime/*.* glob.
+    source/runtime/human_shadow.cpp
+    source/runtime/pickup_rules.cpp
+    # The weapon/item configurator's data layer (#49): DefineWeaponType's
+    # parameter table, its call-argument reader and the player slot tables.
+    # Pure logic over qvm_parser, so the host lane needs it to link
+    # tests/test_weapon_config.cpp; igi-editor picks it up through the
+    # source/runtime/*.* glob.
+    source/runtime/weapon_config.cpp
+    source/runtime/rain_rules.cpp
+    source/runtime/sound_emitter.cpp
+    # The retail sound container and sample format (#70): the ILFF/IRES pack
+    # walker, the 20-byte ILSF header and the engine's IMA ADPCM decoder.
+    # Pure logic, so the host lane needs it to link
+    # tests/test_igi_sound_bank.cpp; igi-editor picks it up through the
+    # source/runtime/*.* glob.
+    source/runtime/igi_sound_bank.cpp
+    source/runtime/weather_mode.cpp
+    source/menu/qvm_image.cpp
+    source/menu/menu_qvm_writer.cpp
+    source/menu/menu_text_res.cpp
+    source/menu/menu_ui.cpp
+    source/app_menu.cpp
+    source/runtime/pause_menu_rows.cpp
+    # The GAME's own menu pointer (`LOCAL:menusystem/pointer.spr` out of
+    # `menusystem/ingamemenu.res`).  Pure logic over RES_Extract + TEX_ParseBytes,
+    # so tests/test_pause_menu_input.cpp can prove the resource identity in the
+    # host lane without a GL context.  igi-editor picks it up through the
+    # source/runtime/*.* glob; this line is what the igi_tests / host lane needs.
+    #
+    # The WEAPON_ID_* -> weapon-type-model reader for a placed StationaryGun's
+    # mounted weapon: WEAPONS/<NAME>/WEAPON.QVM -> DefineWeaponType argument 29,
+    # the table WeaponType_Find (0x413BD0) searches and Gun_ParamChangedHandler
+    # loads with VirModel_Find (src/guncasing/gun.c:506).  Pure logic over
+    # weapon_config.cpp + std::filesystem, so the host lane needs it to link
+    # tests/test_statgun_mount.cpp; igi-editor picks it up through the
+    # source/runtime/*.* glob.
+    source/runtime/weapon_model_lookup.cpp
+)
+
+set_source_files_properties(
+    source/runtime/audio_system.cpp
+    source/runtime/audio_asset_resolver.cpp
+    source/runtime/igi_sound_bank.cpp
+    source/runtime/config_qvm.cpp
+    source/runtime/human_player_config.cpp
+    PROPERTIES SKIP_PRECOMPILE_HEADERS ON
 )
 
 # level_objects.cpp (and its pch.h header graph: app.h, renderer, level.h) relies
@@ -291,7 +782,119 @@ target_sources(igi_tests PRIVATE
 target_precompile_headers(igi_tests PRIVATE source/pch.h)
 
 include(GoogleTest)
-gtest_discover_tests(igi_tests WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+# Cross-compiling: the test executables are Windows PE images that cannot be
+# executed on the build host.  Defer gtest test discovery to `ctest` time
+# instead of running the binaries during the build.
+if(CMAKE_CROSSCOMPILING AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.18)
+    set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
+endif()
+gtest_discover_tests(igi_tests
+    TEST_PREFIX "aggregate."
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
+# Keep the editor-start policy regression lightweight and independent from the
+# large runtime integration translation unit/PCH. This gives the camera policy
+# a fast, reliable unit-test seam even when the full aggregate test target is
+# memory constrained on Windows.
+add_executable(editor_camera_start_tests
+    tests/test_editor_camera_start.cpp
+)
+
+if(IGI_TEST_ASAN AND MSVC)
+    # ASan is an isolated opt-in lane. Release symbols avoid /RTC conflicts;
+    # disable incremental linking because the linker does not support it with
+    # the sanitizer runtime.
+    target_compile_options(igi_tests PRIVATE /fsanitize=address /Zi)
+    target_link_options(igi_tests PRIVATE /INCREMENTAL:NO)
+endif()
+target_include_directories(editor_camera_start_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/source
+    ${PROJECT_SOURCE_DIR}/third_party/glm-1.0.1
+    ${PROJECT_SOURCE_DIR}/third_party/GL/include
+)
+target_link_libraries(editor_camera_start_tests PRIVATE gtest_main)
+target_precompile_headers(editor_camera_start_tests PRIVATE source/pch.h)
+gtest_discover_tests(editor_camera_start_tests
+    TEST_PREFIX "camera."
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
+add_executable(editor_policy_tests
+    tests/test_editor_policy.cpp
+)
+target_include_directories(editor_policy_tests PRIVATE ${PROJECT_SOURCE_DIR}/source)
+target_link_libraries(editor_policy_tests PRIVATE gtest_main)
+gtest_discover_tests(editor_policy_tests
+    TEST_PREFIX "policy."
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
+add_executable(game_clock_tests
+    tests/test_game_clock.cpp
+    source/game_clock.cpp
+)
+target_include_directories(game_clock_tests PRIVATE ${PROJECT_SOURCE_DIR}/source)
+target_link_libraries(game_clock_tests PRIVATE gtest_main)
+gtest_discover_tests(game_clock_tests
+    TEST_PREFIX "clock."
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
+add_executable(debug_command_queue_tests
+    tests/test_debug_command_queue.cpp
+)
+target_include_directories(debug_command_queue_tests PRIVATE ${PROJECT_SOURCE_DIR}/source)
+target_link_libraries(debug_command_queue_tests PRIVATE gtest_main)
+gtest_discover_tests(debug_command_queue_tests
+    TEST_PREFIX "debug_queue."
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
+add_executable(igi_mcp
+    source/mcp/mcp_main.cpp
+    source/mcp/mcp_server.cpp
+    source/mcp/mcp_transport_stdio.cpp
+    source/mcp/mcp_transport_http.cpp
+    source/mcp/mcp_json.cpp
+    source/mcp/mcp_json_rpc.cpp
+    source/mcp/game_data_service.cpp
+    source/mcp/mcp_transaction.cpp
+    source/mcp/mcp_tools_session.cpp
+    source/mcp/mcp_tools_objects.cpp
+    source/mcp/mcp_tools_ai.cpp
+    source/mcp/mcp_tools_player.cpp
+    source/mcp/mcp_tools_runtime.cpp
+    source/mcp/mcp_tools_audio.cpp
+    source/mcp/mcp_tools_strings.cpp
+    source/mcp/mcp_tools_cutscene.cpp
+    source/mcp/mcp_tools_mission.cpp
+    source/mcp/mcp_tools_graph.cpp
+    source/mcp/mcp_tools_assets.cpp
+    source/mcp/mcp_logger_stub.cpp
+    source/level/qsc_lexer.cpp
+    source/level/qsc_parser.cpp
+    source/level/qvm_parser.cpp
+    source/level/qvm_compiler.cpp
+    source/level/qvm_decompiler.cpp
+    source/level/task_schema.cpp
+    # task_schema.cpp derives the Smoke, AlarmLight and SplineObj /
+    # SplineObjWaypoint inspector rows from these modules' authored parameter
+    # tables (issues #43 and #79), so this binary needs them to link.  All are
+    # pure logic -- no Windows, GL or level headers.
+    source/runtime/smoke.cpp
+    source/runtime/alarm_light.cpp
+    source/runtime/spline_rules.cpp
+    # task_schema.cpp now also derives the GunPickup / AmmoPickup / AddAmmo rows
+    # from igi::PickupLayouts() (issue #49), so pickup_rules.cpp is needed here
+    # too.  It is pure logic: <cstdint>, <string>, <vector>, <cmath>, <cstdio>,
+    # <cstdlib>, <cstring> only.
+    source/runtime/pickup_rules.cpp
+    source/renderer/res_writer.cpp
+)
+target_include_directories(igi_mcp PRIVATE source)
+if (WIN32)
+    target_link_libraries(igi_mcp PRIVATE ws2_32 bcrypt gdiplus psapi wbemuuid ole32)
+    set_target_properties(igi_mcp PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG "${PROJECT_SOURCE_DIR}/bin/Debug"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${PROJECT_SOURCE_DIR}/bin/Release"
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
 
 # Copy test fixtures next to igi_tests.exe so tests work from any directory
 add_custom_command(TARGET igi_tests POST_BUILD
@@ -300,4 +903,3 @@ add_custom_command(TARGET igi_tests POST_BUILD
         "$<TARGET_FILE_DIR:igi_tests>/fixtures"
     COMMENT "Copying test fixtures to output directory"
 )
-

@@ -6,9 +6,10 @@
 #include "pch.h"
 #include "utils.h"
 #include "logger.h"
+#if defined(_WIN32)
 #include <windows.h>
 #include <tlhelp32.h>
-#include <sstream>
+#endif
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -55,6 +56,7 @@ void SetLogEnabled(bool enabled) {
 }
 
 // UI message box functions
+#if defined(_WIN32)
 void ShowError(const std::string& message, const std::string& title) {
 	MessageBoxA(NULL, message.c_str(), title.c_str(), MB_OK | MB_ICONERROR);
 }
@@ -66,7 +68,9 @@ void ShowWarning(const std::string& message, const std::string& title) {
 void ShowInfo(const std::string& message, const std::string& title) {
 	MessageBoxA(NULL, message.c_str(), title.c_str(), MB_OK | MB_ICONINFORMATION);
 }
+#endif // _WIN32
 
+#if defined(_WIN32)
 struct PromptDialogState {
 	std::string title;
 	std::string label;
@@ -205,6 +209,7 @@ std::optional<std::string> PromptForText(const std::string& title, const std::st
 	if (!state.accepted) return std::nullopt;
 	return state.result;
 }
+#endif // _WIN32
 
 // Combined log + message box functions
 void LogAndShowError(const std::string& message, const std::string& title) {
@@ -213,6 +218,7 @@ void LogAndShowError(const std::string& message, const std::string& title) {
 }
 
 // Process elevation check
+#if defined(_WIN32)
 bool IsElevatedProcess() {
 	bool isElevated = false;
 	HANDLE token = NULL;
@@ -229,7 +235,9 @@ bool IsElevatedProcess() {
 	return isElevated;
 }
 
+#endif // _WIN32
 // String utilities
+#if defined(_WIN32)
 std::string GetLastErrorAsString() {
 	DWORD error = GetLastError();
 	if (error == 0)
@@ -239,13 +247,10 @@ std::string GetLastErrorAsString() {
 	ss << "Error code: " << error << " - " << std::system_category().message(error);
 	return ss.str();
 }
+#endif // _WIN32
 
-std::string Trim(const std::string& str) {
-	auto start = str.find_first_not_of(" \t\n\r");
-	if (start == std::string::npos) return "";
-	auto end = str.find_last_not_of(" \t\n\r");
-	return str.substr(start, end - start + 1);
-}
+// Trim() is defined inline in utils.h so the pure-logic parsers can be compiled
+// and linked by the host-native test lane, which does not build this file.
 
 std::vector<std::string> Split(const std::string& str, char delimiter) {
 	std::vector<std::string> tokens;
@@ -287,11 +292,13 @@ std::string ToString(const T& value) {
 template std::optional<int> TryParse<int>(const std::string&);
 template std::optional<float> TryParse<float>(const std::string&);
 template std::optional<double> TryParse<double>(const std::string&);
+template std::optional<long long> TryParse<long long>(const std::string&);
 template std::string ToString<int>(const int&);
 template std::string ToString<float>(const float&);
 template std::string ToString<double>(const double&);
 
 // Key handling functions (Windows API)
+#if defined(_WIN32)
 bool HotKeysDown(const std::vector<int>& keys) {
 	if (keys.empty()) return false;
 
@@ -330,6 +337,7 @@ bool IsKeyBindingPressed(const KeyBinding& kb) {
 	if (kb.vkCode) keys.push_back(kb.vkCode);
 	return HotKeysDown(keys);
 }
+#endif // _WIN32
 
 bool ModifiersExactMatch(const KeyBinding& kb, bool ctrlDown, bool shiftDown, bool altDown) {
 	// Required modifiers must be held AND non-required modifiers must be released,
@@ -337,6 +345,7 @@ bool ModifiersExactMatch(const KeyBinding& kb, bool ctrlDown, bool shiftDown, bo
 	return kb.ctrl == ctrlDown && kb.shift == shiftDown && kb.alt == altDown;
 }
 
+#if defined(_WIN32)
 bool IsKeyBindingPressedExact(const KeyBinding& kb) {
 	// A binding with no key and no modifiers can never be "pressed".
 	if (!kb.vkCode && !kb.ctrl && !kb.shift && !kb.alt) return false;
@@ -345,20 +354,15 @@ bool IsKeyBindingPressedExact(const KeyBinding& kb) {
 	return ModifiersExactMatch(kb, down(VK_CONTROL), down(VK_SHIFT), down(VK_MENU));
 }
 
-std::string GetExeDirectory() {
-	char exePath[MAX_PATH];
-	GetModuleFileNameA(NULL, exePath, MAX_PATH);
-	std::string exeDir(exePath);
-	size_t lastSlash = exeDir.find_last_of("\\/");
-	if (lastSlash != std::string::npos) {
-		exeDir = exeDir.substr(0, lastSlash);
-	}
-	return exeDir;
-}
+void ActivateApp() {}
+#endif // _WIN32
+
+// GetExeDirectory() is defined inline in utils.h so the level-load path can be
+// compiled and linked by the host-native test lane, which does not build this file.
 
 std::string GetVersionString() {
 	std::string exeDir = GetExeDirectory();
-	std::string versionPath = exeDir + "\\version";
+	std::string versionPath = ToNativePath(exeDir + "\\version");
 	std::ifstream file(versionPath);
 	if (file.is_open()) {
 		std::string version;
@@ -377,20 +381,20 @@ std::string GetLevelQSCPath(int level_no) {
 			path = path.substr(6);
 			// In IGI, LOCAL: usually means it's relative to the game root or mission folder
 			// For the editor, we'll try to resolve it relative to the game root.
-			return GetIGIRootPath() + "\\" + path;
+			return ToNativePath(GetIGIRootPath() + "\\" + path);
 		}
 		return path;
 	}
 	std::string exeDir = GetExeDirectory();
 	std::string dir = exeDir + "\\editor\\qed\\temp";
 	std::filesystem::create_directories(dir);
-	return dir + "\\objects.qsc";
+	return ToNativePath(dir + "\\objects.qsc");
 }
 
 std::string GetLevelQVMPath(int level_no) {
 	std::string game_path = GetIGIRootPath();
 	Logger::Get().Log(LogLevel::INFO, "[Utils] GetLevelQVMPath using custom location: " + game_path);
-	return game_path + "\\missions\\location0\\level" + std::to_string(level_no) + "\\objects.qvm";
+	return ToNativePath(game_path + "\\missions\\location0\\level" + std::to_string(level_no) + "\\objects.qvm");
 }
 
 static void CopyDirExcludingQFiles(const std::filesystem::path& source, const std::filesystem::path& destination) {
@@ -450,9 +454,11 @@ bool IsUndergroundModel(const std::string& name, const std::string& modelId) {
 		matches("471_") ||
 		matches("491_") ||
 		matches("472_01_1") ||   // ANYA_HQ — underground command bunker
-		matches("ANYA_HQ");
+		matches("ANYA_HQ") ||
+		matches("ANYA");
 }
 
+#if defined(_WIN32)
 void SetClipboardText(const std::string& text) {
 	if (!OpenClipboard(NULL)) return;
 	EmptyClipboard();
@@ -483,6 +489,7 @@ std::string GetClipboardText() {
 	CloseClipboard();
 	return text;
 }
+#endif // _WIN32
 
 void TrimFileInPlace(const std::string& filepath) {
 	std::ifstream inFile(filepath, std::ios::in | std::ios::binary);
@@ -510,6 +517,8 @@ void TrimFileInPlace(const std::string& filepath) {
 }
 
 std::string GetIGIRootPath() {
+	static std::string cachedPath;
+	if (!cachedPath.empty()) return cachedPath;
 #if defined(_WIN32)
 	char* envPath = nullptr;
 	size_t len = 0;
@@ -517,7 +526,8 @@ std::string GetIGIRootPath() {
 		std::string path(envPath);
 		free(envPath);
 		if (!path.empty()) {
-			return path;
+			cachedPath = path;
+			return cachedPath;
 		}
 	}
 #else
@@ -525,9 +535,28 @@ std::string GetIGIRootPath() {
 	if (envPath != nullptr) {
 		std::string path(envPath);
 		if (!path.empty()) {
-			return path;
+			cachedPath = path;
+			return cachedPath;
 		}
 	}
+#if defined(__APPLE__)
+	// A Finder launch inherits no shell environment, so an .app cannot rely on
+	// IGI_GAME_PATH.  The bundle ships a one-line file naming the install; it is
+	// read here so double-clicking the app finds the same tree the CLI tests use.
+	{
+		const std::string configPath =
+		    Utils::ToNativePath(GetExeDirectory() + "\\igi-game-path.txt");
+		std::ifstream in(configPath);
+		std::string line;
+		if (in.is_open() && std::getline(in, line)) {
+			line = Trim(line);
+			if (!line.empty()) {
+				cachedPath = line;
+				return cachedPath;
+			}
+		}
+	}
+#endif
 #endif
 
 	std::string path = GetExeDirectory();
@@ -535,8 +564,11 @@ std::string GetIGIRootPath() {
 	while (!path.empty() && (path.back() == '\\' || path.back() == '/' || path.back() == ' ')) {
 		path.pop_back();
 	}
-	// If it contains \missions, strip it
+	// If it contains \missions or /missions, strip it
 	size_t pos = path.find("\\missions");
+	if (pos == std::string::npos) {
+		pos = path.find("/missions");
+	}
 	if (pos != std::string::npos) {
 		path = path.substr(0, pos);
 	}
@@ -544,12 +576,13 @@ std::string GetIGIRootPath() {
 	while (!path.empty() && (path.back() == '\\' || path.back() == '/' || path.back() == ' ')) {
 		path.pop_back();
 	}
-	return path;
+	cachedPath = path;
+	return cachedPath;
 }
 
 std::string GetIGIModelsPath(int level_no) {
 	std::string root = GetIGIRootPath();
-	std::string pathLoc = root + "\\missions\\location0\\level" + std::to_string(level_no) + "\\models";
+	std::string pathLoc = ToNativePath(root + "\\missions\\location0\\level" + std::to_string(level_no) + "\\models");
 	
 	if (std::filesystem::exists(pathLoc)) {
 		return pathLoc;
@@ -557,6 +590,7 @@ std::string GetIGIModelsPath(int level_no) {
 	return "";
 }
 
+#if defined(_WIN32)
 HANDLE FindProcess(const std::string &processName)
 {
     LogInfo("FindProcess: Trying to find process: " + processName);
@@ -770,5 +804,6 @@ DWORD GetProcessBaseAddress()
         return 0;
     }
 }
+#endif // _WIN32
 
 } // namespace Utils

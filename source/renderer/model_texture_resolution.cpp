@@ -1,0 +1,418 @@
+#include "model_texture_resolution.h"
+
+#include <algorithm>
+#include <cctype>
+#include <cstring>
+#include <map>
+#include <set>
+
+std::vector<ModelPickerEntry> FilterModelPickerEntries(
+    const std::vector<ModelPickerEntry>& entries,
+    const std::string& filter) {
+    std::string lowerFilter = filter;
+    std::transform(lowerFilter.begin(), lowerFilter.end(), lowerFilter.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    std::vector<ModelPickerEntry> filtered;
+    for (const auto& entry : entries) {
+        if (lowerFilter.empty()) {
+            filtered.push_back(entry);
+            continue;
+        }
+        std::string lowerLabel = entry.label;
+        std::transform(lowerLabel.begin(), lowerLabel.end(), lowerLabel.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lowerLabel.find(lowerFilter) != std::string::npos) {
+            filtered.push_back(entry);
+        }
+    }
+    return filtered;
+}
+
+bool ModelSourceRequiresImport(bool destinationInventoryLoaded,
+                               bool destinationContainsModel,
+                               int destinationLevel,
+                               int selectedSourceLevel) {
+    const bool explicitForeignSource = selectedSourceLevel > 0 &&
+        selectedSourceLevel != destinationLevel;
+    if (!destinationInventoryLoaded) return explicitForeignSource;
+    if (!destinationContainsModel) return true;
+    return explicitForeignSource;
+}
+
+int ModelPickerSelectionAt(
+    const std::vector<ModelPickerEntry>& entries,
+    const std::string& filter,
+    int mouseX,
+    int mouseY,
+    int viewportWidth,
+    int viewportHeight,
+    int scrollOffset,
+    int rowHeight) {
+    constexpr int kPanelWidth = 280;
+    constexpr int kHeaderHeight = 50;
+    constexpr int kFooterHeight = 20;
+    if (rowHeight <= 0 || mouseX < viewportWidth - kPanelWidth ||
+        mouseX > viewportWidth || mouseY < kHeaderHeight ||
+        mouseY >= viewportHeight - kFooterHeight || scrollOffset < 0) {
+        return -1;
+    }
+
+    const auto filtered = FilterModelPickerEntries(entries, filter);
+    const int row = (mouseY - kHeaderHeight) / rowHeight;
+    const int selected = scrollOffset + row;
+    return selected >= 0 && selected < static_cast<int>(filtered.size()) ? selected : -1;
+}
+
+std::vector<ModelPickerEntry> DedupeModelPickerEntries(
+    const std::vector<ModelPickerEntry>& entries,
+    int currentLevel) {
+    std::map<std::string, std::set<int>> levelsByModel;
+    std::vector<std::string> order;
+    for (const auto& entry : entries) {
+        auto levelsIt = levelsByModel.find(entry.modelId);
+        if (levelsIt == levelsByModel.end()) {
+            levelsByModel.emplace(entry.modelId, std::set<int>{});
+            order.push_back(entry.modelId);
+            levelsIt = levelsByModel.find(entry.modelId);
+        }
+        if (entry.sourceLevel > 0) levelsIt->second.insert(entry.sourceLevel);
+    }
+
+    std::vector<ModelPickerEntry> unique;
+    unique.reserve(order.size());
+    for (const auto& modelId : order) {
+        const auto& levels = levelsByModel[modelId];
+        int sourceLevel = 0;
+        if (!levels.empty()) {
+            sourceLevel = levels.count(currentLevel) > 0
+                ? currentLevel
+                : *levels.begin();
+        }
+        unique.push_back({modelId, sourceLevel, modelId});
+    }
+    return unique;
+}
+
+std::optional<ModelPickerCommit> ResolveModelPickerCommit(
+    const std::vector<ModelPickerEntry>& entries,
+    const std::string& filter,
+    int selected) {
+    const auto filtered = FilterModelPickerEntries(entries, filter);
+    if (selected < 0 || selected >= static_cast<int>(filtered.size())) {
+        return std::nullopt;
+    }
+    return ModelPickerCommit{filtered[selected].modelId,
+                             filtered[selected].sourceLevel};
+}
+
+int MoveModelPickerSelection(int selected, int count, int delta) {
+    if (count <= 0) return 0;
+    return std::max(0, std::min(count - 1, selected + delta));
+}
+
+bool IsCompleteModelImportMetadata(const ModelImportMetadataStatus& status) {
+    return status.datPublished && status.mtpPublished;
+}
+
+const ModelTextureSource* FindExactTextureSource(
+    const std::vector<ModelTextureSource>& sources,
+    int sourceLevel,
+    const std::string& modelId) {
+    for (const auto& source : sources) {
+        if (source.level == sourceLevel && source.modelId == modelId) {
+            return &source;
+        }
+    }
+    return nullptr;
+}
+
+std::string StripTextureFormatSuffix(const std::string& textureId) {
+    static const char* const kSuffixes[] = {
+        "_argb8888", "_rgb565", "_argb1555", "_argb4444",
+        "_a8r8g8b8", "_r5g6b5", "_a1r5g5b5", "_a4r4g4b4"
+    };
+
+    for (const char* suffix : kSuffixes) {
+        const size_t suffixLength = std::strlen(suffix);
+        if (textureId.size() <= suffixLength) continue;
+
+        bool matches = true;
+        const size_t start = textureId.size() - suffixLength;
+        for (size_t i = 0; i < suffixLength; ++i) {
+            const unsigned char actual = static_cast<unsigned char>(textureId[start + i]);
+            const unsigned char expected = static_cast<unsigned char>(suffix[i]);
+            if (std::tolower(actual) != std::tolower(expected)) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) return textureId.substr(0, start);
+    }
+    return textureId;
+}
+
+bool TextureIdHasAlphaSuffix(const std::string& textureId) {
+    static const char* const kAlphaSuffixes[] = {
+        "_argb8888", "_argb1555", "_argb4444",
+        "_a8r8g8b8", "_a1r5g5b5", "_a4r4g4b4"
+    };
+
+    for (const char* suffix : kAlphaSuffixes) {
+        const size_t suffixLength = std::strlen(suffix);
+        if (textureId.size() <= suffixLength) continue;
+
+        bool matches = true;
+        const size_t start = textureId.size() - suffixLength;
+        for (size_t i = 0; i < suffixLength; ++i) {
+            const unsigned char actual = static_cast<unsigned char>(textureId[start + i]);
+            const unsigned char expected = static_cast<unsigned char>(suffix[i]);
+            if (std::tolower(actual) != std::tolower(expected)) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) return true;
+    }
+    return false;
+}
+
+std::string ResolveAiModelTextureId(
+    const std::string& textureId,
+    bool isAiModel,
+    const std::function<bool(const std::string&)>& resolves) {
+    if (!isAiModel || !TextureIdHasAlphaSuffix(textureId)) return textureId;
+
+    const std::string stripped = StripTextureFormatSuffix(textureId);
+    if (stripped == textureId) return textureId;
+
+    // The opaque preference is an editor-only look; it may only be taken when the
+    // opaque texture actually exists. See the header for the retail engine basis
+    // (ModelFile_LoadTextures HOOK 0x4CF790, src/model/model.c:452-470).
+    return resolves(stripped) ? stripped : textureId;
+}
+
+bool ModelNameIsTextureIdFallbackAllowed(bool modelFoundInDat) {
+    // The DAT is the editor's transcription of the model's own MTP INST record
+    // (ModelFile_Setup, HOOK 0x4CF080, src/model/model.c:271-314). When it
+    // answered, its list — even an empty one — is the engine's list, so the
+    // model-name guess must not override it.
+    return !modelFoundInDat;
+}
+
+bool ModelTextureInheritanceAllowed(bool modelFoundInDat) {
+    // A model's textures are its own MTP INST record's GTT list, per ModelLod,
+    // and the engine never copies one ModelLod's array into another's: the only
+    // writers are ModelFile_Setup (src/model/model.c:312) and the NAXT
+    // texture-animation swap within one LOD (src/lod/mesh3d.c:558-581). An ATTA
+    // child gets its own ModelLod through its own VirModel_Find
+    // (src/shadow/sector.c:667-672; src/magicobj/rigidcoll.c:484-485), so there
+    // is no parent->child texture relationship to reproduce. See the header for
+    // the full citation set.
+    //
+    // When the DAT answered — even with an empty list — the editor has the
+    // engine's own answer and must not substitute another model's list. Only a
+    // genuine miss (no entry anywhere) leaves the editor without data, which is
+    // the single case its historical guesses may cover.
+    return !modelFoundInDat;
+}
+
+bool IsSharedCommonTextureArchive(const std::string& resPath) {
+    std::string path = resPath;
+    for (char& c : path) {
+        if (c == '\\') c = '/';
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return path.find("/common/textures/location0.res") != std::string::npos;
+}
+
+std::vector<ModelSourceArchiveIndex> OrderTextureArchivesByOwner(
+    const std::vector<ModelSourceArchiveIndex>& archives,
+    const std::string& ownerResPath) {
+    if (ownerResPath.empty()) return archives;
+
+    std::vector<ModelSourceArchiveIndex> ordered;
+    ordered.reserve(archives.size());
+    for (const auto& archive : archives) {
+        if (archive.resPath == ownerResPath) ordered.push_back(archive);
+    }
+    if (ordered.empty()) return archives;
+    for (const auto& archive : archives) {
+        if (archive.resPath != ownerResPath) ordered.push_back(archive);
+    }
+    return ordered;
+}
+
+int ModelArchiveOwnerLevel(const std::string& resPath) {
+    if (resPath.empty()) return 0;
+
+    // Fold exactly the way every other archive-path comparison in the editor does
+    // (RES_BuildIndex keys and SameArchivePath are case-insensitive).
+    std::string path = resPath;
+    for (char& c : path) {
+        if (c == '\\') c = '/';
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+
+    // ".../level<N>/models/level<N>.res" -- the archive LoadResCache indexes for a
+    // level (renderer_objects.cpp: addModel(missionDir + "\\models\\" + levelName)).
+    // The engine's own expression is "%smodels/%s.res" with gModelDir set to the
+    // level's dir (src/model/model.c:267, HOOK(0x4CF080)), and Model_SetDir was
+    // handed "LOCAL:<mission dir>/" (src/game/game.c:411-418, HOOK(0x4CFBD0)
+    // src/lod/modelfile.c:153-157), so the directory name IS the level identity.
+    const std::string marker = "/models/level";
+    const size_t at = path.rfind(marker);
+    if (at == std::string::npos) return 0;  // common, or an archive from another root
+    size_t digit = at + marker.size();
+    const size_t digitsBegin = digit;
+    int level = 0;
+    while (digit < path.size() && path[digit] >= '0' && path[digit] <= '9') {
+        level = level * 10 + (path[digit] - '0');
+        if (level > 999) return 0;  // not a level number
+        ++digit;
+    }
+    if (digit == digitsBegin) return 0;
+    if (path.compare(digit, std::string::npos, ".res") != 0) return 0;
+    return level >= 1 && level <= 14 ? level : 0;
+}
+
+int TextureOwnerLevelForModel(int meshOwnerLevel, int textureIdOwnerLevel) {
+    // Model_SetDir (HOOK 0x4CFBD0, src/lod/modelfile.c:153-157) is called once per
+    // model set during a level load (src/game/game.c:411-418), and every model read
+    // afterwards takes its .mtp (src/model/model.c:233), its "textures/<name>.res"
+    // (:261, HOOK 0x4CF080) and its "models/<name>.res" (:267) from that one
+    // directory. A model's file and its textures therefore cannot come from
+    // different levels: the archive the model's bytes were read from is the archive
+    // its textures must be searched in. The texture-id owner is the editor's
+    // fallback for a model read from the shared/common archive (0), which is the one
+    // case the engine has no level answer for.
+    if (meshOwnerLevel > 0) return meshOwnerLevel;
+    return textureIdOwnerLevel;
+}
+
+ModelEntryHit FindModelEntryByIdentity(
+    const std::vector<ModelSourceArchiveIndex>& archives,
+    const std::string& modelId,
+    const std::function<std::vector<uint8_t>(const std::string& resPath,
+                                              const ResEntryInfo& info)>& readEntry) {
+    ModelEntryHit hit;
+    if (modelId.empty()) return hit;
+
+    // Mesh_Load's own key: "LOCAL:models/%s.mef", folded the way the resource
+    // system folds every name it stores and compares
+    // (src/model/model.c:364; src/res/resource.c:98-104,136-138).
+    const std::string entryName =
+        igi_res::NormalizeResourceName(igi_res::ModelMemberName(modelId));
+    for (const auto& archive : archives) {
+        const auto found = archive.entries.find(entryName);
+        if (found == archive.entries.end()) continue;
+        std::vector<uint8_t> bytes = readEntry(archive.resPath, found->second);
+        if (bytes.empty()) continue;  // zero-length member: keep looking
+        hit.resPath = archive.resPath;
+        hit.bytes = std::move(bytes);
+        return hit;
+    }
+    return hit;
+}
+
+std::vector<uint8_t> FindPreviewTextureEntry(
+    const std::vector<ModelSourceArchiveIndex>& archives,
+    const std::string& textureId,
+    const std::function<std::vector<uint8_t>(const std::string& resPath,
+                                              const ResEntryInfo& info)>& readEntry,
+    std::string* sourceRes) {
+    if (sourceRes) sourceRes->clear();
+    auto tryId = [&](const std::string& id) -> std::vector<uint8_t> {
+        // Same engine identity as FindModelSourceEntry below.
+        const std::string entryName =
+            igi_res::NormalizeResourceName(igi_res::TextureMemberName(id));
+        for (const bool common : {false, true}) {
+            for (const auto& archive : archives) {
+                if (IsSharedCommonTextureArchive(archive.resPath) != common) continue;
+                const auto found = archive.entries.find(entryName);
+                if (found == archive.entries.end()) continue;
+                std::vector<uint8_t> bytes = readEntry(archive.resPath, found->second);
+                if (bytes.empty()) continue;  // zero-length member: keep looking
+                if (sourceRes) *sourceRes = archive.resPath;
+                return bytes;
+            }
+        }
+        return {};
+    };
+
+    auto bytes = tryId(textureId);
+    if (!bytes.empty()) return bytes;
+    const std::string strippedId = StripTextureFormatSuffix(textureId);
+    return strippedId == textureId ? std::vector<uint8_t>{} : tryId(strippedId);
+}
+
+bool SameArchivePath(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        const int ca = std::tolower(static_cast<unsigned char>(a[i]));
+        const int cb = std::tolower(static_cast<unsigned char>(b[i]));
+        if (ca != cb) return false;
+    }
+    return true;
+}
+
+bool IsTextureMappingCompatible(const std::vector<int>& materialSlots,
+                                std::size_t orderedMappingSize) {
+    if (orderedMappingSize == 0 || materialSlots.empty()) return false;
+    return std::all_of(materialSlots.begin(), materialSlots.end(),
+        [orderedMappingSize](int slot) {
+            return slot >= 0 && static_cast<std::size_t>(slot) < orderedMappingSize;
+        });
+}
+
+int SelectUnambiguousModelSourceLevel(
+    const std::vector<ModelSourceBundle>& candidates) {
+    if (candidates.empty()) return 0;
+    const auto& first = candidates.front();
+    for (const auto& candidate : candidates) {
+        if (candidate.textureIds != first.textureIds ||
+            candidate.meshBytes != first.meshBytes ||
+            candidate.textureBytes != first.textureBytes) {
+            return 0;
+        }
+    }
+    return first.level;
+}
+
+std::vector<uint8_t> FindModelSourceEntry(
+    const std::array<ModelSourceArchiveIndex, 2>& bundle,
+    const std::string& entryId,
+    bool isTexture,
+    const std::function<std::vector<uint8_t>(const std::string& resPath,
+                                              const ResEntryInfo& info)>& readEntry) {
+    // The index is keyed by the engine's own resource identity -- upper-cased and
+    // backslash-folded (String_ToUpper 0x4B5AF0, src/res/resource.c:98-104, compared
+    // by Resource_IsLoaded at :136-138) -- so the member name has to be built the way
+    // the engine builds it: Mesh_Load uses "LOCAL:models/%s.mef" (src/model/model.c:364,
+    // HOOK 0x4CF390) and ModelFile_LoadTextures "LOCAL:textures/%s.tex" (:467,
+    // HOOK 0x4CF790).  Comparing a bare leaf name against those keys never matched.
+    auto lookup = [&](const ModelSourceArchiveIndex& archive,
+                      const std::string& id) -> std::vector<uint8_t> {
+        const std::string entryName = igi_res::NormalizeResourceName(
+            isTexture ? igi_res::TextureMemberName(id) : igi_res::ModelMemberName(id));
+        const auto found = archive.entries.find(entryName);
+        if (found != archive.entries.end())
+            return readEntry(archive.resPath, found->second);
+        return {};
+    };
+    for (size_t i = 0; i < 2; ++i) {
+        const size_t slot = i;
+        auto bytes = lookup(bundle[slot], entryId);
+        if (!bytes.empty()) return bytes;
+        // Format-suffixed texture ids fall back to the stripped name in the
+        // same archive before the search continues to the next archive.
+        if (isTexture) {
+            const std::string stripped = StripTextureFormatSuffix(entryId);
+            if (stripped != entryId) {
+                bytes = lookup(bundle[slot], stripped);
+                if (!bytes.empty()) return bytes;
+            }
+        }
+    }
+    return {};
+}

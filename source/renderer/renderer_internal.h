@@ -23,5 +23,5 @@
 
 #include <freeglut.h>
 #include "../level/task_schema.h"
-#include "../parsers/fnt_parser.h"
+#include "fnt_parser.h"
 using namespace TaskSchemaNS;

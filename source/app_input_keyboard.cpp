@@ -4,9 +4,95 @@
  *          Split from app_input.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include "runtime/graph_camera_target.h"
+#include "runtime/pause_menu_input_policy.h"
+#include "runtime/pause_menu_state.h"
+#include "renderer/renderer_objects_internal.h"
 
 void App::Input_OnSpecial(int key, int x, int y) {
+	// The pause menu owns keyboard input while it is visible, and it is the
+	// FIRST consumer - before F8/F6/F7/F5 and before every editor shortcut.
+	// Retail's menu reads its keys through `MenuManager_ReadInput` HOOK 0x418580
+	// (src/menu/menumanager.c:488-551), which drains the engine's whole key
+	// queue: a key its switch has no case for is popped and discarded, not
+	// handed on.  `PauseMenuSpecialKeyAction` (source/runtime/pause_menu_input_policy.h)
+	// is that switch; anything it does not name is consumed here, so no editor
+	// shortcut can fire behind the overlay.
+	if (igi::IsPauseMenuInputActive(pause_mode_, IsGameplayInputFocused())) {
+		// One deliberate editor-only exception: F11's camera snap stays
+		// reachable while the menu is up (ShouldProcessF11WhilePaused,
+		// source/runtime/graph_camera_target.h - it was always a documented
+		// editor feature, and it is not a menu key in retail).
+		if (key == GLUT_KEY_F11) {
+			// fall through to the F11 handler below
+		} else {
+			switch (igi::PauseMenuSpecialKeyAction(key)) {
+			case igi::PauseKeyAction::MoveDown:
+				// KEY_DOWN (-4): `if (++i >= mm->itemCount) i = 0;`
+				// MenuManager_SetFocus HOOK 0x4186E0 (src/menu/menumanager.c:536-541).
+				MovePauseMenuFocus(1);
+				return;
+			case igi::PauseKeyAction::MoveUp:
+				// KEY_UP (-3): `if (--i < 0) i = mm->itemCount - 1;` (:542-547).
+				MovePauseMenuFocus(-1);
+				return;
+			case igi::PauseKeyAction::Ignore:
+				// KEY_LEFT (-1) / KEY_RIGHT (-2): stored on the focused window
+				// (`mm->focus->key`, :530-535) and acted on by nobody on this
+				// screen, because RUN_ACTION only tests for -7.
+				return;
+			case igi::PauseKeyAction::Consume:
+			case igi::PauseKeyAction::Activate:
+			case igi::PauseKeyAction::Back:
+			case igi::PauseKeyAction::LevelInput:
+			default:
+				// No case in the engine's switch: popped and discarded.  This
+				// is what stops F5/F6/F7/F8/F2/F10, PAGE_UP/PAGE_DOWN, HOME,
+				// END and every other editor shortcut from reaching the editor
+				// while the overlay is up.
+				return;
+			}
+		}
+	}
+
+	if (!ShouldProcessF11WhilePaused(key, GLUT_KEY_F11, pause_mode_)) return;
+
+	// F8 toggles Editor <-> Game Play from anywhere; it must run before every
+	// mode-specific branch so it works in both directions.
+	if (key == GLUT_KEY_F8) {
+		ToggleGamePlayMode();
+		return;
+	}
+	if (in_game_mode_ && key == GLUT_KEY_F6) {
+		FocusEditorWindow();
+		return;
+	}
+	if (in_game_mode_ && key == GLUT_KEY_F7) {
+		FocusGameplayWindow();
+		return;
+	}
+	if (in_game_mode_ && key == GLUT_KEY_F5) {
+		if (!IsGameplayInputFocused()) CaptureEditorSnapshotForGameplayApply();
+		ApplyAndRestartGameplay();
+		return;
+	}
+	if (in_game_mode_ && IsGameplayInputFocused() &&
+		!gameplay_host_.IsGameplayWindowCurrent()) return;
+	// NOTE: the pause menu's own branch is at the top of this function, so by
+	// here `pause_mode_` can only still be set for F11 (the one key it passes
+	// through).  There is deliberately no second arrow-key branch: a duplicate
+	// would be dead code, and the engine's switch lives in exactly one place
+	// (source/runtime/pause_menu_input_policy.h).
+	if (in_game_mode_ && IsGameplayInputFocused() && !pause_mode_) {
+		return;
+	}
+
 	auto& config = Config::Get();
+	// Shift detection mirrors Input_OnKeyboard: GLUT modifiers are sometimes
+	// not reported, so fall back to GetAsyncKeyState for Shift+arrow
+	// selection in the AI Script editor.
+	const bool shiftDown = (glutGetModifiers() & GLUT_ACTIVE_SHIFT) != 0 ||
+	                       Utils::IsKeyPressed(VK_SHIFT);
 
 	// Autocomplete task picker navigation
 	if (ac_task_picker_open_) {
@@ -28,7 +114,7 @@ void App::Input_OnSpecial(int key, int x, int y) {
 			else if (key == GLUT_KEY_DOWN) ac_task_selected_idx_ = std::min(count - 1, ac_task_selected_idx_ + 1);
 			else if (key == GLUT_KEY_PAGE_UP)   ac_task_selected_idx_ = std::max(0, ac_task_selected_idx_ - 10);
 			else if (key == GLUT_KEY_PAGE_DOWN) ac_task_selected_idx_ = std::min(count - 1, ac_task_selected_idx_ + 10);
-			const int row_h = 16, panel_h = window_state_.viewport_height_ - 100;
+			const int row_h = CurrentUiRowHeight(), panel_h = window_state_.viewport_height_ - 100;
 			const int max_vis = std::max(1, panel_h / row_h);
 			if (ac_task_selected_idx_ < ac_task_scroll_offset_)
 				ac_task_scroll_offset_ = ac_task_selected_idx_;
@@ -40,24 +126,16 @@ void App::Input_OnSpecial(int key, int x, int y) {
 
 	// Model picker navigation
 	if (model_picker_open_) {
-		std::vector<std::string> filtered;
-		std::string fl = model_picker_filter_;
-		std::transform(fl.begin(), fl.end(), fl.begin(), [](unsigned char c){ return std::tolower(c); });
-		for (const auto& id : level_model_ids_) {
-			if (fl.empty()) { filtered.push_back(id); }
-			else {
-				std::string idl = id;
-				std::transform(idl.begin(), idl.end(), idl.begin(), [](unsigned char c){ return std::tolower(c); });
-				if (idl.find(fl) != std::string::npos) filtered.push_back(id);
-			}
-		}
+		const auto filtered = FilterModelPickerEntries(level_model_entries_, model_picker_filter_);
 		int count = (int)filtered.size();
 		if (count > 0) {
-			if (key == GLUT_KEY_UP)        model_picker_selected_ = std::max(0, model_picker_selected_ - 1);
-			else if (key == GLUT_KEY_DOWN) model_picker_selected_ = std::min(count - 1, model_picker_selected_ + 1);
-			else if (key == GLUT_KEY_PAGE_UP)   model_picker_selected_ = std::max(0, model_picker_selected_ - 10);
-			else if (key == GLUT_KEY_PAGE_DOWN) model_picker_selected_ = std::min(count - 1, model_picker_selected_ + 10);
-			const int row_h = 16, panel_h = window_state_.viewport_height_ - 100;
+			// One row per unique model ID, so Up/Down steps change the
+			// previewed model directly.
+			if (key == GLUT_KEY_UP)        model_picker_selected_ = MoveModelPickerSelection(model_picker_selected_, count, -1);
+			else if (key == GLUT_KEY_DOWN) model_picker_selected_ = MoveModelPickerSelection(model_picker_selected_, count, 1);
+			else if (key == GLUT_KEY_PAGE_UP)   model_picker_selected_ = MoveModelPickerSelection(model_picker_selected_, count, -10);
+			else if (key == GLUT_KEY_PAGE_DOWN) model_picker_selected_ = MoveModelPickerSelection(model_picker_selected_, count, 10);
+			const int row_h = CurrentUiRowHeight(), panel_h = window_state_.viewport_height_ - 100;
 			const int max_vis = std::max(1, panel_h / row_h);
 			if (model_picker_selected_ < model_picker_scroll_)
 				model_picker_scroll_ = model_picker_selected_;
@@ -73,14 +151,29 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		bool isScript = (prop_text_edit_field_ == PropPanel::kAIScriptTextField);
 		const int mc = AiScriptMaxChars();
 
+		// Shift+arrow extends the selection in the AI Script editor
+		// (Notepad/Home/End as well). The anchor is set on first Shift+arrow
+		// (or the first time the selection becomes non-empty); subsequent
+		// Shift+arrows only move the focus.
+		if (isScript && shiftDown && prop_text_sel_anchor_ < 0 &&
+		    (key == GLUT_KEY_LEFT || key == GLUT_KEY_RIGHT ||
+		     key == GLUT_KEY_UP   || key == GLUT_KEY_DOWN  ||
+		     key == GLUT_KEY_HOME || key == GLUT_KEY_END)) {
+			prop_text_sel_anchor_ = prop_text_caret_;
+		}
+
 		if (key == GLUT_KEY_LEFT) {
 			if (prop_text_caret_ > 0) --prop_text_caret_;
 			if (isScript) UpdateAIScriptScroll(); else UpdateAIScriptPathHScroll();
+			if (isScript && shiftDown) prop_text_sel_focus_ = prop_text_caret_;
+			else if (isScript) ClearPropTextSelection();
 			return;
 		}
 		if (key == GLUT_KEY_RIGHT) {
 			if (prop_text_caret_ < (int)prop_text_buf_.size()) ++prop_text_caret_;
 			if (isScript) UpdateAIScriptScroll(); else UpdateAIScriptPathHScroll();
+			if (isScript && shiftDown) prop_text_sel_focus_ = prop_text_caret_;
+			else if (isScript) ClearPropTextSelection();
 			return;
 		}
 		if (isScript) {
@@ -97,6 +190,39 @@ void App::Input_OnSpecial(int key, int x, int y) {
 				    prop_text_buf_[starts[nl] + line_len - 1] == '\n') --line_len;
 				prop_text_caret_ = starts[nl] + std::min(col, line_len);
 				UpdateAIScriptScroll();
+				if (shiftDown) prop_text_sel_focus_ = prop_text_caret_;
+				else           ClearPropTextSelection();
+				return;
+			}
+			if (key == GLUT_KEY_HOME) {
+				// Home: start of current visual line; Ctrl+Home: start of buffer
+				if (isScript && (glutGetModifiers() & GLUT_ACTIVE_CTRL)) {
+					prop_text_caret_ = 0;
+				} else {
+					auto starts = AiTextLineStarts(prop_text_buf_, mc);
+					int cl = (int)(std::upper_bound(starts.begin(), starts.end(), prop_text_caret_) - starts.begin()) - 1;
+					cl = std::max(0, std::min(cl, (int)starts.size() - 1));
+					prop_text_caret_ = starts[cl];
+				}
+				UpdateAIScriptScroll();
+				if (shiftDown) prop_text_sel_focus_ = prop_text_caret_;
+				else           ClearPropTextSelection();
+				return;
+			}
+			if (key == GLUT_KEY_END) {
+				if (isScript && (glutGetModifiers() & GLUT_ACTIVE_CTRL)) {
+					prop_text_caret_ = (int)prop_text_buf_.size();
+				} else {
+					auto starts = AiTextLineStarts(prop_text_buf_, mc);
+					int cl = (int)(std::upper_bound(starts.begin(), starts.end(), prop_text_caret_) - starts.begin()) - 1;
+					cl = std::max(0, std::min(cl, (int)starts.size() - 1));
+					int next_end = (cl + 1 < (int)starts.size()) ? starts[cl + 1] : (int)prop_text_buf_.size();
+					if (next_end > starts[cl] && prop_text_buf_[next_end - 1] == '\n') --next_end;
+					prop_text_caret_ = next_end;
+				}
+				UpdateAIScriptScroll();
+				if (shiftDown) prop_text_sel_focus_ = prop_text_caret_;
+				else           ClearPropTextSelection();
 				return;
 			}
 			if (key == GLUT_KEY_PAGE_UP) {
@@ -169,7 +295,7 @@ void App::Input_OnSpecial(int key, int x, int y) {
 				task_picker_selected_idx_ = count - 1;
 			}
 
-			int row_h = 16;
+			int row_h = CurrentUiRowHeight();
 			int picker_h = window_state_.viewport_height_ - 100;
 			int max_visible = std::max(1, picker_h / row_h);
 			if (task_picker_selected_idx_ < task_picker_scroll_offset_) {
@@ -282,7 +408,7 @@ void App::Input_OnSpecial(int key, int x, int y) {
 				}
 
 				// Auto scroll to keep selected item visible
-				int row_h = 16;
+				int row_h = CurrentUiRowHeight();
 				int start_y = 30;
 				int max_rows = (window_state_.viewport_height_ - 50 - start_y) / row_h;
 				if (max_rows > 0) {
@@ -290,6 +416,13 @@ void App::Input_OnSpecial(int key, int x, int y) {
 						tree_scroll_offset_ = current_row;
 					} else if (current_row >= tree_scroll_offset_ + max_rows) {
 						tree_scroll_offset_ = current_row - max_rows + 1;
+					}
+				}
+				if (selected_object_index_ >= 0) {
+					auto& objects = level_.GetLevelObjects().GetObjects();
+					if (selected_object_index_ < (int)objects.size()) {
+						marker_manip_.start_pos_ = objects[selected_object_index_].pos;
+						marker_manip_.start_rot_ = objects[selected_object_index_].rot;
 					}
 				}
 			}
@@ -302,6 +435,22 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		show_hud_ = !show_hud_;
 		bridge_.SetEnabled(show_hud_);
 		Logger::Get().Log(LogLevel::INFO, std::string("[App] TaskTree ") + (show_hud_ ? "shown" : "hidden"));
+		return;
+	}
+
+	// F10 always toggles the Animation Debug overlay (skeleton wireframe + status
+	// panel) — independent of F2/TaskTree, and also toggles Developer Mode for Debug Commands.
+	if (key == GLUT_KEY_F10) {
+		show_anim_debug_ = !show_anim_debug_;
+		developer_mode_ = !developer_mode_;
+		if (developer_mode_) {
+			debug_cmd_mgr_.Start();
+			Logger::Get().Log(LogLevel::INFO, "[App] Developer Mode ON - Command Watcher Started");
+		} else {
+			debug_cmd_mgr_.Stop();
+			Logger::Get().Log(LogLevel::INFO, "[App] Developer Mode OFF - Command Watcher Stopped");
+		}
+		Logger::Get().Log(LogLevel::INFO, std::string("[App] Animation Debug Info ") + (show_anim_debug_ ? "shown" : "hidden"));
 		return;
 	}
 
@@ -339,13 +488,124 @@ void App::Input_OnSpecial(int key, int x, int y) {
 		}
 	}
 
+	// F11's camera snap is the one special key the pause menu lets through
+	// (ShouldProcessF11WhilePaused, source/runtime/graph_camera_target.h); the
+	// pause branch above hands it here, and every key it did not name is already
+	// gone.  Reaching this block with `pause_mode_` set therefore means "F11
+	// while paused", which is exactly the documented editor exception.
 	if (key == GLUT_KEY_F11) {
-		if (selected_object_index_ >= 0) {
-			auto& obj = level_.GetLevelObjects().GetObjects()[selected_object_index_];
-			viewer_.pos_ = glm::vec3(obj.pos);
+		auto& objects = level_.GetLevelObjects().GetObjects();
+		const bool hasSelectedObject = selected_object_index_ >= 0 &&
+			selected_object_index_ < (int)objects.size();
+		const bool selectedObjectHasModel = hasSelectedObject &&
+			!objects[selected_object_index_].modelId.empty();
+		const bool hasGraphTarget = renderer_.IsGraphOverlayVisible() ||
+			renderer_.GraphSelected() >= 0;
+		if (!hasSelectedObject && !hasGraphTarget) return;
+
+		if (ShouldF11SnapSelectedObjectDirectly(
+				hasSelectedObject, selectedObjectHasModel,
+				renderer_.IsGraphOverlayVisible(),
+					renderer_.GraphSelected())) {
+			const auto& obj = objects[selected_object_index_];
+			const float boundRadius = renderer_.GetMeshRadius(obj.modelId, obj.isBuilding) * 40.96f * obj.scale;
+			const glm::dvec3 meshCenter = F11MeshCenterWorldOffset(
+				renderer_.GetMeshCenter(obj.modelId, obj.isBuilding), obj.rot,
+				obj.scale);
+			const glm::dvec3 cameraTarget = obj.pos + meshCenter;
+
+			// Shift+F11: wider radius framing (CameraSnapToObjectWithRadius)
+			const bool shiftHeld = (glutGetModifiers() & GLUT_ACTIVE_SHIFT) != 0 ||
+			                       Utils::IsKeyPressed(VK_SHIFT);
+
+			const GraphCameraPose pose = MakeF11ObjectCameraPose(
+				cameraTarget, boundRadius, glm::dvec3(viewer_.forward_), shiftHeld);
+
+			orbit_active_ = false;
+			input_.mouse_delta_x_ = 0;
+			input_.mouse_delta_y_ = 0;
+			viewer_.velocity_ = glm::vec3(0.0f);
+			viewer_.pos_ = glm::vec3(pose.position);
+			viewer_.yaw_ = pose.yaw_degrees;
+			viewer_.pitch_ = pose.pitch_degrees;
 			UpdateViewerVectors();
-			printf("Teleported to Object [%d]\n", selected_object_index_);
+
+			Logger::Get().Log(LogLevel::INFO,
+				"[Camera] F11 CameraSnapToObject index=" + std::to_string(selected_object_index_) +
+				" model=" + obj.modelId +
+				" type=" + obj.type + " task=" + obj.taskId +
+				" radius=" + std::to_string(boundRadius) +
+				" target=(" + std::to_string(cameraTarget.x) + "," +
+				std::to_string(cameraTarget.y) + "," + std::to_string(cameraTarget.z) + ")" +
+				" distance=" + std::to_string(glm::distance(pose.position, cameraTarget)) +
+				" camera=(" + std::to_string(viewer_.pos_.x) + "," +
+				std::to_string(viewer_.pos_.y) + "," +
+				std::to_string(viewer_.pos_.z) + ")");
+			return;
 		}
+
+		const std::optional<glm::dvec3> relatedGraphOrigin =
+			FindRelatedGraphOrigin(objects, selected_object_index_);
+		const std::string relatedGraphTaskId =
+			FindRelatedGraphTaskId(objects, selected_object_index_);
+		glm::dvec3 objectPosition = renderer_.GraphOverlayOffset();
+		if (hasSelectedObject) {
+			const auto& obj = objects[selected_object_index_];
+			objectPosition = obj.pos;
+		}
+		const GraphCameraTarget target = ResolveF11CameraTarget(
+			renderer_.GetGraphOverlaySnapshot(),
+			hasSelectedObject,
+			renderer_.IsGraphOverlayVisible(),
+			renderer_.GraphSelected(),
+			relatedGraphTaskId,
+			renderer_.GraphOverlayTaskId(),
+			renderer_.GraphOverlayOffset(),
+			objectPosition,
+			relatedGraphOrigin);
+		if (target.kind == GraphCameraTargetKind::Object && !hasSelectedObject) return;
+		// Orbit mode recomputes the camera position on the next input tick. F11 is
+		// an explicit teleport, so cancel orbit and stale movement deltas first.
+		orbit_active_ = false;
+		input_.mouse_delta_x_ = 0;
+		input_.mouse_delta_y_ = 0;
+		viewer_.velocity_ = glm::vec3(0.0f);
+		if (target.kind == GraphCameraTargetKind::GraphNode ||
+			target.kind == GraphCameraTargetKind::GraphOrigin) {
+			const GraphCameraPose pose = MakeF11GraphCameraPose(
+				target.position, glm::dvec3(viewer_.forward_),
+				6.0 * static_cast<double>(WORLD_UNITS_PER_METER));
+			viewer_.pos_ = glm::vec3(pose.position);
+			viewer_.yaw_ = pose.yaw_degrees;
+			viewer_.pitch_ = pose.pitch_degrees;
+		} else {
+			float boundRadius = 2000.0f;
+			if (hasSelectedObject && selectedObjectHasModel) {
+				const auto& obj = objects[selected_object_index_];
+				boundRadius = renderer_.GetMeshRadius(obj.modelId, obj.isBuilding) * 40.96f * obj.scale;
+				if (boundRadius < 500.0f) boundRadius = 2000.0f;
+			}
+			const GraphCameraPose pose = MakeF11ObjectCameraPose(
+				target.position, boundRadius, glm::dvec3(viewer_.forward_), /*shiftHeld=*/false);
+			viewer_.pos_ = glm::vec3(pose.position);
+			viewer_.yaw_ = pose.yaw_degrees;
+			viewer_.pitch_ = pose.pitch_degrees;
+		}
+		UpdateViewerVectors();
+		const char* target_name = target.kind == GraphCameraTargetKind::GraphNode
+			? "Graph Node" : target.kind == GraphCameraTargetKind::GraphOrigin
+			? "Graph Origin" : "Object";
+		printf("Teleported to %s [%d] at (%.2f, %.2f, %.2f)\n",
+			target_name, target.node_id >= 0 ? target.node_id : selected_object_index_,
+			target.position.x, target.position.y, target.position.z);
+		Logger::Get().Log(LogLevel::INFO,
+			std::string("[Camera] F11 target=") + target_name + " position=(" +
+			std::to_string(target.position.x) + "," +
+			std::to_string(target.position.y) + "," +
+			std::to_string(target.position.z) + ") camera=(" +
+			std::to_string(viewer_.pos_.x) + "," +
+			std::to_string(viewer_.pos_.y) + "," +
+			std::to_string(viewer_.pos_.z) + ")");
 		return;
 	}
 
@@ -353,6 +613,20 @@ void App::Input_OnSpecial(int key, int x, int y) {
 }
 
 void App::Input_OnSpecialUp(int key, int x, int y) {
+	if (in_game_mode_ && IsGameplayInputFocused() &&
+		!gameplay_host_.IsGameplayWindowCurrent()) return;
+	// A key RELEASE never moves the pause menu's focus: retail reads key presses
+	// (`MenuManager_ReadInput` HOOK 0x418580 consumes `Keys_Pop`), so only
+	// Input_OnSpecial navigates.  The release is consumed so it cannot reach the
+	// editor behind the overlay.
+	if (igi::IsPauseMenuInputActive(pause_mode_, IsGameplayInputFocused())) {
+		return;
+	}
+	if (in_game_mode_ && IsGameplayInputFocused() && !pause_mode_) {
+		return;
+	}
+	if (pause_mode_) return;
+
 	auto& config = Config::Get();
 
 	if (key == config.keyMoveForward)  { input_.keys_ &= ~MK_FORWARD;  return; }
@@ -443,62 +717,160 @@ bool App::InlineAutocomplete() {
 void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	auto& config = Config::Get();
 
+	if (in_game_mode_ && IsGameplayInputFocused() &&
+		!gameplay_host_.IsGameplayWindowCurrent()) return;
+	if (in_game_mode_ && IsGameplayInputFocused() && !pause_mode_) {
+		if (key == 27) { // ESC
+			TogglePauseMenu();
+			return;
+		}
+		gameplay_host_.GetInputRouter().OnKeyboardKey(key, true);
+		return;
+	}
+	// The pause menu owns the keyboard while it is visible, and the engine's own
+	// switch decides which keys that is: `MenuManager_ReadInput` HOOK 0x418580
+	// (src/menu/menumanager.c:488-551) drains the whole key queue and acts on
+	// KEY_ENTER (-7), KEY_ESCAPE (-8), KEY_UP (-3) and KEY_DOWN (-4); KEY_TAB
+	// (-11) and KEY_LEFT/RIGHT (-1/-2) are popped and change nothing on this
+	// screen; everything else has no case and is discarded.  Every branch below
+	// returns, so no key can fall through to an editor shortcut behind the
+	// overlay.  The classification itself is
+	// `igi::PauseMenuCharKeyAction` (source/runtime/pause_menu_input_policy.h).
+	if (igi::IsPauseMenuInputActive(pause_mode_, IsGameplayInputFocused())) {
+		const bool level_row_focused =
+			igi::PauseMenuLevelInputFocused(pause_mode_, pause_active_input_);
+		switch (igi::PauseMenuCharKeyAction(key, level_row_focused)) {
+		case igi::PauseKeyAction::Activate:
+			// Enter is consumed by the pause overlay. It only commits the level
+			// selector after that row has explicitly been focused; opening the
+			// menu must never reload the current level as a side effect.  On any
+			// other row it is KEY_ENTER (-7), which retail forwards to the focused
+			// window (`MenuManager_ReadInput` HOOK 0x418580) — here, the focused
+			// row's editor action.
+			if (level_row_focused && !pause_level_input_.empty()) {
+				int lvl = std::atoi(pause_level_input_.c_str());
+				if (lvl >= 1 && lvl <= 14) {
+					LoadLevel(lvl);
+					TogglePauseMenu();
+				} else {
+					Logger::Get().Log(LogLevel::ERR, "Level must be between 1 and 14.");
+				}
+			} else if (pause_active_input_ == -1) {
+				ActivateFocusedPauseMenuRow();
+			}
+			return;
+		case igi::PauseKeyAction::Back:
+			if (pause_active_input_ != -1) { pause_active_input_ = -1; return; }
+			// KEY_ESCAPE (-8): pop the screen the menu pushed, or close the menu
+			// (`MenuManager_PopScreen` HOOK 0x417710, src/game/menumanager.c:237-247).
+			PauseMenuBack();
+			return;
+		case igi::PauseKeyAction::LevelInput:
+			// EDITOR-ONLY DEVIATION, and the only one in this switch: the level
+			// selector is the editor's own row and retail has no text input
+			// anywhere in a menu (see the header).  While that row owns the
+			// input, BACKSPACE and the digits are accepted here and nowhere
+			// else.
+			if (key == igi::kKeyBackspace) {
+				if (!pause_level_input_.empty()) pause_level_input_.pop_back();
+				return;
+			}
+			if (pause_level_input_.size() < 2) {
+				pause_level_input_ += static_cast<char>(key);
+			}
+			return;
+		case igi::PauseKeyAction::Ignore:
+			// KEY_TAB (-11): `in->select = 1`, and nothing in retail engine reads it.
+			return;
+		case igi::PauseKeyAction::MoveUp:
+		case igi::PauseKeyAction::MoveDown:
+			// The arrows arrive through Input_OnSpecial, never here.
+			return;
+		case igi::PauseKeyAction::Consume:
+		default:
+			// No case in the engine's switch: popped and discarded.  This is
+			// what stops every editor letter shortcut (B, L, DEL, Ctrl+…)
+			// from reaching the editor while the overlay is up.
+			return;
+		}
+	}
+
 	bool ctrlDown = (glutGetModifiers() & GLUT_ACTIVE_CTRL) != 0 ||
-	                (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+	                Utils::IsKeyPressed(VK_CONTROL);
 	bool shiftDown = (glutGetModifiers() & GLUT_ACTIVE_SHIFT) != 0 ||
-	                 (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+	                 Utils::IsKeyPressed(VK_SHIFT);
+	bool altDown = (glutGetModifiers() & GLUT_ACTIVE_ALT) != 0 ||
+	               Utils::IsKeyPressed(VK_MENU);
+
+	// GLUT reports Ctrl+letter as the ASCII control character (Ctrl+A=1,
+	// Ctrl+W=23). The normal configurable binding path samples
+	// GetAsyncKeyState, which can miss that chord after the native key event has
+	// already been queued. Recognize the configured SaveState binding from the
+	// actual event as well, while still honoring its modifiers and key choice.
+	{
+		auto saveBinding = config.eventBindings_.find("SaveState");
+		if (saveBinding != config.eventBindings_.end() && saveBinding->second.ctrl &&
+			!saveBinding->second.shift && !saveBinding->second.alt && ctrlDown) {
+			const int vk = saveBinding->second.vkCode;
+			const bool isLetter = vk >= 'A' && vk <= 'Z';
+			const bool matchesEvent = key == vk ||
+				(isLetter && key == static_cast<unsigned char>(vk - 'A' + 1));
+			if (matchesEvent) {
+				CommitPropTextEdit();
+				SaveCurrentLevel();
+				return;
+			}
+		}
+	}
+
+	// Alt+H: toggle the gameplay HUD overlay (crosshair, health bar, weapon
+	// readout). Hidden by default until the vanilla presentation is finished.
+	if (altDown && (key == 'h' || key == 'H')) {
+		hud_overlay_visible_ = !hud_overlay_visible_;
+		status_message_ = hud_overlay_visible_
+			? "HUD overlay shown (Alt+H to hide)"
+			: "HUD overlay hidden (Alt+H to show)";
+		return;
+	}
 
 	if (ctrlDown && (key == 8 || key == 'h' || key == 'H')) { // CTRL+H
 		ToggleOverlayWireframe();
 		return;
 	}
 
-	if (pause_mode_) {
-		if (key == 13) { // Enter
-			if (pause_active_input_ == 1) {
-				// Submit model search
-				if (!pause_search_input_.empty()) {
-					bool isId = true;
-					if (pause_search_input_.length() != 8 || pause_search_input_[3] != '_' || pause_search_input_[6] != '_') isId = false;
-					for (int i = 0; i < (int)pause_search_input_.length(); i++) {
-						if (i != 3 && i != 6 && !isdigit(pause_search_input_[i])) isId = false;
-					}
-					if (isId) SearchModelById(pause_search_input_);
-					else       SearchModelByName(pause_search_input_);
-					TogglePauseMenu();
-				}
-				pause_active_input_ = -1;
-			} else {
-				// Load level from spinner
-				if (!pause_level_input_.empty()) {
-					int lvl = std::atoi(pause_level_input_.c_str());
-					if (lvl >= 1 && lvl <= 14) {
-						LoadLevel(lvl);
-						TogglePauseMenu();
-					} else {
-						Logger::Get().Log(LogLevel::ERR, "Level must be between 1 and 14.");
-					}
-				}
-			}
-			return;
-		}
-		if (key == 27) { // ESC: clear search focus or close menu
-			if (pause_active_input_ != -1) { pause_active_input_ = -1; return; }
-			TogglePauseMenu();
-			return;
-		}
-		if (pause_active_input_ == 1) {
-			// Search text input
-			if (key == 8 && !pause_search_input_.empty()) { pause_search_input_.pop_back(); return; }
-			if (key >= 32 && key < 127) { pause_search_input_ += (char)key; return; }
-		}
-		if (key != 27) return;
-	}
-
 	// Autocomplete Ctrl combos — intercept before prop text editor so they work while editing.
 	// Detect Ctrl via GLUT *and* GetAsyncKeyState: GLUT modifiers are occasionally not
 	// reported for Ctrl+Space (key 0/space), which silently dropped inline autocomplete.
 	if (ctrlDown) {
+		// AI Script editor notepad-style shortcuts — ONLY when the AI Script text
+		// field is focused. Other property text fields ignore these so the
+		// editor-level Ctrl+F / Ctrl+N / Ctrl+W bindings still work as before.
+		//
+		// GLUT sends the ASCII control-character code for Ctrl+letter
+		// (1=SOH/A, 3=ETX/C, 0x18=CAN/X, 0x16=SYN/V, 0x19=EM/Y, 0x1A=SUB/Z)
+		// — NOT the letter itself. We also accept the letter codes so this
+		// keeps working if a host swallows the control code.
+		if (prop_text_edit_field_ == PropPanel::kAIScriptTextField) {
+			const bool is_a = (key == 1  || key == 'a' || key == 'A');
+			const bool is_c = (key == 3  || key == 'c' || key == 'C');
+			const bool is_x = (key == 24 || key == 'x' || key == 'X');
+			const bool is_v = (key == 22 || key == 'v' || key == 'V');
+			const bool is_y = (key == 25 || key == 'y' || key == 'Y');
+			const bool is_z = (key == 26 || key == 'z' || key == 'Z');
+			if (is_a) { SelectPropTextAll(); return; }
+			if (is_c) { AiScriptCopy();     return; }
+			if (is_x) { AiScriptCut();      return; }
+			if (is_v) { AiScriptPaste();    return; }
+			// Ctrl+Z = undo, Ctrl+Y / Ctrl+Shift+Z = redo
+			if (is_z) { if (shiftDown) AiScriptRedo(); else AiScriptUndo(); return; }
+			if (is_y) { AiScriptRedo(); return; }
+		}
+		// Ctrl+A is also valid for every focused property text/numeric box. The
+		// same selection state lets the next printable character replace its value.
+		if ((key == 1 || key == 'a' || key == 'A') && prop_text_edit_field_ != -1) {
+			SelectPropTextAll();
+			return;
+		}
 		if (key == 14 && !shiftDown) { // Ctrl+N only (not Ctrl+Shift+N — that's TaskFindByTaskNote)
 			// Only open when a property text box is focused, so Enter knows which
 			// field to insert the chosen item into.
@@ -546,47 +918,118 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		if (caret < 0) caret = 0;
 		if (caret > (int)prop_text_buf_.size()) caret = (int)prop_text_buf_.size();
 		bool multiline = IsPropFieldMultiline(prop_text_edit_field_);
-		if (key == 27) { // ESC — cancel (revert)
-			prop_text_edit_field_ = -1;
-			return;
-		}
-		if (key == 13) { // Enter
-			if (multiline) {              // VarString/String256: insert newline
-				prop_text_buf_.insert(prop_text_buf_.begin() + caret, '\n');
-				caret++;
-				UpdateAIScriptScroll();
-			} else {                      // single-line: commit
+
+		// Before the text editor swallows the key, check if it matches a save
+		// hotkey from qedkeybindings.qsc (e.g. Ctrl+W = SaveState, Ctrl+S =
+		// SaveObjectFile). If so, commit the in-flight edit first so the AI
+		// script text is saved, then let the binding fire.
+		{
+			auto& bindings = Config::Get().eventBindings_;
+			auto matchBinding = [&](const std::string& name) -> bool {
+				auto it = bindings.find(name);
+				return it != bindings.end() && Utils::IsKeyBindingPressedExact(it->second);
+			};
+			if (matchBinding("SaveState") || matchBinding("SaveObjectFile") ||
+			    matchBinding("SaveSubTaskObjectFile") || matchBinding("SaveSubTaskObjectFileParent")) {
 				CommitPropTextEdit();
+				// Fall through to DispatchEventBindings below.
 			}
-			return;
+			else if (matchBinding("ToggleSaveStateOnExit") || matchBinding("ToggleAutoSave") ||
+			         matchBinding("AutoSaveIntervalUp") || matchBinding("AutoSaveIntervalDown")) {
+				CommitPropTextEdit();
+				// Fall through to DispatchEventBindings below.
+			}
 		}
-		if (key == 8) { // Backspace — delete before caret
-			if (caret > 0) {
-				prop_text_buf_.erase(prop_text_buf_.begin() + (caret - 1));
-				caret--;
+
+		// If the edit was just committed by a save hotkey, prop_text_edit_field_
+		// is now -1 and this block is skipped — the key reaches DispatchEventBindings.
+		if (prop_text_edit_field_ == -1) {
+			// fall through to DispatchEventBindings
+		}
+		else {
+			if (key == 27) { // ESC — cancel (revert)
+				prop_text_edit_field_ = -1;
+				ClearPropTextSelection();
+				return;
+			}
+			if (key == 13) { // Enter
+				if (multiline) {              // VarString/String256: insert newline
+					// AI Script editor: respect active selection (replace with newline)
+					if (isPropTextSel()) {
+						PushAiTextUndo();
+						int a, b; GetPropTextSelection(a, b);
+						prop_text_buf_.erase(a, b - a);
+						caret = a;
+						ClearPropTextSelection();
+					} else {
+						PushAiTextUndo();
+					}
+					prop_text_buf_.insert(prop_text_buf_.begin() + caret, '\n');
+					caret++;
+					SyncAIScriptBuffer();
+					UpdateAIScriptScroll();
+				} else {                      // single-line: commit
+					CommitPropTextEdit();
+				}
+				return;
+			}
+			if (key == 8) { // Backspace — delete before caret (or delete selection)
+				if (isPropTextSel()) {
+					PushAiTextUndo();
+					int a, b; GetPropTextSelection(a, b);
+					prop_text_buf_.erase(a, b - a);
+					caret = a;
+					ClearPropTextSelection();
+					SyncAIScriptBuffer();
+				} else if (caret > 0) {
+					PushAiTextUndo();
+					prop_text_buf_.erase(prop_text_buf_.begin() + (caret - 1));
+					caret--;
+					SyncAIScriptBuffer();
+				}
 				UpdateAIScriptScroll();
 				UpdateAIScriptPathHScroll();
+				return;
+			}
+			if (key == 127) { // Delete — delete at caret (or delete selection)
+				if (isPropTextSel()) {
+					PushAiTextUndo();
+					int a, b; GetPropTextSelection(a, b);
+					prop_text_buf_.erase(a, b - a);
+					caret = a;
+					ClearPropTextSelection();
+					SyncAIScriptBuffer();
+				} else if (caret < (int)prop_text_buf_.size()) {
+					PushAiTextUndo();
+					prop_text_buf_.erase(prop_text_buf_.begin() + caret);
+					SyncAIScriptBuffer();
+				}
+				UpdateAIScriptScroll();
+				return;
+			}
+			if (key == '\t') { // Tab → inline autocomplete (reliable trigger; GLUT may eat Ctrl+Space)
+				InlineAutocomplete();
+				return;
+			}
+			if (key >= 32 && key <= 126) { // printable: insert at caret (replace selection)
+				if (isPropTextSel()) {
+					PushAiTextUndo();
+					int a, b; GetPropTextSelection(a, b);
+					prop_text_buf_.erase(a, b - a);
+					caret = a;
+					ClearPropTextSelection();
+				} else {
+					PushAiTextUndo();
+				}
+				prop_text_buf_.insert(prop_text_buf_.begin() + caret, (char)key);
+				caret++;
+				SyncAIScriptBuffer();
+				UpdateAIScriptScroll();
+				UpdateAIScriptPathHScroll();
+				return;
 			}
 			return;
 		}
-		if (key == 127) { // Delete — delete at caret
-			if (caret < (int)prop_text_buf_.size())
-				prop_text_buf_.erase(prop_text_buf_.begin() + caret);
-			UpdateAIScriptScroll();
-			return;
-		}
-		if (key == '\t') { // Tab → inline autocomplete (reliable trigger; GLUT may eat Ctrl+Space)
-			InlineAutocomplete();
-			return;
-		}
-		if (key >= 32 && key <= 126) { // printable: insert at caret
-			prop_text_buf_.insert(prop_text_buf_.begin() + caret, (char)key);
-			caret++;
-			UpdateAIScriptScroll();
-			UpdateAIScriptPathHScroll();
-			return;
-		}
-		return;
 	}
 
 	// File dialog input (SaveSubTask / LoadSubTask)
@@ -661,24 +1104,14 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	if (model_picker_open_) {
 		if (key == 27) { model_picker_open_ = false; return; }
 		if (key == 13) {
-			// Build filtered list from level_model_ids_
-			std::vector<std::string> filtered;
-			std::string fl = model_picker_filter_;
-			std::transform(fl.begin(), fl.end(), fl.begin(), [](unsigned char c){ return std::tolower(c); });
-			for (const auto& id : level_model_ids_) {
-				if (fl.empty()) { filtered.push_back(id); }
-				else {
-					std::string idl = id;
-					std::transform(idl.begin(), idl.end(), idl.begin(), [](unsigned char c){ return std::tolower(c); });
-					if (idl.find(fl) != std::string::npos) filtered.push_back(id);
-				}
-			}
+			const auto commit = ResolveModelPickerCommit(level_model_entries_, model_picker_filter_, model_picker_selected_);
 			model_picker_open_ = false;
 			// Restore the field captured when the picker opened, so the choice lands in
 			// the exact text box the cursor was in (even if focus changed meanwhile).
 			if (picker_target_field_ >= 0) { prop_text_edit_field_ = picker_target_field_; prop_edit_obj_index_ = picker_target_obj_; }
-			if (prop_text_edit_field_ >= 0 && model_picker_selected_ < (int)filtered.size()) {
-				prop_text_buf_ = filtered[model_picker_selected_]; // CLEAR and insert
+			if (prop_text_edit_field_ >= 0 && commit.has_value()) {
+				prop_text_buf_ = commit->modelId;
+				pending_model_source_level_ = commit->sourceLevel;
 				prop_text_caret_ = (int)prop_text_buf_.size();
 				CommitPropTextEdit();              // apply the chosen model to the field
 			}
@@ -750,7 +1183,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 					}
 				}
 				if (current_row >= 0) {
-					int row_h = 16;
+					int row_h = CurrentUiRowHeight();
 					int start_y = 30;
 					int max_rows = (window_state_.viewport_height_ - 50 - start_y) / row_h;
 					if (max_rows > 0) {
@@ -762,8 +1195,8 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 				}
 			}
 			find_open_ = false;
-			find_query_.clear();
-			find_result_idx_ = -1;
+			// Keep find_query_ + find_result_idx_ so TaskFindAgain (Ctrl+Shift+F)
+			// can cycle through matches without reopening the search bar.
 			return;
 		}
 		if (key == 8) { // Backspace
@@ -792,7 +1225,13 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 					label = objects[i].type + " " + objects[i].name + " " + objects[i].taskId;
 				}
 				std::transform(label.begin(), label.end(), label.begin(), [](unsigned char c){ return std::tolower(c); });
-				if (label.find(q_lower) != std::string::npos) {
+				// ById requires exact match — task IDs are pixel-perfect, so
+				// typing "7" must not also match "73", "700", etc. All other
+				// find modes keep substring matching.
+				const bool is_match = (find_mode_ == FindMode::ById)
+					? (label == q_lower)
+					: (label.find(q_lower) != std::string::npos);
+				if (is_match) {
 					find_result_idx_ = i;
 					break;
 				}
@@ -1132,10 +1571,10 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 
 	if (key == 27) { // ESC
 		if (show_help_) { show_help_ = false; return; }
-		if (prop_editor_open_) { // close the property panel first
+		if (prop_editor_open_) { // close the property panel — commit any edit first
+			CommitPropTextEdit();
 			prop_editor_open_ = false;
 			prop_field_index_ = -1;
-			prop_text_edit_field_ = -1;
 			return;
 		}
 		TogglePauseMenu();
@@ -1146,11 +1585,30 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 	// DEL key: delete selected task (hardcoded for standard keyboard ergonomics)
 	if (key == 127) { DeleteSelectedTask(); return; }
 
-	if (pause_mode_) {
+	// B: toggle the animation skeleton (bone) wireframe overlay when not holding LMB
+	// for RotateBeta object manipulation, while also setting MK_MANIP_B when keyRotateBeta is 'B'.
+	if (key == 'b' || key == 'B') {
+		if (toupper(key) == toupper(config.keyRotateBeta)) {
+			input_.keys_ |= MK_MANIP_B;
+		}
+		if (!mouse_state_.left_button_down_) {
+			show_anim_skeleton_ = !show_anim_skeleton_;
+			Logger::Get().Log(LogLevel::INFO, std::string("[App] Animation skeleton overlay ") + (show_anim_skeleton_ ? "shown" : "hidden"));
+		}
 		return;
-
 	}
 
+	// L: toggle the rail polyline overlay (GitHub issue #59). On by default, so a
+	// level with a Train shows its rail immediately; the switch itself lives in
+	// the renderer (igi::SetRailPathGizmosEnabled) because the overlay is a
+	// process-wide view preference, exactly like the ladder gizmos.
+	if (key == 'l' || key == 'L') {
+		igi::SetRailPathGizmosEnabled(!igi::RailPathGizmosEnabled());
+		const bool shown = igi::RailPathGizmosEnabled();
+		status_message_ = shown ? "Rail paths: ON" : "Rail paths: OFF";
+		Logger::Get().Log(LogLevel::INFO, std::string("[App] Rail path overlay ") + (shown ? "shown" : "hidden"));
+		return;
+	}
 
 	if ((key == 13) && (glutGetModifiers() & GLUT_ACTIVE_ALT)) { // ALT + ENTER toggle full screen mode
 		window_state_.full_screen_ = !window_state_.full_screen_;
@@ -1165,6 +1623,20 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		else {
 			glutReshapeWindow(window_state_.old_viewport_width_, window_state_.old_viewport_height_);
 		}
+
+		// GLUT does not reliably deliver a reshape for a fullscreen transition, and the
+		// viewport is what decides how much of the window gets painted -- a stale one
+		// leaves the uncovered area black (reported as "on a small screen in fullscreen
+		// the rest of the area is black").  So re-apply the viewport from the window's
+		// ACTUAL size rather than depending on the callback, in both directions.
+		// ApplyClientViewport clamps to >= 1, recomputes fovx_, and keeps BOTH viewport
+		// pairs (editor and gameplay) on the one shared window, so this is idempotent
+		// when a reshape does arrive as well.
+		ApplyClientViewport("alt+enter fullscreen");
+		Logger::Get().Log(LogLevel::INFO, "[App] fullscreen " +
+			std::string(window_state_.full_screen_ ? "on" : "off") +
+			": viewport reapplied as " + std::to_string(editor_viewport_width_) + "x" +
+			std::to_string(editor_viewport_height_));
 
 		return;
 	}
@@ -1203,8 +1675,25 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
         return;
     }
 
+	// Frame step (#73): ',' steps the selected object's playback back one ENGINE
+	// frame and '.' steps it forward one. The step itself is
+	// `App::StepSelectedAnim` -> `AnimPlayback::StepFrames`, the SAME action the
+	// F10 panel's Step -1 / Step +1 buttons run, so the panel's readout and these
+	// keys can never disagree.
+	//
+	// There is no retail QED binding for a frame step: QED.doc, "General
+	// keystrokes", documents F12 / Shift F12 for AnimTask speed and Ctrl T /
+	// Ctrl R for the timer, and nothing for stepping. The keys are therefore the
+	// editor's own, and they are gated on the F10 panel being up - the panel is
+	// the animation transport, and its footer names these two keys.
+	if (show_anim_debug_ && (key == ',' || key == '.')) {
+		StepSelectedAnim(key == '.' ? 1 : -1);
+		return;
+	}
+
 	if (key == 't' || key == 'T') {
 		level_.TeleportToHMP(viewer_.pos_);
+
 		viewer_.pitch_ = -30.0f; // Look down at the terrain
 		UpdateViewerVectors();
 		printf("Teleported to Height Map Zone\n");
@@ -1225,6 +1714,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 					float terrainZ = 0.0f;
 					if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ)) {
 						float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
+						if (igi::IsHumanTaskType(obj.type)) zOffset = 0.0f;
 						// Snap object bottom to terrain surface
 						obj.pos.z = (double)terrainZ + (double)(zOffset * 40.96f * obj.scale);
 						Logger::Get().Log(LogLevel::INFO, "[App] Snapped object to ground");
@@ -1241,6 +1731,8 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		LevelObjects& lo = level_.GetLevelObjects();
 		if (!lo.GetObjects().empty()) {
 			selected_object_index_ = (selected_object_index_ + 1) % (int)lo.GetObjects().size();
+			marker_manip_.start_pos_ = lo.GetObjects()[selected_object_index_].pos;
+			marker_manip_.start_rot_ = lo.GetObjects()[selected_object_index_].rot;
 			printf("Selected Object: %d / %d\n", selected_object_index_, (int)lo.GetObjects().size());
 		}
 		return;
@@ -1254,6 +1746,14 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 
 void App::Input_OnKeyboardUp(unsigned char key, int x, int y) {
 	auto& config = Config::Get();
+
+	if (in_game_mode_ && IsGameplayInputFocused() &&
+		!gameplay_host_.IsGameplayWindowCurrent()) return;
+	if (in_game_mode_ && IsGameplayInputFocused() && !pause_mode_) {
+		gameplay_host_.GetInputRouter().OnKeyboardKey(key, false);
+		return;
+	}
+	if (in_game_mode_ && IsGameplayInputFocused() && pause_mode_) return;
 
 	// Check for modifier keys - if pressed, skip movement key checks
 	int modifiers = glutGetModifiers();
@@ -1299,4 +1799,3 @@ void App::Input_OnKeyboardUp(unsigned char key, int x, int y) {
 }
 
 // idle
-

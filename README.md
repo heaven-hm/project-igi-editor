@@ -1,8 +1,8 @@
 # Project IGI Editor
 
-**Project IGI Editor** is a professional 3D world and object manipulation toolkit for `Project I.G.I 1`. Inspired by the official [IGI 2 Editor](https://www.nexusmods.com/igi2covertstrike/mods/1) created by the original IGI Developers, it provides a modern interface for level research, object placement, and terrain modification.
+**Project IGI Editor** is a professional 3D world and object manipulation toolkit for `Project I.G.I 1`. It provides a modern interface for level research, object placement, and terrain modification.
 
-Professional 3D **modding** suite featuring click-to-select map selection, train and spline tools, a streamlined workspace menu, automated asset extraction, flawless native MEF model loading (including complex buildings and bone structures), integrated QVM decompilation, and a full headless CLI toolchain. It includes an **IGI 2 Style position and orientation properties editor, sliders, pushbuttons, etc.** The editor features fully integrated, **native support for game file formats (SPR, TEX, MEF, DAT, MTP) with absolutely no external tools required**! Supports editing and compiling for all 14 original game levels with native asset parity.
+Professional 3D **modding** suite featuring click-to-select map selection, train and spline tools, a streamlined workspace menu, automated asset extraction, native MEF model loading, integrated QVM decompilation, and a full headless CLI toolchain. It includes a dedicated IGI1 position and orientation properties editor with sliders and pushbuttons. All asset conversion (DAT, MTP, QSC, QVM, RES, Graph, TEX, FNT, MEF, Terrain) is delegated to the bundled **`igi1conv.exe`** (v1.7.0, located at `editor/tools/igi1conv/`) through a single shared spawner (`source/utils_igi1conv.{h,cpp}`); only the runtime loaders that need data the CLI cannot supply every frame (mef_native, fnt_parser, qsc_lexer/parser, terrain_files) stay in-process. Supports editing and compiling for all 14 original IGI1 game levels with native asset parity.
 
 This project is built upon the foundational work of the [Project-IGI-Terrain](https://github.com/hjcminus/Project-IGI-Terrain) repository. Special thanks to [hjcminus](https://github.com/hjcminus) for their research and for bringing this codebase to light. It is built using C++17 and OpenGL, and it is cross-platform, but it is mainly tested on Windows.
 
@@ -99,15 +99,17 @@ With the release of our premium modding features, we have expanded our workspace
 - **Inline AI Script Editor**: Select any HumanSoldier/HumanAI task to reveal a mini-notepad QSC editor with decompiled script preview, vertical scrolling, cursor navigation, autocomplete support, and automatic `.qvm` recompilation on save.
 - **Live Editor Real-Time Sync**: Direct communication between the editor and the IGI engine for instant visual and physical feedback.
 - **3D Object Placement & Manipulation**: Advanced 6-DOF controls for placing buildings, props, terminals, doors, cameras, and actors.
-- **IGI 2 Style Controls**: Seamless object translation and rotation using standard mouse-drag modifiers (Shift, Ctrl, A, B, G).
+- **IGI1 Controls**: Seamless object translation and rotation using standard mouse-drag modifiers (Shift, Ctrl, A, B, G).
 - **Automated Path & Sync Pipeline**: Automatically handles compiler syncing, path mapping, and safe directory cleaning.
 - **Foreign Model Support**: Ability to load, import, and add foreign models from other levels directly into the active level workspace.
+- **Visual 3D Graph Editor**: Full-featured interactive 3D navigation graph editor to view, modify, and save pathfinding networks, node positions, materials, and connection links (defined in `.dat` files). Details in [docs/graph_editor.md](docs/graph_editor.md).
 
 ### Current Testing Status
 - **Building Editor**: Working - fully tested with Building objects.
 - **Terrain Editor**: Working - 3D terrain heightmap rendering and snapping fully functional.
 - **Task Tree & Objectives**: Working - interactive tree management, copy/paste, deletion, and insertion of new tasks fully operational.
 - **AI & Waypoint System**: Working - full editing of NPC patrol nodes and properties.
+- **Navigation Graph Editor**: Working - fully supports interactive 3D navigation nodes, path connections, and per-node property adjustments.
 - **Model Format**: Uses proprietary **Native MEF Models** natively loaded by the integrated MEF parser for optimal accuracy and parity with the game engine.
 - **Level Tested**: Supports compiling/decompiling all 14 original game levels. Note that only the first few levels are fully tested and verified. Levels from Level 5 onwards may have bugs or issues; if you find any, please create an issue on GitHub and report them to us! Thank you!
 
@@ -184,13 +186,27 @@ The **IGI Editor** can be run as both a fully featured interactive 3D graphical 
 For a comprehensive list of all CLI commands, export options, selective rendering bitmask combinations, keyboard hotkeys, and hands-on examples, please check our detailed guide:
 👉 **[CLI & GUI Reference Guide](docs/CLI.md)**
 
+### Model Context Protocol (MCP)
+
+The Win32 build also produces `igi_mcp.exe`, a headless MCP server for safe
+inspection and controlled editing of Project IGI game data. It supports
+newline-delimited stdio by default and authenticated loopback HTTP when
+requested. The server covers tasks and objects, transforms, model IDs, AI and
+weapons, mission objectives, graph/terrain/lightmap metadata, and assets. It
+uses revision checks, dry-run validation, backups, rollback, and root-relative
+path confinement for persistent writes. Editor-only settings are outside its
+scope.
+
+See the complete tool list, transport requirements, and intentionally
+unsupported mutation boundaries in **[MCP game-data integration](docs/MCP.md)**.
+
 And for detailed information about file formats of IGI game 👉 **[IGI File Formats](docs/file-formats.md)**
 
 ---
 
 ## ⌨️ Controls
 
-### Object Manipulation (IGI 2 Style)
+### Object Manipulation
 
 Select an object and use **LMB Drag** + Modifiers:
 
@@ -220,19 +236,85 @@ $env:IGI_TEST_LEVEL="10"; .\igi_tests.exe
 .\igi_tests.exe
 ```
 
-**230 tests** across 18 suites: QSC lexer/parser, QVM round-trips (synthetic + real game data for all 14 levels), file-format parsers (DAT, RES, TEX, MTP, FNT, Graph), verify-core units, and level-verification integration tests.
+The current Release test binary registers **675 tests** across 107 suites. It
+covers QSC/QVM, MCP, file-format parsers, editor/runtime policy, visual
+integrity, and level-verification integration. A clean full-suite result also
+requires the installed mission corpus; see [Test Suite Documentation](docs/TESTS.md)
+for the current verified and environment-gated status.
 
 For the full test reference — suites, filters, fixture descriptions, and build/deploy instructions — see:
 👉 **[Test Suite Documentation](docs/TESTS.md)**
 
 ---
 
+## 🧪 Live End-to-End (E2E) Native Testing
+
+The project includes two complementary live E2E paths. The generic
+[`editor-e2e.ps1`](tools/e2e/editor-e2e.ps1) runner exercises data-driven UI
+workflows. The native smart runner behind [`e2e_live_test.cmd`](e2e_live_test.cmd)
+and [`Run-SmartTest.ps1`](Run-SmartTest.ps1) launches through WMI in interactive
+Session 1 and records loader evidence separately from the deterministic visual
+integrity gate. With its default `Required` policy, a selected object passes
+only when both evidence layers pass; loader or texture records cannot mask a
+visual-integrity failure.
+
+The visual gate is target-scoped and deterministic: it uses object/material ID
+masks, depth evidence, projected part coverage, attachment coverage, and
+diagnostic overlays. It contains no model-specific pass rules or image
+classifier. The Level 12 strict fixtures are Watchtower (`405_02_1`, task
+`570`) and WinchHouse (`463_01_1`, task `-1#907`); the verified pair passes with
+all 20 selected screenshots and no visual-integrity findings.
+
+👉 **[Complete Live E2E Testing Guide (All Categories & Levels)](docs/LIVE_E2E_TESTING.md)**
+
+### Quick Category Commands
+
+```cmd
+# AI Units (Soldiers, Players, AI scripts)
+e2e_live_test --level 5 --ai --maximum 1
+
+# Vehicles (Helicopters, Cars, Trains)
+e2e_live_test --level 5 --vehicle --maximum 1
+
+# Buildings & Facilities (Barracks, Doors, Terminals, Switches)
+e2e_live_test --level 5 --building --maximum 1
+
+# Rigid Objects (Props, Radars, Searchlights, Pickups)
+e2e_live_test --level 5 --rigid --maximum 1
+
+# Sample 1 Object from EACH Distinct Category in a single session
+e2e_live_test --level 5 --distinct-categories --maximum 4
+
+# Dry-run plan preview (verifies candidates without opening game window)
+e2e_live_test --level 5 --distinct-categories --maximum 4 --prepare-only
+```
+
+For the strict Level 12 fixture pair, call the native runner directly so task
+IDs and the required policy are explicit:
+
+```powershell
+$native = 'D:\Code\project-igi-editor\tools\e2e\Invoke-SmartNativeCaptureSession.ps1'
+$out = 'D:\Code\project-igi-editor\artifacts\visual-integrity-level12-' + (Get-Date -Format yyyyMMdd-HHmmss)
+& pwsh -NoProfile -ExecutionPolicy Bypass -File $native `
+  -GameRoot D:\IGI1 -EditorExePath D:\Code\project-igi-editor\bin\Release\igi1ed.exe `
+  -Level 12 -Category Buildings -ModelIds '405_02_1,463_01_1' `
+  -TaskIds '570,-1#907' -MaxObjects 0 -ViewCount 10 -Video `
+  -VisualIntegrityPolicy Required -ArtifactsRoot $out
+```
+
+The expected batch status is `PASS` when both selected objects pass the required
+visual-integrity policy. The per-object result identifies `taskId`,
+`visualIntegrityStatus`, and any actionable findings. The verified run is
+recorded at `artifacts/visual-integrity-level12-depthfix-20260907-155140/`.
+
+---
+
 ## 🛠️ Future Roadmap
 
 With the successful release of **Version 2.0.0**, core features like the **Native MEF Parser**, **Asset Extractor**, **QVM Toolchain**, **Task Tree Editor**, **Train & Spline Engine**, **Click-to-Select Map View**, and **Headless CLI** have been fully realized. Future milestones include:
-- **Native Game Converter tool**: `igi1conv` — a standalone game asset converter matching `gconv.exe` from the IGI 2 Editor — developed in its own repo at [project-igi-conv](https://github.com/heaven-hm/project-igi-conv). It ships as a **Qt application** with both a GUI mode and a headless CLI mode; the editor uses only the CLI. The full prebuilt package (exe + Qt runtime DLLs) is bundled at `editor/tools/igi1conv/`.
+- **Native Game Converter tool**: `igi1conv` — a standalone Project IGI 1 asset converter developed in its own repo at [project-igi-conv](https://github.com/heaven-hm/project-igi-conv). It ships as a **Qt application** with both a GUI mode and a headless CLI mode; the editor uses only the CLI. The full prebuilt package (exe + Qt runtime DLLs) is bundled at `editor/tools/igi1conv/`.
 - **Upgraded compatibility**: A better upgraded version to support the Neo Remastered mod.
-- **Visual 3D Graph Editor (Coming Soon)**: A full-featured Visual 3D Graph Editor displaying interactive nodes and visuals to seamlessly construct game logic, path routes, and area connections.
+- **Visual 3D Graph Editor (Completed)**: Full-featured interactive 3D Graph Editor displaying interactive nodes and visuals to seamlessly construct game logic, path routes, and area connections. See [docs/graph_editor.md](docs/graph_editor.md).
 - **Weapon & Item Configurator**: Rich telemetry overlays and visual UI for modifying active gun parameters, ammunition slots, and dropping custom inventory directly onto the battlefield.
 - **Full 14 Levels campaign run**: Complete, verified playthroughs of all custom compiled maps to guarantee total end-to-end stability.
 
@@ -240,17 +322,15 @@ With the successful release of **Version 2.0.0**, core features like the **Nativ
 
 ## 🏆 Credits and Contributors
 
-Credits and contributions of the people in this project:
-
 - **[Artiom](https://github.com/NEWME0)** 👑 - **Game file formats** (*models, textures, animations*) and his **game conversion tools**. (**Huge Help!** )
 
 - **[GM123](https://www.youtube.com/@gm1233)** 👑 - **Game Models & Animations** (*MEF / IFF formats*) and **development tools**. (**Huge Help!**)
 
-- **[Neo](https://next.nexusmods.com/profile/xaeroneo?gameId=5664)** 👑 - **Guiding & testing** this project to match the *IGI 2 Editor style*. (**Huge Help!**)
+- **[Neo](https://next.nexusmods.com/profile/xaeroneo?gameId=5664)** 👑 - **Guiding & testing** this project. (**Huge Help!**)
 
 - [hjcminus](https://github.com/hjcminus) - **Terrain Editor** Project, which this project is based on.
 
-- **[Ferit](https://www.youtube.com/channel/UCpn_gZMkFVBUAe9SJK9hYQA)** 🌟 - **Game MEF/TEX file formats** and *IGI 2 style file formats* understanding.
+- **[Ferit](https://www.youtube.com/channel/UCpn_gZMkFVBUAe9SJK9hYQA)** 🌟 - **Game MEF/TEX file formats** understanding.
 
 - **[Dark](https://www.youtube.com/@CRONOQUILLOFFICIAL)** 🌟 - **Early prototype building**, *testing tools*, and **editor features**.
 
@@ -260,24 +340,33 @@ Credits and contributions of the people in this project:
 
 - **[ORWA](https://www.youtube.com/@totalwartimelapses6359)** 🌟 - **Graphs Area and Nodes** *information and testing*.
 
-  
-
-
 ### **Historical Note on Early Prototype:**
-> There was an early prototype in year *2020* as a level editor for Project IGI created by **Dimon** which served as an initial inspiration for this project. Although it featured impressive 3D scene loading, it was never released to the public. The developer later became busier with life and work commitments, eventually abandoning the project and choosing not to publish it. You can view the original teaser post [here on VK](https://vk.com/wall-275359_6439).
+> There was an early prototype in year *2020* as a level editor for Project IGI created by **Dimon** which served as an initial inspiration for this project. Although it featured impressive 3D scene loading, it was never released to the public. You can view the original teaser post [here on VK](https://vk.com/wall-275359_6439).
 > 
 > ![Dimon's Prototype Editor](assets/screenshots/igi1-editor-prototype.png)
 
-### 
+---
+
+## 🤖 AI & MCP Integration
+
+Project IGI Editor and Converter feature full **Model Context Protocol (MCP)** support for autonomous level editing, physics tuning, asset extraction, and modding via AI agents.
+
+* 📖 **[MCP Architecture & Setup Guide](docs/MCP.md)** — Protocol specifications and server setup.
+* 💬 **[MCP Prompt Playbook](MCP_PROMPTS.md)** — Ready-to-use prompts for level modding, physics, audio conversion, and 3D mesh exports across Codex, Claude Code, Antigravity, OpenCode, and Pi Agents.
+
 ---
 
 ## 📋 [Changelogs](CHANGELOGS.md)
 
-See the [CHANGELOGS.md](CHANGELOGS.md) for version history and detailed change logs.
+See [CHANGELOGS.md](CHANGELOGS.md) for version history and detailed change logs, including:
+- **AMD OpenGL Driver Crash Fix (`0x6ED690D2` / `0x444` VBO State Resolution)**: Protected all immediate-mode pipelines (`glBegin`/`glEnd`) with systematic VAO, VBO, and attribute array unbinding.
+- **Categorized E2E Testing Engine (`AI`, `Buildings`, `RigidObjects`, `Vehicles`)**: Added dedicated shortcut flags and category filtering across the native test suite.
+- **4 GB Large Address Aware (VAS)**: Enforced 4 GB virtual address space allocation on Release binaries.
+- **Multi-Angle Interactive WMI Automation**: Session 1 interactive desktop lifecycle and evidence validation.
 
 ---
 
-## Folder Structure
+## 📁 Folder Structure
 
 ### Local Repository Folders
 - **`shaders/`**: Core OpenGL GLSL shader source files
@@ -291,7 +380,7 @@ See the [CHANGELOGS.md](CHANGELOGS.md) for version history and detailed change l
 If you encounter any issues or have suggestions, feel free to reach out:
 
 - **🎮 Discord**: Message me at `heaven.hm` or join our [Discord Server](https://discord.com/invite/9SJucSsyt).
-- **📧 Email**: [igiproz.hm@gmail.com](mailto:igiproz.hm@gmail.com).
+- **📧 Email**: [DEFAULT_RECIPIENT_EMAIL](mailto:DEFAULT_RECIPIENT_EMAIL).
 - **🌟 GitHub**: Follow the project on [Heaven-HM profile](https://github.com/heaven-hm/).
 - **📺 YouTube**: Subscribe to [Heaven-HM channel](https://www.youtube.com/@heaven-hm91) for guides and walkthroughs.
 

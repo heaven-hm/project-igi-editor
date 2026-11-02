@@ -13,7 +13,7 @@ struct KeyBinding {
 struct ConfigData {
     // [GamePath]
     int level;
-    // [Marker] - IGI 2 Style Manipulation
+    // [Marker] - Editor Manipulation
     char keySnapGround;
     char keySnapObject;
     char keyRotateAlpha;
@@ -49,8 +49,11 @@ struct ConfigData {
     KeyBinding keyEnableCamera;
     KeyBinding keyMoveCameraForward;
     KeyBinding keyMoveCameraBackward;
-    KeyBinding keyAdjustCameraRadius;
-    KeyBinding keyLookDown;
+    // NOTE (task-11): CameraAdjustRadius and CameraLookDown are consumed through
+    // the event map (Check() in source/app_input.cpp), so the keyAdjustCameraRadius
+    // and keyLookDown fields that used to mirror them were dead config surface
+    // (0 readers) and have been deleted. The remaining named fields are read by the
+    // camera/movement code in app_view.cpp and app_input_mouse.cpp.
     KeyBinding keySnapToObject;
     KeyBinding keySnapToGround;
     KeyBinding keyClipMode;
@@ -79,9 +82,26 @@ struct ConfigData {
     // NEW: Logging
     bool enableLogging;
     bool debugLogging;
+    int logLevelThreshold; // DEBUG=0 through FATAL=4
 
     // [Renderer]
     bool enableLOD; // Portal/attachment distance culling for buildings
+    bool enableLightmaps; // Apply calculated "Calculate Lightmap" textures during render (Escape menu checkbox)
+    bool enableFog; // Terrain/object atmospheric fog — toggle in Terrain Settings panel
+    // Fog Intensity PREVIEW multiplier, 0..1000 (%) in steps of 100 from the pause
+    // menu. 100 (igi::kFogIntensityLevelDefault) = the level's authored fog, which
+    // is the engine's own density; a level ALWAYS STARTS at 100 (App::LoadLevel
+    // resets it, because retail has no such control), so this value only carries a
+    // preview adjustment from one level to the next.
+    int fogIntensity;
+    bool musicEnabled; // Escape-menu Music checkbox preference — persists across level loads/game launches
+    bool weatherEnabled; // Authored rain/snow visibility — toggle in the pause menu
+    int  weatherMode;    // 0 = Default (Authored), 1 = Rain (Forced), 2 = Snow (Forced), 3 = Off
+    // The editor's weather PREVIEW speed step (igi::WeatherSpeed): 0 = frozen,
+    // 1 = the engine's own rate, 2 = double. NO engine counterpart — the engine's
+    // speed is `speed = r->snow ? kSnowSpeed : kRainSpeed` (Rain_Update, HOOK
+    // 0x499CF0, src/dxinit/rain.c:572; constants at src/dxinit/rain.c:122-123).
+    int  weatherSpeed;
 
     // NEW: Advanced QED Settings
     int consoleAutoActivate;
@@ -90,11 +110,13 @@ struct ConfigData {
     bool displayTaskNote;
     bool allowDynamicSwitching;
     bool saveConfigOnExit;
+    bool auto_save_enabled;
+    int auto_save_interval_seconds;
     bool runEvent;
     bool cameraLock;
     bool enableBackup;
     bool useEditorFont;  // TRUE: render HUD with editor/qed/editor.fnt; FALSE: GLUT system font
-    int  systemFontSize; // GLUT system font point size: 10, 12 (default), or 18
+    int  systemFontSize; // UI point size 8-32; GLUT fallback uses the nearest 10/12/18 bitmap font
     std::string findTaskName;
     std::string findTaskNote;
     std::string findTaskID;
@@ -103,6 +125,7 @@ struct ConfigData {
     std::string objectFilePath;
     int interpolation;
     float renderZNear;
+    int graphNodeSize;
 
     // Camera State
     float cameraOriX, cameraOriY, cameraOriZ;
@@ -112,6 +135,11 @@ struct ConfigData {
 
     // Full event bindings map (all ~120 events loaded from config)
     std::unordered_map<std::string, KeyBinding> eventBindings_;
+
+    // Per-level background music override: level number -> filename (just the
+    // name, e.g. "music_wind.wav") to look up under that level's sounds/ dir.
+    // Levels with no entry fall back to "game_music.wav".
+    std::unordered_map<int, std::string> levelMusicFiles;
 };
 
 class Config {
@@ -121,7 +149,7 @@ public:
     static void Save();
     
 private:
-    static void Load();
+    static void Load(bool configQvmReady);
     static void CreateDefault();
     static std::string GetConfigPath();
     static std::string GetKeybindingsPath();

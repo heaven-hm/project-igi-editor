@@ -84,7 +84,7 @@ TEST_P(VerifyLevelIntegration, LevelPassesVerification) {
 
     EXPECT_EQ(exitCode, 0u)
         << "Verify level " << level << " failed (exit code " << exitCode << ").\n"
-        << "Check igi1ed.log in " << exeDir << " for details.";
+        << "Check the verifier output for details.";
 }
 
 INSTANTIATE_TEST_SUITE_P(

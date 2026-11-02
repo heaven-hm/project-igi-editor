@@ -4,6 +4,9 @@
  *          Split from renderer_objects.cpp; shares renderer_objects_internal.h.
  *****************************************************************************/
 #include "renderer_objects_internal.h"
+#include "../lod/lod_qvm_table.h"
+#include "../lod/lod_settings.h"
+#include "../runtime/magic_object_registry.h"
 
 void Renderer_Objects::EnsurePortalDistancesLoaded() {
     if (portal_distances_loaded_) return;
@@ -24,41 +27,30 @@ void Renderer_Objects::EnsurePortalDistancesLoaded() {
     std::string decompiled = QVM_DecompileToString(qvm);
     if (decompiled.empty()) return;
 
-    std::stringstream ss(decompiled);
-    std::string line;
-    while (std::getline(ss, line)) {
-        // Look for: Task_New(-1, "ModelLODSettings", "300_01_1", "300_01_1", 70.0, 170.0, 300.0, 350.0, 500.0);
-        if (line.find("Task_New") == std::string::npos) continue;
-        if (line.find("\"ModelLODSettings\"") == std::string::npos) continue;
+    // Task_New(-1, "ModelLODSettings", "300_01_1", "300_01_1", 70.0, 170.0, 300.0, 350.0, 500.0);
+    // Three leading args then the five distances (gModelLODSettingsParams,
+    // retail engine src/animtrig/lodsettings.c:95,104-109). The tokenizer lives in
+    // source/lod/lod_qvm_table.h so it is host-testable and single-sourced.
+    for (const igi::lod::AuthoredLodEntry& entry : igi::lod::ParseAuthoredLodEntries(decompiled)) {
+        // Portal/attachment culling distance, in metres: the authored "Distance
+        // to cutoff" (tokens[8]), or the largest distance when it is not
+        // positive. Unchanged behaviour from the previous inline parse.
+        portal_distances_[entry.model] = igi::lod::AuthoredCutoffDistance(entry);
 
-        size_t start = line.find('(');
-        size_t end = line.rfind(')');
-        if (start == std::string::npos || end == std::string::npos) continue;
-
-        std::string args = line.substr(start + 1, end - start - 1);
-        
-        std::vector<std::string> tokens;
-        std::stringstream argStream(args);
-        std::string token;
-        while (std::getline(argStream, token, ',')) {
-            token.erase(0, token.find_first_not_of(" \t\r\n"));
-            token.erase(token.find_last_not_of(" \t\r\n") + 1);
-            tokens.push_back(token);
-        }
-
-        if (tokens.size() >= 9) {
-            std::string modelId = tokens[2];
-            if (modelId.size() >= 2 && modelId.front() == '"' && modelId.back() == '"') {
-                modelId = modelId.substr(1, modelId.size() - 2);
-            }
-            try {
-                float portalDist = std::stof(tokens[4]);
-                portal_distances_[modelId] = portalDist;
-            } catch (...) {}
-        }
+        // The engine's copy of the table: non-decreasing clamp, then x4096
+        // (ModelLODSettings_Changed, retail engine src/animtrig/lodsettings.c:157-171).
+        // This is VirModel.unk28, the input to lod_select's authored branch.
+        float raw[5];
+        for (int i = 0; i < 5; ++i) raw[i] = entry.distance[static_cast<size_t>(i)];
+        igi::lod::MonotonizeDistances(raw);
+        std::array<float, 5> scaled{};
+        igi::lod::ScaleDistancesToWorldUnits(raw, scaled.data());
+        authored_lod_distances_[entry.model] = scaled;
     }
-    
-    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Loaded " + std::to_string(portal_distances_.size()) + " LOD distances from lod.qvm");
+
+    Logger::Get().Log(LogLevel::INFO, "[Renderer_Objects] Loaded " + std::to_string(portal_distances_.size()) +
+        " LOD distances from lod.qvm (" + std::to_string(authored_lod_distances_.size()) +
+        " authored distance tables)");
 }
 
 
@@ -116,9 +108,11 @@ void Renderer_Objects::EnsureWindowModelIdsLoaded() {
         pos = idEnd + 1;
     }
 
-    // These glass-room shells in level 12 must render opaque (solid walls, not see-through).
-    window_model_ids_.erase("463_03_1");
-    window_model_ids_.erase("463_04_1");
+    // NOTE: 463_03_1 / 463_04_1 (level-12 winch-house glass-room shells) used to
+    // be erased here to force them opaque. That sent their real-alpha texels to
+    // the opaque pass's alpha cutout, which discarded them — the glass building
+    // was invisible until an ATTA promotion redraw. They keep their normal
+    // window/glass classification now.
 
     Logger::Get().Log(LogLevel::INFO,
         "[Renderer_Objects] Loaded " + std::to_string(window_model_ids_.size()) +
@@ -234,17 +228,21 @@ void Renderer_Objects::EnsureMagicObjIdsLoaded() {
     QVMFile qvm = QVM_Parse(qvmPath);
     if (!qvm.valid) return;
 
-    const std::string src = QVM_DecompileToString(qvm);
-    std::istringstream ss(src);
-    std::string line;
-    while (std::getline(ss, line)) {
-        if (line.find("DefineMagicObj") == std::string::npos) continue;
-        const size_t q1 = line.find('"');
-        if (q1 == std::string::npos) continue;
-        const size_t q2 = line.find('"', q1 + 1);
-        if (q2 == std::string::npos) continue;
-        magicobj_ids_.insert(line.substr(q1 + 1, q2 - q1 - 1));
+    igi::MagicObjectRegistry registry;
+    if (!registry.LoadDecompiledSource(QVM_DecompileToString(qvm))) {
+        return;
     }
+    for (const igi::MagicObjectDefinition& definition : registry.GetDefinitions()) {
+        magicobj_ids_.insert(definition.attachment_name);
+        if (definition.task_type_name == "TASKTYPE_LADDER") {
+            ladder_magicobj_ids_.insert(definition.attachment_name);
+        }
+    }
+}
+
+bool Renderer_Objects::IsLadderMagicObject(const std::string& modelId) {
+    EnsureMagicObjIdsLoaded();
+    return ladder_magicobj_ids_.count(modelId) > 0;
 }
 
 // ─── InitSphereMesh ───────────────────────────────────────────────────────────

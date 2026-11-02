@@ -1,4 +1,6 @@
 #include "renderer_internal.h"
+#include "runtime/mission_fog.h"
+#include <cmath>
 
 /*
 ================================================================================
@@ -11,6 +13,56 @@
  Renderer
 ================================================================================
 */
+
+// A renderer sub-system that fails to initialise used to make `Renderer::Init`
+// return false, which made `App::Init` return false, which made `main` `return 2`
+// with no message anywhere -- and, because the log was never flushed, often with an
+// empty log file too.  The user got a bare exit code and nothing else.
+//
+// The overwhelmingly likely cause is a GL context too old for this renderer's
+// shaders (the shader folders are /41 and /45; a driver reporting GL 2.1 cannot
+// compile either), so the report names the failing sub-system AND the driver's own
+// version strings.  It goes to stderr as well as the log, because the log is
+// exactly what was missing in the first place.
+void ReportInitFailure(const char* subsystem) {
+  const char* vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+  const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+  const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+  const char* glsl = reinterpret_cast<const char*>(glGetString(GL_SHADING_LANGUAGE_VERSION));
+  const char* err = nullptr;
+  switch (glGetError()) {
+    case GL_INVALID_ENUM: err = "GL_INVALID_ENUM"; break;
+    case GL_INVALID_VALUE: err = "GL_INVALID_VALUE"; break;
+    case GL_INVALID_OPERATION: err = "GL_INVALID_OPERATION"; break;
+    case GL_OUT_OF_MEMORY: err = "GL_OUT_OF_MEMORY"; break;
+    default: break;
+  }
+
+  std::fprintf(stderr,
+      "\n[renderer] initialisation failed in '%s'.\n"
+      "  GL_VENDOR:   %s\n"
+      "  GL_RENDERER: %s\n"
+      "  GL_VERSION:  %s\n"
+      "  GLSL:        %s\n"
+      "  last GL error: %s\n"
+      "  Shader tiers are '21' (GLSL 1.20), '41' and '45'.  A context below\n"
+      "  OpenGL 3.0 is served by the 2.1 fallback, selected automatically, which\n"
+      "  emulates uniform blocks and binds vertex arrays through the APPLE\n"
+      "  extension.  If it is active (it prints 'GL 2.1 fallback active' above)\n"
+      "  then this is a shader or uniform problem in the '21' tier, not a\n"
+      "  context-version problem.  See the shader compile errors above (if any),\n"
+      "  docs/KNOWN_ISSUES.md and docs/parity/GL21_FALLBACK.md.\n\n",
+      subsystem, vendor ? vendor : "(null)", renderer ? renderer : "(null)",
+      version ? version : "(null)", glsl ? glsl : "(null)", err ? err : "none");
+
+  Logger::Get().LogAlways(LogLevel::ERR,
+      std::string("[renderer] initialisation failed in '") + subsystem +
+      "' (GL_VERSION=" + (version ? version : "?") +
+      ", GLSL=" + (glsl ? glsl : "?") +
+      ", last GL error=" + (err ? err : "none") + ")");
+  Logger::Get().Flush();
+}
+
 Renderer::Renderer() : ubo_mats_(0), ubo_fog_(0), splines_(objects_) {
 }
 
@@ -18,30 +70,57 @@ Renderer::~Renderer() { Shutdown(); }
 
 #include <sstream>
 #include <iomanip>
+#include <unordered_map>
 
 
 
 
 bool Renderer::Init() {
-  ubo_mats_ = GL_CreateBuffer(GL_UNIFORM_BUFFER, sizeof(ubo_mats_s), nullptr,
+	shutdown_started_ = false;
+	ubo_mats_ = GL_CreateBuffer(GL_UNIFORM_BUFFER, sizeof(ubo_mats_s), nullptr,
                               GL_DYNAMIC_DRAW);
-  ubo_fog_ = GL_CreateBuffer(GL_UNIFORM_BUFFER, sizeof(ubo_fog_s), nullptr,
-                             GL_STATIC_DRAW);
+  // Initialize UBO with safe defaults so the terrain fog shader never sees a zero
+  // coefficient (which would be a no-op) before SetupFog is called on first level
+  // load. A tiny coefficient = effectively no fog, the same "before the level
+  // loads" state the old far_ = 1e9 represented.
+  {
+    ubo_fog_s safe_fog;
+    safe_fog.color_ = glm::vec4(0.15f, 0.15f, 0.15f, 1.0f);
+    safe_fog.scale_ = 0.0f; // no fog until a level authors one
+    ubo_fog_ = GL_CreateBuffer(GL_UNIFORM_BUFFER, sizeof(ubo_fog_s), &safe_fog,
+                               GL_STATIC_DRAW);
+  }
 
   if (!skydome_.Init()) {
+    ReportInitFailure("skydome");
     return false;
   }
 
   if (!flat_sky_layers_.Init()) {
+    ReportInitFailure("flat_sky_layers");
     return false;
   }
 
   if (!terrain_.Init()) {
+    ReportInitFailure("terrain");
     return false;
   }
 
   if (!objects_.Init()) {
+    ReportInitFailure("objects");
     return false;
+  }
+
+  if (!rain_.Init()) {
+    ReportInitFailure("rain");
+    return false;
+  }
+
+  // The Smoke particles (#43). Init failure is not fatal to the editor: the
+  // emitter still simulates, it just is not drawn (Renderer_Smoke::Draw returns
+  // early when the program is 0).
+  if (!smoke_.Init()) {
+    Logger::Get().Log(LogLevel::WARNING, "[Renderer_Smoke] Init failed; smoke particles will not be drawn.");
   }
 
   // init default state
@@ -69,8 +148,16 @@ bool Renderer::Init() {
 }
 
 void Renderer::Shutdown() {
+	if (shutdown_started_) return;
+	shutdown_started_ = true;
+	logged_skinned_draws_.clear();
+  skinned_pose_samples_.clear();
+  logged_skinned_pose_updates_.clear();
+  engine_skin_vertices_cache_.clear();
   terrain_.Shutdown();
   objects_.Shutdown();
+  rain_.Shutdown();
+  smoke_.Shutdown();
   flat_sky_layers_.Shutdown();
 
   skydome_.Shutdown();
@@ -80,9 +167,27 @@ void Renderer::Shutdown() {
 }
 
 void Renderer::BeginLoadLevel() {
+  logged_skinned_draws_.clear();
+  skinned_pose_samples_.clear();
+  logged_skinned_pose_updates_.clear();
+  engine_skin_vertices_cache_.clear();
   flat_sky_layers_.UnloadAllTexs();
   terrain_.UnloadAllTexs();
   objects_.ClearCaches();
+  splines_.ClearBentCache();
+  // Disable rain until the new level's QSC is parsed — prevents rain from a
+  // prior level bleeding into a level that has no RainEffect task.
+  rain_.SetParams(false, false, 0.0f, 0.0f, 0.0f);
+  // The previous level's Smoke emitters and their live particles are gone with
+  // its task tree; the new level's list is published on the next frame.
+  smoke_.Clear();
+  graph_overlay_ = GraphFile{};
+  graph_overlay_visible_ = false;
+  graph_overlay_dirty_ = false;
+  graph_overlay_selected_ = -1;
+  graph_overlay_path_.clear();
+  graph_overlay_taskid_.clear();
+  graph_overlay_area_.clear();
 }
 
 void Renderer::SetupClearColor(const glm::vec4 &color) {
@@ -90,13 +195,62 @@ void Renderer::SetupClearColor(const glm::vec4 &color) {
 }
 
 void Renderer::SetupFog(const glm::vec4 &color, float fog_far) {
-  ubo_fog_s ubo_fog;
+  fog_base_color_ = color;
+  fog_base_far_ = fog_far;
+  ApplyFogIntensity();
+}
 
-  ubo_fog.color_ = color;
-  ubo_fog.far_ = fog_far;
+void Renderer::SetupObjectFog(const glm::vec4 &color, float fog_far) {
+  object_fog_base_color_ = color;
+  object_fog_base_far_ = fog_far;
+  ApplyFogIntensity();
+}
+
+void Renderer::SetFogIntensity(int intensity) {
+  fog_intensity_ = std::max(0, std::min(1000, intensity));
+  ApplyFogIntensity();
+}
+
+void Renderer::ApplyFogIntensity() {
+  // The Fog Intensity preview multiplier, from the host-portable rule in
+  // runtime/mission_fog.h (igi::FogIntensityDistanceScale, pinned by
+  // MissionFogTest.FogIntensityScaleIsOneAtTheLevelDefault). 100 == the level's
+  // authored fog, i.e. the engine's own density; there is no such control in
+  // retail engine, so 100 is the only value that reproduces retail and it is the value a
+  // level starts at (App::LoadLevel resets it).
+  const float scale = igi::FogIntensityDistanceScale(fog_intensity_);
+  float effective_far = fog_base_far_ * scale;
+  float effective_object_far = object_fog_base_far_ * scale;
+
+  ubo_fog_s ubo_fog;
+  ubo_fog.color_ = fog_base_color_;
+  // The terrain fog pass measures depth as `1.0 / gl_FragCoord.w`, i.e. in units of
+  // world * RENDERER_MODEL_SCALE_DOWN (0.001f) -- the same space the engine's
+  // gWorldScale puts its own fog depth in. gTerrainFogScale is therefore already the
+  // exponent per unit of THAT depth, with no conversion needed: see the field's
+  // comment in renderer.h. `effective_far` is the e-folding distance in world units,
+  // so its value in the shader's units is effective_far * RENDERER_MODEL_SCALE_DOWN
+  // and the coefficient is the reciprocal. Writing it this way keeps the Fog
+  // Intensity slider meaning one thing on both passes (a larger `scale` = a longer
+  // e-folding distance = thinner fog).
+  ubo_fog.scale_ = (effective_far > 0.0f)
+                       ? 1.0f / (effective_far * RENDERER_MODEL_SCALE_DOWN)
+                       : 0.0f;
 
   GL_BufferData(ubo_fog_, GL_UNIFORM_BUFFER, sizeof(ubo_fog), &ubo_fog,
                 GL_STATIC_DRAW);
+
+  // Propagate fog to the object shader (warm atmospheric haze over buildings). The
+  // skydome is NOT given a fog colour: retail draws it with FOGENABLE = 0 and uses
+  // only the level's authored FlatSky gradient (src/terredit/skydome.c:242, :94-135).
+  //
+  // The objects get the CATEGORY 1 set, NOT the terrain set: the engine's object
+  // pass reads gFogColor / gFogDensity, which are gFogColors[1] / gFogDensities[1]
+  // (src/render/render.c:775-780, src/dxinit/polylist.c:243-245; the aliasing is
+  // proven by address arithmetic in source/runtime/mission_fog.h, kObjectLightSet).
+  // `effective_object_far` is in world units, matching v_fragPos / u_cameraPos in
+  // the object shader.
+  objects_.SetFogParams(glm::vec3(object_fog_base_color_), effective_object_far);
 }
 
 void Renderer::SetupSkydome(const skydome_define_s &d) {
@@ -119,11 +273,11 @@ void Renderer::UnmapFlatSkyLayersVB() { flat_sky_layers_.UnmapVB(); }
 
 vert_pos_a_uv_s *Renderer::MapTerrainVB() { return terrain_.MapVB(); }
 
-void Renderer::UnmapTerrainVB() { terrain_.UnmapVB(); }
+void Renderer::UnmapTerrainVB(int num_vert) { terrain_.UnmapVB(num_vert); }
 
 uint32_t *Renderer::MapTerrainIB() { return terrain_.MapIB(); }
 
-void Renderer::UnmapTerrainIB() { terrain_.UnmapIB(); }
+void Renderer::UnmapTerrainIB(int num_index) { terrain_.UnmapIB(num_index); }
 
 render_chunk_s *Renderer::GetTerrainRenderChunckBuffer() {
   return terrain_.GetRenderChunckBuffer();
@@ -166,5 +320,401 @@ void Renderer::SetupUBOMats(const view_define_s &vd) {
   // flush ubo buffer
   GL_BufferData(ubo_mats_, GL_UNIFORM_BUFFER, sizeof(ubo_mats), &ubo_mats,
                 GL_DYNAMIC_DRAW);
+}
+
+void Renderer::DrawAnimSkeleton(const std::vector<glm::mat4>& boneWorldTransforms,
+                                const std::vector<int>& boneParents,
+                                const glm::mat4& objWorldMat) {
+    if (boneWorldTransforms.empty()) return;
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+    GLint prevProg;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
+    glUseProgram(0);
+
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glm::mat4 mvp = mat_proj_ * mat_view_ * glm::scale(glm::mat4(1.0f), glm::vec3(RENDERER_MODEL_SCALE_DOWN));
+    glLoadMatrixf(glm::value_ptr(mvp));
+
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+
+    glDisable(GL_LIGHTING);  // must disable so glColor4f applies, not the lit material (which renders black)
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+
+    // Helper: compute world-space bone position. boneWorldTransforms already
+    // carries the BEF skeleton's absolute (animated) position — see
+    // DrawSkinnedMesh for why no extra MEF root offset is added here.
+    auto boneWorldPos = [&](size_t i) -> glm::vec4 {
+        glm::vec3 posInBefSpace = glm::vec3(boneWorldTransforms[i] * glm::vec4(0.f, 0.f, 0.f, 1.f));
+        return objWorldMat * glm::vec4(posInBefSpace, 1.f);
+    };
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+    glLineWidth(3.0f);
+    glBegin(GL_LINES);
+    for (size_t i = 0; i < boneWorldTransforms.size(); ++i) {
+        if (i >= boneParents.size()) break;
+        int p = boneParents[i];
+        if (p < 0 || (size_t)p >= boneWorldTransforms.size()) continue;
+        glm::vec4 childPos  = boneWorldPos(i);
+        glm::vec4 parentPos = boneWorldPos((size_t)p);
+        glColor4f(0.2f, 0.9f, 0.2f, 0.7f);
+        glVertex4f(parentPos.x, parentPos.y, parentPos.z, parentPos.w);
+        glVertex4f(childPos.x,  childPos.y,  childPos.z,  childPos.w);
+    }
+    glEnd();
+
+    glPointSize(5.0f);
+    glColor4f(0.6f, 1.0f, 0.6f, 1.0f);
+    glBegin(GL_POINTS);
+    for (size_t i = 0; i < boneWorldTransforms.size(); ++i) {
+        glm::vec4 wp = boneWorldPos(i);
+        glVertex4f(wp.x, wp.y, wp.z, wp.w);
+    }
+    glEnd();
+
+    glLineWidth(1.0f);
+    glPointSize(1.0f);
+
+    glEnable(GL_LIGHTING);
+    glEnable(GL_TEXTURE_2D);
+
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    for (int i = 0; i < 4; ++i) glDisableVertexAttribArray(i);
+
+    if (prevProg) glUseProgram((GLuint)prevProg);
+}
+
+// IGI_PROFILE-only: split one DrawSkinnedMesh into its CPU skinning half and its
+// GL submission half.  The whole call was [FrameBreak]'s entire `post` span
+// (100 ms for 8 draws), so "the pose draw is slow" needs to say WHICH half: the
+// engine's own skinner over ~3k vertices, or the fixed-function submission of
+// ~3k vertices one glVertex at a time.  They need opposite fixes.
+using SkinnedClockTime = std::chrono::steady_clock::time_point;
+
+static void LogSkinnedDrawSplit(SkinnedClockTime t0, SkinnedClockTime t1,
+                               SkinnedClockTime t2, SkinnedClockTime t3,
+                               SkinnedClockTime t4) {
+    static int64_t acc_skin = 0, acc_state = 0, acc_build = 0, acc_draw = 0;
+    static int calls = 0;
+    const auto us = [](SkinnedClockTime a, SkinnedClockTime b) {
+        return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
+    };
+    acc_skin += us(t0, t1);
+    acc_state += us(t1, t2);
+    acc_build += us(t2, t3);
+    acc_draw += us(t3, t4);
+    ++calls;
+    if (calls >= 200) {
+        const int64_t total = acc_skin + acc_state + acc_build + acc_draw;
+        Logger::Get().Log(LogLevel::INFO,
+            "[FrameBreak] skinned draw split " + std::to_string(calls) +
+            " draws: skin=" + std::to_string(acc_skin / 1000) + "ms state=" +
+            std::to_string(acc_state / 1000) + "ms build=" +
+            std::to_string(acc_build / 1000) + "ms draw=" +
+            std::to_string(acc_draw / 1000) + "ms total=" +
+            std::to_string(total / 1000) + "ms (" +
+            std::to_string(total / calls / 1000) + "ms/draw)");
+        acc_skin = acc_state = acc_build = acc_draw = 0;
+        calls = 0;
+    }
+}
+
+void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
+                                const std::vector<igi::BoneTransform>& engineBoneTransforms,
+                                const glm::mat4& objWorldMat) {
+    const bool profileSkinned = []() {
+        static const bool enabled = std::getenv("IGI_PROFILE") != nullptr;
+        return enabled;
+    }();
+    using SkinnedClock = std::chrono::steady_clock;
+    const auto skinned_t0 = profileSkinned ? SkinnedClock::now() : SkinnedClock::time_point{};
+    if (engineBoneTransforms.empty()) return;
+    const ParsedGeometry* geo = objects_.GetOrLoadSkinGeometry(modelId, isBuilding);
+    if (!geo || !HasRenderableSkinnedGeometry(*geo)) return;
+
+    const size_t renderableTriangles = CountRenderableSkinnedTriangles(*geo);
+    if (logged_skinned_draws_.insert(modelId).second) {
+        Logger::Get().Log(LogLevel::INFO, "[Anim] Skinned draw submitted for " + modelId +
+            " (" + std::to_string(renderableTriangles) + " triangles)");
+    }
+
+    // A draw-submission log alone cannot distinguish a frozen first frame from
+    // a running animation.  Keep one cheap pose sample per model and record the
+    // first frame-to-frame change; this is also consumed by the opt-in live
+    // integration test.  The full bone records remain local to this draw.
+    {
+        const igi::BoneTransform& sampleBone = engineBoneTransforms[
+            engineBoneTransforms.size() > 1 ? 1U : 0U];
+        const float poseSample = sampleBone.matrix[0] + sampleBone.matrix[4] +
+            sampleBone.matrix[8] + sampleBone.pos[2];
+        const auto sampleIt = skinned_pose_samples_.find(modelId);
+        if (sampleIt == skinned_pose_samples_.end()) {
+            skinned_pose_samples_.emplace(modelId, poseSample);
+        } else if (std::abs(sampleIt->second - poseSample) > 0.00001f &&
+                   logged_skinned_pose_updates_.insert(modelId).second) {
+            Logger::Get().Log(LogLevel::INFO,
+                "[Anim] Skinned pose advanced for " + modelId);
+        }
+    }
+
+    // The engine's own skinner, over the engine's own vertex records:
+    // BoneMesh_Skin HOOK 0x49B700 (src/dxinit/d3drender.c:226-313). It reads the
+    // mesh's two XTRV runs (base vertices at mesh+0x10, extra influences at
+    // mesh+0x0C), multiplies each vertex by its bone's row-major `matrix` and
+    // adds `Bone::pos`, and - on the non-rigid path - accumulates each extra
+    // influence's weighted share into its target base vertex.
+    //
+    // `rigid` is the caller's LOD argument, not a mesh property: the retail
+    // caller is `Direct3DRender_DrawBoneMesh` 0x49F700, which passes
+    // `n = Mesh3D_GetBoneMeshLOD(obj)` forced to 0 for a layer-0 object
+    // (src/bonemesh/d3drender.c:124-127), so the main view takes the WEIGHTED
+    // base+influence path. 0 is passed here for the same reason.
+    const std::string skinCacheKey = (isBuilding ? "B:" : "O:") + modelId;
+    auto skinCacheIt = engine_skin_vertices_cache_.find(skinCacheKey);
+    if (skinCacheIt == engine_skin_vertices_cache_.end()) {
+        skinCacheIt = engine_skin_vertices_cache_.emplace(
+            skinCacheKey, BuildEngineSkinVertices(*geo)).first;
+    }
+    const EngineSkinVertices& engine_vertices = skinCacheIt->second;
+    if (engine_vertices.base_count <= 0) return;
+    static thread_local std::vector<igi::SkinTransformOutput> skinned;
+    skinned.clear();
+    if (!igi::BoneMeshSkin(engine_vertices.records.data(), engine_vertices.base_count,
+                           engine_vertices.extra_count, engineBoneTransforms.data(),
+                           static_cast<int>(engineBoneTransforms.size()),
+                           /*rigid=*/false, skinned)) {
+        Logger::Get().Log(LogLevel::WARNING,
+            "[Anim] BoneMesh_Skin refused " + modelId + " (base vertex count out of range)");
+        return;
+    }
+
+    // BoneMesh_Skin writes NormalVertex records in RAW game units (the engine's
+    // world is raw units; D3D applies gWorldScale). The renderer works in metres,
+    // so scale the positions by kMefNativeScale = 1/40.96 and leave the normals
+    // as directions.
+    static thread_local std::vector<glm::vec3> deformedPos;
+    static thread_local std::vector<glm::vec3> deformedNormal;
+    deformedPos.resize(skinned.size());
+    deformedNormal.resize(skinned.size());
+    for (size_t i = 0; i < skinned.size(); ++i) {
+        deformedPos[i] = glm::vec3(skinned[i].position[0], skinned[i].position[1],
+                                   skinned[i].position[2]) * kMefNativeScale;
+        deformedNormal[i] = glm::vec3(skinned[i].normal[0], skinned[i].normal[1],
+                                      skinned[i].normal[2]);
+    }
+
+    // IGI_PROFILE-only: boundary between the engine skinner and the submit.
+    const auto skinned_t1 = profileSkinned ? SkinnedClock::now() : SkinnedClock::time_point{};
+
+    // Resolve the same per-material textures the static (rigid) draw uses, so
+    // the live-skinned mesh looks identical when not moving instead of a flat
+    // debug color. Cheap: GetOrLoadMesh hits the cache (the model is already
+    // loaded for the rigid draw elsewhere).
+    GLint prevProg;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
+    const Mesh& mesh = objects_.GetOrLoadMesh(modelId, isBuilding);
+    std::unordered_map<int, GLuint> slotToTexture;
+    for (const auto& sub : mesh.subMeshes) slotToTexture[sub.materialSlot] = sub.textureID;
+    const GLuint fallbackTexture = mesh.textureID;
+    // Mesh upload binds VAOs. AMD atioglxx.dll crashes at 0x444 if glBegin
+    // runs with ARRAY_BUFFER still bound.
+    GL_UnbindForImmediateMode();
+
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glm::mat4 mvp = mat_proj_ * mat_view_ * glm::scale(glm::mat4(1.0f), glm::vec3(RENDERER_MODEL_SCALE_DOWN));
+    glLoadMatrixf(glm::value_ptr(mvp));
+
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadIdentity();
+
+    // The static (rigid) object draw never culls ("Disable backface culling
+    // to fix invisible interior walls" — see Renderer_Objects::Draw). Match
+    // that here: culling against the deformed mesh risks the wrong winding
+    // after the bone transform and silently dropping faces (looked like a
+    // broken/incomplete blob instead of the full body).
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+
+    // Fixed world-space light direction (biased upward/forward so characters are
+    // well-lit from above, matching a simple sky-light approximation).
+    // NOTE: deformedNormal[i] is already in bone-local/world space (it was
+    // rotated by the bone's `matrix` inside BoneMesh_Skin above). Do NOT
+    // multiply it by normalMat(objWorldMat) again — that is a double-transform
+    // that makes normals point in wrong directions and renders the mesh black.
+    const glm::vec3 lightDir = glm::normalize(glm::vec3(0.3f, 0.5f, 0.8f));
+    const float kAmbient = 0.40f;  // minimum brightness so no face is fully black
+
+    // Disable legacy GL lighting so the per-vertex colour actually applies.
+    glDisable(GL_LIGHTING);
+
+    // IGI_PROFILE-only: boundary after the fixed-function state switch (the
+    // program/VAO unbind, the matrix push, the cull/lighting changes).  A state
+    // switch that the driver re-validates costs the same for 10 triangles as for
+    // 3000, so it must be told apart from the per-vertex work.
+    const auto skinned_t2 = profileSkinned ? SkinnedClock::now() : SkinnedClock::time_point{};
+
+    // ── the submission form, and why it is a batch ─────────────────────────
+    // The vertex VALUES below are unchanged from the immediate-mode loop this
+    // replaces: the same `objWorldMat * deformedPos` position, the same CPU
+    // diffuse shade, the same (u, 1-v) texcoord, emitted in the same triangle
+    // order per render block.  What changed is only HOW they reach GL.
+    //
+    // WHY.  One human is ~950 triangles = ~2.9k vertices, and the old loop paid
+    // five fixed-function calls per vertex (glColor4f, glTexCoord2f,
+    // glVertex4f plus the glBegin/glEnd pair per block) -- ~8.3k GL calls per
+    // drawn AI.  Measured with IGI_PROFILE on the gl2.1 tier: 10.5 ms of the
+    // 12 ms DrawSkinnedMesh was this submission, for 8 AI per frame, i.e. ~85
+    // of the 100 ms that [FrameBreak] charges to `post`.  The engine's rule
+    // (BoneMesh_Skin 0x49B700 -> Direct3DRender_DrawBoneMesh 0x49F700) says
+    // nothing about how many GL calls carry the skinned result to the
+    // rasteriser; that is this renderer's own presentation choice, so batching
+    // it cannot change what is drawn.
+    //
+    // The stream is built once for ALL blocks in triangle order, and each
+    // block records its own (first, count) so the per-material texture binds
+    // stay exactly where they were.
+    struct SkinnedBatchVertex {
+        float position[4];   // world metres, w preserved (glVertex4f parity)
+        float color[4];      // CPU diffuse, alpha 1 (glColor4f parity)
+        float uv[2];
+    };
+    struct SkinnedBatchBlock {
+        GLuint texture;
+        GLint first;
+        GLsizei count;
+    };
+    static thread_local std::vector<SkinnedBatchVertex> batch;
+    static thread_local std::vector<SkinnedBatchBlock> batch_blocks;
+    batch.clear();
+    batch_blocks.clear();
+
+    auto emitVertex = [&](uint32_t vi) -> SkinnedBatchVertex {
+        SkinnedBatchVertex out{};
+        // litColor(), inlined: deformedNormal is already rotated by the bone
+        // matrix inside BoneMesh_Skin, so it is used directly (see the note on
+        // the light direction above).
+        glm::vec3 n = deformedNormal[vi];
+        const float nLen = glm::length(n);
+        float diff = kAmbient;  // default: ambient only for degenerate normals
+        if (nLen > 1e-5f) {
+            float d = glm::dot(n / nLen, lightDir);
+            if (!std::isfinite(d)) d = 0.0f;
+            diff = kAmbient + (1.0f - kAmbient) * glm::clamp(d, 0.0f, 1.0f);
+        }
+        out.color[0] = diff;
+        out.color[1] = diff;
+        out.color[2] = diff;
+        out.color[3] = 1.0f;
+        out.uv[0] = geo->vertices[vi].uv.x;
+        out.uv[1] = 1.0f - geo->vertices[vi].uv.y;
+        const glm::vec4 worldPos = objWorldMat * glm::vec4(deformedPos[vi], 1.0f);
+        out.position[0] = worldPos.x;
+        out.position[1] = worldPos.y;
+        out.position[2] = worldPos.z;
+        out.position[3] = worldPos.w;
+        return out;
+    };
+
+    // Draw per render-block, binding each block's own material texture — same
+    // triangleStart/triangleCount ranges into geo->triangles that the static
+    // (rigid) mesh build in model.cpp uses, so multi-material characters
+    // (skin/clothes/face/etc.) get their correct textures instead of one
+    // flat body texture for the whole mesh.
+    auto drawRange = [&](size_t start, size_t count, GLuint tex) {
+        const GLint first = static_cast<GLint>(batch.size());
+        for (size_t t = start; t < start + count && t < geo->triangles.size(); ++t) {
+            const auto& tri = geo->triangles[t];
+            if (tri[0] >= deformedPos.size() || tri[1] >= deformedPos.size() ||
+                tri[2] >= deformedPos.size()) continue;
+            batch.push_back(emitVertex(tri[0]));
+            batch.push_back(emitVertex(tri[1]));
+            batch.push_back(emitVertex(tri[2]));
+        }
+        const GLsizei emitted = static_cast<GLsizei>(batch.size()) - first;
+        if (emitted > 0) batch_blocks.push_back({tex, first, emitted});
+    };
+
+    batch.reserve(geo->triangles.size() * 3);
+    if (!geo->renderBlocks.empty()) {
+        for (const auto& block : geo->renderBlocks) {
+            if (block.triangleCount == 0) continue;
+            auto it = slotToTexture.find(block.materialSlot);
+            GLuint tex = (it != slotToTexture.end() && it->second != 0) ? it->second : fallbackTexture;
+            drawRange(block.triangleStart, block.triangleCount, tex);
+        }
+    } else {
+        drawRange(0, geo->triangles.size(), fallbackTexture);
+    }
+
+    // IGI_PROFILE-only: boundary after the batch was built on the CPU.
+    const auto skinned_t3 = profileSkinned ? SkinnedClock::now() : SkinnedClock::time_point{};
+
+    if (!batch_blocks.empty()) {
+        // The normal scene pass leaves the lightmap on unit 1. Fixed-function
+        // texture sampling uses unit 0, so select it before the skin blocks.
+        glActiveTexture(GL_TEXTURE0);
+        const GLsizei stride = static_cast<GLsizei>(sizeof(SkinnedBatchVertex));
+        const float* base = &batch.front().position[0];
+        glEnableClientState(GL_VERTEX_ARRAY);
+        glEnableClientState(GL_COLOR_ARRAY);
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        glVertexPointer(4, GL_FLOAT, stride, base);
+        glColorPointer(4, GL_FLOAT, stride, base + 4);
+        glTexCoordPointer(2, GL_FLOAT, stride, base + 8);
+        for (const SkinnedBatchBlock& block : batch_blocks) {
+            if (block.texture != 0) {
+                glEnable(GL_TEXTURE_2D);
+                glBindTexture(GL_TEXTURE_2D, block.texture);
+            } else {
+                glDisable(GL_TEXTURE_2D);
+            }
+            glDrawArrays(GL_TRIANGLES, block.first, block.count);
+        }
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+        glDisableClientState(GL_COLOR_ARRAY);
+        glDisableClientState(GL_VERTEX_ARRAY);
+    }
+
+    glEnable(GL_LIGHTING);   // restore legacy lighting state disabled above
+    glEnable(GL_TEXTURE_2D); // restore in case caller relies on it
+
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    for (int i = 0; i < 4; ++i) glDisableVertexAttribArray(i);
+
+    if (prevProg) glUseProgram((GLuint)prevProg);
+
+    if (profileSkinned) {
+        LogSkinnedDrawSplit(skinned_t0, skinned_t1, skinned_t2, skinned_t3, SkinnedClock::now());
+    }
 }
 

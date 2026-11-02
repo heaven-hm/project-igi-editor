@@ -4,6 +4,71 @@
  *          Split from app_input.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include "renderer/human_seat_frame.h"
+#include "runtime/editor_camera_start.h"
+#include "runtime/editor_quick_actions.h"
+#include "runtime/loading_bar_style.h"
+#include <cstdio>
+#include <fstream>
+
+// ---------------------------------------------------------------------------
+// Editor camera radius (task-8 CameraResetRadius; used by task-11 item 1 notes).
+// EDITOR-ONLY: this value describes the editor's own orbit camera
+// (igi::ObjectOrbitCamera, the only camera radius this editor has). retail engine
+// decompiles IGI.exe and contains no QED editor code, so there is no game-side
+// behaviour to match and none is claimed.
+// Units: world units, 4096 wu = 1 m (the editor's 40.96 cm->wu scale convention,
+// see docs/parity/PROPS_WIRE_INTERACTABLES.md).
+// ---------------------------------------------------------------------------
+static constexpr float kDefaultOrbitRadius = 40960.0f;   // 10 m
+
+static std::string FormatWorldUnitsAsMetres(float world_units) {
+	char buf[32];
+	std::snprintf(buf, sizeof(buf), "%.3g m", world_units / 4096.0f);
+	return std::string(buf);
+}
+
+// Look up the human-readable Area name for an AIGraph from
+// <exe>\editor\tools\QGraphs\graph_level<N>.json (array of {Graph, Area}).
+// Parsed manually to match the project's other JSON readers. "" if not found.
+static std::string LookupGraphArea(int level, const std::string& graphId) {
+    if (graphId.empty()) return "";
+    const int want = atoi(graphId.c_str());
+    const std::string path = Utils::GetExeDirectory() +
+        "\\editor\\tools\\QGraphs\\graph_level" + std::to_string(level) + ".json";
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return "";
+    const std::string d((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    size_t pos = 0;
+    while ((pos = d.find("\"Graph\"", pos)) != std::string::npos) {
+        const size_t colon = d.find(':', pos + 7);
+        if (colon == std::string::npos) break;
+        const int g = atoi(d.c_str() + colon + 1);
+        const size_t ap = d.find("\"Area\"", colon);
+        if (ap == std::string::npos) break;
+        const size_t ac = d.find(':', ap + 6);
+        const size_t q1 = (ac == std::string::npos) ? std::string::npos : d.find('"', ac + 1);
+        const size_t q2 = (q1 == std::string::npos) ? std::string::npos : d.find('"', q1 + 1);
+        const std::string area = (q1 != std::string::npos && q2 != std::string::npos)
+                                 ? d.substr(q1 + 1, q2 - q1 - 1) : "";
+        if (g == want) return area;
+        pos = (q2 != std::string::npos) ? q2 : (ap + 6);
+    }
+    return "";
+}
+
+void App::ApplyOrbitRadius(float radius) {
+	// Re-derive the eye position from the stored orbit target so the camera keeps
+	// looking at the same object (source/runtime/editor_camera_start.h:94-99).
+	igi::ObjectOrbitCamera orbit;
+	orbit.target = orbit_target_pos_;
+	orbit.distance = radius;
+	orbit.yaw_degrees = viewer_.yaw_;
+	orbit.pitch_degrees = viewer_.pitch_;
+	orbit_distance_ = orbit.distance;
+	viewer_.pos_ = igi::ObjectOrbitCameraPosition(orbit);
+	UpdateViewerVectors();
+}
 
 void App::DispatchEventBindings() {
 	// Guard: skip dispatch while any text-input modal is open
@@ -21,6 +86,24 @@ void App::DispatchEventBindings() {
 		return Utils::IsKeyBindingPressedExact(it->second);
 	};
 
+	// Bindings removed for GitHub issue #48 ("implement or remove the 25 stubbed
+	// keybindings"). They are gone from the shipped
+	// assets/editor/qed/qedkeybindings.qsc, but an already-deployed copy of that
+	// file in a user's QED folder can still bind them — so rather than silently
+	// doing nothing, say why. Every name here has a row in
+	// docs/parity/KEYBINDINGS.md.
+	auto Removed = [&](const char* name) -> bool {
+		if (!Check(name)) return false;
+		// "no editor handler": accurate for every name below, including
+		// CameraSnapToObjectWithRadius — that one's behaviour does exist, but it
+		// belongs to the F11 special-key handler's Shift path
+		// (source/app_input_keyboard.cpp:466-471), not to this event name.
+		status_message_ = std::string(name) +
+			" was removed (#48): no editor handler and no retail engine counterpart — "
+			"see docs/parity/KEYBINDINGS.md";
+		return true;
+	};
+
 	// ---- Help ----
 	if (Check("ToggleHelp")) {
 		show_help_ = !show_help_;
@@ -33,11 +116,78 @@ void App::DispatchEventBindings() {
 	if (Check("CameraEnable")) { /* handled by existing named binding */ }
 	if (Check("CameraMoveForward")) { /* handled by existing named binding */ }
 	if (Check("CameraMoveBackward")) { /* handled by existing named binding */ }
-	if (Check("CameraAdjustRadius")) { /* handled by existing named binding */ }
-	if (Check("CameraResetRadius")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraResetRadius not implemented"); }
-	if (Check("CameraLookDown")) { /* handled by existing named binding */ }
-	if (Check("CameraCopyPosition")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraCopyPosition not implemented"); }
-	if (Check("CameraCopyOrientation")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraCopyOrientation not implemented"); }
+	if (Check("CameraAdjustRadius")) {
+		// task-11 item 1: REMOVED, not implemented. The editor has no radius
+		// adjuster anywhere (nothing reads the old keyAdjustCameraRadius field, and
+		// the only radius, igi::ObjectOrbitCamera::distance, is derived by
+		// BeginObjectOrbit and only ever reset by CameraResetRadius). Any rate,
+		// direction or preset ladder would have been invented, so the binding is
+		// gone from assets/editor/qed/qedkeybindings.qsc and a stale user config
+		// gets this message instead. Editor-only: retail engine decompiles IGI.exe and
+		// contains no QED editor code, so there is no game behaviour to match.
+		if (Removed("CameraAdjustRadius")) return;
+	}
+	if (Check("CameraResetRadius")) {
+		// The editor's only camera radius is the object-orbit distance
+		// (igi::ObjectOrbitCamera::distance, source/runtime/editor_camera_start.h:39-44).
+		// Reset it to the editor's documented default radius and re-derive the eye
+		// position from the stored orbit target, so the camera stays aimed at the
+		// same object. NOTE: the struct's own initialiser is 1.0 world unit, which
+		// BeginObjectOrbit (source/runtime/editor_camera_start.h:64-84) only uses as
+		// a degenerate fallback when the camera is already on top of the target —
+		// 1 wu is 0.24 mm, not a usable viewing distance, so the reset uses
+		// kDefaultOrbitRadius (10 m) instead.
+		// retail engine has no counterpart to cite: it decompiles IGI.exe only, and its
+		// editor-camera module attaches the camera to a target with no orbit radius
+		// at all (src/editcam/editcamera.c:212 EditCamera_AttachRotation,
+		// :273 EditCamera_AttachPosition). Editor-only feature; see
+		// docs/parity/KEYBINDINGS.md.
+		if (orbit_active_) {
+			ApplyOrbitRadius(kDefaultOrbitRadius);
+			status_message_ = "Camera radius reset to " +
+			                  FormatWorldUnitsAsMetres(kDefaultOrbitRadius);
+		} else {
+			status_message_ = "CameraResetRadius: no orbit target (F11 snaps the camera to an object first)";
+		}
+		return;
+	}
+	if (Check("CameraLookDown")) {
+		// task-11 item 2: REMOVED, not implemented. Nothing in the editor reads the
+		// old keyLookDown field and no camera-look control exists to wire it to
+		// (the mouse owns pitch, source/app_view.cpp:43); any step size or rate
+		// would have been invented, so the binding is gone from
+		// assets/editor/qed/qedkeybindings.qsc and a stale user config gets this
+		// message instead. Editor-only: retail engine decompiles IGI.exe and contains no
+		// QED editor code, so there is no game behaviour to match.
+		if (Removed("CameraLookDown")) return;
+	}
+	if (Check("CameraCopyPosition")) {
+		// Issue #48: implemented. Retail QED.doc, "General keystrokes" —
+		// "Ctrl P  Copy camera position to clipboard". The editor already owns a
+		// clipboard (Utils::SetClipboardText, source/utils.cpp:445 — the same call
+		// source/app_editor.cpp:136 uses for text edits) and its live camera is
+		// viewer_.pos_, so this copies that value and nothing else: no new state
+		// and no second clipboard path. Editor-only: retail engine decompiles IGI.exe and
+		// contains no QED code, so there is no game-side behaviour to match.
+		const std::string text = igi::FormatCameraTripleForClipboard(
+			viewer_.pos_.x, viewer_.pos_.y, viewer_.pos_.z);
+		Utils::SetClipboardText(text);
+		status_message_ = "Camera position copied to clipboard: " + text;
+		return;
+	}
+	if (Check("CameraCopyOrientation")) {
+		// Issue #48: implemented — the same command on the camera's angles.
+		// viewer_.yaw_/pitch_/roll_ are in degrees (source/app.h:618-620) and are
+		// the editor's own camera orientation (persisted as
+		// QEDSetCameraOrientation, source/config.cpp:505-508). QED.doc's table
+		// documents the Ctrl P position copy; this is its <Ctrl><Shift>O sibling
+		// from the shipped default bindings.
+		const std::string text = igi::FormatCameraTripleForClipboard(
+			viewer_.yaw_, viewer_.pitch_, viewer_.roll_);
+		Utils::SetClipboardText(text);
+		status_message_ = "Camera orientation copied to clipboard: " + text;
+		return;
+	}
 	if (Check("CameraSnapToObject")) {
 		if (selected_object_index_ >= 0) {
 			auto& objects = level_.GetLevelObjects().GetObjects();
@@ -49,7 +199,7 @@ void App::DispatchEventBindings() {
 			}
 		}
 	}
-	if (Check("CameraSnapToObjectWithRadius")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraSnapToObjectWithRadius not implemented"); }
+	if (Removed("CameraSnapToObjectWithRadius")) return;
 	if (Check("CameraSnapToGround")) {
 		if (selected_object_index_ >= 0) {
 			auto& objects = level_.GetLevelObjects().GetObjects();
@@ -59,6 +209,7 @@ void App::DispatchEventBindings() {
 					float terrainZ = 0.0f;
 					if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ)) {
 						float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
+						if (igi::IsHumanTaskType(obj.type)) zOffset = 0.0f;
 						obj.pos.z = (double)terrainZ + (double)(zOffset * 40.96f * obj.scale);
 						obj.modified = true;
 						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
@@ -68,9 +219,13 @@ void App::DispatchEventBindings() {
 			}
 		}
 	}
-	if (Check("CameraStrafe")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CameraStrafe not implemented"); }
-	// CameraStrafeFree is handled at the end of this function (one-shot toggle)
+	if (Removed("CameraStrafe")) return;
 	// CameraStrafeLeft/Right are handled in ProcessInput (continuous per-frame movement)
+	// CameraStrafeFree was removed in task-11 item 3: it toggled camera_strafe_free_,
+	// which nothing read, so the status bar announced a state change that never
+	// happened. Strafing itself (source/app_view.cpp:225-236) is unconditional, so
+	// there was no lock for it to release.
+	if (Removed("CameraStrafeFree")) return;
 
 	// ---- Tasks ----
 	if (Check("TaskMoveUp")) {
@@ -172,6 +327,22 @@ void App::DispatchEventBindings() {
 		status_message_ = "TaskSendEventRecursive: requires live game connection";
 		return;
 	}
+	if (Check("TaskFind")) {
+		// task-11 (found by the new "every advertised binding does something"
+		// test, not one of the five items): <Ctrl><F> was advertised in
+		// assets/editor/qed/qedkeybindings.qsc:44 with no handler anywhere, so it
+		// was a silent no-op next to its three working siblings below. The find bar
+		// state already exists (find_open_/find_mode_/find_query_, source/app.h:365-369)
+		// and its default mode is FindMode::TaskNameTypeId, so the generic find opens
+		// that mode — the same four lines as its siblings, no new state and no new
+		// behaviour invented. Editor-only: retail engine decompiles IGI.exe and has no QED
+		// task-tree find bar, so no game-side claim is made.
+		find_mode_  = FindMode::TaskNameTypeId;
+		find_open_  = true;
+		find_query_.clear();
+		find_result_idx_ = -1;
+		return;
+	}
 	if (Check("TaskFindTextInTask")) {
 		find_mode_  = FindMode::TextInTask;
 		find_open_  = true;
@@ -194,6 +365,13 @@ void App::DispatchEventBindings() {
 		return;
 	}
 	if (Check("TaskFindAgain")) {
+		if (find_query_.empty()) {
+			// No previous query — open the search bar so the user can type one.
+			find_open_ = true;
+			find_mode_ = FindMode::TaskNameTypeId;
+			find_result_idx_ = -1;
+			return;
+		}
 		if (!find_query_.empty()) {
 			const auto& objects = level_.GetLevelObjects().GetObjects();
 			std::string q = find_query_;
@@ -214,7 +392,13 @@ void App::DispatchEventBindings() {
 					label = objects[idx].type + " " + objects[idx].name + " " + objects[idx].taskId;
 				}
 				std::transform(label.begin(), label.end(), label.begin(), [](unsigned char c){ return std::tolower(c); });
-				if (label.find(q) != std::string::npos) {
+				// ById requires exact match — task IDs are pixel-perfect, so
+				// typing "7" must not also match "73", "700", etc. All other
+				// find modes keep substring matching.
+				const bool is_match = (find_mode_ == FindMode::ById)
+					? (label == q)
+					: (label.find(q) != std::string::npos);
+				if (is_match) {
 					find_result_idx_ = idx;
 					found = true;
 					// Expand ancestors and scroll to result
@@ -237,7 +421,7 @@ void App::DispatchEventBindings() {
 							if (visibleList[i] == idx) { current_row = i; break; }
 						}
 						if (current_row >= 0) {
-							int row_h = 16;
+							int row_h = CurrentUiRowHeight();
 							int start_y = 30;
 							int max_rows = (window_state_.viewport_height_ - 50 - start_y) / row_h;
 							if (max_rows > 0) {
@@ -295,25 +479,53 @@ void App::DispatchEventBindings() {
 	if (Check("TaskDelete")) { DeleteSelectedTask(); }
 
 	// ---- AnimTask ----
-	if (Check("AnimTaskIncreaseKeyframeInterpolation")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskIncreaseKeyframeInterpolation not implemented"); }
-	if (Check("AnimTaskDecreaseKeyframeInterpolation")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskDecreaseKeyframeInterpolation not implemented"); }
-	if (Check("AnimTaskToggleCameraRelative")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskToggleCameraRelative not implemented"); }
-	if (Check("AnimTaskGoToCursor")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskGoToCursor not implemented"); }
-	if (Check("AnimTaskToggleWindowHidden")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskToggleWindowHidden not implemented"); }
-	if (Check("AnimTaskStartRecording")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskStartRecording not implemented"); }
-	if (Check("AnimTaskGoToTop")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskGoToTop not implemented"); }
-	if (Check("AnimTaskToggleSyncPlayback")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] AnimTaskToggleSyncPlayback not implemented"); }
+	if (Removed("AnimTaskIncreaseKeyframeInterpolation")) return;
+	if (Removed("AnimTaskDecreaseKeyframeInterpolation")) return;
+	if (Removed("AnimTaskToggleCameraRelative")) return;
+	if (Removed("AnimTaskGoToCursor")) return;
+	if (Removed("AnimTaskToggleWindowHidden")) return;
+	if (Removed("AnimTaskStartRecording")) return;
+	if (Removed("AnimTaskGoToTop")) return;
+	if (Removed("AnimTaskToggleSyncPlayback")) return;
 
-	// ---- Timer ----
-	if (Check("TimerIncreaseSpeed")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerIncreaseSpeed not implemented"); }
-	if (Check("TimerDecreaseSpeed")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerDecreaseSpeed not implemented"); }
-	if (Check("TimerReset")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerReset not implemented"); }
-	if (Check("TimerStartStop")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] TimerStartStop not implemented"); }
+	// ---- Timer (the animation playback clock) ----
+	// Issue #48: implemented. Retail QED.doc, "General keystrokes" — "Ctrl R
+	// Reset timer", "Ctrl T  Timer Start / Stop", "F12 / Shift F12  Increment /
+	// Decrement AnimTask speed". The editor's ONE playback clock is the selected
+	// object's igi::AnimPlayback (source/animation.h, "the editor's ONE playback
+	// path"): `currentTimeMs` is the timer, `playing` is start/stop, `Reset()`
+	// rewinds and stops, and `speed` is the multiplier the engine is given by
+	// AnimPlayback::SyncEngineFlags (source/runtime/anim_playback.cpp:147-151,
+	// Anim_SetSpeed 0x4D6580: `inst->speed = gTicksPerFrame * speed`). The
+	// playbacks are created by the level load (source/app_level.cpp:664-676
+	// auto-plays one per eligible AI NPC) and by the property editor's animation
+	// list (App::ToggleAnimationForObject).
+	//
+	// Issue #73: the four handlers below are now the SAME App methods the F10
+	// panel's buttons call (`App::ToggleSelectedAnimPlayback`, `ResetSelectedAnim`,
+	// `AdjustSelectedAnimSpeed` in source/app.cpp), so the keys and the panel
+	// cannot drift apart. The key names are still what the status bar reports.
+	// Editor-only: retail engine contains no QED code, so no game-side counterpart is
+	// claimed for the keys themselves; the engine call the speed reaches
+	// (Anim_SetSpeed 0x4D6580) is cited above.
+	if (Check("TimerStartStop")) {
+		ToggleSelectedAnimPlayback();
+		return;
+	}
+	if (Check("TimerReset")) {
+		ResetSelectedAnim();
+		return;
+	}
+	if (Check("TimerIncreaseSpeed") || Check("TimerDecreaseSpeed")) {
+		const bool faster = Check("TimerIncreaseSpeed");
+		AdjustSelectedAnimSpeed(faster ? 1 : -1);
+		return;
+	}
 
 	// ---- Manipulate ----
-	if (Check("Manipulate")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] Manipulate not implemented"); }
-	if (Check("ManipulatePositionXY")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulatePositionXY not implemented"); }
-	if (Check("ManipulatePositionXZ")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulatePositionXZ not implemented"); }
+	if (Removed("Manipulate")) return;
+	if (Removed("ManipulatePositionXY")) return;
+	if (Removed("ManipulatePositionXZ")) return;
 	if (Check("ManipulatePositionSnapToGround")) {
 		if (selected_object_index_ >= 0) {
 			auto& objects = level_.GetLevelObjects().GetObjects();
@@ -323,6 +535,7 @@ void App::DispatchEventBindings() {
 					float terrainZ = 0.0f;
 					if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ)) {
 						float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
+						if (igi::IsHumanTaskType(obj.type)) zOffset = 0.0f;
 						obj.pos.z = (double)terrainZ + (double)(zOffset * 40.96f * obj.scale);
 						obj.modified = true;
 						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
@@ -343,17 +556,55 @@ void App::DispatchEventBindings() {
 			}
 		}
 	}
-	if (Check("ManipulateOrientationAlpha")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateOrientationAlpha not implemented"); }
-	if (Check("ManipulateOrientationBeta")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateOrientationBeta not implemented"); }
-	if (Check("ManipulateOrientationGamma")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateOrientationGamma not implemented"); }
-	if (Check("ManipulateOrientationReset")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ManipulateOrientationReset not implemented"); }
+	if (Removed("ManipulateOrientationAlpha")) return;
+	if (Removed("ManipulateOrientationBeta")) return;
+	if (Removed("ManipulateOrientationGamma")) return;
+	if (Removed("ManipulateOrientationReset")) return;
 
 	// ---- GraphNode ----
-	if (Check("ScaleGraphNode")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ScaleGraphNode not implemented"); }
-	if (Check("ScaleGraphNodeHalfe")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ScaleGraphNodeHalfe not implemented"); }
-	if (Check("ScaleGraphNodeDouble")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ScaleGraphNodeDouble not implemented"); }
-	if (Check("CreateGraphNode")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] CreateGraphNode not implemented"); }
-	if (Check("DeleteGraphNode")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] DeleteGraphNode not implemented"); }
+	// Graph node edit controls (only while the overlay is shown).
+	if (renderer_.IsGraphOverlayVisible()) {
+		if (Check("ScaleGraphNode"))       { PushUndoState(); renderer_.ScaleSelectedGraphNode(0.0f); return; }  // reset radius
+		if (Check("ScaleGraphNodeHalfe"))  { PushUndoState(); renderer_.ScaleSelectedGraphNode(0.5f); return; }
+		if (Check("ScaleGraphNodeDouble")) { PushUndoState(); renderer_.ScaleSelectedGraphNode(2.0f); return; }
+		if (Check("CreateGraphNode"))      { PushUndoState(); renderer_.CreateGraphNode();           return; }
+		if (Check("DeleteGraphNode"))      { PushUndoState(); renderer_.DeleteSelectedGraphNode();    return; }
+		if (Check("AddGraphLink"))         { PushUndoState(); status_message_ = renderer_.AddGraphLinkStep();        return; }
+		if (Check("RemoveGraphLink"))      { PushUndoState(); status_message_ = renderer_.RemoveGraphLinkStep();     return; }
+		if (Check("ToggleGraphNodeLabels")) {
+			renderer_.ToggleGraphLabels();
+			status_message_ = renderer_.GraphLabelsVisible() ? "Graph labels: ON" : "Graph labels: OFF";
+			return;
+		}
+	}
+	if (Check("ShowGraphNodes")) {
+		// Show/hide the navigation graph of the selected AIGraph task. The graph
+		// file is graph<taskId>.dat in the current level's graphs/ folder.
+		const auto& objs = level_.GetLevelObjects().GetObjects();
+		if (selected_object_index_ >= 0 && selected_object_index_ < (int)objs.size() &&
+		    objs[selected_object_index_].type == "AIGraph") {
+			if (renderer_.IsGraphOverlayVisible()) {
+				renderer_.ToggleGraphOverlay();  // hide
+			} else {
+				const LevelObject& g = objs[selected_object_index_];
+				const std::string path = Utils::GetIGIRootPath() +
+					"\\missions\\location0\\level" + std::to_string(last_loaded_level_) +
+					"\\graphs\\graph" + g.taskId + ".dat";
+				// Node coords are local to the AIGraph task's graph origin (its world pos).
+				const std::string area = LookupGraphArea(last_loaded_level_, g.taskId);
+				Logger::Get().Log(LogLevel::INFO, "[App] Graph task " + g.taskId +
+					" (" + area + ") world offset=(" + std::to_string(g.pos.x) + ", " +
+					std::to_string(g.pos.y) + ", " + std::to_string(g.pos.z) + ")");
+				if (renderer_.LoadGraphOverlayFile(path, g.pos)) {
+					renderer_.SetGraphOverlayMeta(g.taskId, area);
+					renderer_.ToggleGraphOverlay();  // show
+				}
+			}
+		} else {
+			Logger::Get().Log(LogLevel::INFO, "[App] ShowGraphNodes: select an AIGraph task first");
+		}
+		return;
+	}
 
 	// ---- Other ----
 	if (Check("ToggleDisplay")) { noclip_mode_ = !noclip_mode_; }
@@ -367,20 +618,29 @@ void App::DispatchEventBindings() {
 		Config::Get().saveConfigOnExit = !Config::Get().saveConfigOnExit;
 		status_message_ = Config::Get().saveConfigOnExit ? "Save on exit: ON" : "Save on exit: OFF";
 	}
+	if (Check("ToggleAutoSave")) { ToggleAutoSave(); return; }
+	if (Check("AutoSaveIntervalUp")) { AdjustAutoSaveInterval(10); return; }
+	if (Check("AutoSaveIntervalDown")) { AdjustAutoSaveInterval(-10); return; }
 	if (Check("SaveState")) {
 		SaveCurrentLevel();
 		int lvl = level_.GetLevelNo();
-		status_message_ = "Save level: LOCAL:missions/location" + std::to_string(lvl) +
-		                  "/level" + std::to_string(lvl) + "/objects.qsc";
+		status_message_ = "Save level: LOCAL:missions/location0/level" +
+		                  std::to_string(lvl) + "/objects.qsc";
 		return;
 	}
 	if (Check("SaveObjectFile")) {
+		// While editing an AIGraph overlay, Ctrl+S writes the edited node
+		// positions straight back to graph<taskId>.dat in the game.
+		if (renderer_.IsGraphOverlayVisible() && renderer_.GraphOverlayDirty()) {
+			status_message_ = renderer_.SaveGraphOverlay() ? "Graph saved." : "Graph save FAILED.";
+			return;
+		}
 		// Ctrl+S → open a path textbox and write the live objects QSC to that path.
 		// (Whole-level save/compile lives in the pause menu.)
 		int lvl = level_.GetLevelNo();
 		file_dialog_mode_  = FileDialogMode::SaveObjectFile;
-		file_dialog_path_  = "missions/location" + std::to_string(lvl) +
-		                     "/level" + std::to_string(lvl) + "/objects.qsc";
+		file_dialog_path_  = "missions/location0/level" +
+		                     std::to_string(lvl) + "/objects.qsc";
 		file_dialog_caret_ = (int)file_dialog_path_.size();
 		return;
 	}
@@ -508,7 +768,23 @@ void App::DispatchEventBindings() {
 	if (Check("Undo")) { Undo(); }
 	if (Check("Redo")) { Redo(); }
 	if (Check("ReloadSettings")) { Config::Init(); LoadAutoCompleteKeywords(); Logger::Get().Log(LogLevel::INFO, "[App] Settings reloaded from QED config"); }
-	if (Check("ToggleObjects")) { Logger::Get().Log(LogLevel::INFO, "[Keybind] ToggleObjects not implemented"); }
+	if (Check("ToggleObjects")) {
+		// "Toggle objects in editor": the same three-way object gate the View menu
+		// uses (source/main.cpp:439-450, MENU_SHOW_ALL). Renderer::DRAW_OBJECTS
+		// short-circuits the whole object pass (renderer_objects.cpp:760-766);
+		// BUILDINGS/PROPS are the per-kind fallbacks consulted once it is cleared.
+		// This is an editor viewport option: retail engine decompiles IGI.exe only and has
+		// no equivalent, so the evidence is the editor's own draw-part system
+		// (main.cpp:342-346, debug_command_manager.cpp:104).
+		const int kAllObjects = Renderer::DRAW_OBJECTS | Renderer::DRAW_BUILDINGS |
+		                        Renderer::DRAW_PROPS;
+		const bool objects_on = (GetDrawParts() & Renderer::DRAW_OBJECTS) != 0 &&
+		                        (GetDrawParts() & Renderer::DRAW_BUILDINGS) != 0;
+		SetDrawParts(objects_on ? (GetDrawParts() & ~kAllObjects)
+		                        : (GetDrawParts() | kAllObjects));
+		status_message_ = objects_on ? "Objects: OFF" : "Objects: ON";
+		return;
+	}
 	if (Check("TaskMagicObjToggle")) {
 		show_magic_obj_spheres_ = !show_magic_obj_spheres_;
 		status_message_ = show_magic_obj_spheres_ ? "Magic objects: ON" : "Magic objects: OFF";
@@ -535,65 +811,102 @@ void App::DispatchEventBindings() {
 			status_message_ = "Select an object whose model is flagged missing from the .res first.";
 		}
 	}
-	if (Check("CameraStrafeFree")) {
-		camera_strafe_free_ = !camera_strafe_free_;
-		status_message_ = camera_strafe_free_ ? "Strafe lock: ON" : "Strafe lock: OFF";
+	// CameraStrafeFree removed in task-11 item 3 — see the guard near the Camera
+	// section above; the flag and the status message that announced it are gone.
+	if (terrain_edit_enabled_) {
+		if (Check("TerrainBrushCycle")) {
+			SetEditBrush((edit_brush_ + 1) % 4);
+		}
+		if (Check("TerrainBrushRadiusDec"))   AdjustBrushRadius(0.8);
+		if (Check("TerrainBrushRadiusInc"))   AdjustBrushRadius(1.25);
+		if (Check("TerrainBrushStrengthDec")) AdjustBrushStrength(-1.0);
+		if (Check("TerrainBrushStrengthInc")) AdjustBrushStrength(1.0);
 	}
-	if (Check("TerrainBrushCycle")) {
-		edit_brush_ = (edit_brush_ + 1) % 4;
-		static const char* kNames[] = {"Raise","Lower","Soften","Flatten"};
-		status_message_ = std::string("Terrain brush: ") + kNames[edit_brush_];
-	}
-	if (Check("TerrainBrushRadiusDec"))   AdjustBrushRadius(0.8);
-	if (Check("TerrainBrushRadiusInc"))   AdjustBrushRadius(1.25);
-	if (Check("TerrainBrushStrengthDec")) AdjustBrushStrength(-1.0);
-	if (Check("TerrainBrushStrengthInc")) AdjustBrushStrength(1.0);
 }
 
 
 #ifdef _WIN32
 #include <windows.h>
-#include <tlhelp32.h>
 #endif
 
 void App::ResetLevel() {
+	if (in_game_mode_) {
+		status_message_ = "Close gameplay before resetting the level";
+		return;
+	}
+
 	int levelNo = level_.GetLevelNo();
 
 	Logger::Get().Log(LogLevel::INFO, "[App] Resetting Level " + std::to_string(levelNo));
 
-	// Force kill any running game instance to release file locks on objects.qvm
+	// The restore is a whole-folder copy and can take seconds: it reports through
+	// the same bar as a level load (source/runtime/loading_bar_style.h section 5).
+	// This ladder stops at 20% because the reload that follows runs the level-load
+	// ladder, which carries the bar to 100.
+	DrawProgressOverlay("Resetting Level", igi::kLevelResetPreparing.percent,
+	                    igi::kLevelResetPreparing.stage);
+
+	// Only stop the game process launched and tracked by this editor instance.
+	// Scanning by executable name used to terminate unrelated retail sessions.
 #ifdef _WIN32
 	{
-		HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-		if (hSnap != INVALID_HANDLE_VALUE) {
-			PROCESSENTRY32 pe;
-			pe.dwSize = sizeof(pe);
-			if (Process32First(hSnap, &pe)) {
-				do {
-					if (_wcsicmp(pe.szExeFile, L"igi.exe") == 0) {
-						HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
-						if (hProc) {
-							TerminateProcess(hProc, 0);
-							CloseHandle(hProc);
-							Logger::Get().Log(LogLevel::INFO, "[App] Terminated running game instance 'igi.exe' to unlock files.");
-						}
-					}
-				} while (Process32Next(hSnap, &pe));
+		if (game_process_.running && game_process_.hProcess) {
+			TerminateProcess(game_process_.hProcess, 0);
+			WaitForSingleObject(game_process_.hProcess, 2000);
+			game_exited_.store(true, std::memory_order_release);
+			if (game_process_.hMonitorThread) {
+				WaitForSingleObject(game_process_.hMonitorThread, 1000);
+				CloseHandle(game_process_.hMonitorThread);
 			}
-			CloseHandle(hSnap);
+			CloseHandle(game_process_.hProcess);
+			if (game_process_.hThread) CloseHandle(game_process_.hThread);
+			game_process_ = {};
+			game_exited_.store(false, std::memory_order_release);
+			Logger::Get().Log(LogLevel::INFO, "[App] Terminated the editor-owned game process to unlock files.");
 		}
 	}
 #endif
 
-	if (Config::Get().enableBackup) {
+	// Always restore from backup — backup is created on every level load so it
+	// captures the pristine state of the full level folder (objects, ai, graphs,
+	// models, textures, terrain). A full folder replacement (remove + copy)
+	// ensures deleted graph nodes, removed AI scripts, etc. are all reverted.
+	DrawProgressOverlay("Resetting Level", igi::kLevelResetRestoring.percent,
+	                    igi::kLevelResetRestoring.stage);
+	bool restored = false;
+	{
 		std::string gameLevelDir = Utils::GetIGIRootPath() + "\\missions\\location0\\level" + std::to_string(levelNo);
 		std::string backupLevelDir = Utils::GetExeDirectory() + "\\editor\\backup\\level" + std::to_string(levelNo);
-		
+		std::string stagingLevelDir = gameLevelDir + ".reset_tmp";
+		std::string oldLevelDir = gameLevelDir + ".reset_old";
+
 		Logger::Get().Log(LogLevel::INFO, "[App] Restoring level from backup: " + backupLevelDir + " to " + gameLevelDir);
-		
+
 		if (std::filesystem::exists(backupLevelDir)) {
 			try {
-				std::filesystem::copy(backupLevelDir, gameLevelDir, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing);
+				// Stage the complete backup first. If staging or replacement fails,
+				// leave the user's level untouched and do not reload a false reset.
+				std::error_code ec;
+				std::filesystem::remove_all(stagingLevelDir, ec);
+				ec.clear();
+				std::filesystem::copy(backupLevelDir, stagingLevelDir,
+					std::filesystem::copy_options::recursive);
+				std::filesystem::remove_all(oldLevelDir, ec);
+				ec.clear();
+				bool movedOld = false;
+				if (std::filesystem::exists(gameLevelDir)) {
+					std::filesystem::rename(gameLevelDir, oldLevelDir);
+					movedOld = true;
+				}
+				try {
+					std::filesystem::rename(stagingLevelDir, gameLevelDir);
+				} catch (...) {
+					if (movedOld && !std::filesystem::exists(gameLevelDir))
+						std::filesystem::rename(oldLevelDir, gameLevelDir);
+					throw;
+				}
+				if (movedOld) std::filesystem::remove_all(oldLevelDir, ec);
+				restored = true;
 				Logger::Get().Log(LogLevel::INFO, "[App] Level reset successfully from backup.");
 			} catch (const std::exception& e) {
 				Logger::Get().Log(LogLevel::ERR, "[App] Failed to restore from backup: " + std::string(e.what()));
@@ -601,8 +914,10 @@ void App::ResetLevel() {
 		} else {
 			Logger::Get().Log(LogLevel::ERR, "[App] Cannot reset level: No backup found at " + backupLevelDir);
 		}
-	} else {
-		Logger::Get().Log(LogLevel::INFO, "[App] Reset level skipped because QEDBackup is not enabled in config.");
+	}
+	if (!restored) {
+		status_message_ = "Reset failed: pristine level backup is unavailable";
+		return;
 	}
 
 	// Remove local objects.qsc so it recompiles fresh from QVM
@@ -616,6 +931,15 @@ void App::ResetLevel() {
 	catch (...) {}
 
 	// Reload level after reset
+	DrawProgressOverlay("Resetting Level", igi::kLevelResetReloading.percent,
+	                    igi::kLevelResetReloading.stage);
+	last_loaded_level_ = -1;
+	Config::Get().cameraPosX = 0.0f;
+	Config::Get().cameraPosY = 0.0f;
+	Config::Get().cameraPosZ = 0.0f;
+	Config::Get().cameraOriX = 0.0f;
+	Config::Get().cameraOriY = 0.0f;
+	Config::Get().cameraOriZ = 0.0f;
 	LoadLevel(levelNo);
 	// Snap objects to terrain after level reset
 	SnapObjectsToTerrain();
@@ -669,8 +993,14 @@ void App::ResetScript() {
 	catch (...) {}
 
 	// Reload the level to apply changes
+	last_loaded_level_ = -1;
+	Config::Get().cameraPosX = 0.0f;
+	Config::Get().cameraPosY = 0.0f;
+	Config::Get().cameraPosZ = 0.0f;
+	Config::Get().cameraOriX = 0.0f;
+	Config::Get().cameraOriY = 0.0f;
+	Config::Get().cameraOriZ = 0.0f;
 	LoadLevel(levelNo);
 }
-
 
 

@@ -106,9 +106,9 @@ missions/location1/level1/
 │   └── Squad_NNN.qvm   Squad coordination scripts
 ├── envmaps/            Cubemap BMPs (6 faces per water object)
 │   └── cubemap_NNNN_NNN_N.bmp
-├── graphs/             AI navigation
-│   ├── graph<taskid>.dat      Navigation graphs (named by AIGraph task ID)
-│   └── graphcover<taskid>.dat AI cover/visibility (same task ID, subset)
+├── graphs/             AI navigation graphs (pathfinding meshes)
+│   ├── graph<taskid>.dat      Primary nav graph — nodes, edges, routing table (named by AIGraph task ID)
+│   └── graphcover<taskid>.dat Cover/visibility graph — subset of primary (same task ID)
 ├── heightmaps/
 │   └── heightmaps.res  → extracts to heightmapNNN.thm/.tmm/.tlm
 ├── lightmaps/

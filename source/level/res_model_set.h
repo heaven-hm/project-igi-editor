@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 #include <unordered_set>
-#include "parsers/res_parser.h"
+#include "../renderer/res_writer.h"
 
 // Set of model ids (NNN_NN_N) packed as <id>.mef entries inside a level .res.
 // Used to warn when an object references a model the game archive lacks.

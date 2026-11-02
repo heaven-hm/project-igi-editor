@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "parsers/dat_parser.h"
+#include "../source/renderer/dat_writer.h"
 #include "utils.h"
 #include <filesystem>
 #include <algorithm>
@@ -47,4 +47,20 @@ TEST(DatWriterTest, AddModelThenRoundTrip) {
     EXPECT_EQ(b.declaredModelCount, a.declaredModelCount); // a was already bumped by DAT_AddModel
     EXPECT_NE(std::find(b.allTextures.begin(), b.allTextures.end(), "zzz_xy_9"), b.allTextures.end());
     std::filesystem::remove(tmp);
+}
+
+TEST(DatWriterTest, UpsertModelReplacesConflictingMappingInPlace) {
+    DATFile dat;
+    dat.valid = true;
+    dat.models = {{"keep_before", {"old_a"}}, {"target", {"wrong"}}, {"keep_after", {"old_b"}}};
+    dat.allTextures = {"old_a", "wrong", "old_b"};
+
+    EXPECT_TRUE(DAT_UpsertModel(dat, "target", {"right_a", "right_b"}));
+    ASSERT_EQ(dat.models.size(), 3u);
+    EXPECT_EQ(dat.models[0].modelName, "keep_before");
+    EXPECT_EQ(dat.models[1].modelName, "target");
+    EXPECT_EQ(dat.models[1].textures, (std::vector<std::string>{"right_a", "right_b"}));
+    EXPECT_EQ(dat.models[2].modelName, "keep_after");
+    EXPECT_NE(std::find(dat.allTextures.begin(), dat.allTextures.end(), "right_b"), dat.allTextures.end());
+    EXPECT_FALSE(DAT_UpsertModel(dat, "target", {"right_a", "right_b"}));
 }

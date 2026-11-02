@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "cli_handler.h"
+#include "config.h"
 #include "verify_level_core.h"
 #include "utils.h"
 
@@ -16,8 +17,10 @@
 #include <chrono>
 #include <thread>
 
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -56,6 +59,7 @@ static std::string JsonEsc(const std::string& s) {
 // Launch editor, wait for exit or timeout
 // ---------------------------------------------------------------------------
 
+#if defined(_WIN32)
 static bool LaunchEditor(const std::string& exePath, const std::string& workDir,
                          int levelNo, int timeoutSec) {
     if (!fs::exists(exePath)) {
@@ -106,6 +110,17 @@ static bool LaunchEditor(const std::string& exePath, const std::string& workDir,
     CloseHandle(pi.hThread);
     return true;
 }
+
+#else  // !_WIN32
+
+// Launch-and-wait is Win32 process management (CreateProcess + console
+// isolation).  The native macOS build does not provide the live launch path;
+// the headless verification modes that do not spawn a child still work.
+static bool LaunchEditor(const std::string&, const std::string&, int, int) {
+    std::cerr << "  [ERROR] live editor launch is a Windows-only feature in this build\n";
+    return false;
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Console report
@@ -206,6 +221,7 @@ static void PrintReport(const LevelReport& r) {
     std::cout << " LEVEL " << r.levelNo << " VERIFICATION REPORT\n";
     PrintSep();
     if (r.logError) { std::cout << "\n[LOG]  " << r.logErrorMsg << "\n"; }
+    if (r.logChecksSkipped) { std::cout << "\n[LOG]  checks skipped by configuration\n"; }
     PrintCategory(r.buildings);
     PrintCategory(r.objects);
     PrintCategory(r.ai);
@@ -282,6 +298,7 @@ static void WriteJsonCategory(std::ostream& o, const LevelReport::Category& cat,
 static void WriteJsonReport(std::ostream& o, const LevelReport& r) {
     o << "{\n"
       << "  \"level\": " << r.levelNo << ",\n"
+      << "  \"log_checks_skipped\": " << (r.logChecksSkipped ? "true" : "false") << ",\n"
       << "  \"buildings\": ";
     WriteJsonCategory(o, r.buildings, "found", "missing", 1);
     o << ",\n  \"objects\": ";
@@ -367,6 +384,8 @@ static void WriteMdReport(std::ostream& o, const std::vector<LevelReport>& repor
 
     for (const auto& r : reports) {
         o << "## Level " << r.levelNo << " Verification\n\n";
+        if (r.logChecksSkipped)
+            o << "- Log checks: skipped by configuration\n\n";
         WriteMdCategory(o, r.buildings, "Matching",     "Missing");
         WriteMdCategory(o, r.objects,   "Matching",     "Missing");
         WriteMdCategory(o, r.ai,        "Found Models", "Missing Models");
@@ -407,7 +426,12 @@ int CLIHandler::VerifyLevel(const VerifyLevelParams& params) {
 #else
         setenv("IGI_GAME_PATH", igiPath.c_str(), 1);
 #endif
+        // --game-path selects both level data and the editor configuration.
+        // Refresh after the environment change so log requirements match the
+        // editor process that will be launched below.
+        if (!params.gamePath.empty()) Config::Init();
     }
+    const bool requireLog = Config::Get().enableLogging;
 
     std::string modelNamesPath = igiPath + "\\editor\\tools\\IGIModels.json";
     std::map<std::string, std::string> modelNames = LoadModelNames(modelNamesPath);
@@ -422,6 +446,7 @@ int CLIHandler::VerifyLevel(const VerifyLevelParams& params) {
     PrintSep();
     std::cout << "  IGI path  : " << igiPath  << "\n";
     std::cout << "  Log file  : " << logPath   << "\n";
+    if (!requireLog) std::cout << "  Log checks: skipped (QEDLogs(FALSE))\n";
     std::cout << "  Levels    :";
     for (int n : params.levels) std::cout << " " << n;
     std::cout << "\n";
@@ -481,7 +506,7 @@ int CLIHandler::VerifyLevel(const VerifyLevelParams& params) {
 
         LevelReport rep;
         try {
-            rep = VerifyOneLevel(igiPath, exeDir, logPath, levelNo, modelNames);
+            rep = VerifyOneLevel(igiPath, exeDir, logPath, levelNo, modelNames, requireLog);
         } catch (const std::exception& ex) {
             rep.levelNo = levelNo;
             rep.buildings.label = "BUILDINGS"; rep.objects.label = "OBJECTS"; rep.ai.label = "AI";

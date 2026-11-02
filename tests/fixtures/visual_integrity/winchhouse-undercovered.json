@@ -1,0 +1,13 @@
+{
+  "object": { "level": 12, "taskId": "-1#907", "modelId": "463_01_1" },
+  "expectedPartIds": [1, 2],
+  "views": [
+    {
+      "name": "Ext_120",
+      "width": 4,
+      "height": 4,
+      "partIds": [1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2],
+      "targetMask": [true,true,true,true,true,true,true,true,false,false,false,false,false,false,false,false]
+    }
+  ]
+}

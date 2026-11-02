@@ -1,21 +1,21 @@
 #include "pch.h"
 #include "cli_tests.h"
 #include "cli_handler.h"
-#include "parsers/res_parser.h"
-#include "parsers/mtp_parser.h"
-#include "parsers/tex_parser.h"
-#include "parsers/qvm_parser.h"
-#include "parsers/qvm_decompiler.h"
-#include "parsers/graph_parser.h"
-#include "parsers/terrain_files.h"
-#include "parsers/fnt_parser.h"
+#include "renderer/res_writer.h"
+#include "level/mtp_writer.h"
+#include "renderer/tex_writer.h"
+#include "level/qvm_parser.h"
+#include "level/qvm_decompiler.h"
+#include "renderer/graph_writer.h"
+#include "level/terrain_files.h"
+#include "renderer/fnt_parser.h"
 #include "utils.h"
 #include "common.h"
 #include "logger.h"
 #include "config.h"
-#include "parsers/qsc_lexer.h"
-#include "parsers/qsc_parser.h"
-#include "parsers/qvm_compiler.h"
+#include "level/qsc_lexer.h"
+#include "level/qsc_parser.h"
+#include "level/qvm_compiler.h"
 
 #include <iostream>
 #include <fstream>
@@ -86,8 +86,8 @@ static bool VerifyTaskNewLines(const std::string& filepath) {
 }
 
 static void TestRES() {
-    std::string resPath = Utils::GetIGIRootPath() + "\\language\\ENGLISH\\MESSAGES.RES";
-    std::string scratchExt = "scratch\\cpp_tests\\res_extracted";
+    std::string resPath = Utils::ToNativePath(Utils::GetIGIRootPath() + "\\language\\ENGLISH\\MESSAGES.RES");
+    std::string scratchExt = Utils::ToNativePath("scratch\\cpp_tests\\res_extracted");
 
     ASSERT_TRUE(fs::exists(resPath), "MESSAGES.RES exists");
     if (!fs::exists(resPath)) return;
@@ -105,7 +105,7 @@ static void TestRES() {
                 c = '_';
             }
         }
-        std::string outpath = scratchExt + "\\" + safeName;
+        std::string outpath = Utils::ToNativePath(scratchExt + "\\" + safeName);
         fs::create_directories(fs::path(outpath).parent_path());
         if (File_SaveBinary(outpath.c_str(), entry.data.data(), entry.data.size())) {
             extracted++;
@@ -114,18 +114,18 @@ static void TestRES() {
     ASSERT_TRUE(extracted > 0, "Extracted files from RES successfully");
 
     // Test nonexistent RES file
-    RESFile missing = RES_Parse("scratch\\cpp_tests\\missing_res_file.res");
+    RESFile missing = RES_Parse(Utils::ToNativePath("scratch\\cpp_tests\\missing_res_file.res"));
     ASSERT_FALSE(missing.valid, "Nonexistent RES file should be invalid");
 
     // Test models RES archive parsing and extraction
-    std::string modelsResPath = Utils::GetIGIRootPath() + "\\missions\\location0\\level1\\models\\level1.res";
+    std::string modelsResPath = Utils::ToNativePath(Utils::GetIGIRootPath() + "\\missions\\location0\\level1\\models\\level1.res");
     ASSERT_TRUE(fs::exists(modelsResPath), "level1.res exists");
     if (fs::exists(modelsResPath)) {
         RESFile modelsRes = RES_Parse(modelsResPath);
         ASSERT_TRUE(modelsRes.valid, "RES parser successfully parsed models archive");
         ASSERT_TRUE(modelsRes.entries.size() > 0, "Models RES has at least one entry");
         
-        std::string modelsScratch = "scratch\\cpp_tests\\models_extracted";
+        std::string modelsScratch = Utils::ToNativePath("scratch\\cpp_tests\\models_extracted");
         fs::create_directories(modelsScratch);
         int extractedMefs = 0;
         for (const auto& entry : modelsRes.entries) {
@@ -133,7 +133,7 @@ static void TestRES() {
             size_t slash = name.find_last_of("/\\");
             std::string filename = (slash != std::string::npos) ? name.substr(slash + 1) : name;
             if (filename.find(".mef") != std::string::npos) {
-                std::string outpath = modelsScratch + "\\" + filename;
+                std::string outpath = Utils::ToNativePath(modelsScratch + "\\" + filename);
                 if (File_SaveBinary(outpath.c_str(), entry.data.data(), entry.data.size())) {
                     extractedMefs++;
                 }
@@ -144,7 +144,7 @@ static void TestRES() {
 }
 
 static void TestMTP() {
-    std::string mtpPath = Utils::GetIGIRootPath() + "\\missions\\location0\\level1\\level1.mtp";
+    std::string mtpPath = Utils::ToNativePath(Utils::GetIGIRootPath() + "\\missions\\location0\\level1\\level1.mtp");
     ASSERT_TRUE(fs::exists(mtpPath), "level1.mtp exists");
     if (fs::exists(mtpPath)) {
         MTPFile mtp = MTP_Parse(mtpPath);
@@ -152,13 +152,13 @@ static void TestMTP() {
         ASSERT_TRUE(mtp.models.size() > 0, "MTP contains texture models");
     }
 
-    MTPFile missingMtp = MTP_Parse("scratch\\cpp_tests\\missing.mtp");
+    MTPFile missingMtp = MTP_Parse(Utils::ToNativePath("scratch\\cpp_tests\\missing.mtp"));
     ASSERT_FALSE(missingMtp.valid, "Nonexistent MTP file should be invalid");
 }
 
 static void TestTEX() {
-    std::string texPath = Utils::GetIGIRootPath() + "\\missions\\location0\\level1\\terrain\\terrain.tex";
-    std::string scratchTex = "scratch\\cpp_tests\\tex_tga";
+    std::string texPath = Utils::ToNativePath(Utils::GetIGIRootPath() + "\\missions\\location0\\level1\\terrain\\terrain.tex");
+    std::string scratchTex = Utils::ToNativePath("scratch\\cpp_tests\\tex_tga");
 
     ASSERT_TRUE(fs::exists(texPath), "terrain.tex exists");
     if (fs::exists(texPath)) {
@@ -171,17 +171,17 @@ static void TestTEX() {
         ASSERT_TRUE(written > 0, "TEX exported TGA files to scratch folder successfully");
     }
 
-    TEXFile missingTex = TEX_Parse("scratch\\cpp_tests\\missing.tex");
+    TEXFile missingTex = TEX_Parse(Utils::ToNativePath("scratch\\cpp_tests\\missing.tex"));
     ASSERT_FALSE(missingTex.valid, "Nonexistent TEX file should be invalid");
 }
 
 static void TestQVM() {
-    std::string baseDir = Utils::GetIGIRootPath() + "\\missions\\location0\\level1\\";
-    std::string missionPath = baseDir + "mission.qvm";
-    std::string objectsPath = baseDir + "objects.qvm";
-    std::string soundsPath  = baseDir + "sounds\\sounds.qvm";
-    std::string terrainPath = baseDir + "terrain\\terrain.qvm";
-    std::string aiPath      = baseDir + "ai\\1205.qvm";
+    std::string baseDir = Utils::ToNativePath(Utils::GetIGIRootPath() + "\\missions\\location0\\level1\\");
+    std::string missionPath = Utils::ToNativePath(baseDir + "mission.qvm");
+    std::string objectsPath = Utils::ToNativePath(baseDir + "objects.qvm");
+    std::string soundsPath  = Utils::ToNativePath(baseDir + "sounds\\sounds.qvm");
+    std::string terrainPath = Utils::ToNativePath(baseDir + "terrain\\terrain.qvm");
+    std::string aiPath      = Utils::ToNativePath(baseDir + "ai\\1205.qvm");
 
     ASSERT_TRUE(fs::exists(missionPath), "mission.qvm exists");
     ASSERT_TRUE(fs::exists(objectsPath), "objects.qvm exists");
@@ -193,10 +193,10 @@ static void TestQVM() {
     QVMFile qvmObjects = QVM_Parse(objectsPath);
     ASSERT_TRUE(qvmObjects.valid, "Parsed objects.qvm successfully");
 
-    std::string outMission = "scratch\\cpp_tests\\mission.qsc";
-    std::string outObjects = "scratch\\cpp_tests\\objects.qsc";
+    std::string outMission = Utils::ToNativePath("scratch\\cpp_tests\\mission.qsc");
+    std::string outObjects = Utils::ToNativePath("scratch\\cpp_tests\\objects.qsc");
 
-    fs::create_directories("scratch\\cpp_tests");
+    fs::create_directories(Utils::ToNativePath("scratch\\cpp_tests"));
 
     // Test mission decompile
     bool decompMission = QVM_Decompile(qvmMission, outMission);
@@ -211,7 +211,7 @@ static void TestQVM() {
     ASSERT_TRUE(VerifyTaskNewLines(outObjects), "objects.qsc Task_New first parameter is correct integer format");
 
     // Test objects compiler round-trip!
-    std::string recompiledObjectsPath = "scratch\\cpp_tests\\objects_recompiled.qvm";
+    std::string recompiledObjectsPath = Utils::ToNativePath("scratch\\cpp_tests\\objects_recompiled.qvm");
     std::ifstream qscIn(outObjects);
     std::string qscSrc((std::istreambuf_iterator<char>(qscIn)), std::istreambuf_iterator<char>());
     auto lexR   = qsc::Lex(qscSrc);
@@ -228,7 +228,7 @@ static void TestQVM() {
     if (fs::exists(soundsPath)) {
         QVMFile qvmSounds = QVM_Parse(soundsPath);
         ASSERT_TRUE(qvmSounds.valid, "Parsed sounds.qvm successfully");
-        std::string outSounds = "scratch\\cpp_tests\\sounds.qsc";
+        std::string outSounds = Utils::ToNativePath("scratch\\cpp_tests\\sounds.qsc");
         bool decompSounds = QVM_Decompile(qvmSounds, outSounds);
         ASSERT_TRUE(decompSounds, "Decompiled sounds.qvm to QSC successfully");
         ASSERT_FALSE(FileContainsComments(outSounds), "sounds.qsc contains NO comments (//)");
@@ -237,7 +237,7 @@ static void TestQVM() {
     if (fs::exists(terrainPath)) {
         QVMFile qvmTerrain = QVM_Parse(terrainPath);
         ASSERT_TRUE(qvmTerrain.valid, "Parsed terrain.qvm successfully");
-        std::string outTerrain = "scratch\\cpp_tests\\terrain.qsc";
+        std::string outTerrain = Utils::ToNativePath("scratch\\cpp_tests\\terrain.qsc");
         bool decompTerrain = QVM_Decompile(qvmTerrain, outTerrain);
         ASSERT_TRUE(decompTerrain, "Decompiled terrain.qvm to QSC successfully");
         ASSERT_FALSE(FileContainsComments(outTerrain), "terrain.qsc contains NO comments (//)");
@@ -246,31 +246,33 @@ static void TestQVM() {
     if (fs::exists(aiPath)) {
         QVMFile qvmAI = QVM_Parse(aiPath);
         ASSERT_TRUE(qvmAI.valid, "Parsed ai/1205.qvm successfully");
-        std::string outAI = "scratch\\cpp_tests\\ai_1205.qsc";
+        std::string outAI = Utils::ToNativePath("scratch\\cpp_tests\\ai_1205.qsc");
         bool decompAI = QVM_Decompile(qvmAI, outAI);
         ASSERT_TRUE(decompAI, "Decompiled ai/1205.qvm to QSC successfully");
         ASSERT_FALSE(FileContainsComments(outAI), "ai_1205.qsc contains NO comments (//)");
     }
 
     // Test nonexistent and corrupted QVM files
-    QVMFile missingQvm = QVM_Parse("scratch\\cpp_tests\\missing.qvm");
+    QVMFile missingQvm = QVM_Parse(Utils::ToNativePath("scratch\\cpp_tests\\missing.qvm"));
     ASSERT_FALSE(missingQvm.valid, "Nonexistent QVM file should be invalid");
 
-    std::string corruptPath = "scratch\\cpp_tests\\corrupt.qvm";
+    std::string corruptPath = Utils::ToNativePath("scratch\\cpp_tests\\corrupt.qvm");
     std::vector<uint8_t> corruptBytes(32, 0xff);
-    fs::create_directories("scratch\\cpp_tests");
+    fs::create_directories(Utils::ToNativePath("scratch\\cpp_tests"));
     if (File_SaveBinary(corruptPath.c_str(), corruptBytes.data(), corruptBytes.size())) {
         QVMFile corruptQvm = QVM_Parse(corruptPath);
         ASSERT_FALSE(corruptQvm.valid, "Corrupt QVM file should fail to parse");
+        std::error_code removeEc;
+        fs::remove(corruptPath, removeEc);
     }
 }
 
 static void TestLevelLoad() {
-    std::string levelBase = Utils::GetIGIRootPath() + "\\missions\\location0";
+    std::string levelBase = Utils::ToNativePath(Utils::GetIGIRootPath() + "\\missions\\location0");
     std::vector<std::string> levels = { "level1", "level2", "level3" };
 
     for (const auto& lvl : levels) {
-        std::string ldir = levelBase + "\\" + lvl;
+        std::string ldir = Utils::ToNativePath(levelBase + "\\" + lvl);
         if (!fs::exists(ldir)) {
             std::cout << "  [SKIP] Level load for " << lvl << " (Directory not found: " << ldir << ")\n";
             continue;
@@ -279,12 +281,12 @@ static void TestLevelLoad() {
         std::cout << "  [INFO] Verifying loader for level: " << lvl << "\n";
 
         // 1. Verify mission.qvm
-        std::string missionPath = ldir + "\\mission.qvm";
+        std::string missionPath = Utils::ToNativePath(ldir + "\\mission.qvm");
         if (fs::exists(missionPath)) {
             QVMFile qvm = QVM_Parse(missionPath);
             ASSERT_TRUE(qvm.valid, lvl + ": Parse mission.qvm");
             
-            std::string outQsc = "scratch\\cpp_tests\\" + lvl + "_mission.qsc";
+            std::string outQsc = Utils::ToNativePath("scratch\\cpp_tests\\" + lvl + "_mission.qsc");
             bool decomp = QVM_Decompile(qvm, outQsc);
             ASSERT_TRUE(decomp, lvl + ": Decompile mission.qvm");
             ASSERT_FALSE(FileContainsComments(outQsc), lvl + ": decompiled mission.qsc contains NO comments");
@@ -292,21 +294,21 @@ static void TestLevelLoad() {
         }
 
         // 2. Verify terrain.qvm if present
-        std::string terrainPath = ldir + "\\terrain\\terrain.qvm";
+        std::string terrainPath = Utils::ToNativePath(ldir + "\\terrain\\terrain.qvm");
         if (fs::exists(terrainPath)) {
             QVMFile qvm = QVM_Parse(terrainPath);
             ASSERT_TRUE(qvm.valid, lvl + ": Parse terrain.qvm");
         }
 
         // 3. Verify terrain.tex if present
-        std::string texPath = ldir + "\\terrain\\terrain.tex";
+        std::string texPath = Utils::ToNativePath(ldir + "\\terrain\\terrain.tex");
         if (fs::exists(texPath)) {
             TEXFile tex = TEX_Parse(texPath);
             ASSERT_TRUE(tex.valid, lvl + ": Parse terrain.tex");
         }
 
         // 4. Verify terrain LMP lightmaps
-        std::string lmpPath = ldir + "\\terrain\\terrain.lmp";
+        std::string lmpPath = Utils::ToNativePath(ldir + "\\terrain\\terrain.lmp");
         if (fs::exists(lmpPath)) {
             pics_s pics;
             bool lmpLoad = LMP_Load(lmpPath.c_str(), pics);
@@ -317,7 +319,7 @@ static void TestLevelLoad() {
         }
 
         // 5. Verify navigation graph
-        std::string graphsDir = ldir + "\\graphs";
+        std::string graphsDir = Utils::ToNativePath(ldir + "\\graphs");
         if (fs::exists(graphsDir)) {
             for (const auto& entry : fs::directory_iterator(graphsDir)) {
                 if (entry.path().extension() == ".dat") {
@@ -331,7 +333,7 @@ static void TestLevelLoad() {
 }
 
 static void TestExtractLevel() {
-    std::string outDir = "scratch\\cpp_tests\\extracted_level1";
+    std::string outDir = Utils::ToNativePath("scratch\\cpp_tests\\extracted_level1");
     if (fs::exists(outDir)) {
         fs::remove_all(outDir);
     }
@@ -347,33 +349,47 @@ static void TestExtractLevel() {
     int code = CLIHandler::Process(argc, argv);
     ASSERT_TRUE(code == 0, "CLIHandler Process --extract-level 1 succeeded");
 
-    std::string modelsDir = outDir + "\\models";
-    std::string texturesDir = outDir + "\\textures";
+    std::string modelsDir = Utils::ToNativePath(outDir + "\\models");
+    std::string texturesDir = Utils::ToNativePath(outDir + "\\textures");
+    // --extract-level nests its output per level: models\levelN\ and
+    // textures\levelN\ (cli_handler.cpp:154-158). The nesting is deliberate,
+    // not an accident: cli_handler.cpp:182 says the levelN subdir exists "so
+    // FindModelFile's per-level search finds it", matching the renderer's own
+    // per-level family dirs (renderer_objects_atta.cpp:363). Count the tree the
+    // extractor actually writes instead of assuming a flat dump.
+    const std::string modelsLevelDir = Utils::ToNativePath(modelsDir + "\\level1");
+    const std::string texturesLevelDir = Utils::ToNativePath(texturesDir + "\\level1");
+    const std::string terrainDir = Utils::ToNativePath(outDir + "\\terrain");
 
     ASSERT_TRUE(fs::exists(modelsDir), "Extracted models directory exists");
     ASSERT_TRUE(fs::exists(texturesDir), "Extracted textures directory exists");
+    ASSERT_TRUE(fs::exists(modelsLevelDir), "Models are nested per level (models\\level1)");
+    ASSERT_TRUE(fs::exists(texturesLevelDir), "Textures are nested per level (textures\\level1)");
+    ASSERT_TRUE(fs::exists(terrainDir), "Extracted terrain directory exists");
 
     int modelCount = 0;
     int mefCount = 0;
     if (fs::exists(modelsDir)) {
-        for (const auto& entry : fs::directory_iterator(modelsDir)) {
-            modelCount++;
+        for (const auto& entry : fs::recursive_directory_iterator(modelsDir)) {
+            if (!entry.is_regular_file()) continue;
+            ++modelCount;
             if (entry.path().extension() == ".mef") {
-                mefCount++;
+                ++mefCount;
             }
         }
     }
 
     int textureCount = 0;
     if (fs::exists(texturesDir)) {
-        for (const auto& entry : fs::directory_iterator(texturesDir)) {
-            textureCount++;
+        for (const auto& entry : fs::recursive_directory_iterator(texturesDir)) {
+            if (entry.is_regular_file()) ++textureCount;
         }
     }
 
-    ASSERT_TRUE(modelCount > 100, "Extracted more than 100 models");
-    ASSERT_TRUE(mefCount > 0, "Extracted at least one MEF model file");
-    ASSERT_TRUE(textureCount > 100, "Extracted more than 100 textures");
+    ASSERT_TRUE(modelCount > 100, "Extracted more than 100 models (" + std::to_string(modelCount) + ")");
+    ASSERT_TRUE(mefCount > 0, "Extracted at least one MEF model file (" + std::to_string(mefCount) + ")");
+    ASSERT_TRUE(mefCount == modelCount, "Every extracted model file is a .mef");
+    ASSERT_TRUE(textureCount > 100, "Extracted more than 100 textures (" + std::to_string(textureCount) + ")");
 }
 
 // Write an RGBA buffer to an uncompressed 32-bit TGA (top-down).
@@ -405,7 +421,7 @@ static void RenderSampleToTGA(const FntFont& font, const std::string& text, cons
     int penW = pad;
     for (char ch : text) {
         auto it = font.glyphs.find((int)(unsigned char)ch);
-        if (it == font.glyphs.end()) { penW += (font.lineHeight > 0 ? font.lineHeight / 2 : 4); continue; }
+        if (it == font.glyphs.end()) { penW += (font.defaultAdvance > 0 ? font.defaultAdvance : 4); continue; }
         penW += it->second.advance;
     }
     const int canvasW = penW + pad;
@@ -417,7 +433,7 @@ static void RenderSampleToTGA(const FntFont& font, const std::string& text, cons
     int penX = pad;
     for (char ch : text) {
         auto it = font.glyphs.find((int)(unsigned char)ch);
-        if (it == font.glyphs.end()) { penX += (font.lineHeight > 0 ? font.lineHeight / 2 : 4); continue; }
+        if (it == font.glyphs.end()) { penX += (font.defaultAdvance > 0 ? font.defaultAdvance : 4); continue; }
         const FntGlyph& g = it->second;
         int ax = (int)(g.u0 * font.texWidth + 0.5f);
         int ay = (int)(g.v0 * font.texHeight + 0.5f);
@@ -455,25 +471,65 @@ static void TestOneFNT(const std::string& path, const std::string& tag) {
     ASSERT_TRUE(font.texWidth > 0 && font.texHeight > 0, tag + ": non-empty atlas");
 
     // Printable ASCII coverage and metric sanity.
-    int covered = 0, badAdvance = 0;
+    //
+    // These retail fonts are FIXED-pitch. FNTH.proportional (+0) is 0 in both
+    // editor.fnt and editorsm.fnt, which is exactly what makes the retail
+    // loader pass FRAME_FIXED (retail engine src/res/sprite.c:192), and retail
+    // accumulates a text run's width from the per-frame advance field,
+    // s->frames[c - 1].advance (sprite.c:318-324). In the shipped files all 104
+    // ANMF entries store the same advance -- 8 for editor.fnt, 5 for
+    // editorsm.fnt -- equal to FNTH.advance (+12), while the inked widths vary
+    // over 3..13 and 3..10 respectively. A constant advance is therefore the
+    // format's design, not the "excessive spacing" bug: the renderer advances
+    // pen_x by it and positions the bitmap inside the cell with the x bearing
+    // (renderer_draw.cpp:239-247). The previous check demanded
+    // advance == width + 1, which is the behaviour the parser had BEFORE commit
+    // 679a94e0 switched to the stored field; since widths vary and the advance
+    // does not, it could only hold by accident for a single width. Assert the
+    // fixed-pitch cell model the format actually defines.
+    //
+    // SCOPE -- this check asserts FIXED-pitch specifically, and that is
+    // deliberate. FNTH.proportional (+0) is 0 in both shipped fonts, so they
+    // are fixed-pitch by declaration. A proportional FNT asset
+    // (proportional != 0) would legitimately carry per-glyph advances and would
+    // fail the "all glyphs share one advance" check below. If such a font is
+    // ever added, give it a proportional variant of this check -- do not relax
+    // this one, and do not read its failure on a proportional font as a
+    // regression.
+    int covered = 0, badAdvance = 0, badCell = 0;
+    int minAdvance = 0, maxAdvance = 0;
+    bool haveAdvance = false;
     for (int c = 0x20; c <= 0x7e; ++c) {
         auto it = font.glyphs.find(c);
         if (it == font.glyphs.end()) continue;
         ++covered;
         const FntGlyph& g = it->second;
-        // Advance is derived as a tight, proportional width+1 (see fnt_parser).
-        // A constant advance across glyphs of differing widths is the "excessive
-        // spacing" bug; this band enforces proportional spacing.
         if (c != 0x20 && g.width > 0) {
-            if (g.advance != g.width + 1) ++badAdvance;
+            if (g.advance <= 0) {
+                ++badAdvance;
+            } else {
+                if (!haveAdvance) { minAdvance = maxAdvance = g.advance; haveAdvance = true; }
+                minAdvance = std::min(minAdvance, g.advance);
+                maxAdvance = std::max(maxAdvance, g.advance);
+            }
+            // A glyph may overhang its cell slightly for kerning; the widest
+            // ASCII glyphs in the shipped fonts overhang by at most 2px.
+            if (g.width > g.advance + 2) ++badCell;
         }
         // UVs in range.
         ASSERT_TRUE(g.u0 >= 0.0f && g.u1 <= 1.001f && g.v0 >= 0.0f && g.v1 <= 1.001f,
                     tag + ": glyph '" + std::string(1, (char)c) + "' UVs in range");
     }
     ASSERT_TRUE(covered >= 90, tag + ": covers printable ASCII (" + std::to_string(covered) + "/95)");
-    ASSERT_TRUE(badAdvance == 0, tag + ": all advances within [width, width+4] (" +
-                std::to_string(badAdvance) + " out of band)");
+    ASSERT_TRUE(badAdvance == 0, tag + ": every coded glyph has a positive advance");
+    ASSERT_TRUE(haveAdvance && minAdvance == maxAdvance,
+                tag + ": fixed-pitch cell advance (all glyphs share one advance; "
+                      "a proportional FNT needs its own variant)");
+    ASSERT_TRUE(haveAdvance && minAdvance == font.defaultAdvance,
+                tag + ": cell advance matches FNTH default (" + std::to_string(minAdvance) +
+                " vs " + std::to_string(font.defaultAdvance) + ")");
+    ASSERT_TRUE(badCell == 0, tag + ": glyphs fit their cell (" + std::to_string(badCell) +
+                " overhang more than 2px)");
 
     // Dump a few representative glyph metrics for eyeballing.
     std::cout << "  [INFO] " << tag << " metrics (char: w/h/adv):";
@@ -486,19 +542,27 @@ static void TestOneFNT(const std::string& path, const std::string& tag) {
     std::cout << "\n";
 
     // Emit atlas + a rendered sample line for visual inspection.
-    fs::create_directories("scratch\\cpp_tests\\fnt");
-    WriteTGA("scratch\\cpp_tests\\fnt\\" + tag + "_atlas.tga", font.texWidth, font.texHeight, font.rgba);
+    fs::create_directories(Utils::ToNativePath("scratch\\cpp_tests\\fnt"));
+    WriteTGA(Utils::ToNativePath("scratch\\cpp_tests\\fnt\\" + tag + "_atlas.tga"), font.texWidth, font.texHeight, font.rgba);
     RenderSampleToTGA(font, "The quick brown fox 0123456789",
-                      "scratch\\cpp_tests\\fnt\\" + tag + "_sample.tga");
+                      Utils::ToNativePath("scratch\\cpp_tests\\fnt\\" + tag + "_sample.tga"));
     std::cout << "  [INFO] Wrote scratch\\cpp_tests\\fnt\\" << tag << "_atlas.tga and "
               << tag << "_sample.tga\n";
 }
 
 static void TestFNT() {
-    TestOneFNT("assets\\editor\\qed\\editor.fnt", "editor");
-    TestOneFNT("assets\\editor\\qed\\editorsm.fnt", "editorsm");
+    // Resolve the shipped fonts the way the product does: relative to the
+    // executable, not to the process CWD (renderer_draw.cpp:170 loads
+    // Utils::GetExeDirectory() + "\\editor\\qed\\editor.fnt"). The old
+    // CWD-relative "assets\\editor\\qed\\..." path only resolved when the suite
+    // happened to be run from the repo root, so in any deployed or staged
+    // layout both fonts failed to load and ~196 assertions were silently
+    // skipped (see docs/parity/WINE_SMOKE.md).
+    const std::string qedDir = Utils::ToNativePath(Utils::GetExeDirectory() + "\\editor\\qed");
+    TestOneFNT(Utils::ToNativePath(qedDir + "\\editor.fnt"), "editor");
+    TestOneFNT(Utils::ToNativePath(qedDir + "\\editorsm.fnt"), "editorsm");
 
-    FntFont missing = FNT_Parse("scratch\\cpp_tests\\nope.fnt");
+    FntFont missing = FNT_Parse(Utils::ToNativePath("scratch\\cpp_tests\\nope.fnt"));
     ASSERT_FALSE(missing.valid, "Nonexistent FNT file should be invalid");
 }
 

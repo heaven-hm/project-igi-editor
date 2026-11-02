@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["schemaVersion", "runId", "lane", "status", "counts", "cases", "cleanup"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "lane": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["PASS", "FAIL", "BLOCKED", "NOT_RUN", "INCONCLUSIVE"] },
+    "counts": { "type": "object", "required": ["planned", "applicable", "selected", "executed", "passed"], "additionalProperties": { "type": "integer", "minimum": 0 } },
+    "cases": { "type": "array", "items": { "type": "object", "required": ["id", "status"], "properties": { "id": { "type": "string" }, "status": { "enum": ["PASS", "FAIL", "BLOCKED", "NOT_RUN", "INCONCLUSIVE", "SKIP"] } } } },
+    "cleanup": { "type": "object", "required": ["status"], "properties": { "status": { "enum": ["PASS", "FAIL", "NOT_RUN"] } } }
+  },
+  "additionalProperties": true
+}

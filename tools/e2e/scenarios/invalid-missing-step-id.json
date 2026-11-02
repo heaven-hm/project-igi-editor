@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "scenarios": [
+    {
+      "name": "invalid-missing-step-id",
+      "level": 9,
+      "requiresMutation": false,
+      "steps": [
+        { "type": "wait", "seconds": 0.1 }
+      ]
+    }
+  ]
+}

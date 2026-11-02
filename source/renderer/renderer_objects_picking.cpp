@@ -4,6 +4,9 @@
  *          Split from renderer_objects.cpp; shares renderer_objects_internal.h.
  *****************************************************************************/
 #include "renderer_objects_internal.h"
+#include "igi_transform.h"
+#include "../capture_camera.h"
+
 
 void Renderer_Objects::InitPickingFBO(int w, int h) {
     // Delete existing resources
@@ -50,7 +53,8 @@ void Renderer_Objects::DrawAttachmentsForPicking(
     const std::string& parentModelId, bool isBuilding,
     const glm::mat4& parentWorldMat, float parentScale,
     GLint loc_model, GLint loc_id, int parentObjIndex,
-    std::unordered_set<std::string>& drawn)
+    std::unordered_set<std::string>& drawn,
+    int selected_object_index)
 {
     const std::string prefix = isBuilding ? "building:" : "object:";
     const std::string attKey = std::to_string(current_level_) + ":" + prefix + parentModelId;
@@ -61,33 +65,24 @@ void Renderer_Objects::DrawAttachmentsForPicking(
     for (size_t ri = 0; ri < atts.size(); ++ri) {
         const auto& att = atts[ri];
         // Find the attachment mesh (same cache lookup as DrawAttachmentsRecursive)
-        std::string subKey = std::to_string(current_level_) + ":" + prefix + att.modelId;
+        const std::string spawnModelId = MagicObjectModelId(att.modelId);
+        std::string subKey = std::to_string(current_level_) + ":" + prefix + spawnModelId;
         auto sit = mesh_cache_.find(subKey);
         if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) {
-            subKey = std::to_string(current_level_) + ":object:" + att.modelId;
+            subKey = std::to_string(current_level_) + ":object:" + spawnModelId;
             sit = mesh_cache_.find(subKey);
         }
         if (sit == mesh_cache_.end()) continue;
         const Mesh& subMesh = sit->second;
 
-        // Build ATTA world transform (identical logic to DrawAttachmentsRecursive)
-        glm::mat4 attLocalRot(
-            att.r[0], att.r[1], att.r[2], 0.f,
-            att.r[3], att.r[4], att.r[5], 0.f,
-            att.r[6], att.r[7], att.r[8], 0.f,
-            0.f,      0.f,      0.f,      1.f
-        );
-        glm::vec3 localOff(att.px, att.py, att.pz);
-        glm::vec3 worldPos = glm::vec3(parentWorldMat * glm::vec4(localOff, 1.f));
-        glm::mat4 parentRot = parentWorldMat;
-        parentRot[3] = glm::vec4(0.f, 0.f, 0.f, 1.f);
-        glm::mat4 childWorldMat(1.0f);
-        childWorldMat = glm::translate(childWorldMat, worldPos);
-        childWorldMat = childWorldMat * parentRot * attLocalRot;
-
-        // Recurse regardless of whether this node has pick-able geometry
-        std::string childKey = parentModelId + ">" + att.modelId;
-        bool recurse = drawn.insert(childKey).second;
+        // Build the ATTA world transform through the shared, retail-cited helper
+        // rather than a second copy of the maths: this path and
+        // DrawAttachmentsRecursive must agree exactly or a click lands on the
+        // wrong sub-model. See atta_children.h for the oracle
+        // (`src/magicobj/rigidcoll.c:399-450`, `src/shadow/sector.c:545-630`).
+        const float attPos[3] = { att.px, att.py, att.pz };
+        const glm::mat4 childWorldMat = igi::IgiAttaChildWorld(parentWorldMat, attPos, att.r);
+        const glm::vec3 worldPos(childWorldMat[3]);
 
         // Skip ATTAs already promoted (by world-pos key or by direct record index).
         bool occupied = IsAttaPromoted(att.modelId, worldPos) ||
@@ -110,6 +105,7 @@ void Renderer_Objects::DrawAttachmentsForPicking(
 
             glm::mat4 leafModel = glm::scale(childWorldMat, glm::vec3(40.96f * parentScale));
             glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(leafModel));
+            
             glUniform1i(loc_id, kAttaPickBase + 1 + entry);
 
             if (!subMesh.subMeshes.empty()) {
@@ -124,9 +120,34 @@ void Renderer_Objects::DrawAttachmentsForPicking(
             }
         }
 
-        if (recurse) {
-            DrawAttachmentsForPicking(att.modelId, isBuilding, childWorldMat, parentScale,
-                                      loc_model, loc_id, parentObjIndex, drawn);
+        // Rule 5: in retail engine, a spawned child task expands its own attachments only
+        // when it is a child Sector (its mesh has portals; src/shadow/sector.c:673-676)
+        // or when its task type create handler calls RigidDynCubeObj_CreateMagicObjs
+        // (src/magicobj/rigidcoll.c:383-496, igi::MagicObjectTypeChildExpansion).
+        bool expands = false;
+        if (!subMesh.portalMeshes.empty()) {
+            expands = true;
+        } else {
+            const auto* def = MagicObjectTable().Find(att.modelId);
+            if (def != nullptr) {
+                switch (igi::MagicObjectTypeChildExpansion(def->task_type_name)) {
+                case igi::MagicObjectChildExpansion::kAlways:
+                    expands = true;
+                    break;
+                case igi::MagicObjectChildExpansion::kIfModelResolved:
+                    expands = (subMesh.vertexCount > 0);
+                    break;
+                case igi::MagicObjectChildExpansion::kNo:
+                    break;
+                }
+            }
+        }
+
+        if (expands && drawn.count(spawnModelId) == 0) {
+            drawn.insert(spawnModelId);
+            DrawAttachmentsForPicking(spawnModelId, isBuilding, childWorldMat, parentScale,
+                                      loc_model, loc_id, parentObjIndex, drawn, selected_object_index);
+            drawn.erase(spawnModelId);
         }
     }
 }
@@ -135,7 +156,9 @@ void Renderer_Objects::DrawAttachmentsForPicking(
 void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
                                       const std::vector<LevelObject>& objects,
                                       int draw_parts,
-                                      const glm::vec3& camera_pos)
+                                      const glm::vec3& camera_pos,
+                                      int selected_object_index,
+                                      const glm::vec3& camera_forward)
 {
     if (!pick_shader_prog_) return;
 
@@ -143,6 +166,40 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
     const int DRAW_OBJECTS   = 4;
     const int DRAW_BUILDINGS = 16;
     const int DRAW_PROPS     = 32;
+
+    // The SAME conservative view cull the visual pass applies before it draws an
+    // object (see Renderer_Objects::Draw).  Without it this pass re-submits every
+    // object in the level, including the ones the renderer just rejected for
+    // being behind the camera or outside its view cone: measured on level 1 it
+    // issued 523 objects / 2956 submesh draws where the visible scene issued
+    // 234 / 721, and the pick is draw-submission bound (scissoring the read pixel
+    // to the one pixel that is read changed nothing: 23 ms either way), so those
+    // extra draws were the whole cost of a pick.
+    //
+    // This cannot change the pixel this pass is read at, and the reason is
+    // parity, not a new judgement: after this the pick considers exactly the
+    // objects the visual pass considered, so anything it drops was not drawn and
+    // therefore is not on screen to be clicked or to occlude what is.  The test
+    // itself is conservative on top of that -- it rejects an object only when its
+    // whole bounding sphere is behind the eye plane, or outside a cone of
+    // half-angle atan(1/2) ~= 26.6 deg widened by the bounding radius (a >=120 deg
+    // cone, wider than this viewport's frustum).
+    glm::vec3 cameraFwd(0.0f);
+    const float cameraFwdLen = glm::length(camera_forward);
+    if (cameraFwdLen > 0.01f) cameraFwd = camera_forward / cameraFwdLen;
+
+    // IGI_PROFILE-only: the pick pass re-submits the whole scene.  Whether it
+    // submits MORE than the visual pass (which honours the engine's own
+    // ModelObj_GetLOD cull, `if (lod < 0) continue`) decides whether there is
+    // anything to save here at all, so count what it actually issues and time
+    // its CPU-side setup separately from the GL submission.
+    const bool profilePickPass = []() {
+        static const bool enabled = std::getenv("IGI_PROFILE") != nullptr;
+        return enabled;
+    }();
+    using PickPassClock = std::chrono::steady_clock;
+    const auto pp_t0 = profilePickPass ? PickPassClock::now() : PickPassClock::time_point{};
+    int pp_objects = 0, pp_draws = 0;
 
     // Reset the per-pass ATTA pick capture and rebuild EditRigidObj occupancy so
     // ATTAs already promoted to real tasks aren't offered for promotion again.
@@ -156,6 +213,7 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
             suppressed_atta_keys_.insert(o.name.substr(5));
         }
     }
+    const auto pp_t1 = profilePickPass ? PickPassClock::now() : PickPassClock::time_point{};
 
     // Set picking render state
     glBindFramebuffer(GL_FRAMEBUFFER, pick_fbo_);
@@ -180,9 +238,16 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
 
     GLint loc_model = glGetUniformLocation(pick_shader_prog_, "u_model");
     GLint loc_id    = glGetUniformLocation(pick_shader_prog_, "u_object_id");
+    // IGI_PROFILE-only: boundary after the FBO bind + clear + program/uniform
+    // setup.  A pick starts by clearing a 1680x1050 colour+depth FBO, which is
+    // easy to mistake for "the scene submission" when only the whole pass is
+    // timed.
+    const auto pp_t2 = profilePickPass ? PickPassClock::now() : PickPassClock::time_point{};
+    int64_t pp_setup_us = 0;
 
     for (int i = 0; i < (int)objects.size(); ++i) {
         const auto& obj = objects[i];
+        const auto obj_t0 = profilePickPass ? PickPassClock::now() : PickPassClock::time_point{};
         if (obj.deleted || obj.modelId.empty()) continue;
         if (obj.isSplineWaypoint || obj.isSplineContainer) continue;
         if (IsSkippedModelId(obj.modelId)) continue;
@@ -206,35 +271,121 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
         // interior object underneath. This is geometrically exact and order-
         // independent, so AABB-based interior occlusion is unnecessary.
 
-        Mesh mesh = GetOrLoadMesh(obj.modelId, obj.isBuilding);
+        const Mesh& mesh = GetOrLoadMesh(obj.modelId, obj.isBuilding);
         if (mesh.vertexCount == 0) continue;
         // Allow collision-only meshes (fromRenderMesh==false) as fallback pick hitboxes
         // so vehicles, cargo, and any model without render vertices are still clickable.
 
-        // Build model matrix (same convention as Draw())
+        // The visual pass's cull, mirrored (see the note at the top of this
+        // function).  `keepVisible` matches the visual pass: the selected object
+        // is never culled, so a selection can always be re-picked.  The hovered
+        // object needs no exemption -- it is under the cursor, and the test
+        // rejects only what cannot project into the viewport at all.
+        if (cameraFwdLen > 0.01f && i != selected_object_index) {
+            // Same sphere the draw pass uses (renderer_objects.cpp): a Wire's
+            // engine sphere is centred on its anchor MIDPOINT and grown by the
+            // stretched Y scale, not the unstretched model bound at the start
+            // anchor (retail engine Wire_ParamsChanged 0x43F3D0, src/props/wire.c:
+            // 184-189). One helper keeps a visible wire clickable.
+            glm::vec3 boundCenter((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z);
+            float boundRadius =
+                glm::length(mesh.halfExtents) * BASE_SCALE * std::max(obj.scale, 0.001f);
+            if (obj.isWire) {
+                glm::dvec3 wa, wb;
+                if (obj.WireAnchors(wa, wb)) {
+                    const igi::props::WireDrawSphere wireBounds =
+                        igi::props::WireDrawBounds(wa, wb, glm::length(mesh.halfExtents),
+                                                   obj.scale, obj.scale);
+                    boundCenter = glm::vec3((float)wireBounds.center.x,
+                                            (float)wireBounds.center.y,
+                                            (float)wireBounds.center.z);
+                    boundRadius = (float)wireBounds.radius;
+                }
+            }
+            const glm::vec3 toObject = boundCenter - camera_pos;
+            const float distSq = glm::dot(toObject, toObject);
+            const float facing = glm::dot(toObject, cameraFwd);
+            if (facing < -boundRadius) continue;
+            if (distSq > boundRadius * boundRadius &&
+                facing < std::sqrt(distSq) * 0.5f - boundRadius) continue;
+        }
+
+        // Build model matrix (same convention as Draw(), and the same Euler order
+        // as the game: Rz * Ry * Rx — see renderer/igi_transform.h).
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, glm::vec3(obj.pos));
-        model = glm::rotate(model, (float)obj.rot.z, glm::vec3(0.0f, 0.0f, 1.0f));
-        model = glm::rotate(model, (float)obj.rot.x, glm::vec3(1.0f, 0.0f, 0.0f));
-        model = glm::rotate(model, (float)obj.rot.y, glm::vec3(0.0f, 1.0f, 0.0f));
-        if (IsWeaponModel(obj.modelId) || obj.type == "GunPickup" || obj.type == "AmmoPickup" || obj.type == "GenericPickup") {
-            model = glm::rotate(model, glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        model = model * igi::IgiEulerRotationMatrix(obj.rot);
+        // No pickup-specific turn: the engine draws a rigid object with the object's
+        // own matrix and scale only (Direct3DRender_DrawRigidMesh HOOK 0x49DF60,
+        // src/render/render.c:965-966).  See renderer_objects.cpp for the full note.
+
+        // A placed helicopter is drawn at its FLIGHT PREVIEW pose, not at the
+        // authored placement (GitHub issue #60, renderer_objects.cpp's `"Heli"`
+        // block). The pick pass must draw the same pose or the user would be
+        // clicking where the helicopter used to be. `GetHeliPreviewPose` is pure
+        // and reads the frame's tick, so it returns exactly what the visual pass
+        // drew.
+        // Same rule as Renderer_Objects::Draw (lines 1361-1370): only the selected
+        // helicopter flies in the preview pose.
+        if (i == selected_object_index && obj.type == "Heli") {
+            HeliPreviewCacheEntry pose;
+            GetHeliPreviewPose(i, obj.type, obj.argTokens, &pose);
+            if (pose.pose_valid) {
+                model = glm::translate(glm::mat4(1.0f), pose.pose_pos);
+                model = model * pose.pose_rot;
+            }
         }
         model = glm::scale(model, glm::vec3(BASE_SCALE * obj.scale));
 
+        // A Wire is DRAWN stretched between its two anchors at their midpoint
+        // (Wire_ParamsChanged 0x43F3D0, src/props/wire.c:160-191); the pick pass
+        // used to draw the unstretched model at the start anchor, so only the
+        // first metre of a 25-143 m wire could be clicked. Same helper as the
+        // draw pass, so the pick mesh is the drawn mesh.
+        if (obj.isWire) {
+            glm::dvec3 wa, wb;
+            glm::mat4 wireModel(1.0f);
+            if (obj.WireAnchors(wa, wb) &&
+                igi::props::WireModelMatrix(wa, wb, obj.scale, &wireModel)) {
+                model = wireModel;
+            }
+        }
+
+        // A human the level authors inside a vehicle is DRAWN with the engine's
+        // object origin (the pelvis) at the authored position, not with the mesh's
+        // feet: the pick pass must place it identically or the user clicks where
+        // the human is not. See renderer/human_seat_frame.h.
+        if (igi::HumanSitsInVehicle(objects, i)) {
+            const ParsedGeometry* seat_geo = GetOrLoadSkinGeometry(obj.modelId, obj.isBuilding);
+            const glm::vec3 seat_origin = igi::StaticModelOriginMetres(
+                seat_geo != nullptr ? &seat_geo->bones : nullptr, /*engine_origin_frame=*/true);
+            if (seat_origin != glm::vec3(0.0f)) model = glm::translate(model, seat_origin);
+        }
+
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
         glUniform1i(loc_id, i + 1); // ID 0 = background
+        // Everything above is CPU-side setup (mesh cache lookup, the mirrored
+        // view cull, the model matrix, the heli/seat/wire frame); everything
+        // below is GL submission.  A pass that is DRAW-SUBMISSION bound and one
+        // that is CPU bound need opposite fixes, so they are measured apart.
+        if (profilePickPass) {
+            pp_setup_us += std::chrono::duration_cast<std::chrono::microseconds>(
+                PickPassClock::now() - obj_t0).count();
+        }
 
+        ++pp_objects;
         // Draw hull submeshes
         if (!mesh.subMeshes.empty()) {
             for (const auto& sub : mesh.subMeshes) {
                 if (sub.VAO == 0 || sub.vertexCount == 0) continue;
                 glBindVertexArray(sub.VAO);
                 glDrawArrays(GL_TRIANGLES, 0, sub.vertexCount);
+                ++pp_draws;
             }
         } else if (mesh.VAO) {
             glBindVertexArray(mesh.VAO);
             glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);
+            ++pp_draws;
         }
 
         // Render ATTA sub-models into the pick buffer, each with its OWN unique
@@ -243,27 +394,93 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
         // in objects.qsc) become individually clickable — the app promotes them
         // into real, editable EditRigidObj tasks. ATTAs that already have a
         // matching EditRigidObj are skipped (occupancy check inside).
+        // Match the visual pass's attachment distance cull and cache check
+        // (Renderer_Objects::Draw lines 1739-1756) so distant buildings and
+        // models without attachments do not issue redundant GL state/draw work.
         {
-            glm::mat4 parentWorldMat(1.0f);
-            parentWorldMat = glm::translate(parentWorldMat, glm::vec3(obj.pos));
-            parentWorldMat = glm::rotate(parentWorldMat, (float)obj.rot.z, glm::vec3(0.f, 0.f, 1.f));
-            parentWorldMat = glm::rotate(parentWorldMat, (float)obj.rot.x, glm::vec3(1.f, 0.f, 0.f));
-            parentWorldMat = glm::rotate(parentWorldMat, (float)obj.rot.y, glm::vec3(0.f, 1.f, 0.f));
-            std::unordered_set<std::string> drawn;
-            DrawAttachmentsForPicking(obj.modelId, obj.isBuilding, parentWorldMat, obj.scale,
-                                      loc_model, loc_id, i, drawn);
-            glUseProgram(pick_shader_prog_);
-            glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
+            const glm::vec3 toObj = glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z) - camera_pos;
+            const float distSq = glm::dot(toObj, toObj);
+            const float boundRadius =
+                glm::length(mesh.halfExtents) * BASE_SCALE * std::max(obj.scale, 0.001f);
+            bool isCloseEnough = true;
+            if (obj.isBuilding && Config::Get().enableLOD) {
+                float distToCamera = std::sqrt(distSq);
+                float portalDistance = 100.0f;
+                auto pit = portal_distances_.find(obj.modelId);
+                if (pit != portal_distances_.end()) {
+                    portalDistance = pit->second;
+                }
+                isCloseEnough = igi::ShouldDrawBuildingAttachments(
+                    distToCamera, boundRadius, portalDistance * BASE_SCALE * 100.0f, Config::Get().enableLOD);
+            } else {
+                const float maxAtta = (80.0f * BASE_SCALE * 100.0f) + boundRadius;
+                isCloseEnough = distSq < maxAtta * maxAtta;
+            }
+            if (isCloseEnough) {
+                FillLevelModelKey(level_model_key_scratch_, current_level_, obj.isBuilding, obj.modelId);
+                if (attachment_cache_.find(level_model_key_scratch_) != attachment_cache_.end()) {
+                    glm::mat4 parentWorldMat(1.0f);
+                    parentWorldMat = glm::translate(parentWorldMat, glm::vec3(obj.pos));
+                    parentWorldMat = glm::rotate(parentWorldMat, (float)obj.rot.z, glm::vec3(0.f, 0.f, 1.f));
+                    parentWorldMat = glm::rotate(parentWorldMat, (float)obj.rot.x, glm::vec3(1.f, 0.f, 0.f));
+                    parentWorldMat = glm::rotate(parentWorldMat, (float)obj.rot.y, glm::vec3(0.f, 1.f, 0.f));
+                    std::unordered_set<std::string> drawn;
+                    DrawAttachmentsForPicking(obj.modelId, obj.isBuilding, parentWorldMat, obj.scale,
+                                              loc_model, loc_id, i, drawn, selected_object_index);
+                    glUseProgram(pick_shader_prog_);
+                    glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
+                }
+            }
         }
     }
 
+    // IGI_PROFILE-only: boundary after the last pick draw, before the unbind.
+    const auto pp_t3 = profilePickPass ? PickPassClock::now() : PickPassClock::time_point{};
+
     glBindVertexArray(0);
     glUseProgram(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    for (int i = 0; i < 4; ++i) glDisableVertexAttribArray(static_cast<GLuint>(i));
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     // Restore state
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glDisable(GL_CULL_FACE);
+
+    if (profilePickPass) {
+        static int64_t acc_occ_us = 0, acc_total_us = 0, acc_objs = 0, acc_draws = 0;
+        static int64_t acc_clear_us = 0, acc_setup_us = 0, acc_submit_us = 0;
+        static int calls = 0;
+        const auto us = [](PickPassClock::time_point a, PickPassClock::time_point b) {
+            return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
+        };
+        const int64_t loop_us = us(pp_t2, pp_t3);
+        acc_occ_us += us(pp_t0, pp_t1);
+        acc_clear_us += us(pp_t1, pp_t2);
+        acc_setup_us += pp_setup_us;
+        // The remainder of the object loop is the GL submission the pick is
+        // bound by: uniform uploads, VAO binds and glDrawArrays.
+        acc_submit_us += loop_us - pp_setup_us;
+        acc_total_us += us(pp_t0, PickPassClock::now());
+        acc_objs += pp_objects;
+        acc_draws += pp_draws;
+        ++calls;
+        if (calls >= 8) {
+            Logger::Get().Log(LogLevel::INFO,
+                "[PickPass] 8 passes: occupancy=" +
+                std::to_string(acc_occ_us / calls / 1000) + "ms clear+state=" +
+                std::to_string(acc_clear_us / calls / 1000) + "ms setup=" +
+                std::to_string(acc_setup_us / calls / 1000) + "ms submit=" +
+                std::to_string(acc_submit_us / calls / 1000) + "ms total=" +
+                std::to_string(acc_total_us / calls / 1000) + "ms objects=" +
+                std::to_string(acc_objs / calls) + " draws=" +
+                std::to_string(acc_draws / calls) + " submeshes/pass");
+            calls = 0;
+            acc_occ_us = acc_total_us = acc_objs = acc_draws = 0;
+            acc_clear_us = acc_setup_us = acc_submit_us = 0;
+        }
+    }
 }
 
 // ─── PickObjectAtScreen ───────────────────────────────────────────────────────
@@ -271,7 +488,9 @@ int Renderer_Objects::PickObjectAtScreen(int x, int y, int w, int h,
                                           GLuint ubo_mats,
                                           const std::vector<LevelObject>& objects,
                                           int draw_parts,
-                                          const glm::vec3& camera_pos)
+                                          const glm::vec3& camera_pos,
+                                          int selected_object_index,
+                                          const glm::vec3& camera_forward)
 {
     if (!pick_shader_prog_ || w <= 0 || h <= 0) return -1;
 
@@ -281,20 +500,342 @@ int Renderer_Objects::PickObjectAtScreen(int x, int y, int w, int h,
     }
     if (!pick_fbo_) return -1;
 
-    DrawForPicking(ubo_mats, objects, draw_parts, camera_pos);
+    // IGI_PROFILE-only: split the pick itself.  It is a whole extra scene pass
+    // into a full-viewport FBO for a single-pixel readback, so "the pick costs
+    // 23 ms" is not actionable until the clear, the scene submission and the
+    // synchronous readback are told apart.
+    const bool profilePick = []() {
+        static const bool enabled = std::getenv("IGI_PROFILE") != nullptr;
+        return enabled;
+    }();
+    using PickClock = std::chrono::steady_clock;
+    const auto pick_t0 = profilePick ? PickClock::now() : PickClock::time_point{};
 
     // Read back the single pixel under the cursor.
     // OpenGL origin is bottom-left; screen coords are top-left → flip Y.
+    const int read_x = x;
+    const int read_y = h - y - 1;
+
+    // Scissor the FBO clear and rasterization to a 3x3 pixel window around the
+    // readback coordinate so we don't clear or shade 2M pixels on every pick.
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(std::max(0, read_x - 1), std::max(0, read_y - 1), 3, 3);
+
+    DrawForPicking(ubo_mats, objects, draw_parts, camera_pos, selected_object_index,
+                   camera_forward);
+
+    glDisable(GL_SCISSOR_TEST);
+    const auto pick_t1 = profilePick ? PickClock::now() : PickClock::time_point{};
+
     uint8_t pixel[3] = {0, 0, 0};
     glBindFramebuffer(GL_FRAMEBUFFER, pick_fbo_);
-    glReadPixels(x, h - y - 1, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, pixel);
+    glReadPixels(read_x, read_y, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, pixel);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    const auto pick_t2 = profilePick ? PickClock::now() : PickClock::time_point{};
+
+    if (profilePick) {
+        static int64_t acc_draw_us = 0, acc_read_us = 0;
+        static int calls = 0;
+        const auto us = [](PickClock::time_point a, PickClock::time_point b) {
+            return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
+        };
+        const int64_t draw_us = us(pick_t0, pick_t1);
+        const int64_t read_us = us(pick_t1, pick_t2);
+        acc_draw_us += draw_us;
+        acc_read_us += read_us;
+        ++calls;
+        // One line per call: a single pick is cheap enough to log, and the run
+        // this is measured in is driven by real pointer input, so a fixed-size
+        // averaging window yields too few samples to compare two builds with.
+        Logger::Get().Log(LogLevel::INFO,
+            "[PickProfile] call " + std::to_string(calls) + ": draw=" +
+            std::to_string(draw_us / 1000) + "ms readback=" +
+            std::to_string(read_us / 1000) + "ms avgdraw=" +
+            std::to_string(acc_draw_us / calls / 1000) + "ms over " +
+            std::to_string(calls) + " calls (" + std::to_string(w) + "x" +
+            std::to_string(h) + " FBO)");
+    }
 
     int id = (static_cast<int>(pixel[0]) << 16) |
              (static_cast<int>(pixel[1]) <<  8) |
               static_cast<int>(pixel[2]);
 
     return (id == 0) ? -1 : id - 1;
+}
+
+int Renderer_Objects::CountObjectVisiblePixels(
+    GLuint ubo_mats, const std::vector<LevelObject>& objects, int draw_parts,
+    const glm::vec3& camera_pos, int selected_object_index,
+    int target_object_index, int viewport_width, int viewport_height,
+    const std::vector<float>& scene_depth, int* target_id_pixels) {
+    if (!pick_shader_prog_ || target_object_index < 0 ||
+        target_object_index >= static_cast<int>(objects.size()) ||
+        viewport_width <= 0 || viewport_height <= 0 ||
+        scene_depth.size() != static_cast<size_t>(viewport_width) * viewport_height) {
+        return 0;
+    }
+    if (viewport_width != pick_fbo_w_ || viewport_height != pick_fbo_h_) {
+        InitPickingFBO(viewport_width, viewport_height);
+    }
+    if (!pick_fbo_) return 0;
+
+    DrawForPicking(ubo_mats, objects, draw_parts, camera_pos,
+                   selected_object_index);
+
+    std::vector<uint8_t> pixels(
+        static_cast<size_t>(pick_fbo_w_) * static_cast<size_t>(pick_fbo_h_) * 3);
+    std::vector<float> pick_depth(
+        static_cast<size_t>(pick_fbo_w_) * static_cast<size_t>(pick_fbo_h_));
+    glBindFramebuffer(GL_FRAMEBUFFER, pick_fbo_);
+    glReadPixels(0, 0, pick_fbo_w_, pick_fbo_h_, GL_RGB, GL_UNSIGNED_BYTE,
+                 pixels.data());
+    glReadPixels(0, 0, pick_fbo_w_, pick_fbo_h_, GL_DEPTH_COMPONENT, GL_FLOAT,
+                 pick_depth.data());
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    const int target_id = target_object_index + 1;
+    int id_pixels = 0;
+    int visible_pixels = 0;
+    for (size_t offset = 0; offset < pixels.size(); offset += 3) {
+        const int id = (static_cast<int>(pixels[offset]) << 16) |
+                       (static_cast<int>(pixels[offset + 1]) << 8) |
+                        static_cast<int>(pixels[offset + 2]);
+        const size_t pixel_index = offset / 3;
+        if (id == target_id) {
+            ++id_pixels;
+            if (scene_depth[pixel_index] < 1.0f &&
+                std::abs(scene_depth[pixel_index] - pick_depth[pixel_index]) <= 0.0001f) {
+                ++visible_pixels;
+            }
+        }
+    }
+    if (target_id_pixels) *target_id_pixels = id_pixels;
+    return visible_pixels;
+}
+
+Renderer_Objects::VisualEvidence Renderer_Objects::CaptureObjectVisualEvidence(
+    GLuint ubo_mats, const std::vector<LevelObject>& objects, int target_object_index,
+    int viewport_width, int viewport_height, const std::vector<float>& scene_depth) {
+    VisualEvidence evidence;
+    if (!pick_shader_prog_ || target_object_index < 0 ||
+        target_object_index >= static_cast<int>(objects.size()) || viewport_width <= 0 ||
+        viewport_height <= 0 || scene_depth.size() != static_cast<size_t>(viewport_width) * viewport_height) {
+        return evidence;
+    }
+    if (viewport_width != pick_fbo_w_ || viewport_height != pick_fbo_h_) {
+        InitPickingFBO(viewport_width, viewport_height);
+    }
+    if (!pick_fbo_) return evidence;
+
+    const LevelObject& obj = objects[target_object_index];
+    const std::string modelId = obj.modelId.empty() ? obj.segmentModelId : obj.modelId;
+    const Mesh& mesh = GetOrLoadMesh(modelId, obj.isBuilding);
+    if (mesh.vertexCount == 0 || !mesh.fromRenderMesh) return evidence;
+
+    evidence.width = viewport_width;
+    evidence.height = viewport_height;
+    const size_t pixels = static_cast<size_t>(viewport_width) * viewport_height;
+    evidence.targetMask.assign(pixels, 0);
+    evidence.partIds.assign(pixels, 0);
+    evidence.targetDepth.assign(pixels, 1.0f);
+
+    std::unordered_map<GLuint, float> texture_chromatic_ratios;
+    auto texture_chromatic_ratio = [&](GLuint texture) {
+        if (texture == 0) return 0.0f;
+        const auto cached = texture_chromatic_ratios.find(texture);
+        if (cached != texture_chromatic_ratios.end()) return cached->second;
+        GLint active_texture = GL_TEXTURE0;
+        GLint prior_texture = 0;
+        GLint width = 0;
+        GLint height = 0;
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &active_texture);
+        glActiveTexture(GL_TEXTURE0);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &prior_texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &height);
+        float ratio = 0.0f;
+        if (width > 0 && height > 0) {
+            const size_t texels = static_cast<size_t>(width) * height;
+            std::vector<uint8_t> rgba(texels * 4);
+            glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+            size_t chromatic = 0;
+            for (size_t texel = 0; texel < texels; ++texel) {
+                const size_t offset = texel * 4;
+                const uint8_t lo = std::min({rgba[offset], rgba[offset + 1], rgba[offset + 2]});
+                const uint8_t hi = std::max({rgba[offset], rgba[offset + 1], rgba[offset + 2]});
+                if (hi - lo >= 16) ++chromatic;
+            }
+            ratio = static_cast<float>(chromatic) / static_cast<float>(texels);
+        }
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prior_texture));
+        glActiveTexture(static_cast<GLenum>(active_texture));
+        texture_chromatic_ratios.emplace(texture, ratio);
+        return ratio;
+    };
+
+    glBindFramebuffer(GL_FRAMEBUFFER, pick_fbo_);
+    glViewport(0, 0, viewport_width, viewport_height);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+    glUseProgram(pick_shader_prog_);
+    glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
+    const GLint loc_model = glGetUniformLocation(pick_shader_prog_, "u_model");
+    const GLint loc_id = glGetUniformLocation(pick_shader_prog_, "u_object_id");
+
+    glm::mat4 model(1.0f);
+    model = glm::translate(model, glm::vec3(obj.pos));
+    model = model * igi::IgiEulerRotationMatrix(obj.rot);
+    // No pickup-specific turn -- see renderer_objects.cpp for the engine citation
+    // (Direct3DRender_DrawRigidMesh HOOK 0x49DF60, src/render/render.c:965-966).
+    model = glm::scale(model, glm::vec3(40.96f * obj.scale));
+
+    // Same seat frame as the visual pass for a human the level authors inside a
+    // vehicle — see renderer/human_seat_frame.h.
+    if (igi::HumanSitsInVehicle(objects, target_object_index)) {
+        const ParsedGeometry* seat_geo = GetOrLoadSkinGeometry(obj.modelId, obj.isBuilding);
+        const glm::vec3 seat_origin = igi::StaticModelOriginMetres(
+            seat_geo != nullptr ? &seat_geo->bones : nullptr, /*engine_origin_frame=*/true);
+        if (seat_origin != glm::vec3(0.0f)) model = glm::translate(model, seat_origin);
+    }
+    glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(model));
+
+    int next_part_id = 1;
+    auto draw_mesh_parts = [&](const Mesh& part_mesh, const glm::mat4& part_model,
+                               bool strict_coverage) {
+        glUniformMatrix4fv(loc_model, 1, GL_FALSE, glm::value_ptr(part_model));
+        if (part_mesh.subMeshes.empty()) {
+            if (part_mesh.VAO && part_mesh.vertexCount > 0) {
+                const int part_id = next_part_id++;
+                evidence.expectedPartIds.push_back(part_id);
+                evidence.expectedParts.push_back({part_id, part_mesh.vertexCount,
+                                                  part_mesh.vertexCount / 3, -1, 0,
+                                                  part_mesh.textureName,
+                                                  part_mesh.textureName.empty() || part_mesh.textureID != 0,
+                                                  texture_chromatic_ratio(part_mesh.textureID),
+                                                  part_mesh.center - part_mesh.halfExtents,
+                                                  part_mesh.center + part_mesh.halfExtents});
+                if (strict_coverage) evidence.strictPartIds.push_back(part_id);
+                glUniform1i(loc_id, part_id);
+                glBindVertexArray(part_mesh.VAO);
+                glDrawArrays(GL_TRIANGLES, 0, part_mesh.vertexCount);
+            }
+            return;
+        }
+        for (const auto& sub : part_mesh.subMeshes) {
+            if (sub.VAO == 0 || sub.vertexCount == 0) continue;
+            const int part_id = next_part_id++;
+            evidence.expectedPartIds.push_back(part_id);
+            evidence.expectedParts.push_back({part_id, sub.vertexCount, sub.vertexCount / 3,
+                                              sub.materialSlot, sub.alphaMode, sub.textureName,
+                                              sub.textureName.empty() || sub.textureID != 0,
+                                              texture_chromatic_ratio(sub.textureID),
+                                              sub.localMin, sub.localMax});
+            if (strict_coverage) evidence.strictPartIds.push_back(part_id);
+            glUniform1i(loc_id, part_id);
+            glBindVertexArray(sub.VAO);
+            glDrawArrays(GL_TRIANGLES, 0, sub.vertexCount);
+        }
+    };
+    // The visible hull path draws with this offset.  The diagnostic must use
+    // the identical depth convention before comparing its projection with the
+    // captured scene depth.
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-1.0f, -1.0f);
+    draw_mesh_parts(mesh, model, false);
+
+    // The source inventory includes recursive MEF attachments.  This is a
+    // geometry pass, deliberately independent of the visible attachment draw
+    // so an omission in that path cannot certify itself.  It nevertheless
+    // excludes known non-visual authored data using the same data-derived
+    // predicates as the renderer (death zones, collision fallbacks and large
+    // untextured trigger slabs).
+    // Attachments are drawn one offset step closer than their parent hull in
+    // the visible renderer to prevent z-fighting with hull walls.
+    glPolygonOffset(-2.0f, -2.0f);
+    EnsureDeathZoneIdsLoaded();
+    EnsureAiModelIdsLoaded();
+    const std::string prefix = obj.isBuilding ? "building:" : "object:";
+    std::function<void(const std::string&, const glm::mat4&, std::unordered_set<std::string>&)> draw_attachments;
+    draw_attachments = [&](const std::string& parent_model, const glm::mat4& parent_world,
+                           std::unordered_set<std::string>& ancestry) {
+        const std::string cache_key = std::to_string(current_level_) + ":" + prefix + parent_model;
+        const auto ait = attachment_cache_.find(cache_key);
+        if (ait == attachment_cache_.end()) return;
+        for (const auto& att : ait->second) {
+            const std::string spawn_model = MagicObjectModelId(att.modelId);
+            std::string mesh_key = std::to_string(current_level_) + ":" + prefix + spawn_model;
+            auto sit = mesh_cache_.find(mesh_key);
+            if (sit == mesh_cache_.end() || sit->second.vertexCount == 0) {
+                mesh_key = std::to_string(current_level_) + ":object:" + spawn_model;
+                sit = mesh_cache_.find(mesh_key);
+            }
+            if (sit == mesh_cache_.end()) continue;
+            const Mesh& child = sit->second;
+
+            // Compute exact child world frame via retail engine orthonormalization
+            // (src/magicobj/rigidcoll.c:399-450, src/shadow/sector.c:545-630)
+            const float att_pos[3] = { att.px, att.py, att.pz };
+            const glm::mat4 child_world = igi::IgiAttaChildWorld(parent_world, att_pos, att.r);
+
+            const bool is_death_zone = deathzone_ids_.count(att.modelId) > 0;
+            bool has_texture = child.textureID > 0;
+            for (const auto& sub : child.subMeshes) has_texture |= sub.textureID > 0;
+            const float max_half_extent = std::max(child.halfExtents.x,
+                std::max(child.halfExtents.y, child.halfExtents.z));
+            const bool large_untextured_slab = !has_texture &&
+                (!ai_model_ids_.count(obj.modelId) || max_half_extent >= 700.0f);
+            if (!is_death_zone && child.fromRenderMesh && !large_untextured_slab)
+                draw_mesh_parts(child, glm::scale(child_world, glm::vec3(40.96f * obj.scale)), true);
+
+            if (ancestry.insert(spawn_model).second) {
+                draw_attachments(spawn_model, child_world, ancestry);
+                ancestry.erase(spawn_model);
+            }
+        }
+    };
+    std::unordered_set<std::string> ancestry{modelId};
+    draw_attachments(modelId, glm::scale(model, glm::vec3(1.0f / (40.96f * obj.scale))), ancestry);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    for (int i = 0; i < 4; ++i) glDisableVertexAttribArray(static_cast<GLuint>(i));
+    glUseProgram(0);
+
+    std::vector<uint8_t> color(pixels * 3);
+    glReadPixels(0, 0, viewport_width, viewport_height, GL_RGB, GL_UNSIGNED_BYTE, color.data());
+    glReadPixels(0, 0, viewport_width, viewport_height, GL_DEPTH_COMPONENT, GL_FLOAT,
+                 evidence.targetDepth.data());
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    for (size_t index = 0; index < pixels; ++index) {
+        const size_t color_index = index * 3;
+        const int part_id = (static_cast<int>(color[color_index]) << 16) |
+                            (static_cast<int>(color[color_index + 1]) << 8) |
+                            static_cast<int>(color[color_index + 2]);
+        if (part_id == 0) continue;
+        evidence.partIds[index] = part_id;
+        const auto part = std::find_if(evidence.expectedParts.begin(), evidence.expectedParts.end(),
+            [part_id](const VisualEvidence::PartInventory& value) { return value.id == part_id; });
+        const bool is_transparent_part = part != evidence.expectedParts.end() && part->alphaMode == 2;
+        if ((is_transparent_part &&
+             scene_depth[index] >= evidence.targetDepth[index] - 0.0001f) ||
+            (!is_transparent_part && scene_depth[index] < 1.0f &&
+             std::abs(scene_depth[index] - evidence.targetDepth[index]) <= 0.0001f)) {
+            evidence.targetMask[index] = 1;
+        }
+    }
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    return evidence;
 }
 
 // ─── Draw ─────────────────────────────────────────────────────────────────────

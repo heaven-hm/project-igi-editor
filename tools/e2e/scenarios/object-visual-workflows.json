@@ -1,0 +1,1274 @@
+﻿{
+    "scenarios":  [
+                      {
+                          "anchor":  {
+                                         "type":  "EditRigidObj",
+                                         "modelId":  "621_01_1",
+                                         "taskId":  "444",
+                                         "lods":  [
+                                                      1,
+                                                      2,
+                                                      3,
+                                                      4,
+                                                      5
+                                                  ]
+                                     },
+                          "requiresMutation":  false,
+                          "name":  "level2-object-orbit-444",
+                          "steps":  [
+                                        {
+                                            "level":  2,
+                                            "id":  "launch",
+                                            "type":  "launch_editor"
+                                        },
+                                        {
+                                            "timeoutSeconds":  45,
+                                            "id":  "window",
+                                            "type":  "wait_for_window"
+                                        },
+                                        {
+                                            "pattern":  "\\[App\\] LoadLevel\\(\\) COMPLETE for level 2",
+                                            "timeoutSeconds":  120,
+                                            "id":  "loaded",
+                                            "type":  "wait_for_log"
+                                        },
+                                        {
+                                            "id":  "healthy",
+                                            "type":  "assert_process"
+                                        },
+                                        {
+                                            "key":  "CTRL+F",
+                                            "id":  "open-find",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "id":  "type-task",
+                                            "type":  "type_text",
+                                            "text":  "444"
+                                        },
+                                        {
+                                            "key":  "ENTER",
+                                            "id":  "confirm-find",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  1,
+                                            "id":  "find-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "key":  "ENTER",
+                                            "id":  "open-props",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  0.5,
+                                            "id":  "props-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "key":  "F11",
+                                            "id":  "center-object",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  0.5,
+                                            "id":  "center-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "id":  "orbit-front",
+                                            "angle":  "front",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front",
+                                            "id":  "view-shot-front",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back",
+                                            "angle":  "back",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back",
+                                            "id":  "view-shot-back",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-left",
+                                            "angle":  "left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-left",
+                                            "id":  "view-shot-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-right",
+                                            "angle":  "right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-right",
+                                            "id":  "view-shot-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-top",
+                                            "angle":  "top",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-top",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-top",
+                                            "id":  "view-shot-top",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-bottom",
+                                            "angle":  "bottom",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-bottom",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-bottom",
+                                            "id":  "view-shot-bottom",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-front-left",
+                                            "angle":  "front-left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front-left",
+                                            "id":  "view-shot-front-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-front-right",
+                                            "angle":  "front-right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front-right",
+                                            "id":  "view-shot-front-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back-left",
+                                            "angle":  "back-left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back-left",
+                                            "id":  "view-shot-back-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back-right",
+                                            "angle":  "back-right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back-right",
+                                            "id":  "view-shot-back-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "close",
+                                            "type":  "close_editor"
+                                        }
+                                    ],
+                          "level":  2
+                      },
+                      {
+                          "anchor":  {
+                                         "type":  "EditRigidObj",
+                                         "modelId":  "301_01_1",
+                                         "taskId":  "777",
+                                         "lods":  [
+                                                      1,
+                                                      2
+                                                  ]
+                                     },
+                          "requiresMutation":  false,
+                          "name":  "level3-object-orbit-777",
+                          "steps":  [
+                                        {
+                                            "level":  3,
+                                            "id":  "launch",
+                                            "type":  "launch_editor"
+                                        },
+                                        {
+                                            "timeoutSeconds":  45,
+                                            "id":  "window",
+                                            "type":  "wait_for_window"
+                                        },
+                                        {
+                                            "pattern":  "\\[App\\] LoadLevel\\(\\) COMPLETE for level 3",
+                                            "timeoutSeconds":  120,
+                                            "id":  "loaded",
+                                            "type":  "wait_for_log"
+                                        },
+                                        {
+                                            "id":  "healthy",
+                                            "type":  "assert_process"
+                                        },
+                                        {
+                                            "key":  "CTRL+F",
+                                            "id":  "open-find",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "id":  "type-task",
+                                            "type":  "type_text",
+                                            "text":  "777"
+                                        },
+                                        {
+                                            "key":  "ENTER",
+                                            "id":  "confirm-find",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  1,
+                                            "id":  "find-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "key":  "ENTER",
+                                            "id":  "open-props",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  0.5,
+                                            "id":  "props-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "key":  "F11",
+                                            "id":  "center-object",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  0.5,
+                                            "id":  "center-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "id":  "orbit-front",
+                                            "angle":  "front",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front",
+                                            "id":  "view-shot-front",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back",
+                                            "angle":  "back",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back",
+                                            "id":  "view-shot-back",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-left",
+                                            "angle":  "left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-left",
+                                            "id":  "view-shot-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-right",
+                                            "angle":  "right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-right",
+                                            "id":  "view-shot-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-top",
+                                            "angle":  "top",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-top",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-top",
+                                            "id":  "view-shot-top",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-bottom",
+                                            "angle":  "bottom",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-bottom",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-bottom",
+                                            "id":  "view-shot-bottom",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-front-left",
+                                            "angle":  "front-left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front-left",
+                                            "id":  "view-shot-front-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-front-right",
+                                            "angle":  "front-right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front-right",
+                                            "id":  "view-shot-front-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back-left",
+                                            "angle":  "back-left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back-left",
+                                            "id":  "view-shot-back-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back-right",
+                                            "angle":  "back-right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back-right",
+                                            "id":  "view-shot-back-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "close",
+                                            "type":  "close_editor"
+                                        }
+                                    ],
+                          "level":  3
+                      },
+                      {
+                          "anchor":  {
+                                         "type":  "EditRigidObj",
+                                         "modelId":  "339_01_1",
+                                         "taskId":  "204",
+                                         "lods":  [
+                                                      1,
+                                                      2,
+                                                      3,
+                                                      4
+                                                  ]
+                                     },
+                          "requiresMutation":  false,
+                          "name":  "level6-object-orbit-204",
+                          "steps":  [
+                                        {
+                                            "level":  6,
+                                            "id":  "launch",
+                                            "type":  "launch_editor"
+                                        },
+                                        {
+                                            "timeoutSeconds":  45,
+                                            "id":  "window",
+                                            "type":  "wait_for_window"
+                                        },
+                                        {
+                                            "pattern":  "\\[App\\] LoadLevel\\(\\) COMPLETE for level 6",
+                                            "timeoutSeconds":  120,
+                                            "id":  "loaded",
+                                            "type":  "wait_for_log"
+                                        },
+                                        {
+                                            "id":  "healthy",
+                                            "type":  "assert_process"
+                                        },
+                                        {
+                                            "key":  "CTRL+F",
+                                            "id":  "open-find",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "id":  "type-task",
+                                            "type":  "type_text",
+                                            "text":  "204"
+                                        },
+                                        {
+                                            "key":  "ENTER",
+                                            "id":  "confirm-find",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  1,
+                                            "id":  "find-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "key":  "ENTER",
+                                            "id":  "open-props",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  0.5,
+                                            "id":  "props-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "key":  "F11",
+                                            "id":  "center-object",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  0.5,
+                                            "id":  "center-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "id":  "orbit-front",
+                                            "angle":  "front",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front",
+                                            "id":  "view-shot-front",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back",
+                                            "angle":  "back",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back",
+                                            "id":  "view-shot-back",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-left",
+                                            "angle":  "left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-left",
+                                            "id":  "view-shot-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-right",
+                                            "angle":  "right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-right",
+                                            "id":  "view-shot-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-top",
+                                            "angle":  "top",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-top",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-top",
+                                            "id":  "view-shot-top",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-bottom",
+                                            "angle":  "bottom",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-bottom",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-bottom",
+                                            "id":  "view-shot-bottom",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-front-left",
+                                            "angle":  "front-left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front-left",
+                                            "id":  "view-shot-front-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-front-right",
+                                            "angle":  "front-right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front-right",
+                                            "id":  "view-shot-front-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back-left",
+                                            "angle":  "back-left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back-left",
+                                            "id":  "view-shot-back-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back-right",
+                                            "angle":  "back-right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back-right",
+                                            "id":  "view-shot-back-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "close",
+                                            "type":  "close_editor"
+                                        }
+                                    ],
+                          "level":  6
+                      },
+                      {
+                          "anchor":  {
+                                         "type":  "EditRigidObj",
+                                         "modelId":  "713_01_1",
+                                         "taskId":  "2222",
+                                         "lods":  [
+                                                      1,
+                                                      2,
+                                                      3,
+                                                      4
+                                                  ]
+                                     },
+                          "requiresMutation":  false,
+                          "name":  "level7-object-orbit-2222",
+                          "steps":  [
+                                        {
+                                            "level":  7,
+                                            "id":  "launch",
+                                            "type":  "launch_editor"
+                                        },
+                                        {
+                                            "timeoutSeconds":  45,
+                                            "id":  "window",
+                                            "type":  "wait_for_window"
+                                        },
+                                        {
+                                            "pattern":  "\\[App\\] LoadLevel\\(\\) COMPLETE for level 7",
+                                            "timeoutSeconds":  120,
+                                            "id":  "loaded",
+                                            "type":  "wait_for_log"
+                                        },
+                                        {
+                                            "id":  "healthy",
+                                            "type":  "assert_process"
+                                        },
+                                        {
+                                            "key":  "CTRL+F",
+                                            "id":  "open-find",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "id":  "type-task",
+                                            "type":  "type_text",
+                                            "text":  "2222"
+                                        },
+                                        {
+                                            "key":  "ENTER",
+                                            "id":  "confirm-find",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  1,
+                                            "id":  "find-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "key":  "ENTER",
+                                            "id":  "open-props",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  0.5,
+                                            "id":  "props-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "key":  "F11",
+                                            "id":  "center-object",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  0.5,
+                                            "id":  "center-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "id":  "orbit-front",
+                                            "angle":  "front",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front",
+                                            "id":  "view-shot-front",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back",
+                                            "angle":  "back",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back",
+                                            "id":  "view-shot-back",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-left",
+                                            "angle":  "left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-left",
+                                            "id":  "view-shot-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-right",
+                                            "angle":  "right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-right",
+                                            "id":  "view-shot-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-top",
+                                            "angle":  "top",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-top",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-top",
+                                            "id":  "view-shot-top",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-bottom",
+                                            "angle":  "bottom",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-bottom",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-bottom",
+                                            "id":  "view-shot-bottom",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-front-left",
+                                            "angle":  "front-left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front-left",
+                                            "id":  "view-shot-front-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-front-right",
+                                            "angle":  "front-right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front-right",
+                                            "id":  "view-shot-front-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back-left",
+                                            "angle":  "back-left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back-left",
+                                            "id":  "view-shot-back-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back-right",
+                                            "angle":  "back-right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back-right",
+                                            "id":  "view-shot-back-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "close",
+                                            "type":  "close_editor"
+                                        }
+                                    ],
+                          "level":  7
+                      },
+                      {
+                          "anchor":  {
+                                         "type":  "EditRigidObj",
+                                         "modelId":  "612_01_1",
+                                         "taskId":  "777",
+                                         "lods":  [
+                                                      1,
+                                                      2,
+                                                      3,
+                                                      4
+                                                  ]
+                                     },
+                          "requiresMutation":  false,
+                          "name":  "level10-object-orbit-777",
+                          "steps":  [
+                                        {
+                                            "level":  10,
+                                            "id":  "launch",
+                                            "type":  "launch_editor"
+                                        },
+                                        {
+                                            "timeoutSeconds":  45,
+                                            "id":  "window",
+                                            "type":  "wait_for_window"
+                                        },
+                                        {
+                                            "pattern":  "\\[App\\] LoadLevel\\(\\) COMPLETE for level 10",
+                                            "timeoutSeconds":  120,
+                                            "id":  "loaded",
+                                            "type":  "wait_for_log"
+                                        },
+                                        {
+                                            "id":  "healthy",
+                                            "type":  "assert_process"
+                                        },
+                                        {
+                                            "key":  "CTRL+F",
+                                            "id":  "open-find",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "id":  "type-task",
+                                            "type":  "type_text",
+                                            "text":  "777"
+                                        },
+                                        {
+                                            "key":  "ENTER",
+                                            "id":  "confirm-find",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  1,
+                                            "id":  "find-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "key":  "ENTER",
+                                            "id":  "open-props",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  0.5,
+                                            "id":  "props-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "key":  "F11",
+                                            "id":  "center-object",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  0.5,
+                                            "id":  "center-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "id":  "orbit-front",
+                                            "angle":  "front",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front",
+                                            "id":  "view-shot-front",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back",
+                                            "angle":  "back",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back",
+                                            "id":  "view-shot-back",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-left",
+                                            "angle":  "left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-left",
+                                            "id":  "view-shot-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-right",
+                                            "angle":  "right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-right",
+                                            "id":  "view-shot-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-top",
+                                            "angle":  "top",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-top",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-top",
+                                            "id":  "view-shot-top",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-bottom",
+                                            "angle":  "bottom",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-bottom",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-bottom",
+                                            "id":  "view-shot-bottom",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-front-left",
+                                            "angle":  "front-left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front-left",
+                                            "id":  "view-shot-front-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-front-right",
+                                            "angle":  "front-right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front-right",
+                                            "id":  "view-shot-front-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back-left",
+                                            "angle":  "back-left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back-left",
+                                            "id":  "view-shot-back-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back-right",
+                                            "angle":  "back-right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back-right",
+                                            "id":  "view-shot-back-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "close",
+                                            "type":  "close_editor"
+                                        }
+                                    ],
+                          "level":  10
+                      },
+                      {
+                          "anchor":  {
+                                         "type":  "EditRigidObj",
+                                         "modelId":  "joint_fixer",
+                                         "taskId":  "3333",
+                                         "lods":  [
+
+                                                  ]
+                                     },
+                          "requiresMutation":  false,
+                          "name":  "level14-object-orbit-3333",
+                          "steps":  [
+                                        {
+                                            "level":  14,
+                                            "id":  "launch",
+                                            "type":  "launch_editor"
+                                        },
+                                        {
+                                            "timeoutSeconds":  45,
+                                            "id":  "window",
+                                            "type":  "wait_for_window"
+                                        },
+                                        {
+                                            "pattern":  "\\[App\\] LoadLevel\\(\\) COMPLETE for level 14",
+                                            "timeoutSeconds":  120,
+                                            "id":  "loaded",
+                                            "type":  "wait_for_log"
+                                        },
+                                        {
+                                            "id":  "healthy",
+                                            "type":  "assert_process"
+                                        },
+                                        {
+                                            "key":  "CTRL+F",
+                                            "id":  "open-find",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "id":  "type-task",
+                                            "type":  "type_text",
+                                            "text":  "3333"
+                                        },
+                                        {
+                                            "key":  "ENTER",
+                                            "id":  "confirm-find",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  1,
+                                            "id":  "find-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "key":  "ENTER",
+                                            "id":  "open-props",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  0.5,
+                                            "id":  "props-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "key":  "F11",
+                                            "id":  "center-object",
+                                            "type":  "key"
+                                        },
+                                        {
+                                            "seconds":  0.5,
+                                            "id":  "center-settle",
+                                            "type":  "wait"
+                                        },
+                                        {
+                                            "id":  "orbit-front",
+                                            "angle":  "front",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front",
+                                            "id":  "view-shot-front",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back",
+                                            "angle":  "back",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back",
+                                            "id":  "view-shot-back",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-left",
+                                            "angle":  "left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-left",
+                                            "id":  "view-shot-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-right",
+                                            "angle":  "right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-right",
+                                            "id":  "view-shot-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-top",
+                                            "angle":  "top",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-top",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-top",
+                                            "id":  "view-shot-top",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-bottom",
+                                            "angle":  "bottom",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-bottom",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-bottom",
+                                            "id":  "view-shot-bottom",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-front-left",
+                                            "angle":  "front-left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front-left",
+                                            "id":  "view-shot-front-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-front-right",
+                                            "angle":  "front-right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-front-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-front-right",
+                                            "id":  "view-shot-front-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back-left",
+                                            "angle":  "back-left",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back-left",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back-left",
+                                            "id":  "view-shot-back-left",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "orbit-back-right",
+                                            "angle":  "back-right",
+                                            "pixels":  12,
+                                            "screenshotAfter":  "view-back-right",
+                                            "type":  "orbit_camera",
+                                            "distance":  300
+                                        },
+                                        {
+                                            "name":  "view-back-right",
+                                            "id":  "view-shot-back-right",
+                                            "type":  "screenshot"
+                                        },
+                                        {
+                                            "id":  "close",
+                                            "type":  "close_editor"
+                                        }
+                                    ],
+                          "level":  14
+                      }
+                  ],
+    "schemaVersion":  1,
+    "purpose":  "Bounded object visual orbit batch (Task 4): one named-ID renderable EditRigidObj per level where one exists, exercised through the ten deterministic orbit views. Anonymous -1#N instances are excluded because they cannot be located by the find-by-ID bar; a live-calibrated selection mechanism is a documented follow-up."
+}

@@ -1,0 +1,38 @@
+// Editor configuration source.  Keep this file next to qedconfig.qvm so the
+// runtime can rebuild the compiled config on startup.
+QEDLevel(1);
+QEDFontSize(12.0);
+QEDFontColorR(255);
+QEDFontColorG(255);
+QEDFontColorB(255);
+QEDLogs(FALSE);
+QEDDebug(FALSE);
+QEDConsoleAutoActivate(2);
+QEDSearchType(133577004);
+QEDInvertMouse(FALSE);
+QEDDisplayTaskNote(TRUE);
+QEDAllowDynamicSwitching(FALSE);
+QEDSaveConfigOnExit(TRUE);
+QEDAutoSaveEnabled(FALSE);
+QEDAutoSaveInterval(300);
+QEDRunEvent(TRUE);
+QEDCameraLock(FALSE);
+QEDBackup(FALSE);
+QEDLightmaps(FALSE);
+QEDFog(TRUE);
+QEDFogIntensity(800);
+QEDMusic(TRUE);
+QEDWeatherEnabled(TRUE);
+QEDWeatherMode("Default");
+QEDUseEditorFont(TRUE);
+QEDSystemFontSize(14);
+QEDFindTaskName("");
+QEDFindTaskNote("");
+QEDFindTaskID("");
+QEDFindTaskText("");
+QEDTaskFileName("");
+QEDSetObjectFile("LOCAL:missions/location0/level1/objects.qsc");
+QEDInterpolation(0);
+QEDSetCameraOrientation(0.0, 0.0, 0.0);
+QEDSetCameraRadius(0.10000000149011612, 0.0);
+QEDSetCameraMatrix(4.380767822265625, 0.0, 1.6377459764480591);

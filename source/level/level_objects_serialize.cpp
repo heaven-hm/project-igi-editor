@@ -134,6 +134,26 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
         }
     };
 
+    // Int32 / bool8 authored parameters.  QSC writes booleans as the bare words
+    // TRUE / FALSE; a numeric token is accepted too because the editor's own writer
+    // emits them that way in some paths.
+    auto readInt = [&](size_t idx, int& out) {
+        if (idx >= obj.argTokens.size()) return;
+        try {
+            out = static_cast<int>(std::stod(obj.argTokens[idx]));
+        } catch (...) {
+        }
+    };
+    auto readBool = [&](size_t idx, bool& out) {
+        if (idx >= obj.argTokens.size()) return;
+        const std::string& token = obj.argTokens[idx];
+        if (token == "TRUE" || token == "true" || token == "1") {
+            out = true;
+        } else if (token == "FALSE" || token == "false" || token == "0") {
+            out = false;
+        }
+    };
+
     if (obj.qscFuncName == "Task_New") {
         if (obj.type == "Container" || obj.type == "Static" || obj.type == "Dynamic" || obj.type == "Level") {
             obj.isContainer = true;
@@ -154,19 +174,38 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(11, obj.rot.z);
             if (obj.argTokens.size() > 12) obj.modelId = unquote(obj.argTokens[12]);
         } else if (obj.type == "SCamera") {
+            // retail engine src/scamera/scamera.c:116-131 / retail objects.qsc declaration:
+            // 6 = "Holder Gamma" (yaw), 7 = "Holder Model" (the model THIS task draws:
+            // `FIELD(model)` -> RigidDynCubeObj_SetModel, scamera.c:240), 8 = "Camera
+            // Alpha" (pitch), 9 = "Camera Gamma" (an extra yaw, NOT roll), 10 = "Camera
+            // Model" (the SCameraLens child's model, scamera.c:184/scameralens.c:204),
+            // 11 = "Camera Destroyed Model". Arg 12 is an Int16, not a model.
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);
             readDouble(5, obj.pos.z);
             readDouble(6, obj.rot.z);
             readDouble(8, obj.rot.x);
-            readDouble(9, obj.rot.y);
-            if (obj.argTokens.size() > 10) obj.modelId = unquote(obj.argTokens[10]);
+            readDouble(9, obj.yawOffset);
+            obj.rot.z += obj.yawOffset;   // display yaw = holder gamma + camera gamma
+            if (obj.argTokens.size() > 7) obj.modelId = unquote(obj.argTokens[7]);
+            if (obj.argTokens.size() > 10) obj.lensModelId = unquote(obj.argTokens[10]);
+            if (obj.argTokens.size() > 11) obj.secondaryModelId = unquote(obj.argTokens[11]);
         } else if (obj.type == "Fence") {
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);
             readDouble(5, obj.pos.z);
             readDouble(6, obj.rot.z);
             if (obj.argTokens.size() > 7) obj.modelId = unquote(obj.argTokens[7]);
+        } else if (obj.type == "Wire") {
+            // retail engine Wire_Open (0x43EFF0, src/props/wire.c:89-113) & ParamTable_Add (:109-111):
+            // 3-5: start (ObjectPos), 6-8: end (ObjectPos), 9: model (String16).
+            // A Wire has no authored rotation (it computes its orientation matrix from
+            // end - start in Wire_ParamsChanged, HOOK 0x43F3D0, src/props/wire.c:160-191).
+            readDouble(3, obj.pos.x);
+            readDouble(4, obj.pos.y);
+            readDouble(5, obj.pos.z);
+            obj.rot = glm::dvec3(0.0);
+            if (obj.argTokens.size() > 9) obj.modelId = unquote(obj.argTokens[9]);
         } else if (obj.type == "AnimTask" || obj.type == "CutScene") {
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);
@@ -177,7 +216,22 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(5, obj.pos.z);
             readDouble(8, obj.rot.z);
             if (obj.argTokens.size() > 13) obj.modelId = unquote(obj.argTokens[13]);
+        } else if (obj.type == "AIGraph") {
+            // AIGraph "Graph position" (args 3/4/5) is the world origin the graph's
+            // node coordinates are local to, and arg@7 is Graphdata's node_count.
+            // LoadRecursive reads the same fields (level_objects.cpp:516-527); this
+            // path was dropping them, so an AIGraph parsed here had no origin and no
+            // node count.
+            readDouble(3, obj.pos.x);
+            readDouble(4, obj.pos.y);
+            readDouble(5, obj.pos.z);
+            readInt(7, obj.graphNodeCount);
+        } else if (obj.type == "HumanAI") {
+            // Task_New(id, "HumanAI", name, "AITYPE_*", graphId).  Same field the load
+            // path reads (level_objects.cpp:528-533).
+            readInt(4, obj.aiGraphTaskId);
         } else if (obj.type == "SplineObjWaypoint") {
+            obj.isSplineWaypoint = true;
             readDouble(3, obj.rot.x);
             readDouble(4, obj.rot.y);
             readDouble(5, obj.rot.z);
@@ -186,6 +240,35 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(8, obj.pos.z);
             if (obj.argTokens.size() > 9) { obj.modelId = unquote(obj.argTokens[9]); if (obj.modelId == "waypoint") obj.modelId = ""; }
             if (obj.argTokens.size() > 10) obj.segmentModelId = unquote(obj.argTokens[10]);
+            // The remaining authored parameters, at the indices the engine's ParamTable
+            // fixes (SplineObj_Open HOOK 0x502250, src/editobj/spline.c:215-223):
+            //   arg 11 "NumAreas" Int32 -> segments
+            //   arg 12 "Align" bool8 -> straight
+            //   arg 13 "Flip" bool8 -> reversed
+            //   arg 14 "Automatic Orientation" bool8 -> autoOrient
+            readInt(11, obj.splineSegments);
+            readBool(12, obj.splineStraight);
+            readBool(13, obj.splineReversed);
+            readBool(14, obj.splineAutoOrient);
+        } else if (obj.type == "SplineObj") {
+            // SplineObj container. The position is at args 9-11, NOT at 3-5:
+            // retail engine SplineObj_Open (HOOK 0x502250, src/editobj/spline.c:204-214)
+            // declares Linear Segments @3, Collision @4, Snap Length @5,
+            // Automatic Orientation @6, Number of Matrices/Segment @7,
+            // Collision LOD @8, Position @9-11, Gamma Orientation @12,
+            // Properties @13-15, Colour 1/2 @16-18 — the same layout the load
+            // path uses (source/level/level_objects.cpp:235-243). Falling through
+            // to the generic branch below would read the three flags as the
+            // container's coordinates and leave them at the map origin.
+            double flag = 0.0;
+            double segCount = 0.0;
+            readDouble(3, flag);
+            obj.linearSegments = (flag != 0.0);
+            readDouble(7, segCount);
+            obj.splineSegmentCount = static_cast<int>(segCount);
+            readDouble(9, obj.pos.x);
+            readDouble(10, obj.pos.y);
+            readDouble(11, obj.pos.z);
         } else if (obj.type == "Switch") {
             readDouble(3, obj.pos.x);
             readDouble(4, obj.pos.y);
@@ -238,13 +321,51 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(6, obj.rot.x);
             readDouble(7, obj.rot.y);
             readDouble(8, obj.rot.z);
-            for (size_t i = 9; i < obj.argTokens.size(); ++i) {
-                std::string val = unquote(obj.argTokens[i]);
-                if (val.length() == 8 && val[3] == '_' && val[6] == '_') {
-                    obj.modelId = val;
-                    obj.modelIdArgIdx = (int)i;
-                    break;
+            // AlarmLight's model is at a FIXED argument -- the authored
+            // "Off model" at arg 11, which is the `onModel` field
+            // AlarmLight_Changed installs (RigidDynCubeObj_SetModel(al,
+            // VirModel_Find(al->onModel)), HOOK 0x43A450,
+            // src/elevator/alarmlight.c:98; ParamTable_Add order at
+            // src/fxobj/alarm.c:108-115).  The shape scan below cannot find it:
+            // it only accepts an 8-character "NNN_NN_N" id and retail lamp
+            // models such as "1729_01_1" are 9 characters (issue #43).
+            if (obj.type == "AlarmLight" && obj.argTokens.size() > 11) {
+                const std::string lamp = unquote(obj.argTokens[11]);
+                if (!lamp.empty()) {
+                    obj.modelId = lamp;
+                    obj.modelIdArgIdx = 11;
                 }
+            }
+            if (obj.modelId.empty()) {
+                for (size_t i = 9; i < obj.argTokens.size(); ++i) {
+                    std::string val = unquote(obj.argTokens[i]);
+                    if (val.length() == 8 && val[3] == '_' && val[6] == '_') {
+                        obj.modelId = val;
+                        obj.modelIdArgIdx = (int)i;
+                        break;
+                    }
+                }
+            }
+            // Elevator (GitHub issue #40): "SplineObj taskid" @10 (Int32),
+            // "Linear" @11 and "Force orientation" @12 (bool8), "Pos" @13
+            // (Real32). `Elevator_Init` HOOK 0x43CC70
+            // (src/elevator/elevator.c:44-83) is the parameter order; the retail
+            // LEVEL3 call confirms the indices (see LevelObject's elevator
+            // block). The other members of this group have no such fields, so
+            // the reads are guarded on the type rather than on the size alone.
+            if (obj.type == "Elevator") {
+                if (obj.argTokens.size() > 10) obj.splineTaskId = unquote(obj.argTokens[10]);
+                auto readBool = [&](size_t idx, bool& out) {
+                    if (idx >= obj.argTokens.size()) return;
+                    std::string val = unquote(obj.argTokens[idx]);
+                    std::transform(val.begin(), val.end(), val.begin(),
+                                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                    if (val == "true" || val == "1") out = true;
+                    else if (val == "false" || val == "0") out = false;
+                };
+                readBool(11, obj.elevatorLinear);
+                readBool(12, obj.elevatorForceOrientation);
+                readDouble(13, obj.elevatorStartHeight);
             }
         } else if (obj.argTokens.size() > 8) {
             readDouble(3, obj.pos.x);
@@ -293,13 +414,20 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
             setToken(11, FormatQscDouble(obj.rot.z));
             if (!obj.modelId.empty() || obj.argTokens.size() > 12) setStringToken(12, obj.modelId);
         } else if (obj.type == "SCamera") {
+            // Write the authored split back to its own indices so a load/save round-trip
+            // is lossless: arg 6 keeps the holder yaw, arg 9 keeps the camera gamma
+            // (rot.z carries the sum for display), arg 7 the task's own model, arg 10
+            // the lens child's model and arg 11 the destroyed model. Args 12+ (Int16
+            // yaw limits, turn speed, viewcone) keep their original tokens.
             setToken(3, FormatQscDouble(obj.pos.x));
             setToken(4, FormatQscDouble(obj.pos.y));
             setToken(5, FormatQscDouble(saveZ));
-            setToken(6, FormatQscDouble(obj.rot.z));
+            setToken(6, FormatQscDouble(obj.rot.z - obj.yawOffset));
             setToken(8, FormatQscDouble(obj.rot.x));
-            setToken(9, FormatQscDouble(obj.rot.y));
-            if (!obj.modelId.empty() || obj.argTokens.size() > 10) setStringToken(10, obj.modelId);
+            setToken(9, FormatQscDouble(obj.yawOffset));
+            if (!obj.modelId.empty() || obj.argTokens.size() > 7) setStringToken(7, obj.modelId);
+            if (!obj.lensModelId.empty() || obj.argTokens.size() > 10) setStringToken(10, obj.lensModelId);
+            if (!obj.secondaryModelId.empty() || obj.argTokens.size() > 11) setStringToken(11, obj.secondaryModelId);
         } else if (obj.type == "Fence") {
             setToken(3, FormatQscDouble(obj.pos.x));
             setToken(4, FormatQscDouble(obj.pos.y));
@@ -329,6 +457,33 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
             setToken(8, FormatQscDouble(saveZ));
             if (!obj.modelId.empty() || obj.argTokens.size() > 9) setStringToken(9, obj.modelId.empty() ? "waypoint" : obj.modelId);
             if (!obj.segmentModelId.empty() || obj.argTokens.size() > 10) setStringToken(10, obj.segmentModelId);
+            // The remaining authored parameters (SplineObj_Open HOOK 0x502250,
+            // src/editobj/spline.c:215-223).  The load path reads them; without these
+            // writes a save dropped them, which is the other half of the defect the
+            // waypoint parameter test found.
+            if (obj.splineSegments != 0 || obj.argTokens.size() > 11) {
+                setToken(11, std::to_string(obj.splineSegments));
+            }
+            if (obj.splineStraight || obj.argTokens.size() > 12) {
+                setToken(12, obj.splineStraight ? "TRUE" : "FALSE");
+            }
+            if (obj.splineReversed || obj.argTokens.size() > 13) {
+                setToken(13, obj.splineReversed ? "TRUE" : "FALSE");
+            }
+            if (obj.splineAutoOrient || obj.argTokens.size() > 14) {
+                setToken(14, obj.splineAutoOrient ? "TRUE" : "FALSE");
+            }
+        } else if (obj.type == "SplineObj") {
+            // SplineObj container: the position belongs at args 9-11, not 3-5
+            // (retail engine SplineObj_Open, HOOK 0x502250, src/editobj/spline.c:204-214;
+            // the load path agrees, source/level/level_objects.cpp:235-243). Args
+            // 3/4/5 are Linear Segments / Collision / Snap Length and are written
+            // back only when their owning properties change, so they are left as
+            // authored here. Without this branch the container's position is never
+            // persisted and every move is dropped on save.
+            setToken(9, FormatQscDouble(obj.pos.x));
+            setToken(10, FormatQscDouble(obj.pos.y));
+            setToken(11, FormatQscDouble(saveZ));
         } else if (obj.type == "Switch") {
             setToken(3, FormatQscDouble(obj.pos.x));
             setToken(4, FormatQscDouble(obj.pos.y));
@@ -344,7 +499,10 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
             setToken(6, FormatQscDouble(obj.rot.x));
             setToken(7, FormatQscDouble(obj.rot.y));
             setToken(8, FormatQscDouble(obj.rot.z));
-            if (!obj.modelId.empty() || obj.argTokens.size() > 15) setStringToken(15, obj.modelId);
+            // ExplodeObject follows its declared schema: Model is arg 9 and
+            // Destroyed model is arg 10. Writing the live model to arg 15
+            // overwrote Explosion delay and made saved vanilla tasks invalid.
+            if (!obj.modelId.empty() || obj.argTokens.size() > 9) setStringToken(9, obj.modelId);
         } else if (obj.type == "AmbientArea") {
             setToken(3, FormatQscDouble(obj.pos.x));
             setToken(4, FormatQscDouble(obj.pos.y));
@@ -391,6 +549,32 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
                     setStringToken(9, obj.modelId);
                 }
             }
+            // Elevator (GitHub issue #40): the rail reference and the three
+            // authored fields after it must round-trip, or a level saved after a
+            // load loses the platform's rail. "SplineObj taskid" @10 (Int32 — a
+            // task id, written unquoted), "Linear" @11 and "Force orientation"
+            // @12 (bool8, written as the engine's TRUE/FALSE) and "Pos" @13
+            // (Real32). `Elevator_Init` HOOK 0x43CC70
+            // (src/elevator/elevator.c:44-83) is the parameter order; the retail
+            // LEVEL3 call confirms the indices.
+            if (obj.type == "Elevator") {
+                if (!obj.splineTaskId.empty() || obj.argTokens.size() > 10)
+                    setToken(10, obj.splineTaskId.empty() ? "-1" : obj.splineTaskId);
+                if (obj.argTokens.size() > 11) setToken(11, obj.elevatorLinear ? "TRUE" : "FALSE");
+                if (obj.argTokens.size() > 12)
+                    setToken(12, obj.elevatorForceOrientation ? "TRUE" : "FALSE");
+                if (obj.argTokens.size() > 13)
+                    setToken(13, FormatQscDouble(obj.elevatorStartHeight));
+            }
+        } else if (obj.type == "AIGraph") {
+            // AIGraph's "Graph position" is args 3/4/5 -- the world origin its node
+            // coordinates are local to (the load path reads it at
+            // level_objects.cpp:516-527, and the parse branch above).  Without this branch
+            // a graph moved in the editor never persisted: this function has no generic
+            // fallback, so the chain simply ended and the tokens were left untouched.
+            setToken(3, FormatQscDouble(obj.pos.x));
+            setToken(4, FormatQscDouble(obj.pos.y));
+            setToken(5, FormatQscDouble(obj.pos.z));
         }
     }
 
@@ -446,11 +630,14 @@ std::string LevelObjects::SerializeObjectRecursive(const std::vector<LevelObject
     std::function<std::string(int)> serialize = [&](int objectIdx) -> std::string {
         const LevelObject& node = objects[objectIdx];
 
-        // Collect live (non-deleted) children
+        // Collect live (non-deleted, non-proxy) children.
+        // isAttaProxy objects are editor-only virtual nodes — they must never
+        // appear in the QSC because they have no qscFuncName/argTokens.
         std::vector<int> liveChildren;
         for (int childIdx : node.childrenIndices) {
             if (childIdx < 0 || childIdx >= (int)objects.size()) continue;
             if (objects[childIdx].deleted) continue;
+            if (objects[childIdx].isAttaProxy) continue;
             liveChildren.push_back(childIdx);
         }
 
@@ -522,4 +709,3 @@ std::string LevelObjects::SerializeObjectRecursive(const std::vector<LevelObject
 
     return serialize(idx);
 }
-

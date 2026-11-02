@@ -11,6 +11,11 @@
 # include <windows.h>
 #endif
 
+#if defined(__APPLE__)
+// Win32 *names* (scalar types, VK_* codes) only; see the header's contract.
+# include "platform_compat.h"
+#endif
+
 
 #define GLM_FORCE_SWIZZLE
 #include <glm/glm.hpp>

@@ -9,6 +9,8 @@
 #include "pch.h"
 #include "renderer_objects.h"
 #include "../config.h"
+#include "../runtime/magic_object_registry.h"
+#include "../runtime/magic_object_expand.h"
 #include <iostream>
 #include <fstream>
 #include <filesystem>
@@ -20,13 +22,37 @@
 #include "utils.h"
 #include "../level/level_common.h"
 #include "gl_helper.h"
-#include "../parsers/mef_native.h"
-#include "../parsers/qvm_parser.h"
-#include "../parsers/qvm_decompiler.h"
-#include "../parsers/dat_parser.h"
-#include "../parsers/res_compiler.h"
-#include "../parsers/mtp_parser.h"
+#include "atta_children.h"
+#include "human_seat_frame.h"
+#include "mef_native.h"
+#include "model_texture_resolution.h"
+#include "../level/qvm_parser.h"
+#include "../level/qvm_decompiler.h"
+// The engine's own placement/bounds for a `Wire` (Wire_ParamsChanged
+// 0x43F3D0, retail engine src/props/wire.c:160-191), shared by the draw and pick
+// passes so they cannot disagree -- see source/runtime/props_preview.h.
+#include "../runtime/props_preview.h"
+#include "dat_writer.h"
+#include "res_compiler.h"
+#include "../level/mtp_writer.h"
+#include "../runtime/editor_hover_policy.h"
+// The placed-helicopter flight preview (GitHub issue #60): the engine's own
+// per-tick control and motion rule, and the vehicle config it reads. Included
+// here as well as in renderer_objects.h so every renderer_objects_*.cpp module
+// sees the same dependency.
+#include "../runtime/heli_preview.h"
 #include <sstream>
+#include <cstdio>
+
+inline void FillLevelModelKey(std::string& out, int level, bool isBuilding, const std::string& modelId) {
+    out.clear();
+    out.reserve(modelId.size() + 24);
+    char prefix[24];
+    const int n = std::snprintf(prefix, sizeof(prefix), "%d:%s",
+                                level, isBuilding ? "building:" : "object:");
+    if (n > 0) out.append(prefix, static_cast<size_t>(n));
+    out.append(modelId);
+}
 
 // Used across draw/picking/atta/visual modules.
 inline bool IsWeaponModel(const std::string& modelId) {
@@ -42,3 +68,27 @@ inline bool IsWeaponModel(const std::string& modelId) {
     }
     return false;
 }
+
+// Magic-object model resolution (retail engine src/shadow/sector.c:667,
+// src/magicobj/rigidcoll.c:484: arg.model = def->model).
+// Defined in renderer_objects_atta.cpp.
+std::string MagicObjectModelId(const std::string& attachmentName);
+const igi::MagicObjectRegistry& MagicObjectTable();
+
+namespace igi {
+
+// Renderer_Objects::DrawLadderGizmos (renderer_objects_visual.cpp) is opt-out.
+// The editor has no render menu — it is GLUT-based and its overlays are keyboard
+// toggles in app_input_keyboard.cpp — so this is the process-wide switch a UI
+// hook can flip. Default: on. See docs/parity/LADDER_PLACEMENT.md.
+void SetLadderGizmosEnabled(bool enabled);
+bool LadderGizmosEnabled();
+
+// The rail polyline overlay of GitHub issue #59 (DrawRailPathGizmos,
+// renderer_objects_visual.cpp). Same opt-out shape as the ladder gizmos above,
+// and for the same reason: the engine draws no rail gizmo, so there is no engine
+// state to read — only an editor view preference. Default: on.
+void SetRailPathGizmosEnabled(bool enabled);
+bool RailPathGizmosEnabled();
+
+}  // namespace igi
