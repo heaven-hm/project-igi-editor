@@ -353,6 +353,8 @@ bool IsKeyBindingPressedExact(const KeyBinding& kb) {
 	if (kb.vkCode && !down(kb.vkCode)) return false;
 	return ModifiersExactMatch(kb, down(VK_CONTROL), down(VK_SHIFT), down(VK_MENU));
 }
+
+void ActivateApp() {}
 #endif // _WIN32
 
 // GetExeDirectory() is defined inline in utils.h so the level-load path can be
@@ -514,6 +516,8 @@ void TrimFileInPlace(const std::string& filepath) {
 }
 
 std::string GetIGIRootPath() {
+	static std::string cachedPath;
+	if (!cachedPath.empty()) return cachedPath;
 #if defined(_WIN32)
 	char* envPath = nullptr;
 	size_t len = 0;
@@ -521,7 +525,8 @@ std::string GetIGIRootPath() {
 		std::string path(envPath);
 		free(envPath);
 		if (!path.empty()) {
-			return path;
+			cachedPath = path;
+			return cachedPath;
 		}
 	}
 #else
@@ -529,7 +534,8 @@ std::string GetIGIRootPath() {
 	if (envPath != nullptr) {
 		std::string path(envPath);
 		if (!path.empty()) {
-			return path;
+			cachedPath = path;
+			return cachedPath;
 		}
 	}
 #if defined(__APPLE__)
@@ -544,7 +550,8 @@ std::string GetIGIRootPath() {
 		if (in.is_open() && std::getline(in, line)) {
 			line = Trim(line);
 			if (!line.empty()) {
-				return line;
+				cachedPath = line;
+				return cachedPath;
 			}
 		}
 	}
@@ -568,7 +575,8 @@ std::string GetIGIRootPath() {
 	while (!path.empty() && (path.back() == '\\' || path.back() == '/' || path.back() == ' ')) {
 		path.pop_back();
 	}
-	return path;
+	cachedPath = path;
+	return cachedPath;
 }
 
 std::string GetIGIModelsPath(int level_no) {

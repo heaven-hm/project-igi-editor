@@ -235,6 +235,15 @@ std::string GetClipboardText() {
     return out;
 }
 
+void ActivateApp() {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    ProcessSerialNumber psn = { 0, kCurrentProcess };
+    TransformProcessType(&psn, kProcessTransformToForegroundApplication);
+    SetFrontProcess(&psn);
+#pragma clang diagnostic pop
+}
+
 } // namespace Utils
 
 #endif // !_WIN32

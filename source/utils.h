@@ -73,6 +73,8 @@ bool IsKeyBindingPressed(const KeyBinding& kb);
 bool ModifiersExactMatch(const KeyBinding& kb, bool ctrlDown, bool shiftDown, bool altDown);
 bool IsKeyBindingPressedExact(const KeyBinding& kb);
 
+void ActivateApp();
+
 // Process and window utilities (Windows API)
 #if defined(_WIN32)
 HANDLE FindProcess(const std::string& processName);
@@ -99,6 +101,8 @@ inline std::string GetExeDirectory() {
     }
     return exeDir;
 #elif defined(__APPLE__)
+    static std::string cached;
+    if (!cached.empty()) return cached;
     // Native macOS build.  Inside an .app the assets live in
     // <bundle>.app/Contents/Resources/editor, not next to the executable in
     // Contents/MacOS, so resolve the executable and step up to Resources.
@@ -114,12 +118,15 @@ inline std::string GetExeDirectory() {
             std::filesystem::path dir = exe.parent_path();
             if (dir.filename() == "MacOS" &&
                 dir.parent_path().filename() == "Contents") {
-                return (dir.parent_path() / "Resources").string();
+                cached = (dir.parent_path() / "Resources").string();
+                return cached;
             }
-            return dir.string();
+            cached = dir.string();
+            return cached;
         }
     }
-    return std::filesystem::current_path().string();
+    cached = std::filesystem::current_path().string();
+    return cached;
 #else
     return std::filesystem::current_path().string();
 #endif

@@ -701,6 +701,7 @@ int main(int argc, char **argv) {
   glutInitWindowPosition(pos_x, pos_y);
   glutInitWindowSize(wnd_w, wnd_h);
   glutCreateWindow("IGI Editor");
+  Utils::ActivateApp();
 
 #if defined(_WIN32)
   // Load icon from file and set it
