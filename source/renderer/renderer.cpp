@@ -153,6 +153,7 @@ void Renderer::Shutdown() {
 	logged_skinned_draws_.clear();
   skinned_pose_samples_.clear();
   logged_skinned_pose_updates_.clear();
+  engine_skin_vertices_cache_.clear();
   terrain_.Shutdown();
   objects_.Shutdown();
   rain_.Shutdown();
@@ -169,6 +170,7 @@ void Renderer::BeginLoadLevel() {
   logged_skinned_draws_.clear();
   skinned_pose_samples_.clear();
   logged_skinned_pose_updates_.clear();
+  engine_skin_vertices_cache_.clear();
   flat_sky_layers_.UnloadAllTexs();
   terrain_.UnloadAllTexs();
   objects_.ClearCaches();
@@ -487,7 +489,13 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
     // `n = Mesh3D_GetBoneMeshLOD(obj)` forced to 0 for a layer-0 object
     // (src/bonemesh/d3drender.c:124-127), so the main view takes the WEIGHTED
     // base+influence path. 0 is passed here for the same reason.
-    const EngineSkinVertices engine_vertices = BuildEngineSkinVertices(*geo);
+    const std::string skinCacheKey = (isBuilding ? "B:" : "O:") + modelId;
+    auto skinCacheIt = engine_skin_vertices_cache_.find(skinCacheKey);
+    if (skinCacheIt == engine_skin_vertices_cache_.end()) {
+        skinCacheIt = engine_skin_vertices_cache_.emplace(
+            skinCacheKey, BuildEngineSkinVertices(*geo)).first;
+    }
+    const EngineSkinVertices& engine_vertices = skinCacheIt->second;
     if (engine_vertices.base_count <= 0) return;
     std::vector<igi::SkinTransformOutput> skinned;
     if (!igi::BoneMeshSkin(engine_vertices.records.data(), engine_vertices.base_count,

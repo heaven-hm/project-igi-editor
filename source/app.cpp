@@ -54,6 +54,17 @@ static LRESULT CALLBACK EditorSubclassWndProc(HWND hwnd, UINT msg, WPARAM wParam
 		if (g_appForHotkey) g_appForHotkey->LaunchGame();
 		return 0;
 	}
+	// Suppress Win32's modal menu activation loop and system beep when Alt
+	// (VK_MENU, the editor's CameraEnable key) is pressed, held, or combined
+	// with camera movement keys. Preserve Alt+F4 (window close) and Alt+Enter
+	// (fullscreen toggle).
+	if (msg == WM_SYSCOMMAND && (wParam & 0xFFF0) == SC_KEYMENU) {
+		return 0;
+	}
+	if ((msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP || msg == WM_SYSCHAR) &&
+	    wParam != VK_F4 && wParam != VK_RETURN) {
+		return 0;
+	}
 	return CallWindowProc(g_origEditorWndProc, hwnd, msg, wParam, lParam);
 }
 #endif
@@ -1527,13 +1538,8 @@ void App::Frame(float delta_seconds) {
 	// built above by `GetGameplayDrawnAnimationIndices()` and handed to
 	// `AdvanceGameplayAnimationClocks`, so the draw uses that one set unchanged.
 	const bool camMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
-	const bool camMoving = camMode && (camera_mode_moved_ ||
-		((input_.keys_ & (MK_FORWARD | MK_BACKWARD | MK_LEFT | MK_RIGHT | MK_STRAIGHT_UP | MK_STRAIGHT_DOWN)) != 0) ||
-		Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraForward) ||
-		Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraBackward) ||
-		(last_pointer_motion_ms_ >= 0 && (Sys_Milliseconds() - last_pointer_motion_ms_) < 100));
 	draw_params_.fast_scene_preview_ = igi::ShouldUseFastScenePreview(
-		cameraNavigating, render_gameplay, camMode, camMoving);
+		cameraNavigating, render_gameplay, camMode);
 	if (!draw_params_.fast_scene_preview_) {
 		if (!render_gameplay) {
 			// IGI_PROFILE_ANIMBENCH-only: see ShouldUseAnimBench.  Force one
@@ -1548,14 +1554,18 @@ void App::Frame(float delta_seconds) {
 				}
 				if (bench_idx >= 0) selected_object_index_ = bench_idx;
 			}
-			// The posed set IS the drawn set: the AI whose pose the skinned draw
-			// loop below submits.  In editor mode that is every playback the
-			// viewport would draw - NOT just the selected one, which is what made
-			// an unselected AI look frozen while its clock ran.  See
-			// App::GetEditorDrawnAnimationIndices for the engine rule
-			// (`Human_WakeIfVisible` 0x45F140) and the two tests it reuses from
-			// the visual pass.
-			skinnedReplacementIndices = GetEditorDrawnAnimationIndices();
+			// While navigating with the camera key (`camMode`), UpdateAnimations is
+			// skipped so poses do not advance; restrict skinned replacement to the
+			// selected object during active camera-key navigation (matching v3.6.11-pre)
+			// so camera look/orbit stays 60fps while keeping the full HUD and scene visible.
+			if (camMode) {
+				std::unordered_set<int> candidates = GetSkinnedReplacementObjectIndices(false);
+				if (selected_object_index_ >= 0 && candidates.count(selected_object_index_)) {
+					skinnedReplacementIndices.insert(selected_object_index_);
+				}
+			} else {
+				skinnedReplacementIndices = GetEditorDrawnAnimationIndices();
+			}
 		}
 		// render_gameplay: already computed above, before the pose. Deliberately
 		// NOT recomputed here - one set, so the posed set and the drawn set cannot

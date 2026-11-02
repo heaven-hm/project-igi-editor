@@ -92,8 +92,6 @@ TEST(EditorCameraStartTest, CameraKeyDoesNotSuppressEditorSceneOverlays) {
     EXPECT_FALSE(igi::ShouldUseFastScenePreview(false, false, true));
     EXPECT_TRUE(igi::ShouldUseFastScenePreview(true, false, false));
     EXPECT_FALSE(igi::ShouldUseFastScenePreview(true, true, false));
-    // When camera mode is actively moving (look/orbit), fast preview engages to prevent lag
-    EXPECT_TRUE(igi::ShouldUseFastScenePreview(true, false, true, true));
 }
 
 TEST(EditorCameraStartTest, F11MeshCenterFollowsEditRigidRotation) {

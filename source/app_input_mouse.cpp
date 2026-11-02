@@ -216,18 +216,6 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 						// the left panel strip is consumed so background 3D objects are never
 						// selected/manipulated while the editor is open.
 						if (x >= L.panel_x && x <= L.panel_x + L.panel_w) {
-							// Check if clicking [X] close button
-							const int close_x1 = L.panel_x + L.panel_w - 24;
-							const int close_y1 = PropPanel::kTop;
-							const int close_x2 = L.panel_x + L.panel_w - 4;
-							const int close_y2 = PropPanel::kTop + 16;
-							if (x >= close_x1 && x <= close_x2 && y >= close_y1 && y <= close_y2) {
-								CommitPropTextEdit();
-								prop_editor_open_ = false;
-								mouse_state_.left_button_down_ = false;
-								return;
-							}
-
 							// +4px tolerance on all sides for pixel-perfect feel at any DPI
 							auto inRect = [&](const PropPanel::Widget& w) {
 								return x >= w.x1 - 4 && x <= w.x2 + 4 && y >= w.y1 - 4 && y <= w.y2 + 4;
@@ -580,8 +568,14 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 					return;
 				}
 
-				// Priority 3: 3D Viewport right-click
+				// Priority 3: 3D Viewport right-click (pick directly at (x, y) if hover pick hasn't settled yet)
 				int target = hover_object_index_;
+				if (target < 0) {
+					int picked = PickObjectAtScreenPos(x, y);
+					if (picked >= 0 && picked < Renderer::kAttaPickBase) {
+						target = picked;
+					}
+				}
 				if (target >= 0) {
 					if (terrain_edit_enabled_) {
 						SetTerrainEditEnabled(false);
@@ -720,9 +714,25 @@ void App::Input_OnMotion(int x, int y) {
 		}
 	}
 	else {
+		const int w = window_state_.viewport_width_;
+		const int h = window_state_.viewport_height_;
+		const int center_x = w >> 1;
+		const int center_y = h >> 1;
+
+		// If a boundary warp was issued, ignore the synthetic warp event that
+		// lands at (center_x, center_y), without dropping legitimate pre-warp
+		// motion events that were already queued before glutWarpPointer ran.
 		if (skip_input_on_motion_once_) {
-			skip_input_on_motion_once_ = false;
-			return;
+			if (std::abs(x - center_x) <= 2 && std::abs(y - center_y) <= 2) {
+				skip_input_on_motion_once_ = false;
+				mouse_state_.prior_x_ = x;
+				mouse_state_.prior_y_ = y;
+				return;
+			}
+			// If a pre-warp event arrives with a large jump (> w/4 or h/4), ignore it.
+			if (std::abs(dx) > (w >> 2) || std::abs(dy) > (h >> 2)) {
+				return;
+			}
 		}
 
 		// Use the mouse delta directly during camera look/orbit instead of warping
@@ -733,14 +743,8 @@ void App::Input_OnMotion(int x, int y) {
 		input_.mouse_delta_y_ += dy;
 
 		const int margin = 16;
-		const int w = window_state_.viewport_width_;
-		const int h = window_state_.viewport_height_;
 		if (w > margin * 2 && h > margin * 2 &&
 		    (x <= margin || x >= w - margin || y <= margin || y >= h - margin)) {
-			const int center_x = w >> 1;
-			const int center_y = h >> 1;
-			mouse_state_.prior_x_ = center_x;
-			mouse_state_.prior_y_ = center_y;
 			glutWarpPointer(center_x, center_y);
 			skip_input_on_motion_once_ = true;
 		}

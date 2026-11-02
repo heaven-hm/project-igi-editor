@@ -54,15 +54,46 @@ void App::ProcessInput(float delta_seconds) {
 
 	UpdateViewerVectors();
 
+	// Unified camera movement queries so both WASD (held with or without Alt) and
+	// configured camera bindings (including Alt+Shift forward / Alt+Ctrl backward)
+	// accelerate viewer_.move_speed_ and move the camera identically, without
+	// double-applying CameraStrafeLeft/Right.
+	auto& ev = Config::Get().eventBindings_;
+	auto CheckCont = [&](const std::string& n) {
+		auto it = ev.find(n);
+		return (it != ev.end()) && Utils::IsKeyBindingPressed(it->second);
+	};
+	const bool modal_text_open =
+		task_picker_open_ || task_editor_open_ || find_open_ ||
+		file_dialog_mode_ != FileDialogMode::None ||
+		ac_task_picker_open_ || model_picker_open_ ||
+		prop_text_edit_field_ != -1;
+	const bool alt_wasd_active = enableCameraMode && !modal_text_open;
+	const bool is_fwd =
+		(input_.keys_ & MK_FORWARD) ||
+		Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraForward) ||
+		(alt_wasd_active && (Utils::IsKeyPressed('W') || Utils::IsKeyPressed(VK_SHIFT)));
+	const bool is_bwd =
+		(input_.keys_ & MK_BACKWARD) ||
+		Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraBackward) ||
+		(alt_wasd_active && (Utils::IsKeyPressed('S') || Utils::IsKeyPressed(VK_CONTROL)));
+	const bool is_left =
+		(input_.keys_ & MK_LEFT) ||
+		CheckCont("CameraStrafeLeft") ||
+		(alt_wasd_active && Utils::IsKeyPressed('A'));
+	const bool is_right =
+		(input_.keys_ & MK_RIGHT) ||
+		CheckCont("CameraStrafeRight") ||
+		(alt_wasd_active && Utils::IsKeyPressed('D'));
+	const bool is_up =
+		(input_.keys_ & MK_STRAIGHT_UP) ||
+		(alt_wasd_active && Utils::IsKeyPressed('Q'));
+	const bool is_down =
+		(input_.keys_ & MK_STRAIGHT_DOWN) ||
+		(alt_wasd_active && Utils::IsKeyPressed('E'));
+
 	// Gradually increase/decrease camera movement speed based on active movement
 	{
-		bool is_fwd = (input_.keys_ & MK_FORWARD) || Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraForward);
-		bool is_bwd = (input_.keys_ & MK_BACKWARD) || Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraBackward);
-		bool is_left = (input_.keys_ & MK_LEFT);
-		bool is_right = (input_.keys_ & MK_RIGHT);
-		bool is_up = (input_.keys_ & MK_STRAIGHT_UP);
-		bool is_down = (input_.keys_ & MK_STRAIGHT_DOWN);
-
 		bool is_moving = is_fwd || is_bwd || is_left || is_right || is_up || is_down;
 
 		if (is_moving) {
@@ -82,12 +113,6 @@ void App::ProcessInput(float delta_seconds) {
 
 		float z0 = viewer_.pos_.z - VIEW_HEIGHT;
 		float friction = viewer_.move_speed_ * 2.0f;
-
-		// Check configured bindings for camera movement (which override standard keys if pressed)
-		bool is_fwd = (input_.keys_ & MK_FORWARD) || Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraForward);
-		bool is_bwd = (input_.keys_ & MK_BACKWARD) || Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraBackward);
-		bool is_left = (input_.keys_ & MK_LEFT);
-		bool is_right = (input_.keys_ & MK_RIGHT);
 
 		// check movement
 		if (is_fwd) {
@@ -184,11 +209,6 @@ void App::ProcessInput(float delta_seconds) {
 	}
 	else {
 
-		bool is_fwd = (input_.keys_ & MK_FORWARD) || Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraForward);
-		bool is_bwd = (input_.keys_ & MK_BACKWARD) || Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraBackward);
-		bool is_left = (input_.keys_ & MK_LEFT);
-		bool is_right = (input_.keys_ & MK_RIGHT);
-
 		// check movement - direct position update for free mode (NO collision)
 		if (is_fwd) {
 			viewer_.pos_ += viewer_.forward_ * viewer_.move_speed_ * delta_seconds;
@@ -202,10 +222,10 @@ void App::ProcessInput(float delta_seconds) {
 		if (is_right) {
 			viewer_.pos_ += viewer_.right_ * viewer_.move_speed_ * delta_seconds;
 		}
-		if (input_.keys_ & MK_STRAIGHT_UP && !viewer_.clip_to_z_) {
+		if (is_up && !viewer_.clip_to_z_) {
 			viewer_.pos_ += VEC3_Z_DIR * viewer_.move_speed_ * delta_seconds;
 		}
-		if (input_.keys_ & MK_STRAIGHT_DOWN && !viewer_.clip_to_z_) {
+		if (is_down && !viewer_.clip_to_z_) {
 			viewer_.pos_ -= VEC3_Z_DIR * viewer_.move_speed_ * delta_seconds;
 		}
 	}
@@ -225,19 +245,6 @@ void App::ProcessInput(float delta_seconds) {
 
 	if (update_orientation) {
 		UpdateViewerVectors();
-	}
-
-	// CameraStrafeLeft/Right — lateral movement (held keys)
-	{
-		auto& ev = Config::Get().eventBindings_;
-		auto CheckCont = [&](const std::string& n) {
-			auto it = ev.find(n);
-			return (it != ev.end()) && Utils::IsKeyBindingPressed(it->second);
-		};
-		if (CheckCont("CameraStrafeLeft"))
-			viewer_.pos_ -= viewer_.right_ * viewer_.move_speed_ * delta_seconds;
-		if (CheckCont("CameraStrafeRight"))
-			viewer_.pos_ += viewer_.right_ * viewer_.move_speed_ * delta_seconds;
 	}
 }
 

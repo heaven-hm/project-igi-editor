@@ -418,6 +418,13 @@ void App::Input_OnSpecial(int key, int x, int y) {
 						tree_scroll_offset_ = current_row - max_rows + 1;
 					}
 				}
+				if (selected_object_index_ >= 0) {
+					auto& objects = level_.GetLevelObjects().GetObjects();
+					if (selected_object_index_ < (int)objects.size()) {
+						marker_manip_.start_pos_ = objects[selected_object_index_].pos;
+						marker_manip_.start_rot_ = objects[selected_object_index_].rot;
+					}
+				}
 			}
 			return;
 		}
@@ -1719,6 +1726,8 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 		LevelObjects& lo = level_.GetLevelObjects();
 		if (!lo.GetObjects().empty()) {
 			selected_object_index_ = (selected_object_index_ + 1) % (int)lo.GetObjects().size();
+			marker_manip_.start_pos_ = lo.GetObjects()[selected_object_index_].pos;
+			marker_manip_.start_rot_ = lo.GetObjects()[selected_object_index_].rot;
 			printf("Selected Object: %d / %d\n", selected_object_index_, (int)lo.GetObjects().size());
 		}
 		return;

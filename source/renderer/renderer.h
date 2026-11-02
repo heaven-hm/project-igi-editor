@@ -983,6 +983,7 @@ private:
 	std::unordered_set<std::string>	logged_skinned_draws_;
 	std::unordered_map<std::string, float>	skinned_pose_samples_;
 	std::unordered_set<std::string>	logged_skinned_pose_updates_;
+	std::unordered_map<std::string, EngineSkinVertices>	engine_skin_vertices_cache_;
 
 	glm::mat4				mat_proj_;
 	glm::mat4				mat_view_;

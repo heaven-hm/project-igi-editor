@@ -2,16 +2,12 @@
 
 namespace igi {
 
-// Fast scene preview is used during active camera navigation (movement keys or
-// active camera-key drag/orbit) to skip CPU-heavy skinned meshes and overlays
-// for smooth interactive frame rates. When stationary in camera mode, the full
-// editor scene and overlays are retained.
+// Camera-key look/orbit must retain the complete editor scene and TaskTree HUD.
+// Fast preview is reserved for navigation driven by movement keys without the
+// camera key, where secondary overlays can be omitted for a frame.
 inline bool ShouldUseFastScenePreview(
-    bool camera_navigating, bool render_gameplay, bool camera_mode_active = false,
-    bool camera_mode_moving = false) {
-    if (render_gameplay) return false;
-    if (camera_mode_active && !camera_mode_moving) return false;
-    return camera_navigating;
+    bool camera_navigating, bool render_gameplay, bool camera_mode_active = false) {
+    return camera_navigating && !render_gameplay && !camera_mode_active;
 }
 
 } // namespace igi

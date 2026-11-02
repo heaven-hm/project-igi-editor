@@ -842,26 +842,7 @@ void Renderer::Draw(const draw_params_s &params,
       int start_y = 30;
       int current_row = 0;
       int scroll_offset = task_tree_view.tree_scroll_offset;
-      int viewport_h = params.view_define_->viewport_height_;
-
-      // Translucent background panel so TaskTree text stays readable over the 3D scene
-      glEnable(GL_BLEND);
-      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-      glColor4f(0.04f, 0.05f, 0.07f, 0.75f);
-      glBegin(GL_QUADS);
-      glVertex2i(tree_x - 10, viewport_h - (start_y - 10));
-      glVertex2i(tree_x + 320, viewport_h - (start_y - 10));
-      glVertex2i(tree_x + 320, 30);
-      glVertex2i(tree_x - 10, 30);
-      glEnd();
-      glColor3f(0.25f, 0.28f, 0.35f);
-      glBegin(GL_LINE_LOOP);
-      glVertex2i(tree_x - 10, viewport_h - (start_y - 10));
-      glVertex2i(tree_x + 320, viewport_h - (start_y - 10));
-      glVertex2i(tree_x + 320, 30);
-      glVertex2i(tree_x - 10, 30);
-      glEnd();
-      glDisable(GL_BLEND);
+      int viewport_h = glutGet(GLUT_WINDOW_HEIGHT);
 
       // Recursive helper to draw tree nodes
       current_row = 0;
@@ -2631,19 +2612,6 @@ void Renderer::Draw(const draw_params_s &params,
               }
             }
           };
-
-          // Dark background panel so property editor controls and text don't bleed into 3D scene
-          quad(L.panel_x - 4, PropPanel::kTop - 4, L.panel_x + L.panel_w + 4, vh - 20, 0.05f, 0.06f, 0.08f, 0.90f);
-          border(L.panel_x - 4, PropPanel::kTop - 4, L.panel_x + L.panel_w + 4, vh - 20, 0.35f, 0.40f, 0.50f);
-
-          // Close button at top-right
-          int close_x1 = L.panel_x + L.panel_w - 24;
-          int close_y1 = PropPanel::kTop;
-          int close_x2 = L.panel_x + L.panel_w - 4;
-          int close_y2 = PropPanel::kTop + 16;
-          quad(close_x1, close_y1, close_x2, close_y2, 0.25f, 0.15f, 0.15f, 0.85f);
-          border(close_x1, close_y1, close_x2, close_y2, 0.8f, 0.3f, 0.3f);
-          draw_text(close_x1 + 6, close_y1 + 12, "X", 1.0f, 0.4f, 0.4f);
 
           // Header text — track running screen y to mirror the layout.
           int ty = L.panel_y + PropPanel::kPad;
