@@ -207,7 +207,7 @@ TEST(SeatedHuman, OnlyAHumanUnderAVehicleIsAPassenger) {
     // 2 Container -> 3 Car -> 4 HumanSoldier (passenger through a container)
     // 5 HumanSoldier (root: a human standing in the world)
     // 6 Car -> 7 EditRigidObj (a vehicle's own prop is not a human)
-    // 8 Train -> 9 Container -> 10 HumanSoldierFemale (passenger)
+    // 8 Plane -> 9 Container -> 10 HumanSoldierFemale (passenger)
     // 11 Heli -> 12 Car (no human anywhere)
     std::vector<StubObject> objects = {
         {"Heli", -1},
@@ -218,7 +218,7 @@ TEST(SeatedHuman, OnlyAHumanUnderAVehicleIsAPassenger) {
         {"HumanSoldier", -1},
         {"Car", -1},
         {"EditRigidObj", 6},
-        {"Train", -1},
+        {"Plane", -1},
         {"Container", 8},
         {"HumanSoldierFemale", 9},
         {"Heli", -1},
@@ -233,6 +233,13 @@ TEST(SeatedHuman, OnlyAHumanUnderAVehicleIsAPassenger) {
     EXPECT_FALSE(igi::HumanSitsInVehicle(objects, -1));
     EXPECT_FALSE(igi::HumanSitsInVehicle(objects, 99));
 
+    // Train is a spline rail consist, not a passenger platform (src/missile/train.c)
+    std::vector<StubObject> train_objects = {
+        {"Train", -1},
+        {"HumanSoldier", 0},
+    };
+    EXPECT_FALSE(igi::HumanSitsInVehicle(train_objects, 1)) << "soldiers under Train are grounded";
+
     // A malformed parent cycle must not hang a draw pass.
     std::vector<StubObject> cyclic = {{"Container", 1}, {"HumanSoldier", 0}};
     EXPECT_FALSE(igi::HumanSitsInVehicle(cyclic, 1));
@@ -245,28 +252,34 @@ TEST(SeatedHuman, HumanAttachedViaAiGraphToVehicleIsAPassenger) {
         std::string taskId;
         int aiGraphTaskId = -1;
         std::vector<int> childrenIndices;
+        int standAnimation = -1;
     };
     // Retail pattern (Level 1 Jones in truck, Level 2 Jones in truck, Level 8 Car 1501):
     // 0 Car
     // 1 AIGraph (child of Car 0, taskId="15")
     // 2 ConditionalContainer (no vehicle in parent chain)
-    // 3 HumanSoldier (child of ConditionalContainer 2, has child 4)
+    // 3 HumanSoldier (child of ConditionalContainer 2, has child 4, standAnimation=61 driving)
     // 4 HumanAI (child of HumanSoldier 3, aiGraphTaskId=15)
     // 5 HumanSoldier (grounded, child of ConditionalContainer 2, has child 6)
     // 6 HumanAI (child of HumanSoldier 5, aiGraphTaskId=99 -> ground graph)
     // 7 AIGraph (root level ground graph, taskId="99")
+    // 8 HumanSoldier (running outside vehicle on foot, standAnimation=244)
+    // 9 HumanAI (child of HumanSoldier 8, aiGraphTaskId=15)
     std::vector<StubGraphObject> objects = {
-        {"Car", -1, "1099", -1, {1}},
-        {"AIGraph", 0, "15", -1, {}},
-        {"ConditionalContainer", -1, "4007", -1, {3, 5}},
-        {"HumanSoldier", 2, "4023", -1, {4}},
-        {"HumanAI", 3, "3201", 15, {}},
-        {"HumanSoldier", 2, "1234", -1, {6}},
-        {"HumanAI", 5, "3202", 99, {}},
-        {"AIGraph", -1, "99", -1, {}}
+        {"Car", -1, "1099", -1, {1}, -1},
+        {"AIGraph", 0, "15", -1, {}, -1},
+        {"ConditionalContainer", -1, "4007", -1, {3, 5, 8}, -1},
+        {"HumanSoldier", 2, "4023", -1, {4}, 61},
+        {"HumanAI", 3, "3201", 15, {}, -1},
+        {"HumanSoldier", 2, "1234", -1, {6}, -1},
+        {"HumanAI", 5, "3202", 99, {}, -1},
+        {"AIGraph", -1, "99", -1, {}, -1},
+        {"HumanSoldier", 2, "3341", -1, {9}, 244},
+        {"HumanAI", 8, "3056", 15, {}, -1}
     };
-    EXPECT_TRUE(igi::HumanSitsInVehicle(objects, 3));
-    EXPECT_FALSE(igi::HumanSitsInVehicle(objects, 5));
+    EXPECT_TRUE(igi::HumanSitsInVehicle(objects, 3)) << "driver (standAnimation 61) is seated";
+    EXPECT_FALSE(igi::HumanSitsInVehicle(objects, 5)) << "soldier on ground graph is grounded";
+    EXPECT_FALSE(igi::HumanSitsInVehicle(objects, 8)) << "soldier running outside vehicle (standAnimation 244) is grounded";
 }
 
 // ---------------------------------------------------------------------------

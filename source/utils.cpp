@@ -454,7 +454,8 @@ bool IsUndergroundModel(const std::string& name, const std::string& modelId) {
 		matches("471_") ||
 		matches("491_") ||
 		matches("472_01_1") ||   // ANYA_HQ — underground command bunker
-		matches("ANYA_HQ");
+		matches("ANYA_HQ") ||
+		matches("ANYA");
 }
 
 #if defined(_WIN32)

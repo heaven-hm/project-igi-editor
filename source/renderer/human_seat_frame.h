@@ -83,12 +83,13 @@
 namespace igi {
 
 // The vehicle task types a level can own a passenger with.  These are the task
-// names the shipped QSC uses (`Car`, `CarAI`, `Heli`, `Plane`, `Train`); the
+// names the shipped QSC uses (`Car`, `CarAI`, `Heli`, `Plane`); the
 // engine's own `TASKTYPE_*` constants for them are registered in
-// `src/rotor/car.c:276`, `src/heli/heli.c:201` and `src/missile/train.c:375`.
+// `src/rotor/car.c:276`, `src/heli/heli.c:201` and `src/rotor/plane.c`.
+// Train (`src/missile/train.c`) is a spline rail object without passenger
+// attachments and does not use `Human_SetPlatform` (0x463310).
 inline bool IsVehicleTaskType(std::string_view type) {
-    return type == "Car" || type == "CarAI" || type == "Heli" || type == "Plane" ||
-           type == "Train";
+    return type == "Car" || type == "CarAI" || type == "Heli" || type == "Plane";
 }
 
 // The human task types whose mesh is re-based to the feet by
@@ -105,6 +106,18 @@ struct HasChildrenIndices : std::false_type {};
 
 template <typename T>
 struct HasChildrenIndices<T, std::void_t<decltype(std::declval<T>().childrenIndices)>> : std::true_type {};
+
+template <typename T, typename = void>
+struct HasStandAnimation : std::false_type {};
+
+template <typename T>
+struct HasStandAnimation<T, std::void_t<decltype(std::declval<T>().standAnimation)>> : std::true_type {};
+
+inline bool IsVehicleSeatedAnimation(int anim) {
+    // 61: Driver (car/truck) - e.g. Level 1 & 2 Jones driving truck
+    // 240, 243: Seated passenger - e.g. seated in helicopter or truck
+    return anim == 61 || anim == 240 || anim == 243;
+}
 
 // True when `objects[index]` is a human whose PARENT CHAIN contains a vehicle
 // task, OR whose HumanAI child attaches to an AIGraph that is parented to a vehicle
@@ -137,7 +150,17 @@ inline bool HumanSitsInVehicle(const ObjectList& objects, int index) {
                         int gParent = objects[gi].parentIndex;
                         for (int gGuard = 0; gParent >= 0 && gParent < static_cast<int>(objects.size()); ++gGuard) {
                             if (gGuard > 64) break;
-                            if (IsVehicleTaskType(objects[gParent].type)) return true;
+                            if (IsVehicleTaskType(objects[gParent].type)) {
+                                if constexpr (HasStandAnimation<ItemType>::value) {
+                                    // If the human has an explicit stand animation, it must be a seated/driving animation
+                                    // (e.g. 61 for driver, 240/243 for passenger). Running (244) or walking is on foot outside.
+                                    if (objects[index].standAnimation >= 0 &&
+                                        !IsVehicleSeatedAnimation(objects[index].standAnimation)) {
+                                        return false;
+                                    }
+                                }
+                                return true;
+                            }
                             gParent = objects[gParent].parentIndex;
                         }
                         break;

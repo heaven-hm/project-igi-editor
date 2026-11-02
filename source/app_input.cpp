@@ -4,6 +4,7 @@
  *          Split from app_input.cpp; shares app_internal.h.
  *****************************************************************************/
 #include "app_internal.h"
+#include "renderer/human_seat_frame.h"
 #include "runtime/editor_camera_start.h"
 #include "runtime/editor_quick_actions.h"
 #include "runtime/loading_bar_style.h"
@@ -208,6 +209,7 @@ void App::DispatchEventBindings() {
 					float terrainZ = 0.0f;
 					if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ)) {
 						float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
+						if (igi::IsHumanTaskType(obj.type)) zOffset = 0.0f;
 						obj.pos.z = (double)terrainZ + (double)(zOffset * 40.96f * obj.scale);
 						obj.modified = true;
 						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
@@ -533,6 +535,7 @@ void App::DispatchEventBindings() {
 					float terrainZ = 0.0f;
 					if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ)) {
 						float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
+						if (igi::IsHumanTaskType(obj.type)) zOffset = 0.0f;
 						obj.pos.z = (double)terrainZ + (double)(zOffset * 40.96f * obj.scale);
 						obj.modified = true;
 						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);

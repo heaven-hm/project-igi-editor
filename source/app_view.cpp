@@ -670,8 +670,8 @@ void App::SnapObjectsToTerrain() {
             skipped++;
             continue;
         }
-        // Skip snapping for Player Jones (000_01_1) to preserve exact QSC position
-        if (obj.modelId == "000_01_1") {
+        // Skip snapping for Player Jones (spawn placement) to preserve exact QSC position
+        if (obj.type == "HumanPlayer") {
             skipped++;
             continue;
         }
@@ -715,6 +715,56 @@ void App::SnapObjectsToTerrain() {
             }
             
             obj.snap_z_offset = 0.0;
+            skipped++;
+            continue;
+        }
+
+        // Underground objects (Tunnels, ElevatorTunnels, UndergroundRooms, Anya HQ) have their
+        // Z defined precisely in the QSC and must go below terrain. Preserve original Z.
+        // We also check parents: if a child (like a Door, Terminal, or AI) is inside an underground
+        // parent, it must also skip snapping.
+        bool isUnderground = Utils::IsUndergroundModel(obj.name, obj.modelId) || (obj.type == "Underground");
+        
+        if (!isUnderground && obj.parentIndex != -1 && obj.parentIndex < (int)objects.size()) {
+            int pIdx = obj.parentIndex;
+            while (pIdx != -1 && pIdx < (int)objects.size()) {
+                const auto& parent = objects[pIdx];
+                if (Utils::IsUndergroundModel(parent.name, parent.modelId) || (parent.type == "Underground")) {
+                    isUnderground = true;
+                    break;
+                }
+                pIdx = parent.parentIndex;
+            }
+        }
+
+        if (isUnderground) {
+            obj.snap_z_offset = 0.0;
+            obj.pos.z = obj.original_pos.z;
+            Logger::Get().Log(LogLevel::INFO, "[App] Underground context, preserving QSC Z for " + obj.modelId + " (" + obj.name + ") Z=" + std::to_string(obj.pos.z));
+            skipped++;
+            continue;
+        }
+
+        // Objects that are children of buildings (interior furniture, crates, AI) have
+        // their QSC Z set relative to the building's pre-snap position (= terrainZ).
+        // After snap, the building floor is at terrainZ + building.snap_z_offset, so
+        // the child must be raised by the same amount to stay on the building floor.
+        bool isIndoorChild = false;
+        double buildingSnapZ = 0.0;
+        if (obj.parentIndex != -1 && obj.parentIndex < (int)objects.size()) {
+            int pIdx = obj.parentIndex;
+            while (pIdx != -1 && pIdx < (int)objects.size()) {
+                if (objects[pIdx].isBuilding) {
+                    isIndoorChild = true;
+                    buildingSnapZ = objects[pIdx].snap_z_offset;
+                    break;
+                }
+                pIdx = objects[pIdx].parentIndex;
+            }
+        }
+        if (isIndoorChild) {
+            obj.snap_z_offset = 0.0;
+            obj.pos.z = obj.original_pos.z + buildingSnapZ;
             skipped++;
             continue;
         }
@@ -881,56 +931,6 @@ void App::SnapObjectsToTerrain() {
                 }
                 continue;
             }
-        }
-
-        // Underground objects (Tunnels, ElevatorTunnels, UndergroundRooms) have their
-        // Z defined precisely in the QSC and must go below terrain. Preserve original Z.
-        // We also check parents: if a child (like a Door or Terminal) is inside an underground
-        // parent, it must also skip snapping.
-        bool isUnderground = Utils::IsUndergroundModel(obj.name, obj.modelId) || (obj.type == "Underground");
-        
-        if (!isUnderground && obj.parentIndex != -1 && obj.parentIndex < (int)objects.size()) {
-            int pIdx = obj.parentIndex;
-            while (pIdx != -1 && pIdx < (int)objects.size()) {
-                const auto& parent = objects[pIdx];
-                if (Utils::IsUndergroundModel(parent.name, parent.modelId) || (parent.type == "Underground")) {
-                    isUnderground = true;
-                    break;
-                }
-                pIdx = parent.parentIndex;
-            }
-        }
-
-        if (isUnderground) {
-            obj.snap_z_offset = 0.0;
-            obj.pos.z = obj.original_pos.z;
-            Logger::Get().Log(LogLevel::INFO, "[App] Underground context, preserving QSC Z for " + obj.modelId + " (" + obj.name + ") Z=" + std::to_string(obj.pos.z));
-            skipped++;
-            continue;
-        }
-
-        // Objects that are children of buildings (interior furniture, crates, AI) have
-        // their QSC Z set relative to the building's pre-snap position (= terrainZ).
-        // After snap, the building floor is at terrainZ + building.snap_z_offset, so
-        // the child must be raised by the same amount to stay on the building floor.
-        bool isIndoorChild = false;
-        double buildingSnapZ = 0.0;
-        if (obj.parentIndex != -1 && obj.parentIndex < (int)objects.size()) {
-            int pIdx = obj.parentIndex;
-            while (pIdx != -1 && pIdx < (int)objects.size()) {
-                if (objects[pIdx].isBuilding) {
-                    isIndoorChild = true;
-                    buildingSnapZ = objects[pIdx].snap_z_offset;
-                    break;
-                }
-                pIdx = objects[pIdx].parentIndex;
-            }
-        }
-        if (isIndoorChild) {
-            obj.snap_z_offset = 0.0;
-            obj.pos.z = obj.original_pos.z + buildingSnapZ;
-            skipped++;
-            continue;
         }
 
         float terrainZ = 0.0f;
@@ -1211,6 +1211,7 @@ void App::UpdateMarkerManipulation() {
 		float terrainZ = 0.0f;
 		if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ, isUnderground)) {
 			float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
+			if (igi::IsHumanTaskType(obj.type)) zOffset = 0.0f;
 			obj.snap_z_offset = isUnderground ? 0.0 : (double)(zOffset * 40.96f * obj.scale);
 			obj.pos.z = (double)terrainZ + obj.snap_z_offset;
 			obj.modified = true;

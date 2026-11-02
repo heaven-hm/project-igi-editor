@@ -1714,6 +1714,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 					float terrainZ = 0.0f;
 					if (level_.GetTerrainZ(obj.pos.x, obj.pos.y, terrainZ)) {
 						float zOffset = renderer_.GetMeshZOffset(obj.modelId, obj.isBuilding);
+						if (igi::IsHumanTaskType(obj.type)) zOffset = 0.0f;
 						// Snap object bottom to terrain surface
 						obj.pos.z = (double)terrainZ + (double)(zOffset * 40.96f * obj.scale);
 						Logger::Get().Log(LogLevel::INFO, "[App] Snapped object to ground");
