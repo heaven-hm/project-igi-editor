@@ -431,3 +431,44 @@ TEST_F(ConfigTest, KeybindingsHaveNonZeroVkCodes) {
 TEST_F(ConfigTest, InterpolationIsNonNegative) {
     EXPECT_GE(Config::Get().interpolation, 0);
 }
+
+TEST(ConfigQvmTest, LoadsEventBindingsFromCompiledKeybindingsQvm) {
+    namespace fs = std::filesystem;
+    const fs::path gameRoot = fs::temp_directory_path() /
+        ("igi1ed-keybindings-qvm-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const fs::path qedDir = gameRoot / "editor" / "qed";
+    std::error_code ec;
+    fs::create_directories(qedDir, ec);
+    ASSERT_FALSE(ec);
+    {
+        std::ofstream qsc(qedDir / "qedconfig.qsc");
+        ASSERT_TRUE(qsc.is_open());
+        qsc << "QEDLogs(FALSE);\nQEDDebug(FALSE);\n";
+    }
+    {
+        std::ofstream kb(qedDir / "qedkeybindings.qsc");
+        ASSERT_TRUE(kb.is_open());
+        kb << "SetEventBinding(\"CameraEnable\", \"<Alt>\");\n"
+           << "SetEventBinding(\"CameraMoveForward\", \"<W>\");\n"
+           << "SetEventBinding(\"CameraMoveBackward\", \"<S>\");\n"
+           << "SetEventBinding(\"CameraStrafeLeft\", \"<A>\");\n"
+           << "SetEventBinding(\"CameraStrafeRight\", \"<D>\");\n";
+    }
+
+    {
+        ScopedEnvironmentVariable gamePath("IGI_GAME_PATH", gameRoot.string());
+        Config::Init();
+        const fs::path kbQvmPath = qedDir / "qedkeybindings.qvm";
+        ASSERT_TRUE(fs::is_regular_file(kbQvmPath));
+        const QVMFile kbQvm = QVM_Parse(kbQvmPath.string());
+        ASSERT_TRUE(kbQvm.valid) << kbQvm.error;
+        EXPECT_TRUE(Config::Get().keyEnableCamera.alt);
+        EXPECT_EQ(Config::Get().keyMoveCameraForward.vkCode, 'W');
+        EXPECT_EQ(Config::Get().keyMoveCameraBackward.vkCode, 'S');
+        EXPECT_EQ(Config::Get().eventBindings_["CameraStrafeLeft"].vkCode, 'A');
+        EXPECT_EQ(Config::Get().eventBindings_["CameraStrafeRight"].vkCode, 'D');
+    }
+    fs::remove_all(gameRoot, ec);
+    Config::Init();
+}

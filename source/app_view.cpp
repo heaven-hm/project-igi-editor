@@ -54,10 +54,11 @@ void App::ProcessInput(float delta_seconds) {
 
 	UpdateViewerVectors();
 
-	// Unified camera movement queries so both WASD (held with or without Alt) and
-	// configured camera bindings (including Alt+Shift forward / Alt+Ctrl backward)
-	// accelerate viewer_.move_speed_ and move the camera identically, without
-	// double-applying CameraStrafeLeft/Right.
+	// Camera movement queries read strictly from Config::Get() / eventBindings_
+	// (populated from qedkeybindings.qvm / qedconfig.qvm) with no hardcoded key
+	// literals. Gated on !modal_text_open and not actively LMB-dragging an object
+	// in 3D view (so object manipulation keys like 'A'/'S' during LMB drag don't
+	// simultaneously move the camera).
 	auto& ev = Config::Get().eventBindings_;
 	auto CheckCont = [&](const std::string& n) {
 		auto it = ev.find(n);
@@ -68,29 +69,29 @@ void App::ProcessInput(float delta_seconds) {
 		file_dialog_mode_ != FileDialogMode::None ||
 		ac_task_picker_open_ || model_picker_open_ ||
 		prop_text_edit_field_ != -1;
-	const bool alt_wasd_active = enableCameraMode && !modal_text_open;
+	const bool manip_lmb_active =
+		!enableCameraMode && mouse_state_.left_button_down_ && selected_object_index_ >= 0;
+	const bool allow_cam_keys = !modal_text_open && !manip_lmb_active;
 	const bool is_fwd =
 		(input_.keys_ & MK_FORWARD) ||
-		Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraForward) ||
-		(alt_wasd_active && (Utils::IsKeyPressed('W') || Utils::IsKeyPressed(VK_SHIFT)));
+		(allow_cam_keys && (Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraForward) ||
+		                    CheckCont("CameraMoveForward")));
 	const bool is_bwd =
 		(input_.keys_ & MK_BACKWARD) ||
-		Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraBackward) ||
-		(alt_wasd_active && (Utils::IsKeyPressed('S') || Utils::IsKeyPressed(VK_CONTROL)));
+		(allow_cam_keys && (Utils::IsKeyBindingPressed(Config::Get().keyMoveCameraBackward) ||
+		                    CheckCont("CameraMoveBackward")));
 	const bool is_left =
 		(input_.keys_ & MK_LEFT) ||
-		CheckCont("CameraStrafeLeft") ||
-		(alt_wasd_active && Utils::IsKeyPressed('A'));
+		(allow_cam_keys && CheckCont("CameraStrafeLeft"));
 	const bool is_right =
 		(input_.keys_ & MK_RIGHT) ||
-		CheckCont("CameraStrafeRight") ||
-		(alt_wasd_active && Utils::IsKeyPressed('D'));
+		(allow_cam_keys && CheckCont("CameraStrafeRight"));
 	const bool is_up =
 		(input_.keys_ & MK_STRAIGHT_UP) ||
-		(alt_wasd_active && Utils::IsKeyPressed('Q'));
+		(allow_cam_keys && CheckCont("CameraMoveUp"));
 	const bool is_down =
 		(input_.keys_ & MK_STRAIGHT_DOWN) ||
-		(alt_wasd_active && Utils::IsKeyPressed('E'));
+		(allow_cam_keys && CheckCont("CameraMoveDown"));
 
 	// Gradually increase/decrease camera movement speed based on active movement
 	{
@@ -1101,9 +1102,9 @@ void App::UpdateMarkerManipulation() {
 	if (shift && ctrl) current_mode = ManipulationMode::MoveXZ;
 	else if (shift)    current_mode = ManipulationMode::MoveXY;
 	else if (ctrl)     current_mode = ManipulationMode::MoveXZ;
-	else if (input_.keys_ & MK_MANIP_A) current_mode = ManipulationMode::RotateAlpha;
-	else if (input_.keys_ & MK_MANIP_B) current_mode = ManipulationMode::RotateBeta;
-	else if (input_.keys_ & MK_MANIP_G) current_mode = ManipulationMode::RotateGamma;
+	else if ((input_.keys_ & MK_MANIP_A) || Utils::IsKeyPressed(Config::Get().keyRotateAlpha)) current_mode = ManipulationMode::RotateAlpha;
+	else if ((input_.keys_ & MK_MANIP_B) || Utils::IsKeyPressed(Config::Get().keyRotateBeta))  current_mode = ManipulationMode::RotateBeta;
+	else if ((input_.keys_ & MK_MANIP_G) || Utils::IsKeyPressed(Config::Get().keyRotateGamma)) current_mode = ManipulationMode::RotateGamma;
 	else               current_mode = ManipulationMode::None;
 
 	// Detect mid-drag transition between MoveXY and MoveXZ to prevent resetting coordinate updates in the other plane
@@ -1259,13 +1260,5 @@ void App::UpdateMarkerManipulation() {
 		if (task_editor_open_) {
 			edit_string_ = obj.qscLine;
 		}
-	}
-
-	if (dx != 0 || dy != 0) {
-		obj.modified = true;
-	}
-
-	if (obj.modified) {
-		level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
 	}
 }

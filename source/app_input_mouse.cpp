@@ -708,7 +708,8 @@ void App::Input_OnMotion(int x, int y) {
 			if (graph_node_manip_.active_ && renderer_.GraphSelected() >= 0) {
 				UpdateGraphNodeManipulation(x, y);
 			}
-			else if (edit_mode_ && selected_object_index_ >= 0 && !terrain_edit_enabled_) {
+			else if (edit_mode_ && selected_object_index_ >= 0 && !terrain_edit_enabled_ &&
+			         prop_field_index_ < 0 && !edit_dragging_) {
 				UpdateMarkerManipulation();
 			}
 		}
@@ -783,19 +784,17 @@ void App::Input_OnMotion(int x, int y) {
 					bool is_ori = (tn == "Real32x9");
 					int dxp = x - prop_drag_start_x_;
 
-					if (is_pos && (prop_drag_kind_ == PropPanel::WidgetKind::PosPad ||
-					               prop_drag_kind_ == PropPanel::WidgetKind::PosZSlider)) {
-						// Position pad / Z slider use a per-frame velocity model
-						// (ApplyPropPositionDrag) so the object accelerates while held in a
-						// direction and keeps moving even when the cursor is pinned at the
-						// window edge. Raw motion events do nothing for position here.
+					if (is_pos) {
+						// Position X/Y/Z NumBoxes, 2D pad, and Z slider use the per-frame
+						// velocity model (ApplyPropPositionDrag) from v3.6.11-pre so the
+						// object accelerates smoothly while held and the camera follows along.
 					} else {
 						glm::dvec3 oldPos = obj.pos;
 						glm::dvec3 oldRot = obj.rot;
 						// Orientation / RGB / numeric horizontal slider or NumBox scrub.
 						bool isRgb = (tn == "RGB" || tn == "Colour");
 						bool isInt = (tn == "Int16" || tn == "Int32" || tn == "EnumInt32");
-						float sens = is_pos ? 50.0f : (is_ori ? 0.01f : (isRgb ? 0.005f : (isInt ? 0.1f : 0.05f)));
+						float sens = is_float3 ? 100.0f : (is_ori ? 0.01f : (isRgb ? 0.005f : (isInt ? 0.1f : 0.05f)));
 						float nv = prop_drag_start_val_ + dxp * sens;
 						if (isRgb) nv = std::max(0.f, std::min(1.f, nv));
 						int argIdx = fd.argOffset + comp;
@@ -804,11 +803,6 @@ void App::Input_OnMotion(int x, int y) {
 							if (isInt) snprintf(buf, sizeof(buf), "%d", (int)std::lround(nv));
 							else       snprintf(buf, sizeof(buf), "%.6f", nv);
 							obj.argTokens[argIdx] = buf;
-						}
-						if (is_pos) {
-							if      (comp == 0) obj.pos.x = nv;
-							else if (comp == 1) obj.pos.y = nv;
-							else if (comp == 2) obj.pos.z = nv;
 						}
 						if (is_ori) { // mirror to obj.rot (Alpha/Beta/Gamma -> x/y/z)
 							if      (comp == 0) obj.rot.x = nv;
@@ -823,14 +817,9 @@ void App::Input_OnMotion(int x, int y) {
 						                    (fd.name == "Gamma" || fd.name == "Heading"));
 						if (isSingleRot) obj.rot.z = (double)nv;
 						obj.modified = true;
-						if (is_pos) {
-							glm::dvec3 deltaPos = obj.pos - oldPos;
-							PropagateTransformToChildren(dragIdx, deltaPos, glm::dmat3(1.0), oldPos);
-							SyncGraphOverlayOffsetFromAIGraph();
-						}
 						if (is_ori) {
 							glm::dmat3 deltaWorld = BuildRotMatZXY(obj.rot) * glm::transpose(BuildRotMatZXY(oldRot));
-							PropagateTransformToChildren(dragIdx, glm::dvec3(0), deltaWorld, oldPos);
+							PropagateTransformToChildren(dragIdx, deltaWorld == glm::dmat3(1.0) ? glm::dvec3(0) : glm::dvec3(0), deltaWorld, oldPos);
 						}
 						level_.GetLevelObjects().UpdateCoordinatesInLine(obj);
 					}
@@ -840,16 +829,13 @@ void App::Input_OnMotion(int x, int y) {
 	}
 }
 
-// Per-frame velocity-ramped position drag for the property editor's 2D pad and Z
-// slider. Called once per frame while the field is held. The object accelerates
-// the longer the cursor is held away from the drag-start point (mirrors the
-// ALT+SHIFT camera boost) and keeps moving even when the cursor is pinned at the
-// window edge. The camera is intentionally NOT moved, so the object visibly
-// travels through the world.
+// Per-frame velocity-ramped position drag for the property editor's X/Y/Z numeric
+// boxes, 2D pad, and Z slider (v3.6.11-pre model). Called once per frame while the
+// field is held. The object accelerates the longer/further the cursor is held away
+// from the drag-start point and keeps moving even when the cursor is pinned at the
+// window edge, with the camera following along.
 void App::ApplyPropPositionDrag() {
 	if (prop_field_index_ < 0) return;
-	if (prop_drag_kind_ != PropPanel::WidgetKind::PosPad &&
-	    prop_drag_kind_ != PropPanel::WidgetKind::PosZSlider) return;
 	auto& objects = level_.GetLevelObjects().GetObjects();
 	int dragIdx = (prop_drag_obj_index_ >= 0) ? prop_drag_obj_index_ : selected_object_index_;
 	if (dragIdx < 0 || dragIdx >= (int)objects.size()) return;
@@ -861,14 +847,14 @@ void App::ApplyPropPositionDrag() {
 	int comp = prop_field_index_ % 3;
 	if (fi >= (int)schema.size()) return;
 	const FieldDef& fd = schema[fi];
-	if (fd.typeName != "ObjectPos") return;   // only the pad / Z slider use this model
+	if (fd.typeName != "ObjectPos") return;
 
 	int dispx = mouse_state_.prior_x_ - prop_drag_start_x_;
 	int dispy = mouse_state_.prior_y_ - prop_drag_start_y_;
-	const int   kDead   = 5;        // cursor dead zone around the drag start
-	const float kBase   = 25.0f;    // units/frame just past the dead zone
-	const float kGrowth = 1.05f;    // per-frame acceleration multiplier
-	const float kMax    = 8000.0f;  // speed cap (units/frame)
+	const int   kDead   = 4;        // cursor dead zone around the drag start
+	const float kBase   = 120.0f;   // units/frame just past the dead zone
+	const float kGrowth = 1.08f;    // per-frame acceleration multiplier
+	const float kMax    = 12000.0f; // speed cap (units/frame)
 
 	auto curArg = [&](int idx) -> double {
 		return (idx >= 0 && idx < (int)obj.argTokens.size()) ? std::atof(obj.argTokens[idx].c_str()) : 0.0;
@@ -883,10 +869,11 @@ void App::ApplyPropPositionDrag() {
 	glm::dvec3 oldPos = obj.pos;
 	bool moved = false;
 
-	if (comp == 0) {            // 2D pad → X / Y
+	if (prop_drag_kind_ == PropPanel::WidgetKind::PosPad) { // 2D pad → X / Y
 		float len = std::sqrt((float)(dispx * dispx + dispy * dispy));
 		if (len < (float)kDead) { prop_drag_speed_ = 0.f; return; }
-		prop_drag_speed_ = (prop_drag_speed_ < kBase) ? kBase : std::min(kMax, prop_drag_speed_ * kGrowth);
+		const float distBoost = std::max(1.0f, len / 20.0f);
+		prop_drag_speed_ = (prop_drag_speed_ < kBase) ? (kBase * distBoost) : std::min(kMax, prop_drag_speed_ * kGrowth);
 		float ux = dispx / len, uy = dispy / len;
 		double nx = curArg(fd.argOffset + 0) + ux * prop_drag_speed_;
 		double ny = curArg(fd.argOffset + 1) - uy * prop_drag_speed_;  // screen-y down → world-y up
@@ -894,22 +881,37 @@ void App::ApplyPropPositionDrag() {
 		writeArg(fd.argOffset + 1, ny);
 		obj.pos.x = nx; obj.pos.y = ny;
 		moved = true;
-	} else if (comp == 1) {     // Y numeric box → Y only
+	} else if (prop_drag_kind_ == PropPanel::WidgetKind::PosZSlider) { // vertical Z slider
 		if (std::abs(dispy) < kDead) { prop_drag_speed_ = 0.f; return; }
-		prop_drag_speed_ = (prop_drag_speed_ < kBase) ? kBase : std::min(kMax, prop_drag_speed_ * kGrowth);
-		float uy = (dispy < 0) ? 1.f : -1.f;   // drag up → +Y
-		double ny = curArg(fd.argOffset + 1) + uy * prop_drag_speed_;
-		writeArg(fd.argOffset + 1, ny);
-		obj.pos.y = ny;
-		moved = true;
-	} else if (comp == 2) {     // Z slider
-		if (std::abs(dispy) < kDead) { prop_drag_speed_ = 0.f; return; }
-		prop_drag_speed_ = (prop_drag_speed_ < kBase) ? kBase : std::min(kMax, prop_drag_speed_ * kGrowth);
+		const float distBoost = std::max(1.0f, (float)std::abs(dispy) / 20.0f);
+		prop_drag_speed_ = (prop_drag_speed_ < kBase) ? (kBase * distBoost) : std::min(kMax, prop_drag_speed_ * kGrowth);
 		float uy = (dispy < 0) ? 1.f : -1.f;   // drag up → +Z
 		double nz = curArg(fd.argOffset + 2) + uy * prop_drag_speed_;
 		writeArg(fd.argOffset + 2, nz);
 		obj.pos.z = nz;
 		moved = true;
+	} else { // X, Y, or Z NumBox (accepts either horizontal or vertical drag)
+		int dom = (std::abs(dispx) >= std::abs(dispy)) ? dispx : -dispy;
+		if (std::abs(dom) < kDead) { prop_drag_speed_ = 0.f; return; }
+		const float distBoost = std::max(1.0f, (float)std::abs(dom) / 20.0f);
+		prop_drag_speed_ = (prop_drag_speed_ < kBase) ? (kBase * distBoost) : std::min(kMax, prop_drag_speed_ * kGrowth);
+		float dir = (dom > 0) ? 1.f : -1.f;
+		if (comp == 0) {
+			double nx = curArg(fd.argOffset + 0) + dir * prop_drag_speed_;
+			writeArg(fd.argOffset + 0, nx);
+			obj.pos.x = nx;
+			moved = true;
+		} else if (comp == 1) {
+			double ny = curArg(fd.argOffset + 1) + dir * prop_drag_speed_;
+			writeArg(fd.argOffset + 1, ny);
+			obj.pos.y = ny;
+			moved = true;
+		} else if (comp == 2) {
+			double nz = curArg(fd.argOffset + 2) + dir * prop_drag_speed_;
+			writeArg(fd.argOffset + 2, nz);
+			obj.pos.z = nz;
+			moved = true;
+		}
 	}
 
 	if (moved) {

@@ -1857,24 +1857,29 @@ void Renderer::Draw(const draw_params_s &params,
       const igi::MenuUiScreen* pause_screen = pause_menu.CurrentScreen();
       if (pause_screen != nullptr) {
         const int viewport_h = params.view_define_->viewport_height_;
+        // Always use the retail IGI-RE menu font (`font3.fnt` from
+        // `MENUSYSTEM/ingamemenu.res`, Sprite_Load HOOK 0x4B6720,
+        // MenuManager_AddResource HOOK 0x417E20) at its native 21px line height
+        // and 25px row pitch (`MenuWindow_Arrange` HOOK 0x4244B0,
+        // `MenuWindow_Place` HOOK 0x424420) for the pause menu itself; the
+        // `Font: Editor/System` row controls the editor HUD font.
         const PauseMenuFontMetrics pause_font_metrics =
-            GetPauseMenuFontMetrics(Config::Get().useEditorFont,
-                                    Config::Get().systemFontSize);
+            GetPauseMenuFontMetrics(false, 12);
         const igi::PauseMenuLayout pause_layout = task_tree_view.pause_menu_layout_;
         const igi::MenuUiRect pause_panel = pause_menu.ToViewport(pause_screen->frame);
         const int menu_x = pause_panel.x;
         const int menu_w = pause_panel.w;
-        const float pause_font_scale = pause_layout.text_scale *
-            (static_cast<float>(Config::Get().systemFontSize) / 12.0f);
+        const float pause_font_scale = pause_layout.text_scale;
         const int pause_box_height = (std::max)(24, static_cast<int>(std::ceil(
             static_cast<float>(pause_font_metrics.lineHeight) *
             pause_layout.text_scale)) + 4);
-        if (Config::Get().useEditorFont) EnsureEditorFont();
-        else EnsureRetailPauseFontTexture();
+        EnsureRetailPauseFontTexture();
+        if (!g_retailPauseFontTex || !GetRetailPauseFont().valid) {
+          EnsureEditorFont();
+        }
 
         auto pause_text_width = [&](const char* text) {
-          return PauseMenuTextWidth(text, Config::Get().useEditorFont,
-                                    Config::Get().systemFontSize,
+          return PauseMenuTextWidth(text, false, 12,
                                     pause_layout.text_scale);
         };
 
@@ -1883,12 +1888,11 @@ void Renderer::Draw(const draw_params_s &params,
         // otherwise; a plain label on a settled menu is alpha 1.
         auto draw_pause_text = [&](int x, int y, const char* text,
                                    float r, float g, float b, float alpha = 1.0f) {
-          if (Config::Get().useEditorFont && g_editorFont.valid && g_editorFontTex) {
-            DrawFontText(x, viewport_h - y, text, r, g, b, pause_font_scale, alpha);
-          } else if (!Config::Get().useEditorFont &&
-                     g_retailPauseFontTex && GetRetailPauseFont().valid) {
+          if (g_retailPauseFontTex && GetRetailPauseFont().valid) {
             DrawRetailPauseText(x, viewport_h - y, text, r, g, b,
                                 pause_font_scale, alpha);
+          } else if (g_editorFont.valid && g_editorFontTex) {
+            DrawFontText(x, viewport_h - y, text, r, g, b, pause_font_scale, alpha);
           } else {
             draw_text_sys(x, y, text, r, g, b);
           }

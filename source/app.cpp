@@ -1554,17 +1554,14 @@ void App::Frame(float delta_seconds) {
 				}
 				if (bench_idx >= 0) selected_object_index_ = bench_idx;
 			}
-			// While navigating with the camera key (`camMode`), UpdateAnimations is
-			// skipped so poses do not advance; restrict skinned replacement to the
-			// selected object during active camera-key navigation (matching v3.6.11-pre)
-			// so camera look/orbit stays 60fps while keeping the full HUD and scene visible.
-			if (camMode) {
-				std::unordered_set<int> candidates = GetSkinnedReplacementObjectIndices(false);
-				if (selected_object_index_ >= 0 && candidates.count(selected_object_index_)) {
-					skinnedReplacementIndices.insert(selected_object_index_);
-				}
-			} else {
-				skinnedReplacementIndices = GetEditorDrawnAnimationIndices();
+			// Match v3.6.11-pre in editor mode: pose and draw full CPU-skinned
+			// replacement meshes only for the selected object (unless the benchmark
+			// override is active), while UpdateAnimations continues advancing clocks
+			// for all AI playbacks. This keeps mouse hover/selection, object move/rotate,
+			// and TaskTree XYZ slider drags at 60fps even when ALT is not held.
+			std::unordered_set<int> candidates = GetSkinnedReplacementObjectIndices(false);
+			if (selected_object_index_ >= 0 && candidates.count(selected_object_index_)) {
+				skinnedReplacementIndices.insert(selected_object_index_);
 			}
 		}
 		// render_gameplay: already computed above, before the pose. Deliberately
@@ -1603,8 +1600,11 @@ void App::Frame(float delta_seconds) {
 	const bool pointer_changed = mouse_state_.prior_x_ != last_pick_x_ ||
 		mouse_state_.prior_y_ != last_pick_y_;
 	// camMode is declared above at line 1527
-	const bool overPanel = prop_editor_open_ &&
-		mouse_state_.prior_x_ < (PropPanel::kLeft + PropPanel::kWidth);
+	const bool overPanel = (show_hud_ && mouse_state_.prior_x_ < 350) ||
+		(prop_editor_open_ && mouse_state_.prior_x_ < (PropPanel::kLeft + PropPanel::kWidth)) ||
+		prop_field_index_ >= 0 ||
+		marker_manip_.mode_ != ManipulationMode::None ||
+		graph_node_manip_.active_;
 	int64_t editor_pick_us = 0;
 	bool editor_pick_called = false;
 	// Hover picking is deferred to a SETTLED pointer: one pick is a whole extra

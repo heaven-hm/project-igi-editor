@@ -5,6 +5,7 @@
  *****************************************************************************/
 #include "renderer_objects_internal.h"
 #include "igi_transform.h"
+#include "../capture_camera.h"
 
 
 void Renderer_Objects::InitPickingFBO(int w, int h) {
@@ -324,7 +325,9 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
         // clicking where the helicopter used to be. `GetHeliPreviewPose` is pure
         // and reads the frame's tick, so it returns exactly what the visual pass
         // drew.
-        {
+        // Same rule as Renderer_Objects::Draw (lines 1361-1370): only the selected
+        // helicopter flies in the preview pose.
+        if (i == selected_object_index && obj.type == "Heli") {
             HeliPreviewCacheEntry pose;
             GetHeliPreviewPose(i, obj.type, obj.argTokens, &pose);
             if (pose.pose_valid) {
@@ -391,17 +394,43 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
         // in objects.qsc) become individually clickable — the app promotes them
         // into real, editable EditRigidObj tasks. ATTAs that already have a
         // matching EditRigidObj are skipped (occupancy check inside).
+        // Match the visual pass's attachment distance cull and cache check
+        // (Renderer_Objects::Draw lines 1739-1756) so distant buildings and
+        // models without attachments do not issue redundant GL state/draw work.
         {
-            glm::mat4 parentWorldMat(1.0f);
-            parentWorldMat = glm::translate(parentWorldMat, glm::vec3(obj.pos));
-            parentWorldMat = glm::rotate(parentWorldMat, (float)obj.rot.z, glm::vec3(0.f, 0.f, 1.f));
-            parentWorldMat = glm::rotate(parentWorldMat, (float)obj.rot.x, glm::vec3(1.f, 0.f, 0.f));
-            parentWorldMat = glm::rotate(parentWorldMat, (float)obj.rot.y, glm::vec3(0.f, 1.f, 0.f));
-            std::unordered_set<std::string> drawn;
-            DrawAttachmentsForPicking(obj.modelId, obj.isBuilding, parentWorldMat, obj.scale,
-                                      loc_model, loc_id, i, drawn, selected_object_index);
-            glUseProgram(pick_shader_prog_);
-            glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
+            const glm::vec3 toObj = glm::vec3((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z) - camera_pos;
+            const float distSq = glm::dot(toObj, toObj);
+            const float boundRadius =
+                glm::length(mesh.halfExtents) * BASE_SCALE * std::max(obj.scale, 0.001f);
+            bool isCloseEnough = true;
+            if (obj.isBuilding && Config::Get().enableLOD) {
+                float distToCamera = std::sqrt(distSq);
+                float portalDistance = 100.0f;
+                auto pit = portal_distances_.find(obj.modelId);
+                if (pit != portal_distances_.end()) {
+                    portalDistance = pit->second;
+                }
+                isCloseEnough = igi::ShouldDrawBuildingAttachments(
+                    distToCamera, boundRadius, portalDistance * BASE_SCALE * 100.0f, Config::Get().enableLOD);
+            } else {
+                const float maxAtta = (80.0f * BASE_SCALE * 100.0f) + boundRadius;
+                isCloseEnough = distSq < maxAtta * maxAtta;
+            }
+            if (isCloseEnough) {
+                FillLevelModelKey(level_model_key_scratch_, current_level_, obj.isBuilding, obj.modelId);
+                if (attachment_cache_.find(level_model_key_scratch_) != attachment_cache_.end()) {
+                    glm::mat4 parentWorldMat(1.0f);
+                    parentWorldMat = glm::translate(parentWorldMat, glm::vec3(obj.pos));
+                    parentWorldMat = glm::rotate(parentWorldMat, (float)obj.rot.z, glm::vec3(0.f, 0.f, 1.f));
+                    parentWorldMat = glm::rotate(parentWorldMat, (float)obj.rot.x, glm::vec3(1.f, 0.f, 0.f));
+                    parentWorldMat = glm::rotate(parentWorldMat, (float)obj.rot.y, glm::vec3(0.f, 1.f, 0.f));
+                    std::unordered_set<std::string> drawn;
+                    DrawAttachmentsForPicking(obj.modelId, obj.isBuilding, parentWorldMat, obj.scale,
+                                              loc_model, loc_id, i, drawn, selected_object_index);
+                    glUseProgram(pick_shader_prog_);
+                    glBindBufferBase(GL_UNIFORM_BUFFER, ubo_binding_point_, ubo_mats);
+                }
+            }
         }
     }
 
@@ -482,14 +511,22 @@ int Renderer_Objects::PickObjectAtScreen(int x, int y, int w, int h,
     using PickClock = std::chrono::steady_clock;
     const auto pick_t0 = profilePick ? PickClock::now() : PickClock::time_point{};
 
-    DrawForPicking(ubo_mats, objects, draw_parts, camera_pos, selected_object_index,
-                   camera_forward);
-    const auto pick_t1 = profilePick ? PickClock::now() : PickClock::time_point{};
-
     // Read back the single pixel under the cursor.
     // OpenGL origin is bottom-left; screen coords are top-left → flip Y.
     const int read_x = x;
     const int read_y = h - y - 1;
+
+    // Scissor the FBO clear and rasterization to a 3x3 pixel window around the
+    // readback coordinate so we don't clear or shade 2M pixels on every pick.
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(std::max(0, read_x - 1), std::max(0, read_y - 1), 3, 3);
+
+    DrawForPicking(ubo_mats, objects, draw_parts, camera_pos, selected_object_index,
+                   camera_forward);
+
+    glDisable(GL_SCISSOR_TEST);
+    const auto pick_t1 = profilePick ? PickClock::now() : PickClock::time_point{};
+
     uint8_t pixel[3] = {0, 0, 0};
     glBindFramebuffer(GL_FRAMEBUFFER, pick_fbo_);
     glReadPixels(read_x, read_y, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, pixel);

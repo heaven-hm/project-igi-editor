@@ -468,18 +468,30 @@ void Config::Load(bool configQvmReady) {
         }
     }
 
-    // Event bindings are authoritative from the human-readable keybindings file.
-    // Parse it last so it overrides any stale bindings from a compiled .qvm and so
-    // the full set (TaskMagicObjToggle, AutoComplete*, SaveSubTask*, ...) is loaded.
+    // Event bindings are compiled from qedkeybindings.qsc into qedkeybindings.qvm
+    // during Config::Init() (lines 256-260). Load them from the compiled .qvm file
+    // via QVM_Parse + QVM_DecompileToString (matching qedconfig.qvm above), falling
+    // back to qedkeybindings.qsc only if the compiled .qvm is absent or invalid.
     {
-        std::ifstream kbFile(GetKeybindingsPath());
-        if (kbFile.is_open()) {
+        const std::filesystem::path kbQvmPath = qedDir / "qedkeybindings.qvm";
+        QVMFile kbQvm = QVM_Parse(kbQvmPath.string());
+        if (kbQvm.valid) {
+            std::string decompiled = QVM_DecompileToString(kbQvm);
+            std::stringstream ss(decompiled);
             std::string line;
             int n = 0;
-            while (std::getline(kbFile, line)) { ParseLine(line); ++n; }
-            Logger::Get().Log(LogLevel::INFO, "[Config] Loaded event bindings from qedkeybindings.qsc (" + std::to_string(n) + " lines)");
+            while (std::getline(ss, line)) { ParseLine(line); ++n; }
+            Logger::Get().Log(LogLevel::INFO, "[Config] Loaded event bindings from memory-decompiled: qedkeybindings.qvm (" + std::to_string(n) + " lines)");
         } else {
-            Logger::Get().Log(LogLevel::WARNING, "[Config] qedkeybindings.qsc not found at: " + GetKeybindingsPath());
+            std::ifstream kbFile(GetKeybindingsPath());
+            if (kbFile.is_open()) {
+                std::string line;
+                int n = 0;
+                while (std::getline(kbFile, line)) { ParseLine(line); ++n; }
+                Logger::Get().Log(LogLevel::INFO, "[Config] Loaded event bindings from qedkeybindings.qsc (" + std::to_string(n) + " lines)");
+            } else {
+                Logger::Get().Log(LogLevel::WARNING, "[Config] qedkeybindings.qvm/.qsc not found at: " + GetKeybindingsPath());
+            }
         }
     }
 }

@@ -66,11 +66,11 @@ igi::MenuUiBuildOptions App::PauseMenuBuildOptions() const {
 	igi::MenuUiBuildOptions options;
 	options.viewport_width = window_state_.viewport_width_;
 	options.viewport_height = window_state_.viewport_height_;
-	// The model sizes a text window from its rendered label (`MAKE_LABEL`,
-	// src/menuscreen/menutext.c:126-149), so it must measure text exactly the way
-	// the draw layer does.
-	options.metrics = igi::MenuUiMetricsForFonts(Config::Get().useEditorFont,
-	                                             Config::Get().systemFontSize);
+	// The pause menu always uses the retail IGI-RE menu font (`font3.fnt` from
+	// `MENUSYSTEM/ingamemenu.res`, Sprite_Load HOOK 0x4B6720, MenuManager_AddResource
+	// HOOK 0x417E20) at its native 21px line height (`MAKE_LABEL`,
+	// src/menuscreen/menutext.c:126-149), independent of the editor HUD font toggle.
+	options.metrics = igi::MenuUiMetricsForFonts(false, 12);
 	return options;
 }
 
@@ -81,8 +81,7 @@ int App::PauseMenuExtraRows() const {
 }
 
 igi::PauseMenuLayout App::PauseMenuLayoutNow() const {
-	const PauseMenuFontMetrics metrics = GetPauseMenuFontMetrics(
-		Config::Get().useEditorFont, Config::Get().systemFontSize);
+	const PauseMenuFontMetrics metrics = GetPauseMenuFontMetrics(false, 12);
 	return igi::BuildPauseMenuLayout(window_state_.viewport_width_,
 	                                 window_state_.viewport_height_,
 	                                 pause_terrain_expanded_, metrics.lineHeight,
@@ -210,8 +209,7 @@ bool App::HandlePauseMenuSpinner(const igi::MenuUiEntry& row, int x) {
 	const igi::PauseMenuLayout layout = PauseMenuLayoutNow();
 	const std::string label =
 		igi::PauseMenuRowLabel(row.editor_action, PauseMenuRowStateNow());
-	const int label_width = PauseMenuTextWidth(label.c_str(), Config::Get().useEditorFont,
-	                                           Config::Get().systemFontSize,
+	const int label_width = PauseMenuTextWidth(label.c_str(), false, 12,
 	                                           layout.text_scale);
 	const igi::PauseMenuSpinner spinner = igi::BuildPauseMenuSpinner(
 		layout.menu_left, layout.menu_width, row_y, layout.row_hit_radius, label_width,
@@ -310,8 +308,7 @@ bool App::WheelPauseMenuSpinner(int x, int y, int direction) {
 	const igi::PauseMenuLayout layout = PauseMenuLayoutNow();
 	const std::string label =
 		igi::PauseMenuRowLabel(row.editor_action, PauseMenuRowStateNow());
-	const int label_width = PauseMenuTextWidth(label.c_str(), Config::Get().useEditorFont,
-	                                           Config::Get().systemFontSize,
+	const int label_width = PauseMenuTextWidth(label.c_str(), false, 12,
 	                                           layout.text_scale);
 	const igi::PauseMenuSpinner spinner = igi::BuildPauseMenuSpinner(
 		layout.menu_left, layout.menu_width, row_y, layout.row_hit_radius, label_width,

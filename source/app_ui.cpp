@@ -98,27 +98,48 @@ void App::LoadAllCursors() {
 
 void App::LoadHelpEntries() {
 	help_entries_.clear();
-	std::vector<std::string> paths = {
-		Utils::GetExeDirectory() + "\\editor\\qed\\qedkeybindings.qsc",
-		Utils::GetExeDirectory() + "\\qed\\qedkeybindings.qsc",
-		Utils::GetIGIRootPath() + "\\editor\\qed\\qedkeybindings.qsc",
-		Utils::GetIGIRootPath() + "\\qed\\qedkeybindings.qsc",
-		"editor\\qed\\qedkeybindings.qsc",
-		"qed\\qedkeybindings.qsc"
+	std::string content;
+	std::vector<std::string> qvmPaths = {
+		Utils::GetIGIRootPath() + "\\editor\\qed\\qedkeybindings.qvm",
+		Utils::GetIGIRootPath() + "\\qed\\qedkeybindings.qvm",
+		Utils::GetExeDirectory() + "\\editor\\qed\\qedkeybindings.qvm",
+		Utils::GetExeDirectory() + "\\qed\\qedkeybindings.qvm",
+		"editor\\qed\\qedkeybindings.qvm",
+		"qed\\qedkeybindings.qvm"
 	};
-	std::ifstream f;
-	for (const auto& p : paths) {
-		f.open(p);
-		if (f.is_open()) {
-			Logger::Get().Log(LogLevel::INFO, "[App] Loaded keybindings from: " + p);
+	for (const auto& qp : qvmPaths) {
+		QVMFile qvm = QVM_Parse(qp);
+		if (qvm.valid) {
+			content = QVM_DecompileToString(qvm);
+			Logger::Get().Log(LogLevel::INFO, "[App] Loaded keybindings from QVM: " + qp);
 			break;
 		}
-		f.clear();
 	}
-	if (!f.is_open()) {
-		Logger::Get().Log(LogLevel::WARNING, "[App] Could not load help keybindings file: qedkeybindings.qsc");
+	if (content.empty()) {
+		std::vector<std::string> paths = {
+			Utils::GetExeDirectory() + "\\editor\\qed\\qedkeybindings.qsc",
+			Utils::GetExeDirectory() + "\\qed\\qedkeybindings.qsc",
+			Utils::GetIGIRootPath() + "\\editor\\qed\\qedkeybindings.qsc",
+			Utils::GetIGIRootPath() + "\\qed\\qedkeybindings.qsc",
+			"editor\\qed\\qedkeybindings.qsc",
+			"qed\\qedkeybindings.qsc"
+		};
+		std::ifstream f;
+		for (const auto& p : paths) {
+			f.open(p);
+			if (f.is_open()) {
+				Logger::Get().Log(LogLevel::INFO, "[App] Loaded keybindings from: " + p);
+				content.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+				break;
+			}
+			f.clear();
+		}
+	}
+	if (content.empty()) {
+		Logger::Get().Log(LogLevel::WARNING, "[App] Could not load help keybindings file: qedkeybindings.qvm/.qsc");
 		return;
 	}
+	std::stringstream f(content);
 	std::string line;
 	while (std::getline(f, line)) {
 		// Strip leading whitespace
