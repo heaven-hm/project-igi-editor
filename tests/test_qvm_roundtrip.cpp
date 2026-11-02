@@ -46,6 +46,14 @@ std::string FixturePath(const std::string& name) {
         exeDir / "tests" / "fixtures",
     };
     for (const std::filesystem::path& dir : direct) {
+        if (!name.empty() && std::filesystem::exists(dir / name)) return (dir / name).string();
+    }
+    for (std::filesystem::path up = exeDir; !up.empty(); up = up.parent_path()) {
+        const std::filesystem::path dir = up / "tests" / "fixtures";
+        if (!name.empty() && std::filesystem::exists(dir / name)) return (dir / name).string();
+        if (up == up.root_path()) break;
+    }
+    for (const std::filesystem::path& dir : direct) {
         if (std::filesystem::is_directory(dir)) return (dir / name).string();
     }
     for (std::filesystem::path up = exeDir; !up.empty(); up = up.parent_path()) {

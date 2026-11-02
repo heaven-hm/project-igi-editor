@@ -136,3 +136,14 @@ AGENTS.md
 .env.*
 !.env.example
 reports/
+
+# --- Build outputs, logs, and scratch directories ----------------------------
+parallel-verify-*
+build-testing-*
+scratch/
+logs/
+report.html
+*.tmp
+*.bak
+*.swp
+

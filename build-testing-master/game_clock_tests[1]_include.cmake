@@ -1,5 +1,0 @@
-if(EXISTS "D:/Code/project-igi-editor/build-testing-master/game_clock_tests[1]_tests.cmake")
-  include("D:/Code/project-igi-editor/build-testing-master/game_clock_tests[1]_tests.cmake")
-else()
-  add_test(game_clock_tests_NOT_BUILT game_clock_tests_NOT_BUILT)
-endif()

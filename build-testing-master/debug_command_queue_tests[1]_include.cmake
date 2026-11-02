@@ -1,5 +1,0 @@
-if(EXISTS "D:/Code/project-igi-editor/build-testing-master/debug_command_queue_tests[1]_tests.cmake")
-  include("D:/Code/project-igi-editor/build-testing-master/debug_command_queue_tests[1]_tests.cmake")
-else()
-  add_test(debug_command_queue_tests_NOT_BUILT debug_command_queue_tests_NOT_BUILT)
-endif()

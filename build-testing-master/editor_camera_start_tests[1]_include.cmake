@@ -1,5 +1,0 @@
-if(EXISTS "D:/Code/project-igi-editor/build-testing-master/editor_camera_start_tests[1]_tests.cmake")
-  include("D:/Code/project-igi-editor/build-testing-master/editor_camera_start_tests[1]_tests.cmake")
-else()
-  add_test(editor_camera_start_tests_NOT_BUILT editor_camera_start_tests_NOT_BUILT)
-endif()

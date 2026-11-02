@@ -1,5 +1,0 @@
-if(EXISTS "D:/Code/project-igi-editor/build-testing-master/editor_policy_tests[1]_tests.cmake")
-  include("D:/Code/project-igi-editor/build-testing-master/editor_policy_tests[1]_tests.cmake")
-else()
-  add_test(editor_policy_tests_NOT_BUILT editor_policy_tests_NOT_BUILT)
-endif()
