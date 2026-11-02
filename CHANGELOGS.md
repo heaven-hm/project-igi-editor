@@ -212,6 +212,8 @@ than invented. Tested and verified on both **Windows** and **macOS**.
 
 ## 3.6.11-pre — Weather Controls, Rail Tracks/Spline Accuracy, and Viewport Fixes
 
+This pre-release introduces live weather controls, authentic OpenIGI precipitation parity, indoor weather shelter suppression, accurately aligned rail tracks and spline spans, enhanced F11 object framing with rigid center rotation, and major foreign model texture resolution improvements.
+
 ### Weather controls and indoor sheltering
 
 - Added in-game pause menu weather mode cycle toggle (`Weather: [Default / Rain / Snow / OFF]`), enabling real-time toggling of precipitation.
