@@ -20,4 +20,18 @@ in this repository or any releases.
 
 ## License
 
-The source code in this repository is licensed under the MIT License — see [LICENSE](LICENSE) file.
+The source code in this repository is licensed under the Heaven-HM Community Modding License — see [LICENSE](LICENSE) file.
+
+## License and responsible use
+
+This project's Heaven-HM-owned material uses the
+[Heaven-HM Community Modding License](LICENSE). You may modify the
+source and create and share free, lawful, noncommercial mods. Selling the
+covered software or resulting mods, or charging for access, requires separate
+written permission. Illegal activity, infringement, malware, unauthorized
+access, and intentional real-world harm are prohibited. Preserve attribution
+and follow third-party licenses. Fictional events in games are not real-world harm.
+
+This is a **source-available** project under a custom restrictive license.
+[Prior permissions and separately licensed material](LICENSE_SCOPE.md) remain
+valid; this change does not revoke rights granted for earlier versions.
