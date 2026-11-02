@@ -216,6 +216,18 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 						// the left panel strip is consumed so background 3D objects are never
 						// selected/manipulated while the editor is open.
 						if (x >= L.panel_x && x <= L.panel_x + L.panel_w) {
+							// Check if clicking [X] close button
+							const int close_x1 = L.panel_x + L.panel_w - 24;
+							const int close_y1 = PropPanel::kTop;
+							const int close_x2 = L.panel_x + L.panel_w - 4;
+							const int close_y2 = PropPanel::kTop + 16;
+							if (x >= close_x1 && x <= close_x2 && y >= close_y1 && y <= close_y2) {
+								CommitPropTextEdit();
+								prop_editor_open_ = false;
+								mouse_state_.left_button_down_ = false;
+								return;
+							}
+
 							// +4px tolerance on all sides for pixel-perfect feel at any DPI
 							auto inRect = [&](const PropPanel::Widget& w) {
 								return x >= w.x1 - 4 && x <= w.x2 + 4 && y >= w.y1 - 4 && y <= w.y2 + 4;
@@ -285,6 +297,7 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 									prop_text_buf_ = (argIdx >= 0 && argIdx < (int)tobj.argTokens.size()) ? tobj.argTokens[argIdx] : "";
 									prop_text_caret_ = (int)prop_text_buf_.size();
 									prop_drag_obj_index_ = tIdx;
+									prop_drag_kind_ = w.kind;
 									prop_field_index_  = w.fieldIndex * 3 + w.comp;
 									prop_drag_start_x_ = x;
 									prop_drag_start_y_ = y;
@@ -301,6 +314,7 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 								} else if (w.kind == K::PosPad) {
 									// drag X and Y simultaneously — store field, use comp=0 marker
 									prop_drag_obj_index_ = tIdx;
+									prop_drag_kind_ = w.kind;
 									prop_field_index_  = w.fieldIndex * 3 + 0;
 									prop_drag_start_x_ = x;
 									prop_drag_start_y_ = y;
@@ -358,6 +372,7 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 								} else {
 									// PosZSlider / OriSlider / RgbSlider / NumSlider — single-value drag
 									prop_drag_obj_index_ = tIdx;
+									prop_drag_kind_ = w.kind;
 									prop_field_index_  = w.fieldIndex * 3 + w.comp;
 									prop_drag_start_x_ = x;
 									prop_drag_start_y_ = y;
@@ -536,14 +551,52 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 		if (state == GLUT_DOWN) {
 			mouse_state_.right_button_down_ = true;
 			if (!pause_mode_ && !enableCameraMode) {
+				// Priority 1: TaskTree HUD interaction (tree is on the left)
+				if (show_hud_ && !prop_editor_open_ && x < 350) {
+					ProcessTreeViewHover(x, y);
+					int target = hover_tree_index_;
+					if (target >= 0) {
+						if (terrain_edit_enabled_) {
+							SetTerrainEditEnabled(false);
+						}
+						selected_object_index_ = target;
+						prop_editor_open_ = true;
+						prop_panel_scroll_ = 0;
+						prop_text_edit_field_ = -1;
+						prop_edit_obj_index_ = -1;
+						LoadAIScriptForSelected();
+						if (target < (int)level_.GetLevelObjects().GetObjects().size()) {
+							const auto& obj = level_.GetLevelObjects().GetObjects()[target];
+							marker_manip_.start_pos_ = obj.pos;
+							marker_manip_.start_rot_ = obj.rot;
+						}
+						Logger::Get().Log(LogLevel::INFO, "[App] Right-clicked object from tree and opened property panel.");
+					}
+					return;
+				}
+
+				// Priority 2: Open property panel (consume click so it does not sculpt terrain or close)
+				if (prop_editor_open_ && x >= PropPanel::kLeft && x <= (PropPanel::kLeft + PropPanel::kWidth)) {
+					return;
+				}
+
+				// Priority 3: 3D Viewport right-click
 				int target = hover_object_index_;
 				if (target >= 0) {
 					if (terrain_edit_enabled_) {
 						SetTerrainEditEnabled(false);
 					}
 					selected_object_index_ = target;
-					prop_editor_open_ = true; prop_panel_scroll_ = 0; prop_text_edit_field_ = -1; prop_edit_obj_index_ = -1;
+					prop_editor_open_ = true;
+					prop_panel_scroll_ = 0;
+					prop_text_edit_field_ = -1;
+					prop_edit_obj_index_ = -1;
 					LoadAIScriptForSelected();
+					if (target < (int)level_.GetLevelObjects().GetObjects().size()) {
+						const auto& obj = level_.GetLevelObjects().GetObjects()[target];
+						marker_manip_.start_pos_ = obj.pos;
+						marker_manip_.start_rot_ = obj.rot;
+					}
 				} else {
 					prop_editor_open_ = false;
 					// Right-click on empty space: open terrain editor (hold to sculpt)
@@ -726,7 +779,8 @@ void App::Input_OnMotion(int x, int y) {
 					bool is_ori = (tn == "Real32x9");
 					int dxp = x - prop_drag_start_x_;
 
-					if (is_pos) {
+					if (is_pos && (prop_drag_kind_ == PropPanel::WidgetKind::PosPad ||
+					               prop_drag_kind_ == PropPanel::WidgetKind::PosZSlider)) {
 						// Position pad / Z slider use a per-frame velocity model
 						// (ApplyPropPositionDrag) so the object accelerates while held in a
 						// direction and keeps moving even when the cursor is pinned at the
@@ -737,7 +791,7 @@ void App::Input_OnMotion(int x, int y) {
 						// Orientation / RGB / numeric horizontal slider or NumBox scrub.
 						bool isRgb = (tn == "RGB" || tn == "Colour");
 						bool isInt = (tn == "Int16" || tn == "Int32" || tn == "EnumInt32");
-						float sens = is_ori ? 0.01f : (isRgb ? 0.005f : (isInt ? 0.1f : 0.05f));
+						float sens = is_pos ? 50.0f : (is_ori ? 0.01f : (isRgb ? 0.005f : (isInt ? 0.1f : 0.05f)));
 						float nv = prop_drag_start_val_ + dxp * sens;
 						if (isRgb) nv = std::max(0.f, std::min(1.f, nv));
 						int argIdx = fd.argOffset + comp;
@@ -746,6 +800,11 @@ void App::Input_OnMotion(int x, int y) {
 							if (isInt) snprintf(buf, sizeof(buf), "%d", (int)std::lround(nv));
 							else       snprintf(buf, sizeof(buf), "%.6f", nv);
 							obj.argTokens[argIdx] = buf;
+						}
+						if (is_pos) {
+							if      (comp == 0) obj.pos.x = nv;
+							else if (comp == 1) obj.pos.y = nv;
+							else if (comp == 2) obj.pos.z = nv;
 						}
 						if (is_ori) { // mirror to obj.rot (Alpha/Beta/Gamma -> x/y/z)
 							if      (comp == 0) obj.rot.x = nv;
@@ -760,6 +819,11 @@ void App::Input_OnMotion(int x, int y) {
 						                    (fd.name == "Gamma" || fd.name == "Heading"));
 						if (isSingleRot) obj.rot.z = (double)nv;
 						obj.modified = true;
+						if (is_pos) {
+							glm::dvec3 deltaPos = obj.pos - oldPos;
+							PropagateTransformToChildren(dragIdx, deltaPos, glm::dmat3(1.0), oldPos);
+							SyncGraphOverlayOffsetFromAIGraph();
+						}
 						if (is_ori) {
 							glm::dmat3 deltaWorld = BuildRotMatZXY(obj.rot) * glm::transpose(BuildRotMatZXY(oldRot));
 							PropagateTransformToChildren(dragIdx, glm::dvec3(0), deltaWorld, oldPos);
@@ -780,6 +844,8 @@ void App::Input_OnMotion(int x, int y) {
 // travels through the world.
 void App::ApplyPropPositionDrag() {
 	if (prop_field_index_ < 0) return;
+	if (prop_drag_kind_ != PropPanel::WidgetKind::PosPad &&
+	    prop_drag_kind_ != PropPanel::WidgetKind::PosZSlider) return;
 	auto& objects = level_.GetLevelObjects().GetObjects();
 	int dragIdx = (prop_drag_obj_index_ >= 0) ? prop_drag_obj_index_ : selected_object_index_;
 	if (dragIdx < 0 || dragIdx >= (int)objects.size()) return;

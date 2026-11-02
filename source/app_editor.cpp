@@ -1669,6 +1669,8 @@ void App::ProcessTreeViewClick(int mx, int my) {
                         }
                     } else { // Clicked on label area
                         selected_object_index_ = idx;
+                        marker_manip_.start_pos_ = obj.pos;
+                        marker_manip_.start_rot_ = obj.rot;
                         int currentTime = glutGet(GLUT_ELAPSED_TIME);
                         bool isDoubleClick = (idx == last_tree_click_index_ && (currentTime - last_tree_click_time_ms_ < 400));
                         last_tree_click_index_ = idx;
