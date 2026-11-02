@@ -79,6 +79,31 @@ bool TryRoundMissionExpressionValue(double value, int& result) {
     return true;
 }
 
+// Many engine task handlers convert VarString_EvalReal results to boolean (char)
+// via round_ll / x87_fistp rather than a non-zero float comparison:
+//   - LevelTimer_Run (HOOK 0x51BE10, src/nodereg/leveltimer.c:164)
+//   - Door_RunHandler (HOOK 0x446D10, src/door/door.c:417)
+//   - CutScene_RunHandler (HOOK 0x4F51D0, src/cutscene/cutscene.c:375-376)
+//   - GuardGenerator_Run (HOOK 0x487EE0, src/levelflow/guardgen.c:119)
+//   - ExplodeObject_RunHandler (HOOK 0x481970, src/camera/explodeobject.c:261)
+bool TryEvaluateRoundedCondition(
+    const MissionExpressionState& state,
+    const std::string& expression) {
+    if (expression.empty()) {
+        return false;
+    }
+    double value = 0.0;
+    int rounded = 0;
+    return state.TryEvaluateNumber(expression, value) &&
+        TryRoundMissionExpressionValue(value, rounded) &&
+        static_cast<char>(rounded) != 0;
+}
+
+// In IGI-RE seconds-to-ticks conversions use round_ll (fistpll):
+//   - CutScene_Open (HOOK 0x4F4B70, src/cutscene/cutscene.c:259)
+//   - CutScene_Update (HOOK 0x4F5400, src/cutscene/cutscene.c:445)
+//   - ExplodeObject_BlastHandler (HOOK 0x481EA0, src/camera/explodeobject.c:371)
+//   - StatusMessageScreen_UpdateLine (HOOK 0x485B80, src/mission/statusmessage.c:322, 328)
 int SecondsToSimulationTicks(float seconds) {
     if (!std::isfinite(seconds) || seconds <= 0.0f) {
         return 0;
@@ -86,10 +111,11 @@ int SecondsToSimulationTicks(float seconds) {
 
     const double tick_count = static_cast<double>(seconds) *
         static_cast<double>(GameClock::TICK_RATE_HZ);
-    if (tick_count >= static_cast<double>(std::numeric_limits<int>::max())) {
+    const double rounded = std::llround(tick_count);
+    if (rounded >= static_cast<double>(std::numeric_limits<int>::max())) {
         return std::numeric_limits<int>::max();
     }
-    return static_cast<int>(tick_count);
+    return static_cast<int>(rounded);
 }
 
 glm::vec3 NormalizeOrFallback(
@@ -1000,7 +1026,7 @@ void RuntimeWorld::UpdateAuthoredMissionState() {
         //    if (t->isRun) t->nTick++;
         is_running = timer.on_expression.empty()
             ? timer.initial_run
-            : evaluate_expression(timer.on_expression);
+            : TryEvaluateRoundedCondition(mission_expression_state_, timer.on_expression);
         mission_level_timer_running_[timer_index] = is_running ? 1 : 0;
         if (evaluate_expression(timer.reset_expression)) {
             tick_count = 0;
@@ -1134,13 +1160,9 @@ void RuntimeWorld::SetAuthoredDoors(
         AuthoredDoorRuntime authored_door;
         authored_door.definition = std::move(definition);
         authored_door.state = RuntimeDoorState(authored_door.definition);
-        bool locked = false;
-        if (!authored_door.definition.locked_expression.empty()) {
-            mission_expression_state_.TryEvaluate(
-                authored_door.definition.locked_expression,
-                locked);
-        }
-        authored_door.is_locked = locked;
+        authored_door.is_locked = TryEvaluateRoundedCondition(
+            mission_expression_state_,
+            authored_door.definition.locked_expression);
         authored_doors_.push_back(std::move(authored_door));
     }
 
@@ -1247,8 +1269,14 @@ void RuntimeWorld::UpdateAuthoredDoors() {
 
     for (AuthoredDoorRuntime& authored_door : authored_doors_) {
         const RuntimeDoorDefinition& definition = authored_door.definition;
+        // Door_RunHandler (HOOK 0x446D10, src/door/door.c:416-419):
+        //   if (VarString_HasExpr(&d->lockExpr))
+        //       d->isLocked = (char)round_ll(VarString_EvalReal(&d->lockExpr, d));
+        //   if (d->isPicked) d->isLocked = 0;
         authored_door.is_locked = !authored_door.is_picked &&
-            evaluate_expression(definition.locked_expression);
+            TryEvaluateRoundedCondition(
+                mission_expression_state_,
+                definition.locked_expression);
 
         if (authored_door.state.IsFullyClosed() &&
             evaluate_expression(definition.open_expression)) {
@@ -1370,9 +1398,9 @@ void RuntimeWorld::UpdateAuthoredMissionStatusMessages(uint64_t tick_number) {
         if (message.is_finished_display) {
             ++message.ticks_since_finished_display;
         } else if (message.is_displaying) {
-            const int hold_ticks = static_cast<int>(
-                std::max(0.0f, definition.duration_seconds) *
-                static_cast<float>(GameClock::TICK_RATE_HZ));
+            // StatusMessageScreen_UpdateLine (HOOK 0x485B80, src/mission/statusmessage.c:322, 328):
+            //   (int)round_ll(m->duration * kTicksPerSecond)
+            const int hold_ticks = SecondsToSimulationTicks(definition.duration_seconds);
             bool display_finished = false;
             if (definition.cutscene_message) {
                 display_finished = message.hold_ticks++ > hold_ticks;
@@ -1926,12 +1954,6 @@ void RuntimeWorld::UpdateAuthoredCutSceneCamera(
 void RuntimeWorld::UpdateAuthoredCutScenes() {
     active_cut_scene_camera_ = RuntimeCutSceneCamera();
 
-    const auto evaluate_condition = [this](const std::string& expression) {
-        bool result = false;
-        return !expression.empty() &&
-            mission_expression_state_.TryEvaluate(expression, result) && result;
-    };
-
     for (size_t scene_index = 0;
          scene_index < mission_cut_scenes_.size();
          ++scene_index) {
@@ -1940,14 +1962,24 @@ void RuntimeWorld::UpdateAuthoredCutScenes() {
         bool is_running = mission_cut_scene_running_[scene_index] != 0;
         bool is_finished = mission_cut_scene_finished_[scene_index] != 0;
 
-        if (evaluate_condition(definition.reset_expression)) {
+        // CutScene_RunHandler (HOOK 0x4F51D0, src/cutscene/cutscene.c:374-393):
+        //   if (VarString_HasExpr(&c->runExpr))
+        //       c->isRun = (char)round_ll(VarString_EvalReal(&c->runExpr, c));
+        //   if (VarString_HasExpr(&c->resetExpr) && (char)round_ll(VarString_EvalReal(&c->resetExpr, c))) {
+        //       c->tick = 0; c->isFinished = 0;
+        //   }
+        if (TryEvaluateRoundedCondition(
+                mission_expression_state_,
+                definition.reset_expression)) {
             tick_count = 0;
             is_finished = false;
         }
 
         is_running = definition.run_expression.empty()
             ? definition.initial_run && !is_finished
-            : evaluate_condition(definition.run_expression);
+            : TryEvaluateRoundedCondition(
+                  mission_expression_state_,
+                  definition.run_expression);
 
         if (is_running) {
             const float scaled_duration = definition.duration_seconds *
@@ -1961,6 +1993,11 @@ void RuntimeWorld::UpdateAuthoredCutScenes() {
                 is_finished = true;
             }
 
+            // CutScene_RunHandler (HOOK 0x4F51D0, src/cutscene/cutscene.c:385-393):
+            //   if (VarString_HasExpr(&c->speedExpr)) {
+            //       int n = c->tick + (int)round_ll(VarString_EvalReal(&c->speedExpr, c) * gCutSceneTicksPerSec);
+            //       c->tick = n; if (n < 0) c->tick = 0;
+            //   } else { c->tick++; }
             int tick_delta = 1;
             if (!definition.time_delta_expression.empty()) {
                 double authored_delta_seconds = 0.0;
@@ -1970,22 +2007,26 @@ void RuntimeWorld::UpdateAuthoredCutScenes() {
                     const double authored_delta_ticks = authored_delta_seconds *
                         static_cast<double>(GameClock::TICK_RATE_HZ);
                     if (std::isfinite(authored_delta_ticks)) {
-                        if (authored_delta_ticks >=
+                        const double rounded = std::llround(authored_delta_ticks);
+                        if (rounded >=
                             static_cast<double>(std::numeric_limits<int>::max())) {
                             tick_delta = std::numeric_limits<int>::max();
-                        } else if (authored_delta_ticks > 0.0) {
-                            tick_delta = std::max(
-                                1,
-                                static_cast<int>(authored_delta_ticks));
+                        } else if (rounded <=
+                            static_cast<double>(std::numeric_limits<int>::min())) {
+                            tick_delta = std::numeric_limits<int>::min();
+                        } else {
+                            tick_delta = static_cast<int>(rounded);
                         }
                     }
                 }
             }
-            if (tick_count > std::numeric_limits<int>::max() - tick_delta) {
-                tick_count = std::numeric_limits<int>::max();
-            } else {
-                tick_count += tick_delta;
-            }
+            const long long next_tick =
+                static_cast<long long>(tick_count) +
+                static_cast<long long>(tick_delta);
+            tick_count = static_cast<int>(std::clamp(
+                next_tick,
+                0LL,
+                static_cast<long long>(std::numeric_limits<int>::max())));
         }
 
         mission_cut_scene_running_[scene_index] = is_running ? 1 : 0;
@@ -2090,12 +2131,12 @@ void RuntimeWorld::UpdateAuthoredGuardGenerators() {
          mission_guard_generators_) {
         const AuthoredMissionGuardGenerator& definition =
             runtime_generator.definition;
-        bool condition_result = false;
-        runtime_generator.is_on = !definition.condition_expression.empty() &&
-            mission_expression_state_.TryEvaluate(
-                definition.condition_expression,
-                condition_result) &&
-            condition_result;
+        // GuardGenerator_Run (HOOK 0x487EE0, src/levelflow/guardgen.c:119):
+        //   if (VarString_HasExpr(&g->cond))
+        //       g->isOn = (char)round_ll(VarString_EvalReal(&g->cond, g));
+        runtime_generator.is_on = TryEvaluateRoundedCondition(
+            mission_expression_state_,
+            definition.condition_expression);
 
         // In IGI-RE GuardGenerator_Run (0x487EE0, src/levelflow/guardgen.c:114-135):
         // 1. If !isOn: if no active guard alive, isSpawned = 0.
@@ -2349,12 +2390,6 @@ void RuntimeWorld::TriggerAuthoredExplodeObject(
 }
 
 void RuntimeWorld::UpdateAuthoredExplodeObjects() {
-    const auto evaluate_condition = [this](const std::string& expression) {
-        bool result = false;
-        return !expression.empty() &&
-            mission_expression_state_.TryEvaluate(expression, result) && result;
-    };
-
     for (AuthoredExplodeObjectRuntime& runtime_object : mission_explode_objects_) {
         if (!runtime_object.is_exploded) {
             // In IGI-RE (src/camera/explodeobject.c:260-263 ExplodeObject_RunHandler):
@@ -2367,7 +2402,8 @@ void RuntimeWorld::UpdateAuthoredExplodeObjects() {
             //       o->timer--;
             // Authored script trigger detonates immediately without delay. Delay applies
             // to blast damage countdown (src/camera/explodeobject.c:371).
-            const bool is_condition_active = evaluate_condition(
+            const bool is_condition_active = TryEvaluateRoundedCondition(
+                mission_expression_state_,
                 runtime_object.definition.explosion_expression);
 
             if (is_condition_active) {

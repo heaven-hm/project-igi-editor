@@ -262,6 +262,8 @@ static void TestQVM() {
     if (File_SaveBinary(corruptPath.c_str(), corruptBytes.data(), corruptBytes.size())) {
         QVMFile corruptQvm = QVM_Parse(corruptPath);
         ASSERT_FALSE(corruptQvm.valid, "Corrupt QVM file should fail to parse");
+        std::error_code removeEc;
+        fs::remove(corruptPath, removeEc);
     }
 }
 

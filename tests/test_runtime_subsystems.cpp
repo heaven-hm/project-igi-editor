@@ -3538,6 +3538,82 @@ TEST(RuntimeWorldTest, AuthoredCutSceneHonorsStartTimeAndTimeScale) {
     EXPECT_EQ(world.GetLevelFlow().GetStatus(), MissionStatus::Success);
 }
 
+TEST(RuntimeWorldTest, CutSceneSpeedExpressionRoundsAndClampsAtZero) {
+    // CutScene_RunHandler (HOOK 0x4F51D0, src/cutscene/cutscene.c:385-391):
+    //   int n = c->tick + (int)round_ll(VarString_EvalReal(&c->speedExpr, c) * gCutSceneTicksPerSec);
+    //   c->tick = n; if (n < 0) c->tick = 0;
+    RuntimeWorld world;
+    world.Initialize(FlatTerrain);
+
+    AuthoredMissionCutScene cut_scene;
+    cut_scene.task_id = "1205";
+    cut_scene.run_expression = "1";
+    cut_scene.start_time_seconds = 0.0f;
+    cut_scene.time_scale = 1.0f;
+    cut_scene.duration_seconds = 10.0f;
+    cut_scene.time_delta_expression = "SceneSpeed";
+
+    world.SetAuthoredMissionState({}, {}, {}, {}, {cut_scene});
+
+    // 0.05s * 30 Hz = 1.5 ticks -> round_ll(1.5) = 2 ticks
+    world.SetMissionStateNumber("SceneSpeed", 0.05);
+    world.UpdateSimulationTick(0, PlayerInputCmd());
+    double tick_value = -1.0;
+    EXPECT_TRUE(world.GetMissionExpressionState().TryEvaluateNumber("CutScene_1205.nTick", tick_value));
+    EXPECT_DOUBLE_EQ(tick_value, 2.0);
+
+    // 0.0s * 30 Hz = 0 ticks -> pauses at tick 2
+    world.SetMissionStateNumber("SceneSpeed", 0.0);
+    world.UpdateSimulationTick(1, PlayerInputCmd());
+    EXPECT_TRUE(world.GetMissionExpressionState().TryEvaluateNumber("CutScene_1205.nTick", tick_value));
+    EXPECT_DOUBLE_EQ(tick_value, 2.0);
+
+    // -1.0s * 30 Hz = -30 ticks -> 2 + (-30) = -28 -> clamped to 0
+    world.SetMissionStateNumber("SceneSpeed", -1.0);
+    world.UpdateSimulationTick(2, PlayerInputCmd());
+    EXPECT_TRUE(world.GetMissionExpressionState().TryEvaluateNumber("CutScene_1205.nTick", tick_value));
+    EXPECT_DOUBLE_EQ(tick_value, 0.0);
+}
+
+TEST(RuntimeWorldTest, RoundedBoolConditionsMatchRetailFpuRounding) {
+    // Door_RunHandler (HOOK 0x446D10, src/door/door.c:417),
+    // LevelTimer_Run (HOOK 0x51BE10, src/nodereg/leveltimer.c:164),
+    // ExplodeObject_RunHandler (HOOK 0x481970, src/camera/explodeobject.c:261)
+    // convert real expression values via round_ll / x87_fistp.
+    RuntimeWorld world;
+    world.Initialize(FlatTerrain);
+
+    RuntimeDoorDefinition door_def;
+    door_def.object_index = 20;
+    door_def.task_id = "420";
+    door_def.locked_expression = "LockSignal";
+    door_def.slide_offset_units = glm::vec3(-PlayerController::WORLD_METER, 0.0f, 0.0f);
+    door_def.open_time_seconds = 1.0f;
+
+    AuthoredMissionLevelTimer timer;
+    timer.task_id = "101";
+    timer.on_expression = "LockSignal";
+
+    world.SetAuthoredMissionState({}, {}, {timer});
+    world.SetAuthoredDoors({door_def});
+
+    // 0.4 rounds to 0 -> false
+    world.SetMissionStateNumber("LockSignal", 0.4);
+    world.UpdateSimulationTick(0, PlayerInputCmd());
+    ASSERT_EQ(world.GetDoorSnapshots().size(), 1U);
+    EXPECT_FALSE(world.GetDoorSnapshots()[0].is_locked);
+    double timer_ticks = -1.0;
+    EXPECT_TRUE(world.GetMissionExpressionState().TryEvaluateNumber("LevelTimer_101.nTick", timer_ticks));
+    EXPECT_DOUBLE_EQ(timer_ticks, 0.0);
+
+    // 0.6 rounds to 1 -> true
+    world.SetMissionStateNumber("LockSignal", 0.6);
+    world.UpdateSimulationTick(1, PlayerInputCmd());
+    EXPECT_TRUE(world.GetDoorSnapshots()[0].is_locked);
+    EXPECT_TRUE(world.GetMissionExpressionState().TryEvaluateNumber("LevelTimer_101.nTick", timer_ticks));
+    EXPECT_DOUBLE_EQ(timer_ticks, 1.0);
+}
+
 namespace {
 
 // Authored CutScene / EditCamera calls for the two camera tests below, in the
