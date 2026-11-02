@@ -33,5 +33,5 @@ access, and intentional real-world harm are prohibited. Preserve attribution
 and follow third-party licenses. Fictional events in games are not real-world harm.
 
 This is a **source-available** project under a custom restrictive license.
-[Prior permissions and separately licensed material](LICENSE_SCOPE.md) remain
+Prior permissions and separately licensed material remain
 valid; this change does not revoke rights granted for earlier versions.

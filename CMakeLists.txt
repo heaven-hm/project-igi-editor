@@ -253,13 +253,6 @@ if (WIN32)
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
   )
 
-  # Embed admin manifest (MSVC linker only; MinGW's windres embeds the resource)
-  set(MANIFEST_FILE "${PROJECT_SOURCE_DIR}/igi-editor.exe.manifest")
-  if(MSVC AND EXISTS ${MANIFEST_FILE})
-    set_target_properties(igi-editor PROPERTIES
-      LINK_FLAGS "/MANIFEST:EMBED /MANIFESTINPUT:${MANIFEST_FILE} /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\""
-    )
-  endif()
 
   # Use Console subsystem for both Debug and Release to support CLI mode.
   # MinGW's console subsystem is the default and it does not understand the
