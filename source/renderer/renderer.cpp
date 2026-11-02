@@ -497,7 +497,8 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
     }
     const EngineSkinVertices& engine_vertices = skinCacheIt->second;
     if (engine_vertices.base_count <= 0) return;
-    std::vector<igi::SkinTransformOutput> skinned;
+    static thread_local std::vector<igi::SkinTransformOutput> skinned;
+    skinned.clear();
     if (!igi::BoneMeshSkin(engine_vertices.records.data(), engine_vertices.base_count,
                            engine_vertices.extra_count, engineBoneTransforms.data(),
                            static_cast<int>(engineBoneTransforms.size()),
@@ -511,8 +512,10 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
     // world is raw units; D3D applies gWorldScale). The renderer works in metres,
     // so scale the positions by kMefNativeScale = 1/40.96 and leave the normals
     // as directions.
-    std::vector<glm::vec3> deformedPos(skinned.size());
-    std::vector<glm::vec3> deformedNormal(skinned.size());
+    static thread_local std::vector<glm::vec3> deformedPos;
+    static thread_local std::vector<glm::vec3> deformedNormal;
+    deformedPos.resize(skinned.size());
+    deformedNormal.resize(skinned.size());
     for (size_t i = 0; i < skinned.size(); ++i) {
         deformedPos[i] = glm::vec3(skinned[i].position[0], skinned[i].position[1],
                                    skinned[i].position[2]) * kMefNativeScale;
@@ -603,8 +606,10 @@ void Renderer::DrawSkinnedMesh(const std::string& modelId, bool isBuilding,
         GLint first;
         GLsizei count;
     };
-    std::vector<SkinnedBatchVertex> batch;
-    std::vector<SkinnedBatchBlock> batch_blocks;
+    static thread_local std::vector<SkinnedBatchVertex> batch;
+    static thread_local std::vector<SkinnedBatchBlock> batch_blocks;
+    batch.clear();
+    batch_blocks.clear();
 
     auto emitVertex = [&](uint32_t vi) -> SkinnedBatchVertex {
         SkinnedBatchVertex out{};

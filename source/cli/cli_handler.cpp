@@ -200,21 +200,23 @@ int CLIHandler::Process(int argc, char **argv) {
 
 int CLIHandler::ExtractLevelResources(int levelNo, const std::string &outDir) {
   std::string igiPath = Utils::GetIGIRootPath();
-  std::string levelPath =
-      igiPath + "\\missions\\location0\\level" + std::to_string(levelNo);
+  std::string levelPath = Utils::ToNativePath(
+      igiPath + "\\missions\\location0\\level" + std::to_string(levelNo));
+  std::string nativeOut = Utils::ToNativePath(outDir);
 
   Logger::Get().Log(LogLevel::INFO, "[CLI] Extracting level " +
                                         std::to_string(levelNo) + " resources");
   Logger::Get().Log(LogLevel::INFO, "[CLI] IGI level path: " + levelPath);
-  Logger::Get().Log(LogLevel::INFO, "[CLI] Output dir:     " + outDir);
+  Logger::Get().Log(LogLevel::INFO, "[CLI] Output dir:     " + nativeOut);
 
   namespace fs = std::filesystem;
+  fs::path out(nativeOut);
   try {
-    fs::create_directories(outDir + "\\models\\level" + std::to_string(levelNo));
-    fs::create_directories(outDir + "\\models");
-    fs::create_directories(outDir + "\\textures\\level" + std::to_string(levelNo));
-    fs::create_directories(outDir + "\\textures");
-    fs::create_directories(outDir + "\\terrain");
+    fs::create_directories(out / "models" / ("level" + std::to_string(levelNo)));
+    fs::create_directories(out / "models");
+    fs::create_directories(out / "textures" / ("level" + std::to_string(levelNo)));
+    fs::create_directories(out / "textures");
+    fs::create_directories(out / "terrain");
   } catch (const std::exception &e) {
     Logger::Get().Log(LogLevel::ERR, "[CLI] Failed to create output dirs: " +
                                          std::string(e.what()));
@@ -224,8 +226,8 @@ int CLIHandler::ExtractLevelResources(int levelNo, const std::string &outDir) {
   int totalExtracted = 0;
 
   // --- Extract models from level1.res (or loose .mef files) ---
-  std::string resFile =
-      levelPath + "\\models\\level" + std::to_string(levelNo) + ".res";
+  std::string resFile = Utils::ToNativePath(
+      levelPath + "\\models\\level" + std::to_string(levelNo) + ".res");
   if (fs::exists(resFile)) {
     Logger::Get().Log(LogLevel::INFO,
                       "[CLI] Extracting models from: " + resFile);
@@ -238,7 +240,7 @@ int CLIHandler::ExtractLevelResources(int levelNo, const std::string &outDir) {
         std::string filename =
             (slash != std::string::npos) ? name.substr(slash + 1) : name;
         // Write to levelN subdir so FindModelFile's per-level search finds it.
-        std::string destPath = outDir + "\\models\\level" + std::to_string(levelNo) + "\\" + filename;
+        std::string destPath = (out / "models" / ("level" + std::to_string(levelNo)) / filename).string();
         std::ofstream f(destPath, std::ios::binary);
         if (f) {
           f.write(reinterpret_cast<const char *>(entry.data.data()),
@@ -255,12 +257,12 @@ int CLIHandler::ExtractLevelResources(int levelNo, const std::string &outDir) {
     }
   } else {
     // Fallback: copy loose .mef files
-    std::string modelsDir = levelPath + "\\models";
+    std::string modelsDir = Utils::ToNativePath(levelPath + "\\models");
     if (fs::exists(modelsDir)) {
       for (const auto &entry : fs::directory_iterator(modelsDir)) {
         if (entry.path().extension() == ".mef") {
           std::string dest =
-              outDir + "\\models\\level" + std::to_string(levelNo) + "\\" + entry.path().filename().string();
+              (out / "models" / ("level" + std::to_string(levelNo)) / entry.path().filename()).string();
           fs::copy_file(entry.path(), dest,
                         fs::copy_options::overwrite_existing);
           totalExtracted++;
@@ -274,14 +276,14 @@ int CLIHandler::ExtractLevelResources(int levelNo, const std::string &outDir) {
 
   // --- Extract textures: loose .tex files OR from textures .res archive ---
   int texCount = 0;
-  std::string texDir = levelPath + "\\textures";
+  std::string texDir = Utils::ToNativePath(levelPath + "\\textures");
   // Prefer a per-level subdirectory so FindTextureFile's levelN search works.
-  std::string texOutDir = outDir + "\\textures\\level" + std::to_string(levelNo);
+  fs::path texOutDir = out / "textures" / ("level" + std::to_string(levelNo));
   fs::create_directories(texOutDir);
 
   if (fs::exists(texDir)) {
     // Try .res archive first (e.g. level6/textures/level6.res)
-    std::string texResFile = texDir + "\\level" + std::to_string(levelNo) + ".res";
+    std::string texResFile = Utils::ToNativePath(texDir + "\\level" + std::to_string(levelNo) + ".res");
     if (fs::exists(texResFile)) {
       RESFile texRes = RES_Parse(texResFile);
       if (texRes.valid) {
@@ -292,7 +294,7 @@ int CLIHandler::ExtractLevelResources(int levelNo, const std::string &outDir) {
           std::string ext = filename.substr(filename.size() - 4);
           for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
           if (ext != ".tex") continue;
-          std::string destPath = texOutDir + "\\" + filename;
+          std::string destPath = (texOutDir / filename).string();
           std::ofstream f(destPath, std::ios::binary);
           if (f) { f.write(reinterpret_cast<const char*>(entry.data.data()), entry.data.size()); texCount++; }
         }
@@ -302,7 +304,7 @@ int CLIHandler::ExtractLevelResources(int levelNo, const std::string &outDir) {
       // Fallback: copy loose .tex files
       for (const auto& entry : fs::directory_iterator(texDir)) {
         if (entry.path().extension() == ".tex") {
-          std::string dest = texOutDir + "\\" + entry.path().filename().string();
+          std::string dest = (texOutDir / entry.path().filename()).string();
           fs::copy_file(entry.path(), dest, fs::copy_options::overwrite_existing);
           texCount++;
         }
@@ -313,11 +315,11 @@ int CLIHandler::ExtractLevelResources(int levelNo, const std::string &outDir) {
 
   // --- Copy terrain files ---
   int terrainCount = 0;
-  std::string terrainDir = levelPath + "\\terrain";
+  std::string terrainDir = Utils::ToNativePath(levelPath + "\\terrain");
   if (fs::exists(terrainDir)) {
     for (const auto &entry : fs::directory_iterator(terrainDir)) {
       std::string dest =
-          outDir + "\\terrain\\" + entry.path().filename().string();
+          (out / "terrain" / entry.path().filename()).string();
       fs::copy_file(entry.path(), dest, fs::copy_options::overwrite_existing);
       terrainCount++;
     }

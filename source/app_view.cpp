@@ -5,6 +5,7 @@
  *****************************************************************************/
 #include "app_internal.h"
 #include "renderer/igi_transform.h"
+#include "renderer/human_seat_frame.h"
 #include "runtime/editor_camera_start.h"
 #include "level/ai_graph_ground.h"
 #include "level/collision_drop_rules.h"
@@ -464,14 +465,19 @@ bool App::CheckCollision(const glm::vec3& nextPos) {
         std::string mId = !obj.modelId.empty() ? obj.modelId : obj.segmentModelId;
         if (mId.empty()) continue;
 
-        float dist = glm::distance(nextPos, glm::vec3(obj.pos));
-        if (dist > 150000.0f) continue;
+        // Quick bounding sphere cull before expensive 4x4 matrix setup and inversion.
+        // Mesh radius is in MEF units; scaled to world units by BASE_SCALE * s.
+        const float s = (obj.scale > 0.0f) ? obj.scale : 1.0f;
+        const float mesh_r = renderer_.GetMeshRadius(mId, obj.isBuilding);
+        const float max_extent = (mesh_r > 0.0f ? mesh_r : 50.0f) * BASE_SCALE * s;
+        const float bound_dist = max_extent + collision_radius;
+        const glm::vec3 delta = nextPos - glm::vec3(obj.pos);
+        if (glm::dot(delta, delta) > bound_dist * bound_dist) continue;
 
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, glm::vec3(obj.pos.x, obj.pos.y, obj.pos.z));
         // Authored IGI rotation: Rz * Ry * Rx, like the game (renderer/igi_transform.h).
         model = model * igi::IgiEulerRotationMatrix(obj.rot);
-        float s = (obj.scale > 0.0f) ? obj.scale : 1.0f;
         model = glm::scale(model, glm::vec3(BASE_SCALE * s));
         model = glm::rotate(model, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
 
@@ -740,6 +746,21 @@ void App::SnapObjectsToTerrain() {
         const bool isHuman = (obj.type == "HumanSoldier" || obj.type == "HumanSoldierFemale");
         if (isHuman) {
             const int obj_index = static_cast<int>(&obj - objects.data());
+            // If this human sits in a vehicle, NEVER snap to terrain or attached graph!
+            // The authored position in QSC is already the exact relative seat position,
+            // which the engine records into h->attachPos in Human_SetPlatform (0x463310, src/viewcam/human.c:363)
+            // and updates every tick in Human_MoveOnPlatform (0x462CF0, src/viewcam/human.c:158).
+            if (igi::HumanSitsInVehicle(objects, obj_index)) {
+                obj.pos.z = obj.original_pos.z;
+                obj.snap_z_offset = 0.0;
+                skipped++;
+                Logger::Get().Log(LogLevel::INFO,
+                    "[App] Human in vehicle " + obj.modelId + " (" + obj.name +
+                    ") keeps authored seat Z " + std::to_string(obj.original_pos.z) +
+                    " (Human_SetPlatform 0x463310 attachPos frame)");
+                continue;
+            }
+
             const SoldierAI ai = FindSoldierAI(objects, obj_index);
             if (ai.has_controller) {
                 const LevelObject* graph_task = FindAiGraphTask(objects, ai.graph_task_id);

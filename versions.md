@@ -17,7 +17,7 @@
 
 | Version | Release Date | Status | Major Features |
 |---------|--------------|--------|----------------|
-| **4.0.0-pre** | 2026-10-29 | Pre-release (in progress) | IGI-RE parity campaign — behaviour read out of the retail `igi.exe` (IGI-RE) instead of approximated. Full detail in `CHANGELOGS.md` (`4.0.0-pre`) |
+| **4.0.0-pre** | 2026-11-02 | Pre-release | IGI-RE parity campaign & native macOS release — vehicle seating parity, play mode performance optimizations, terrain ID inspection, native Apple Silicon macOS bundle, and full 14-level asset verification. Tested on Windows and macOS. Full detail in `CHANGELOGS.md` (`4.0.0-pre`) |
 | **3.6.11-pre** | 2026-10-25 | Pre-release | Live weather controls and OpenIGI precipitation parity, indoor weather shelter suppression, accurately aligned rail tracks and spline spans, F11 rigid-center framing, foreign-model texture resolution (see `RELEASE_NOTES_3.6.11-pre.md`) |
 | **3.6.10-pre** | 2026-08-30 | Pre-release | Game-font fallback and retail-style menu rendering, sniper/AI skinned-model rendering, cross-level model/texture/ATTA provenance, staged RES/DAT/MTP publication (see `RELEASE_NOTES_3.6.10-pre.md`) |
 | **3.6.9-pre** | 2026-08-29 | Pre-release | Reliable editor logging with writable-location fallback and immediate startup flush; shipped editable `qedconfig.qsc`; corrected default mission path to `missions/location0` |

@@ -100,19 +100,53 @@ inline bool IsHumanTaskType(std::string_view type) {
            type == "Soldier";
 }
 
+template <typename T, typename = void>
+struct HasChildrenIndices : std::false_type {};
+
+template <typename T>
+struct HasChildrenIndices<T, std::void_t<decltype(std::declval<T>().childrenIndices)>> : std::true_type {};
+
 // True when `objects[index]` is a human whose PARENT CHAIN contains a vehicle
-// task — the level's own way of saying "this human rides in that vehicle".  The
-// walk is bounded, so a malformed parent cycle cannot hang a draw pass.
+// task, OR whose HumanAI child attaches to an AIGraph that is parented to a vehicle
+// (IGI-RE Human_ProbeGround 0x462390 in src/humanbase/human.c:1746-1750: path = ai->graph;
+//  if (path->attached) Human_SetPlatform(h, path->task.parent);).
+// The walk is bounded, so a malformed parent cycle cannot hang a draw pass.
 template <typename ObjectList>
 inline bool HumanSitsInVehicle(const ObjectList& objects, int index) {
     if (index < 0 || index >= static_cast<int>(objects.size())) return false;
     if (!IsHumanTaskType(objects[index].type)) return false;
+
+    // 1. Check direct or indirect parent in parentIndex chain
     int parent = objects[index].parentIndex;
     for (int guard = 0; parent >= 0 && parent < static_cast<int>(objects.size()); ++guard) {
         if (guard > 64) break;
         if (IsVehicleTaskType(objects[parent].type)) return true;
         parent = objects[parent].parentIndex;
     }
+
+    // 2. Check if HumanAI child attaches to an AIGraph parented to a vehicle
+    using ItemType = std::decay_t<decltype(objects[0])>;
+    if constexpr (HasChildrenIndices<ItemType>::value) {
+        for (int ci : objects[index].childrenIndices) {
+            if (ci < 0 || ci >= static_cast<int>(objects.size())) continue;
+            const auto& child = objects[ci];
+            if (child.type == "HumanAI" && child.aiGraphTaskId >= 0) {
+                const std::string graphTaskIdStr = std::to_string(child.aiGraphTaskId);
+                for (size_t gi = 0; gi < objects.size(); ++gi) {
+                    if (objects[gi].type == "AIGraph" && objects[gi].taskId == graphTaskIdStr) {
+                        int gParent = objects[gi].parentIndex;
+                        for (int gGuard = 0; gParent >= 0 && gParent < static_cast<int>(objects.size()); ++gGuard) {
+                            if (gGuard > 64) break;
+                            if (IsVehicleTaskType(objects[gParent].type)) return true;
+                            gParent = objects[gParent].parentIndex;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     return false;
 }
 

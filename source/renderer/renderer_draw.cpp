@@ -1123,10 +1123,6 @@ void Renderer::Draw(const draw_params_s &params,
     // Display object info at mouse position
     int info_object_index = task_tree_view.hover_object_index_;
     if (task_tree_view.in_game_mode_) info_object_index = -1;
-    if (!task_tree_view.status_msg_.empty() &&
-        task_tree_view.selected_object_index_ >= 0) {
-      info_object_index = task_tree_view.selected_object_index_;
-    }
 
     // Suppress tooltip when: in game mode, camera orbit mode, over TaskTree, or over property panel
     {
@@ -1252,28 +1248,47 @@ void Renderer::Draw(const draw_params_s &params,
                     1.0f, 0.6f);
         }
       }
-    } else if (!task_tree_view.in_game_mode_ && !task_tree_view.pause_mode_ && (!task_tree_view.show_hud_ || task_tree_view.mouse_x_ >= 350)) {
+    } else if (!task_tree_view.in_game_mode_ && !task_tree_view.pause_mode_ && (!task_tree_view.show_hud_ || task_tree_view.mouse_x_ >= 350) && !task_tree_view.enable_camera_mode_) {
       int terrainId = -1;
-      if (params.terrain_id_at_world_xy_) {
-        // Same world->clip transform the 3D scene uses (proj * view * scale_down);
-        // its inverse maps the depth-buffer hit back to full IGI world coords.
+      glm::vec3 worldPt(0.0f);
+      bool hit_terrain = false;
+
+      // 1. First try depth-buffer hit
+      if (params.terrain_id_at_world_xy_ && params.view_define_) {
         glm::mat4 worldToClip =
             mat_proj_ * mat_view_ *
             glm::scale(glm::mat4(1.0f), glm::vec3(RENDERER_MODEL_SCALE_DOWN));
-        glm::vec3 worldPt;
         if (UnprojectCursorToWorld(task_tree_view.mouse_x_, task_tree_view.mouse_y_,
                                    params.view_define_->viewport_width_,
                                    params.view_define_->viewport_height_,
                                    worldToClip, worldPt)) {
           terrainId = params.terrain_id_at_world_xy_((double)worldPt.x, (double)worldPt.y);
+          if (terrainId >= 0) hit_terrain = true;
         }
       }
-      char tbuf[96];
-      if (terrainId >= 0) {
+
+      // 2. Fall back to terrain raycast from camera ray (IGI-RE map.c:503-515)
+      if (!hit_terrain && params.raycast_terrain_ && params.view_define_ &&
+          params.view_define_->viewport_width_ > 0 && params.view_define_->viewport_height_ > 0) {
+        float sx = (task_tree_view.mouse_x_ - params.view_define_->viewport_width_ * 0.5f) /
+                   (params.view_define_->viewport_width_ * 0.5f) * params.view_define_->tan_half_fovx_;
+        float sy = (params.view_define_->viewport_height_ * 0.5f - task_tree_view.mouse_y_) /
+                   (params.view_define_->viewport_height_ * 0.5f) * params.view_define_->tan_half_fovy_;
+        glm::vec3 ray_dir = glm::normalize(params.view_define_->forward_ +
+                                           params.view_define_->right_ * sx +
+                                           params.view_define_->up_ * sy);
+        if (params.raycast_terrain_(params.view_define_->pos_, ray_dir, worldPt, terrainId)) {
+          hit_terrain = true;
+        }
+      }
+
+      if (hit_terrain && terrainId >= 0) {
+        char tbuf[96];
         snprintf(tbuf, sizeof(tbuf), "Terrain ID: %d", terrainId);
-        draw_text_sm(tooltip_x, tooltip_y, tbuf, 1.0f, 1.0f, 1.0f);
-      } else {
-        draw_text_sm(tooltip_x, tooltip_y, "Terrain ID: -1", 1.0f, 1.0f, 1.0f);
+        draw_text_sm(tooltip_x, tooltip_y, tbuf, 0.4f, 1.0f, 0.4f);
+        char pos_buf[96];
+        snprintf(pos_buf, sizeof(pos_buf), "Pos: (%.0f, %.0f, %.0f)", (double)worldPt.x, (double)worldPt.y, (double)worldPt.z);
+        draw_text_sm(tooltip_x, tooltip_y + smLineH, pos_buf, 0.9f, 0.9f, 0.9f);
       }
     }
 

@@ -506,7 +506,7 @@ std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isB
     // Helper: search one directory for exact modelId.mef match.
     auto searchOneDirExact = [&](const std::string& dirStr) -> std::string {
         if (dirStr.empty()) return "";
-        std::filesystem::path modelsPath(dirStr);
+        std::filesystem::path modelsPath(Utils::ToNativePath(dirStr));
         if (!std::filesystem::exists(modelsPath)) return "";
 
         // Exact match
@@ -518,7 +518,7 @@ std::string Renderer_Objects::FindModelFile(const std::string& modelId, bool isB
     // Helper: search one directory for fuzzy match by type prefix.
     auto searchOneDirFuzzy = [&](const std::string& dirStr) -> std::string {
         if (dirStr.empty()) return "";
-        std::filesystem::path modelsPath(dirStr);
+        std::filesystem::path modelsPath(Utils::ToNativePath(dirStr));
         if (!std::filesystem::exists(modelsPath)) return "";
 
         // Companion-part guard: IDs ending in _2 .. _9 (face, hands, legs, etc.)

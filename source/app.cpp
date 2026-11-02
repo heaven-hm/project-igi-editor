@@ -1207,7 +1207,7 @@ void App::Frame(float delta_seconds) {
 		                                               : FrameBreakClock::time_point{};
 		int64_t paused_pick_us = 0;
 		bool paused_pick_called = false;
-		if (igi::ShouldPickSceneHover(
+		if (!render_gameplay && igi::ShouldPickSceneHover(
 			mouse_state_.prior_x_ != last_pick_x_ || mouse_state_.prior_y_ != last_pick_y_,
 			mouse_state_.left_button_down_, Sys_Milliseconds(), last_hover_pick_ms_, 33,
 			Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera))) {
@@ -1348,6 +1348,10 @@ void App::Frame(float delta_seconds) {
 		draw_params_.skip_static_draw_indices_ = nullptr;
 		draw_params_.terrain_id_at_world_xy_ =
 			[this](double x, double y) { return level_.GetTerrainNodeId(x, y); };
+		draw_params_.raycast_terrain_ =
+			[this](const glm::vec3& origin, const glm::vec3& dir, glm::vec3& hit, int& nodeId) {
+				return level_.RaycastTerrain(origin, dir, hit, nodeId);
+			};
 		draw_params_.terrain_z_at_world_xy_ =
 			[this](double x, double y, float& z) { return level_.GetTerrainZ(x, y, z); };
 		const auto frame_draw_begin = profile_frame_break ? FrameBreakClock::now()
@@ -1594,7 +1598,6 @@ void App::Frame(float delta_seconds) {
 
 	if (render_gameplay) UpdateGameplayViewDefine();
 	else UpdateViewDefine();
-	if (render_gameplay) CaptureGameplayRenderSnapshot();
 	const auto frame_pre_t1view = profile_frame_break ? FrameBreakClock::now()
 	                                                  : FrameBreakClock::time_point{};
 	const bool pointer_changed = mouse_state_.prior_x_ != last_pick_x_ ||
@@ -1618,7 +1621,7 @@ void App::Frame(float delta_seconds) {
 	// per-motion pick resume and stall the frame. The movement math itself is
 	// identical in both states (App::ProcessInput; viewer_s::clip_to_z_ is never
 	// set after construction), so there is no smoothing/delta term to reset here.
-	if (IsEditorInputActive()) {
+	if (IsEditorInputActive() && !render_gameplay) {
 		const int64_t pick_now_ms = Sys_Milliseconds();
 		if (camMode || cameraNavigating || overPanel) {
 			hover_object_index_ = -1;
@@ -1700,6 +1703,10 @@ void App::Frame(float delta_seconds) {
 	draw_params_.skip_static_draw_indices_ = &skinnedReplacementIndices;
 	draw_params_.terrain_id_at_world_xy_ =
 		[this](double x, double y) { return level_.GetTerrainNodeId(x, y); };
+	draw_params_.raycast_terrain_ =
+		[this](const glm::vec3& origin, const glm::vec3& dir, glm::vec3& hit, int& nodeId) {
+			return level_.RaycastTerrain(origin, dir, hit, nodeId);
+		};
 
 
 	float ground_z = 0.0f;
@@ -3844,6 +3851,9 @@ void App::SetupLevelAiGuards() {
 							if (LastTwoIntArgs(pcmd.qscLine, cmdCode, param)) {
 								guard.patrol_commands.push_back(
 									igi::AiPatrolCommand{ (igi::AiPatrolCommandKind)cmdCode, param });
+								if (obj.standAnimation < 0 && cmdCode == 0 && igi::HumanSitsInVehicle(objects, i)) {
+									guard.stand_animation = param;
+								}
 							}
 					}
 					guard.active_patrol_path_id = pathId;
@@ -4353,23 +4363,49 @@ std::unordered_set<int> App::GetGameplayDrawnAnimationIndices() {
 	// `GetSkinnedReplacementObjectIndices(true)` is "every gameplay playback whose
 	// live skinned pose COULD be submitted": clip playing, engine can pose it,
 	// object alive, skin geometry loaded (ShouldUseSkinnedReplacement,
-	// source/animation.h:295).  The gameplay pass then culls that by camera
-	// DISTANCE - this is the 80 m gameplay filter the skinned draw loop has always
-	// used (`maxSkin` below) - and the selected object is exempt from the cull
-	// exactly as before.
+	// source/animation.h:295).
+	//
+	// In the engine, an AI's POSE is built only for what is visible and within
+	// LOD range (Human_WakeIfVisible 0x45F140 -> Human_Wake 0x45F240 -> BoneObj_Update 0x4D38C0,
+	// called from Human_DrawHandler 0x45F280 / Human_NearClipHandler 0x45F050,
+	// src/humanbase/human.c:262-287). The gameplay pass therefore applies:
+	//   1. 80m max distance cull (maxSkinSq)
+	//   2. Camera view cone frustum cull (igi::PassesEditorViewCone)
+	//   3. Mesh LOD cull (GetObjectDrawLod < 4)
 	std::unordered_set<int> drawn = GetSkinnedReplacementObjectIndices(true);
 	const glm::vec3 cam = gameplay_viewer_.pos_;
+	const glm::vec3 fwd_raw = gameplay_viewer_.forward_;
+	const float fwd_len = glm::length(fwd_raw);
+	const glm::vec3 fwd = (fwd_len > 0.01f) ? fwd_raw / fwd_len : glm::vec3(0.0f);
 	const float maxSkin = 80.0f * WORLD_UNITS_PER_METER;
 	const float maxSkinSq = maxSkin * maxSkin;
 	const auto& objs = GetActiveRenderLevelObjects().GetObjects();
 	for (auto it = drawn.begin(); it != drawn.end(); ) {
-		if (*it == selected_object_index_ || *it < 0 || *it >= (int)objs.size()) {
+		const int idx = *it;
+		if (idx == selected_object_index_ || idx < 0 || idx >= (int)objs.size()) {
 			++it;
 			continue;
 		}
-		const glm::vec3 delta = glm::vec3(objs[*it].pos) - cam;
-		if (glm::dot(delta, delta) > maxSkinSq) it = drawn.erase(it);
-		else ++it;
+		const auto& obj = objs[idx];
+		const glm::vec3 delta = glm::vec3(obj.pos) - cam;
+		if (glm::dot(delta, delta) > maxSkinSq) {
+			it = drawn.erase(it);
+			continue;
+		}
+		const float bound_radius =
+			renderer_.GetMeshRadius(obj.modelId, obj.isBuilding) * 40.96f *
+			std::max(obj.scale, 0.001f);
+		if (!igi::PassesEditorViewCone(delta, bound_radius, fwd, fwd_len)) {
+			it = drawn.erase(it);
+			continue;
+		}
+		const int lod = renderer_.GetObjectDrawLod(obj, cam, fwd,
+		                                           view_define_.tan_half_fovx_);
+		if (lod < 0 || lod >= 4) {
+			it = drawn.erase(it);
+			continue;
+		}
+		++it;
 	}
 	return drawn;
 }
@@ -4798,6 +4834,31 @@ std::vector<int> App::ComputeAnimationIdsForObject(int objIndex) const {
             std::to_string(objIndex) + " via AI task " + std::to_string(aiTaskId) + " (" + qvmPath + ")");
         for (int id : FindAiScriptAnimationIds(qvmPath)) {
             if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+        }
+
+        // Also check if the AI script runs a PatrolPath (e.g. vehicle drivers with animation 61)
+        int scriptPathId = FindAiScriptPatrolPathId(qvmPath);
+        if (scriptPathId >= 0) {
+            for (size_t ci = 0; ci < objects.size(); ++ci) {
+                const auto& candidate = objects[ci];
+                if (candidate.deleted || candidate.type != "PatrolPath") continue;
+                try {
+                    if (std::stoi(candidate.taskId) == scriptPathId) {
+                        for (int pci : candidate.childrenIndices) {
+                            if (pci < 0 || pci >= (int)objects.size()) continue;
+                            const auto& pcmd = objects[pci];
+                            if (pcmd.deleted || pcmd.type != "PatrolPathCommand") continue;
+                            int cmdCode = -1, param = -1;
+                            if (LastTwoIntArgs(pcmd.qscLine, cmdCode, param) && cmdCode == 0) {
+                                if (std::find(ids.begin(), ids.end(), param) == ids.end()) {
+                                    ids.push_back(param);
+                                }
+                            }
+                        }
+                        break;
+                    }
+                } catch (...) {}
+            }
         }
     } else {
         Logger::Get().Log(LogLevel::DEBUG, "[Anim] Object " + std::to_string(objIndex) +

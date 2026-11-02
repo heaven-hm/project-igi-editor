@@ -20,9 +20,10 @@ static constexpr int kMaxMaterialsPerModel = 64;
 DATFile DAT_Parse(const std::string& filepath) {
     DATFile result;
 
-    std::ifstream file(filepath);
+    const std::string nativePath = Utils::ToNativePath(filepath);
+    std::ifstream file(nativePath);
     if (!file.is_open()) {
-        result.error = "Cannot open file: " + filepath;
+        result.error = "Cannot open file: " + nativePath;
         Logger::Get().Log(LogLevel::ERR, "[DAT] " + result.error);
         return result;
     }

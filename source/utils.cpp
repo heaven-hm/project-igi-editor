@@ -556,8 +556,11 @@ std::string GetIGIRootPath() {
 	while (!path.empty() && (path.back() == '\\' || path.back() == '/' || path.back() == ' ')) {
 		path.pop_back();
 	}
-	// If it contains \missions, strip it
+	// If it contains \missions or /missions, strip it
 	size_t pos = path.find("\\missions");
+	if (pos == std::string::npos) {
+		pos = path.find("/missions");
+	}
 	if (pos != std::string::npos) {
 		path = path.substr(0, pos);
 	}
@@ -570,7 +573,7 @@ std::string GetIGIRootPath() {
 
 std::string GetIGIModelsPath(int level_no) {
 	std::string root = GetIGIRootPath();
-	std::string pathLoc = root + "\\missions\\location0\\level" + std::to_string(level_no) + "\\models";
+	std::string pathLoc = ToNativePath(root + "\\missions\\location0\\level" + std::to_string(level_no) + "\\models");
 	
 	if (std::filesystem::exists(pathLoc)) {
 		return pathLoc;

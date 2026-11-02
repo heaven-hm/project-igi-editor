@@ -135,3 +135,4 @@ AGENTS.md
 .env
 .env.*
 !.env.example
+reports/

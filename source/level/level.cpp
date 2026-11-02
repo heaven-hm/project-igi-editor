@@ -400,6 +400,25 @@ int Level::GetTerrainNodeId(double x, double y) {
 	return terrain_.GetLastLeafNodeIndex();
 }
 
+bool Level::RaycastTerrain(const glm::vec3& ray_origin, const glm::vec3& ray_dir, glm::vec3& out_hit, int& out_node_id) {
+	if (!root_dyn_cube_) return false;
+	glm::vec3 current_pos = ray_origin;
+	const float step_size = 1000.0f;
+	for (int i = 0; i < 5000; ++i) {
+		current_pos += ray_dir * step_size;
+		float terrain_z = 0.0f;
+		if (terrain_.GetZ(root_dyn_cube_, current_pos.x, current_pos.y, terrain_z)) {
+			if (current_pos.z <= terrain_z + 100.0f) {
+				current_pos.z = terrain_z;
+				out_hit = current_pos;
+				out_node_id = terrain_.GetLastLeafNodeIndex();
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 void Level::EditorRaycastAndModify(const glm::vec3& ray_origin, const glm::vec3& ray_dir, int brush_type, double radius, double strength) {
 	if (root_dyn_cube_) {
 		terrain_.EditorRaycastAndModify(root_dyn_cube_, ray_origin, ray_dir, brush_type, radius, strength);

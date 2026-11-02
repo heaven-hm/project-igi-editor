@@ -11,7 +11,8 @@ constant in this entry was taken from the retail executable rather than invented
 
 That is only possible because of work other people did first:
 
-- **SlickDaddy** and **BlankName** — for the game's natives. Without a correct map of the
+- **SlickDaddy** (and the **Neonix Modding Team**) and **BlankName** — for reverse engineering
+  the game's natives and making the decompilation project possible. Without a correct map of the
   engine's own functions there is nothing to be faithful *to*.
 - **The decompilation project** (IGI-RE) — for turning `igi.exe` back into readable source. This
   campaign's rule was that IGI-RE is the only authority: no web sources, no other ports, and no
@@ -26,7 +27,39 @@ and that is their work as much as anyone's.
 Every behaviour in this entry was derived from **IGI-RE**, the decompiled retail source of
 Project IGI 1, and each fix cites the engine function + HOOK address + `file:line` in the code
 and in its commit message. Where the engine has no behaviour to copy, that is stated rather
-than invented.
+than invented. Tested and verified on both **Windows** and **macOS**.
+
+### AI Vehicle Driver/Passenger Placement Parity (`Human_ProbeGround` & `Human_SetPlatform`)
+
+- **AI Vehicle Driver/Passenger Seat Positioning (`Human_ProbeGround` / `Human_SetPlatform`)**:
+  - Aligned vehicle passenger and driver ground-probing with IGI-RE (`Human_ProbeGround` HOOK `0x462390`, `src/humanbase/human.c:1746-1750`). Vehicle drivers and passengers attached either directly as children or via a `HumanAI` child referencing an `AIGraph` attached to a vehicle are recognized via `HumanSitsInVehicle`.
+  - In `SnapObjectsToTerrain()`, vehicle riders bypass ground/terrain/graph drop, preserving their authored vehicle-relative seat coordinate `Z` without being corrupted or floating above the vehicle roof (`Human_SetPlatform` HOOK `0x463310`, `src/humanbase/human.c:2018`).
+  - `ComputeAnimationIdsForObject()` resolves vehicle patrol paths via `FindAiScriptPatrolPathId()` and includes driver animation clips (e.g. driving animation `61` for truck drivers).
+  - `App::OnLevelLoaded()` seeds `guard.stand_animation = param` when `obj.standAnimation < 0 && cmdCode == 0 && igi::HumanSitsInVehicle(objects, i)` so AI drivers start seated in the driving pose.
+  - Added unit regression test in `tests/test_seated_human.cpp` verifying `HumanAI -> AIGraph` vehicle attachment resolution.
+
+### Play Mode Performance & Zero-Allocation Optimization
+
+- **Play Mode Interactive Responsiveness & Framerate**:
+  - Eliminated duplicate `CaptureGameplayRenderSnapshot()` invocation in the render loop.
+  - Bypassed hover scene picking (`PickObjectAtScreenPos`) completely while `render_gameplay` is active, removing ~23ms GPU stall per mouse move in Play mode.
+  - Implemented view cone & distance LOD culling (`PassesEditorViewCone` & `GetObjectDrawLod`) in `GetGameplayDrawnAnimationIndices()` matching IGI-RE `Human_WakeIfVisible` (`0x45F140`, `src/humanbase/human.c:704-712`), cutting CPU skinning down from all level guards to only the guards inside the active camera view cone.
+  - Replaced per-call dynamic heap allocations in `Renderer::DrawSkinnedMesh()` with static thread-local reusable buffers.
+  - Added bounding sphere distance pre-cull in `CheckCollision()` before performing expensive inverse matrix transforms.
+
+### Terrain ID Cursor Query Parity (`src/compmap/map.c:503-515`)
+
+- **Terrain ID & Coordinates Hover Inspection**:
+  - Added terrain raycasting via camera ray unproject (`src/compmap/map.c:503-515`) and `Level::RaycastTerrain()` marching heightmap octree nodes to retrieve exact CTR leaf node ID and world coordinates.
+  - Fixed tooltip bug in `renderer_draw.cpp` where `info_object_index` was overriding `hover_object_index_` when `status_msg_` was non-empty.
+  - Accurately displays `Terrain ID: <id>` and `Pos: (X, Y, Z)` in the status HUD when hovering terrain in the 3D viewport.
+
+### Native Apple Silicon macOS Application (`igi1ed.app`)
+
+- **Native macOS Support (`igi1ed.app`)**:
+  - Created standalone native Apple Silicon arm64 macOS application bundle (`build-macos/igi1ed.app`) using legacy OpenGL 2.1 Metal profile and FreeGLUT/GLEW compatibility shims (`platform/macos`).
+  - Standardized all filesystem and resource paths (`Utils::ToNativePath`) across parsers, CLI handlers, and test suites, ensuring 100% path resolution compatibility across POSIX and Windows.
+  - Verified 100% passing results for all 278 native C++ unit tests and full 14-level headless smoke validation on macOS.
 
 ### TaskTree Property Editor & Camera Look Parity
 

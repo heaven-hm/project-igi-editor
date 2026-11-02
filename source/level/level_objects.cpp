@@ -766,11 +766,12 @@ void LevelObjects::LoadModelNames() {
     // logging) — only the stdio wrappers changed.
     std::snprintf(jsonPath, sizeof(jsonPath), "%s\\editor\\tools\\IGIModels.json", exeDir.c_str());
 
-    if (!std::filesystem::exists(Utils::ToNativePath(jsonPath))) {
-        Logger::Get().Log(LogLevel::ERR, "[LevelObjects] IGIModels.json not found in executable directory: " + std::string(jsonPath));
+    const std::string nativeJsonPath = Utils::ToNativePath(jsonPath);
+    if (!std::filesystem::exists(nativeJsonPath)) {
+        Logger::Get().Log(LogLevel::ERR, "[LevelObjects] IGIModels.json not found in executable directory: " + nativeJsonPath);
     }
 
-    std::ifstream jsonFile(jsonPath, std::ios::binary);
+    std::ifstream jsonFile(nativeJsonPath, std::ios::binary);
     if (jsonFile.is_open()) {
         Logger::Get().Log(LogLevel::INFO, "[LevelObjects] Loading model names from: " + std::string(jsonPath));
         std::string content((std::istreambuf_iterator<char>(jsonFile)),

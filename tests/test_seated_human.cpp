@@ -238,6 +238,37 @@ TEST(SeatedHuman, OnlyAHumanUnderAVehicleIsAPassenger) {
     EXPECT_FALSE(igi::HumanSitsInVehicle(cyclic, 1));
 }
 
+TEST(SeatedHuman, HumanAttachedViaAiGraphToVehicleIsAPassenger) {
+    struct StubGraphObject {
+        std::string type;
+        int parentIndex = -1;
+        std::string taskId;
+        int aiGraphTaskId = -1;
+        std::vector<int> childrenIndices;
+    };
+    // Retail pattern (Level 1 Jones in truck, Level 2 Jones in truck, Level 8 Car 1501):
+    // 0 Car
+    // 1 AIGraph (child of Car 0, taskId="15")
+    // 2 ConditionalContainer (no vehicle in parent chain)
+    // 3 HumanSoldier (child of ConditionalContainer 2, has child 4)
+    // 4 HumanAI (child of HumanSoldier 3, aiGraphTaskId=15)
+    // 5 HumanSoldier (grounded, child of ConditionalContainer 2, has child 6)
+    // 6 HumanAI (child of HumanSoldier 5, aiGraphTaskId=99 -> ground graph)
+    // 7 AIGraph (root level ground graph, taskId="99")
+    std::vector<StubGraphObject> objects = {
+        {"Car", -1, "1099", -1, {1}},
+        {"AIGraph", 0, "15", -1, {}},
+        {"ConditionalContainer", -1, "4007", -1, {3, 5}},
+        {"HumanSoldier", 2, "4023", -1, {4}},
+        {"HumanAI", 3, "3201", 15, {}},
+        {"HumanSoldier", 2, "1234", -1, {6}},
+        {"HumanAI", 5, "3202", 99, {}},
+        {"AIGraph", -1, "99", -1, {}}
+    };
+    EXPECT_TRUE(igi::HumanSitsInVehicle(objects, 3));
+    EXPECT_FALSE(igi::HumanSitsInVehicle(objects, 5));
+}
+
 // ---------------------------------------------------------------------------
 // The two draw paths, in both frames: the seat frame puts the model's ORIGIN at
 // the placement; the grounded frame puts the model's FEET there. Each frame's

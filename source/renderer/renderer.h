@@ -436,6 +436,9 @@ public:
 		// renderer can show the terrain id under the cursor without depending on Level. (issue 3)
 		std::function<int(double,double)> terrain_id_at_world_xy_;
 
+		// Raycasts against terrain and returns hit point + CTR node id. (issue 3)
+		std::function<bool(const glm::vec3&, const glm::vec3&, glm::vec3&, int&)> raycast_terrain_;
+
 		// Returns the terrain surface height z at a world (x,y); false over a hole/edge.
 		// Set by App so the renderer can project the 3D brush ring onto the surface.
 		std::function<bool(double,double,float&)> terrain_z_at_world_xy_;
