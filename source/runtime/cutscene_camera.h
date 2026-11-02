@@ -1,53 +1,8 @@
 #pragma once
-/******************************************************************************
- * @file    cutscene_camera.h
- * @brief   The authored CutScene PROGRAMME -- a CutScene task plus the
- *          EditCamera key chain below it -- resolved into the engine's own
- *          camera timeline and evaluated at a tick (GitHub issue #80).
- *
- * WHY THIS EXISTS. `source/runtime/cutscene_rules.{h,cpp}` is the faithful
- * translation of the retail timeline rule, and until now nothing called it: the
- * editor's gameplay camera ran a hand-written LINEAR mix of a five-field
- * "shot" record instead (`RuntimeWorld::UpdateAuthoredCutSceneCamera`, the
- * `glm::mix` of position / forward / up / fov). The engine does not mix
- * linearly -- `CutScene_Interpolate` (0x4F55D0) evaluates a cubic Hermite
- * (`CutScene_Spline` 0x4F6290) through a four-key window with unwrapped angles.
- * This module is the missing link between the two: it turns the authored
- * CutScene + EditCamera task data the editor already parses into the timeline
- * `cutscene_rules` evaluates, so the camera path has ONE rule.
- *
- * Everything here is cited to retail engine (`the retail engine source`,
- * read-only), which is the only evidence source used:
- *
- *   src/cutscene/cutscene.c  CutScene_Open         0x4F4B00 (:227) the screen table
- *                            CutScene_CollectKeys  0x4F4880 (:163-180)
- *                            CutScene_UnwrapAngles 0x4F4940 (:193-211)
- *                            CutScene_Update       0x4F5400 (:417-462)
- *                            CutScene_Interpolate  0x4F55D0 (:473-...)
- *   src/editcam/editcamera.c EditCamera_Init       0x507F10 (:88-107) the key table
- *                            EditCamera_Create     0x508290 (:112-132) the defaults
- *
- * The rule itself is NOT restated here. `ParseCutSceneScreen`, `ParseCutSceneKey`,
- * `CollectCutSceneKeys`, `UnwrapCutSceneAngles`, `CutSceneTimeFromTick` and
- * `EvaluateCutScene` all live in `cutscene_rules.h` and are called, not copied;
- * this header adds only the authored-object -> timeline step and the tick.
- *
- * Relationship to #74's menu work: none. `MenuManager_RequestScreen` 0x4174A0
- * sequences MENU SCREENS (docs/parity/MENU_SYSTEM.md); the cutscene
- * camera is the CutScene task driving EditCamera keys, which is what this
- * module resolves. The triage entry that pointed #80 at `MenuManager_*` was a
- * red herring (docs/parity/CUTSCENES.md section 8).
- *
- * Out of scope, deliberately, and why (the full list is in cutscene_rules.h):
- *   * the run/reset/speed EXPRESSION gating (`CutScene_RunHandler` 0x4F51D0) --
- *     retail mission flow, evaluated by the runtime's own expression state, not
- *     by an authored-data resolver;
- *   * `posAttach`/`rotAttach` resolution (`EditCamera_AttachPosition` 0x508940,
- *     `EditCamera_AttachRotation` 0x508620) -- needs the live task the camera
- *     is attached to;
- *   * the four screen filters and the shake's RNG draws -- see
- *     `CutSceneCameraState`'s notes in cutscene_rules.h.
- *****************************************************************************/
+// cutscene_camera.h - Authored CutScene task and EditCamera evaluation.
+//
+// MIT License.
+
 
 #include "runtime/cutscene_rules.h"
 

@@ -1,51 +1,6 @@
-// elevator_rules.h - the retail `Elevator` task's authored fields and the rule
-// that places the platform on its rail.
+// elevator_rules.h - Elevator task authored parameter layout and rail placement rules.
 //
-// GitHub issue #40 asks (among other things) for "Moving platforms/conveyors"
-// to have "a path or animation preview": "Moving platforms reference a path
-// spline or waypoint list stored in the level's object property block. The
-// editor must: Read the path reference from the object's property fields;
-// Visualize the path as a spline/line in the viewport; Optionally animate the
-// platform along the path in preview mode."
-//
-// The issue names no retail type, so the first question is which task IS a
-// moving platform. It is `Elevator`. The shipped missions place it in
-// LEVEL3/5/8/11/12/13/14 (verified by scanning the shipped `OBJECTS.QVM` string
-// tables for the task-type name), and the retail declaration in the shipped
-// LEVEL3 script is, verbatim:
-//
-//   Task_DeclareParameters("Elevator", "Position", "ObjectPos", "Orientation",
-//     "Real32x9", "Model", "String16", "SplineObj taskid", "Int32", "Linear",
-//     "bool8", "Force orientation", "bool8", "Pos", "Real32", "Max speed",
-//     "Real32", "Speed inertia", "Real32", "Floor down", "VarString",
-//     "Floor up", ...)
-//
-// which is exactly the order `Elevator_Init` HOOK 0x43CC70 registers
-// (`src/elevator/elevator.c:44-83`). `SplineObj taskid` is the rail reference
-// the issue asks for; `Pos` is the platform's scalar position along it. The
-// retail data confirms the index of every one of them: LEVEL3 authors
-// `Task_New(698, "Elevator", "", 24557880.0, -55710968.0, 174421536.0, 0, 0, 0,
-// "200_01_1", 699, TRUE, FALSE, 0, 5.0, 1, ...)` where 699 is the id of the
-// `SplineObj` declared immediately above it.
-//
-// The placement rule is `Elevator_UpdatePlace` HOOK 0x43D960
-// (`src/props/elevator.c:41-83`). It reuses the same `SplineObj_GetPoints`
-// walk the train path uses, so the editor's existing `RailPath` is the right
-// input.
-//
-// Everything here is cited to retail engine (`the retail engine source`,
-// read-only), function + HOOK/ORIG address + `file:line`. Nothing here touches
-// GL or Windows, so the whole rule is unit-testable on the host build.
-//
-// Named divergences (never silently "fixed"):
-//   * The oracle is compiled with `#pragma GCC optimize("excess-precision=standard")`
-//     so its x87 intermediates keep 80 bits. This port keeps `long double`
-//     intermediates and rounds at the same assignments, but `std::sqrt` /
-//     `std::sin` are the host libm's, not the engine's `fsqrt` / `fsin`.
-//   * `Elevator_UpdatePlace` writes back into `e->height` and leaves
-//     `e->obj.matrix` untouched on two of its three paths. Both are reproduced
-//     by returning the clamped height and by taking the caller's matrix as the
-//     starting point.
+// MIT License.
 #pragma once
 
 #include <string>

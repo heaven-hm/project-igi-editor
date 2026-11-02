@@ -1,39 +1,7 @@
-// lightmap_rules.h - the retail object-lightmap rules the editor's bake button
-// needs: the resource name, the `.olm` file name, the accept/reject test for an
-// `.olm` already on disk, and the parameters that decide a bake.
+// lightmap_rules.h - Object lightmap file and resource handling.
 //
-// Issue #72 "Lightmap bake button". Scope is deliberately narrow: this is NOT the
-// game's runtime lighting. It is the three things an editor cannot get wrong
-// without writing the wrong file name or binding a stale bake:
-//
-//   1. the lightmap resource name          Lightmap_GetDir      0x5210C0
-//                                          Lightmap_GetResPath  0x5210E0
-//   2. the `.olm` file name                Lightmap_BuildLod    0x523D40
-//                                          LightmapInfo_MakeName 0x5235A0
-//   3. the accept/reject test for an `.olm` already on disk, and the parameters
-//      that decide a bake                  Lightmap_BuildLod + LightmapInfo_Changed 0x523930
-//
-// Everything here is cited to retail engine (`the retail engine source`),
-// the verified C decompilation of retail `IGI.exe`. No web source and no other
-// port is used as authority. Files used, all under retail engine/src:
-//
-//   litmap/lightmap.c:66-101     Lightmap_FreeBuffers 0x521040, Lightmap_GetDir
-//                                0x5210C0, Lightmap_GetResPath 0x5210E0
-//   litmap/lightmap.c:186-257    LightmapInfo_ScanFile 0x523420, LightmapInfo_Create
-//                                0x523450, LightmapInfo_MakeName 0x5235A0
-//   litmap/lightmap.c:277-318    LightmapInfo_Delete 0x5236C0 (the resource unload)
-//   litmap/lightmap.c:362-378    the DATA/BSS block: the literal format strings
-//                                and the global paths, at their IGI.exe addresses
-//   litmap/litmaptypes.h:11-48   LightmapTex / Lightmaps: the exact on-disk layout
-//   dirlight/lightmapbuild.c:26-100   LIGHTMAP_MAGIC, the name format, the accept
-//                                test, and the builder's own header initialisation
-//   dirlight/lightmapinfo.c:75-200    the bake parameters and the rebuild decision
-//   dirlight/lightmapinfo.c:433  the DATA block holding kScaleRange {0.5f, 10.0f}
-//   dirlight/dirlight.h:20-23    feq(): the x87 "unordered counts as equal" compare
-//   terredit/datetime.c:50-104   DateTime_Format / DateTime_Compare: the timestamp
-//                                is compared as the TEXT "YYYY-MM-DD-hh-mm-ss-mmmm"
-//   model/modeltypes.h:9-27      MeshHeader: version at 0x00, time[7] at 0x04,
-//                                format at 0x20 (0 rigid, 1 bone, 3 lightmapped)
+// MIT License.
+#pragma once
 //
 // ---------------------------------------------------------------------------
 // Rule 1 - the resource names are LITERALS, not the `.olm` name

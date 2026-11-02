@@ -1,57 +1,6 @@
-// cutscene_rules.h - the authored cutscene camera timeline, resolved the way
-// retail engine resolves it (#80 "Intro/outro cutscenes").
+// cutscene_rules.h - Authored cutscene camera timeline and keyframe interpolation.
 //
-// WHAT THIS IS FOR. The editor is a level/object editor, so the half of #80 it
-// needs is the AUTHORED camera/screen data model and the rule that turns it
-// into a camera pose at a time -- enough to place a cutscene and preview it.
-// It is deliberately NOT the retail mission-flow state machine: the run/reset
-// expression gating, the save/load and register-vars handlers, the four screen
-// filters, the leave-world teardown and the IntroScreen .avi screens are all
-// left out, and section "Out of scope" below says why for each.
-//
-// Everything here is cited to retail engine (`the retail engine source`),
-// which is the only evidence source used. The authored parameter names and
-// types come from the retail `Task_DeclareParameters("CutScene", ...)` and
-// `Task_DeclareParameters("EditCamera", ...)` lines, which ship inside every
-// OBJECTS.QVM that authors one and are also present as decompiled text in
-// `MISSIONS/location0/level1/objects.qsc:9-10` and `:4`.
-//
-// the retail engine files this module is built from:
-//
-//   src/cutscene/cutscene.c   CutScene_Open 0x4F4B00 (the 14-parameter table,
-//                             the 0..20 time range, the 30 Hz tick rate),
-//                             CutScene_CollectKeys 0x4F4880, CutScene_GetKey
-//                             0x4F4910, CutScene_UnwrapAngles 0x4F4940,
-//                             CutScene_Update 0x4F5400, CutScene_Interpolate
-//                             0x4F55D0, CutScene_Spline 0x4F6290
-//   src/editcam/editcamera.c  EditCamera_Init 0x507F10 (the 16-entry table),
-//                             EditCamera_Create 0x508290 (the defaults)
-//   src/terrdraw/flare.c      Hermite_Init 0x518130, Hermite_Eval 0x518190
-//   src/physobj/paramops.c    ParamReal32x9_Parse 0x4EFBA0 reads THREE Euler
-//                             angles; Param_Three 0x4EFB00 is the arg count, so
-//                             "Orientation" consumes 3 script args and
-//                             "Position"/"Colour" 3 each
-//   src/game/game.c:465       CutScene_SetTicksPerSecond(30)
-//   src/math/matrix.c         Matrix_SetEuler 0x4B38E0 (the editor already has
-//                             this as igi::IgiEulerRotationMatrix, see
-//                             docs/parity/SCAMERA_PARAMS.md)
-//   src/dxinit/dxinit.h:21-34 x87_fistp (fistpll) and x87_eq
-//
-// Named divergences (never silently fixed):
-//   * `CutScene_UnwrapAngles` (cutscene.c:205-208) hangs forever on a NaN angle
-//     -- `while (!(x >= kNegPi))` is true for NaN and `x += kTwoPi` cannot
-//     escape. The engine's own comment admits it ("a NaN hangs, like the
-//     original"). A level editor must not hang on authored data, so the port
-//     leaves a non-finite angle exactly as authored instead. Every finite
-//     input takes the identical path.
-//   * `x87_eq` (dxinit.h:30-34) is `!(a < b) && !(a > b)`, so it reports NaN
-//     EQUAL to anything. Reproduced, because two of the spline's guards turn on
-//     it.
-//   * The shake offsets need the engine's shared RNG (Random_Float 0x4B4770 on
-//     gCutSceneRandom). A preview cannot reproduce that sequence -- the global
-//     has already been consumed an unknown number of times by the time a
-//     cutscene runs -- so the six draws are a caller argument, not an internal
-//     generator. The draw ORDER and the scale factors are the engine's.
+// MIT License.
 #pragma once
 
 #include <cstddef>

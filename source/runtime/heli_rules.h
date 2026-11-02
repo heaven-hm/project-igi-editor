@@ -1,68 +1,6 @@
-// heli_rules.h - the retail "Heli" vehicle task and the "Rotor" magic object,
-// resolved the way retail engine resolves them.
+// heli_rules.h - Helicopter vehicle task and rotor dynamics modeling.
 //
-// Issue #60 asked for "Helicopter rotor + flight preview". The triage recorded
-// the cited address 0x431B70 as `Heli_Control`; this module is the pure-logic
-// half of that family plus the rotor that a helicopter actually spins. The
-// editor already draws the helicopter's ATTA children (see
-// `source/renderer/atta_children.h`), but it knew nothing about the authored
-// "Heli" parameters, the per-tick control semantics that drive a flight
-// preview, or the rotor's own spin/lift rules.
-//
-// Everything here is cited to retail engine (`the retail engine source`),
-// which is the only evidence source used. The authored parameter names and
-// types come from the retail `Task_DeclareParameters("Heli", ...)` line, which
-// ships inside every OBJECTS.QVM that authors a helicopter and is also present
-// as decompiled text in `location0/LEVEL2/objects.qsc:62-63`.
-//
-// the retail engine files this module is built from:
-//
-//   src/heli/heli.c        Heli_Init 0x4310F0, Heli_Reset 0x431560,
-//                          Heli_Control 0x431B70, Heli_Move 0x431E30,
-//                          Heli_UpdateWheels 0x432550, Heli_GetControlInfo
-//                          0x432BE0, Heli_GetSoundParams 0x432BB0
-//   src/heli/heli.h        Vehicle/VehicleConfig/ControlArg/ControlInfo layouts
-//   src/heli/helitypes.h   Heli and HeliConfig layouts
-//   src/plane/heli.c       Heli_ParseArgs 0x432F60, Heli_ParseConfig 0x433030
-//   src/rotor/rotor.c      Rotor_Init 0x42D2B0, Rotor_Run 0x42D440,
-//                          Rotor_Move 0x42D680, Rotor_DrawPrim 0x42C630,
-//                          Rotor_ParseDef 0x42D9F0
-//   src/rotor/rotor.h      RotorDef and Part layouts
-//   src/vehicle/parts.c    HeliWheel_ParseArgs 0x427240
-//   src/editobj/vehconfig.c Vehicle_ParseConfig 0x5031F0
-//   src/physobj/physobjtype.c DefinePhysicsObjType 0x4EDD20 -- where the
-//                          physics-def argument list is laid out and where the
-//                          task-type parse handler is handed its start index
-//   src/physobj/paramops.c the script argument counts per type (Param_One /
-//                          Param_Three) and ParamReal32x9_Parse 0x4EFBA0
-//   src/math/matrix.c      Matrix_SetRotX 0x4B3B60, Matrix_SetRotZ 0x4B3BE0,
-//                          Matrix_SetEuler 0x4B38E0 and the inlined 3x3
-//                          multiply
-//   src/math/mathvars.h, src/plane/plane.c, src/missile/missile.c,
-//   src/scamera/scameralens.c, src/animtrig/body.c  the shared exe constants
-//
-// A "Heli" task consumes exactly 19 argument tokens (3 for ObjectPos, 3 for
-// Real32x9, 3 for Real32x3 and 10 scalars), which every one of the 29 retail
-// helicopter instances in the shipped QVMs satisfies. A "Rotor" physics
-// definition consumes 6 tokens appended to the physics-def list. See
-// docs/parity/HELICOPTER.md.
-//
-// Named divergences (never silently fixed):
-//   * x87 `fsin`/`fcos` (matrix.c:113-115, :148-150) are not bit-identical to
-//     libm `sinf`/`cosf`; this port uses libm and is exact to ~1 ulp of the
-//     64-bit x87 mantissa, not bit-exact. The same applies to the x87 `fsqrt`
-//     in Heli_Move's heading normalisation (heli.c:464).
-//   * The engine writes `#pragma GCC optimize("excess-precision=standard")`
-//     over these translation units, i.e. every `float` operation rounds to
-//     `float` at each step. This port spells those intermediates out as
-//     `float` so the same rounding happens on a non-x87 host.
-//   * `Heli_Move` reuses one local for two different things: when the heading
-//     basis is degenerate it reads the slot that held the pitch force
-//     (heli.c:473-476, the original's own comment "the original reuses a stack
-//     slot here"). The local is `float t0, t1, t2, stale = 0` (heli.c:417), so
-//     it is 0 unless the turn-force block ran this tick, in which case it holds
-//     `f2[0]` (heli.c:452). That is reproduced as `HeliMoveState::stale` rather
-//     than corrected to a zero.
+// MIT License.
 #pragma once
 
 #include <cstdint>
@@ -196,7 +134,7 @@ struct HeliParams {
 bool ParseHeliParams(const std::vector<std::string>& tokens, HeliParams* out);
 
 // ---------------------------------------------------------------------------
-// 3x3 rotation helpers (src/math/matrix.c)
+// 3x3 rotation helpers
 // ---------------------------------------------------------------------------
 
 // The engine's inlined 3x3 multiply, `Mul` (matrix.c:12-27). The original sums
@@ -422,7 +360,7 @@ HeliWheelLiftResult HeliWheelLift(const HeliWheelProbe& probe, bool found, doubl
 void HeliWheelDamp(float vel[3], float ang_mom[3]);
 
 // ---------------------------------------------------------------------------
-// Rotor (src/rotor/rotor.c)
+// Rotor dynamics
 // ---------------------------------------------------------------------------
 
 constexpr float kRotorLift = 44.600887298583984f;   // rotor.c:70  kLift
