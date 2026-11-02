@@ -624,7 +624,9 @@ int main(int argc, char **argv) {
     const std::vector<std::string> requiredEditorPaths = {
       "\\editor\\shaders",
       "\\editor\\qed",
+#if defined(_WIN32)
       "\\editor\\tools\\igi1conv\\igi1conv.exe",
+#endif
     };
     for (const auto& rel : requiredEditorPaths) {
       // The relative fragments are written with Windows separators; convert at
