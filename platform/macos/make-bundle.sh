@@ -75,7 +75,9 @@ PLIST
 
 chmod +x "$APP/Contents/MacOS/igi1ed"
 # Clear Apple resource forks / Finder extended attributes before signing
-xattr -cr "$APP"
+xattr -cr "$APP" 2>/dev/null || true
+xattr -dr com.apple.FinderInfo "$APP" 2>/dev/null || true
+xattr -dr 'com.apple.fileprovider.fpfs#P' "$APP" 2>/dev/null || true
 # Ad-hoc signature: not notarised, but a stable identity so Gatekeeper/TCC does
 # not treat every rebuild as a different application.
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || \
@@ -86,7 +88,9 @@ if [ -n "$INSTALL" ]; then
   mkdir -p "$INSTALL"
   rm -rf "$INSTALL/igi1ed.app"
   cp -R "$APP" "$INSTALL/igi1ed.app"
-  xattr -cr "$INSTALL/igi1ed.app"
+  xattr -cr "$INSTALL/igi1ed.app" 2>/dev/null || true
+  xattr -dr com.apple.FinderInfo "$INSTALL/igi1ed.app" 2>/dev/null || true
+  xattr -dr 'com.apple.fileprovider.fpfs#P' "$INSTALL/igi1ed.app" 2>/dev/null || true
   codesign --force --deep --sign - "$INSTALL/igi1ed.app" >/dev/null 2>&1 || true
   echo "installed $INSTALL/igi1ed.app"
 fi
