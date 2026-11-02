@@ -1,9 +1,9 @@
-// Regression coverage for IGI-RE parity in the binary MEF parser:
+// Regression coverage for retail parity in the binary MEF parser:
 // render partitions come from the REND/DNER group chain, walked by the record's
 // own `next` link (0xFFFF = last), NOT from the RD3D header count field and NOT
 // from the collision chunks XTVC/ECFC/TAMC.
 //
-// Oracle: /Users/haseeb-mir/Documents/Code/IGI-RE
+// Oracle: the retail engine source
 //   src/bonemesh/d3drender.c:204-261  Direct3DRender_LoadModel (chunk ids, collision parts)
 //   src/bonemesh/d3drender.c:163-183  format-1 draw walk: g += sizeof(MeshGroup) + g->next
 //   src/render/render.c:487-489       format-0 walk: g += g->next + 0x1C
@@ -174,7 +174,7 @@ std::vector<uint8_t> MakeType1Mef(uint32_t headerCountField,
 
 // The game's walk ends at the record whose `next` is 0xFFFF; the RD3D header
 // field the parser used to bound the walk with is never read by the game
-// (no reference to it exists in IGI-RE). With the header field deliberately
+// (no reference to it exists in retail engine). With the header field deliberately
 // smaller than the chain, every group must still be reported.
 TEST(MefDualSetTest, RenderGroupChainIsNotBoundedByRd3dHeaderCount) {
     const std::vector<uint8_t> dner = Concat({
@@ -263,7 +263,7 @@ TEST(MefDualSetTest, DualVertexSetCountsFollowBoneMeshSkinHeaderFields) {
               static_cast<uint32_t>(geo.vertices.size()));
 }
 
-// IGI-RE Direct3DRender_LoadModel (bonemesh/d3drender.c:234-261) fills exactly two
+// retail engine Direct3DRender_LoadModel (bonemesh/d3drender.c:234-261) fills exactly two
 // COLLISION parts from XTVC/ECFC/TAMC/HSPC after reading the HSMC collision chunk.
 // They are not render partitions: the render blocks, and therefore the material
 // selection, must keep coming from DNER.

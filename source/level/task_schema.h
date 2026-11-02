@@ -72,8 +72,8 @@ int FindDeclaredModelArg(const TaskSchema& schema);
 // Prop / interactable parity maths.
 //
 // Pure, host-portable helpers so the editor's inspector and viewport preview
-// agree with the decompiled game. Every constant cites its IGI-RE file:line;
-// see docs/igi-re-parity/PROPS_WIRE_INTERACTABLES.md for the full trace.
+// agree with the decompiled game. Every constant cites its retail engine file:line;
+// see docs/parity/PROPS_WIRE_INTERACTABLES.md for the full trace.
 // ─────────────────────────────────────────────────────────────────────────────
 namespace Props {
 
@@ -90,46 +90,46 @@ struct Vec3 {
     double Length() const;
 };
 
-// IGI-RE src/props/wire.c:320-321 — `DATA(5334B0) double kWireScale
+// retail engine src/props/wire.c:320-321 — `DATA(5334B0) double kWireScale
 // INIT(0.000244140625)` with `ALIAS(kUnitsToMeters, kWireScale, 0)`:
 // 1 world unit = 1/4096 m (4096 units per metre).
 constexpr double kWireScale = 0.000244140625;  // 1/4096
 
-// IGI-RE src/props/wire.c:322-323 — `DATA(533834) float kWireSlope
+// retail engine src/props/wire.c:322-323 — `DATA(533834) float kWireSlope
 // INIT(0.034906585f)` = 2°. Wire_IsSloped (0x43F8A0, wire.c:304-317) compares
 // the matrix X-Euler against it.
 constexpr double kWireSlope = 0.034906585;
 
-// IGI-RE src/game/misc.c:99 — `static const float kNearlyUp = 0.95f`, used by
+// retail engine src/game/misc.c:99 — `static const float kNearlyUp = 0.95f`, used by
 // Matrix_SetYAxis (0x414A60, misc.c:129-190) to pick its basis branch.
 constexpr double kNearlyUp = 0.95;
 
-// IGI-RE src/weapon/humanplayer.c:136-138 — the rider hangs kWireEnd short of
+// retail engine src/weapon/humanplayer.c:136-138 — the rider hangs kWireEnd short of
 // each anchor and kZiplineDown below the wire (0.75 m and 0.9 m).
 constexpr double kWireEnd = 3072.0;
 constexpr double kZiplineDown = 3686.4;
 
-// IGI-RE src/humanstate/humanstate.c:1389-1399 — HumanPlayer_ZiplineUpdate
+// retail engine src/humanstate/humanstate.c:1389-1399 — HumanPlayer_ZiplineUpdate
 // (0x40DEF0) integrates
 //     speed = -dir.z * 0x1.613d32p+6 + speed * 0.99
 // 0x1.613d32p+6 == 88.30976104736328 world units/tick.
 constexpr double kZiplineAccel = 88.30976104736328;
 constexpr double kZiplineFriction = 0.99;
 
-// IGI-RE src/statgun/statgun.c:113-118 — StationaryGun_CreateHandler defaults.
+// retail engine src/statgun/statgun.c:113-118 — StationaryGun_CreateHandler defaults.
 constexpr const char* kStatGunDefaultWeapon = "WEAPON_ID_M2HB";
 constexpr int    kStatGunDefaultAmmo     = -1;
 constexpr double kStatGunDefaultMaxPitch = 25.0;
 constexpr double kStatGunDefaultMinPitch = -25.0;
 constexpr double kStatGunDefaultYawRange = 90.0;
-// IGI-RE src/statgun/statgun.c:140-141 — `gStatGunAmmoRange[] = {0, 100000}`.
+// retail engine src/statgun/statgun.c:140-141 — `gStatGunAmmoRange[] = {0, 100000}`.
 constexpr int kStatGunAmmoMin = 0;
 constexpr int kStatGunAmmoMax = 100000;
-// IGI-RE src/statgun/statgun.c:521 — `DATA(53387C) float kTurnStep
+// retail engine src/statgun/statgun.c:521 — `DATA(53387C) float kTurnStep
 // INIT(0.08726647f)` = 5° per tick, the unmanned-gun slew rate (statgun.c:178).
 constexpr double kStatGunTurnStep = 0.08726647;
 
-// IGI-RE src/comprun/gunholder.c:121-124 — AIStationaryGunHolder (GunHolder)
+// retail engine src/comprun/gunholder.c:121-124 — AIStationaryGunHolder (GunHolder)
 // defaults; gunholder.c:141-142 sets gGunHolderRange[] = {0, 100}.
 constexpr double kGunHolderDefaultAngleX = 360.0;
 constexpr double kGunHolderDefaultAngleY = 360.0;
@@ -139,7 +139,7 @@ constexpr double kGunHolderRangeMin = 0.0;
 constexpr double kGunHolderRangeMax = 100.0;
 
 // Wire geometry resolved from the two authored anchors, using the game's own
-// Wire_ParamsChanged (0x43F3D0, IGI-RE src/props/wire.c:160-191) maths.
+// Wire_ParamsChanged (0x43F3D0, retail engine src/props/wire.c:160-191) maths.
 struct WireSpan {
     Vec3 start{};
     Vec3 end{};
@@ -158,7 +158,7 @@ struct WireSpan {
 WireSpan ComputeWireSpan(const Vec3& start, const Vec3& end);
 
 // The rotation the game builds in Wire_ParamsChanged (Matrix_SetYAxis, HOOK
-// 0x414A60, IGI-RE src/game/misc.c:129-190): the world directions of the model's
+// 0x414A60, retail engine src/game/misc.c:129-190): the world directions of the model's
 // local axes, with `y` equal to the normalised wire direction. Renderers can
 // turn this straight into a column-major basis (glm::mat3(x, y, z)).
 struct Basis {
@@ -166,7 +166,7 @@ struct Basis {
 };
 Basis YAxisBasis(const Vec3& yAxis);
 
-// Zipline travel direction: IGI-RE src/weapon/humanplayer.c:557-568 takes the
+// Zipline travel direction: retail engine src/weapon/humanplayer.c:557-568 takes the
 // model point 0 -> point 1 vector and negates it when d.z > 0, so the ride
 // always runs downhill. Returns a zero vector when the anchors coincide.
 Vec3 ZiplineRideDirection(const Vec3& start, const Vec3& end);
@@ -187,13 +187,13 @@ bool ParseDoubleToken(const std::string& token, double& out);
 std::string UnquoteToken(const std::string& token);
 
 // ── Wire anchors (issue #42 / zipline) ──────────────────────────────────────
-// IGI-RE src/props/wire.c:89-113 Wire_Open (0x43EFF0) declares start ObjectPos
+// retail engine src/props/wire.c:89-113 Wire_Open (0x43EFF0) declares start ObjectPos
 // (args 3-5), end ObjectPos (args 6-8), model String16 (arg 9). Returns false —
 // leaving start/end untouched — when the End anchor is missing or not numeric.
 bool ParseWireAnchors(const std::vector<std::string>& args, Vec3& start, Vec3& end);
 
 // ── StationaryGun (issue #42) ───────────────────────────────────────────────
-// IGI-RE src/statgun/statgun.c:142-150 StationaryGun_Open (0x473ED0) param table
+// retail engine src/statgun/statgun.c:142-150 StationaryGun_Open (0x473ED0) param table
 // order; offsets below are absolute Task_New arg indices. Degrees fields are
 // degrees in the QSC and are converted with kDegToRad by the game
 // (StationaryGun_Clamp 0x4748B0, statgun.c:275-299).
@@ -208,7 +208,7 @@ struct StationaryGunParams {
 StationaryGunParams ParseStationaryGunArgs(const std::vector<std::string>& args);
 
 // ── AIStationaryGunHolder ───────────────────────────────────────────────────
-// IGI-RE src/comprun/gunholder.c:157-165 GunHolder_Init (0x46E370) param table
+// retail engine src/comprun/gunholder.c:157-165 GunHolder_Init (0x46E370) param table
 // order; gunholder.c:121-126 defaults.
 struct GunHolderParams {
     bool valid = false;
@@ -221,7 +221,7 @@ struct GunHolderParams {
 GunHolderParams ParseGunHolderArgs(const std::vector<std::string>& args);
 
 // ── Ladder placement (issue #68) ────────────────────────────────────────────
-// IGI-RE src/props/ladder.c:122-175 Ladder_Use (HOOK 0x4404C0) is the whole
+// retail engine src/props/ladder.c:122-175 Ladder_Use (HOOK 0x4404C0) is the whole
 // activation test, src/props/ladder.c:65-93 Ladder_Create (HOOK 0x440280)
 // derives the rung count, and src/weapon/humanplayer.c:273-340
 // HumanPlayer_UpdateLadder (HOOK 0x4113E0) computes the two mount positions.
@@ -230,7 +230,7 @@ GunHolderParams ParseGunHolderArgs(const std::vector<std::string>& args);
 // foot and point 3 the head (ladder.c:86-87, :155, :164; humanplayer.c:300,308).
 //
 // Every constant below is DATA/static in the retail binary; each citation gives
-// the IGI-RE file:line that declares it.
+// the retail engine file:line that declares it.
 
 // src/props/ladder.c:53-54 + :200-203 — kReachMin/kReachMax = ∓2867.2 world
 // units, applied to the player's local X in ladder.c:138 as the strict band

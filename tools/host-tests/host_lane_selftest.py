@@ -149,7 +149,7 @@ check("3 excluded by policy" in verdict and "0 dropped" in verdict,
 # something that read like a truncated path and made a compile failure look like
 # a display artefact.
 long_error = ("clang++: error: no such file or directory: "
-              "'/Users/someone/Documents/Code/project-igi-editor-igi-re/source/renderer/"
+              "'/Users/someone/Documents/Code/project-igi-editor/source/renderer/"
               "a_very_long_translation_unit_name_that_runs_past_the_old_limit.h'")
 line = R.first_error_line(long_error)
 check(len(line) > 120, "first_error_line() keeps the whole diagnostic",

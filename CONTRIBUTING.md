@@ -17,7 +17,7 @@ For how the code is put together once you are ready to change it, read
 
 `/Users/haseeb-mir/Documents/Code/project-igi-editor` is the original checkout and must not
 be modified. Work happens in the worktree
-`/Users/haseeb-mir/Documents/Code/project-igi-editor-igi-re` (`AGENTS.md:113-117`).
+`/Users/haseeb-mir/Documents/Code/project-igi-editor` (`AGENTS.md:113-117`).
 
 The retail game install is **read-only input**, never a place to write. `Config::Init`
 recompiles `<IGI>/editor/qed/*.qsc` into `.qvm` on every editor start, so every lane that
@@ -89,9 +89,9 @@ unpushed**, and say so explicitly ("committed, not pushed — awaiting your test
 Two build trees, on purpose (`scripts/build-windows.sh:5-27`):
 
 - `build-mingw/` — **i686**. This is the shipping target and the tree
-  `tools/igi-re-parity/tu-check.py` replays compile commands from. Keep it 32-bit;
+  `tools/parity/tu-check.py` replays compile commands from. Keep it 32-bit;
   reconfiguring it for another architecture silently breaks everyone else's check
-  (`docs/igi-re-parity/BUILD_GATE.md:331-333`).
+  (`docs/parity/BUILD_GATE.md:331-333`).
 - `build-mingw-x64/` — x86_64. This is the only architecture the repo can always *link*
   for, because the only committed GL import libraries are MSVC x64 ones. It links but does
   not run: no x64 freeglut/glew runtime DLLs are committed
@@ -156,9 +156,9 @@ IGI_HOST_NO_CACHE=1 bash scripts/run-host-tests.sh
 
 `IGI_HOST_NO_CACHE=1` disables the object cache; while headers are being edited
 concurrently it is the safe choice, because the cache cannot save you from a stale object
-compiled against an old struct layout (`docs/igi-re-parity/BUILD_GATE.md:136-148`).
+compiled against an old struct layout (`docs/parity/BUILD_GATE.md:136-148`).
 
-Useful variants (`docs/igi-re-parity/BUILD_GATE.md:32-35`):
+Useful variants (`docs/parity/BUILD_GATE.md:32-35`):
 
 ```bash
 bash scripts/run-host-tests.sh --list                          # what will run
@@ -168,7 +168,7 @@ IGI_HOST_TESTS="tests/test_mef_dual_set.cpp" bash scripts/run-host-tests.sh
 
 The transcript is always `build-mingw/host-tests.log`, which is a fixed path — two people
 running the lane at once clobber each other's log. Use `IGI_HOST_LOG_DIR` to keep yours
-(`docs/igi-re-parity/BUILD_GATE.md:340-342`).
+(`docs/parity/BUILD_GATE.md:340-342`).
 
 ### 3.3 Windows suite (the gate that finds what the host lane cannot)
 
@@ -190,7 +190,7 @@ verify-level integration tests, which are covered by the headless lane below.
 
 The exact test counts drift as suites are registered — treat "exit 0 with 0 failures" as
 the acceptance condition, not a particular number
-(`docs/igi-re-parity/BUILD_GATE.md:166-172`).
+(`docs/parity/BUILD_GATE.md:166-172`).
 
 ### 3.4 Headless acceptance lane (all 14 levels, GL-free, under Wine)
 
@@ -243,7 +243,7 @@ the populated `scratch/wine-smoke/run` stage. The e2e lane can also drive it wit
 `build-windows.sh` runs the x64 link half, so after a full gate those files are 64-bit. A
 Wine run straight afterwards fails with `libgcc_s_seh-1.dll not found` / exit 53. Force an
 i686 relink first, deleting the artifact so ninja cannot skip it
-(`docs/igi-re-parity/TRANSLATION_CAMPAIGN.md:21-27`):
+(`docs/parity/TRANSLATION_CAMPAIGN.md:21-27`):
 
 ```bash
 rm -f bin/Release/igi1ed.exe && cmake --build build-mingw --target igi-editor --parallel
@@ -265,12 +265,12 @@ self-skip via `GTEST_SKIP` instead of failing — a green lane that tested less 
 (`scripts/run-host-tests.sh:58-65`). The editor is a Windows binary, so the value handed to
 *it* must be the Windows form of the path (`Z:\...` under Wine,
 `scripts/e2e-headless.sh:287-291`). Suites that need extra fixture files name them
-explicitly, e.g. `IGI_MEF_WATERTOWER` (`docs/igi-re-parity/BUILD_GATE.md:157-162`).
+explicitly, e.g. `IGI_MEF_WATERTOWER` (`docs/parity/BUILD_GATE.md:157-162`).
 
 **The build-integrity check has an mtime blind spot.** It proves the artifacts are
 consistent with the dependency information ninja holds — not that your edit is in the
 binary. It cannot see a header that was edited and reverted within one mtime tick, and it
-does not verify struct layouts directly (`docs/igi-re-parity/BUILD_GATE.md:486-488`). When
+does not verify struct layouts directly (`docs/parity/BUILD_GATE.md:486-488`). When
 you need to prove a specific change reached the artifact, **verify by content**: put a
 distinctive `const char*` literal in the code and grep the binary for it.
 
@@ -289,7 +289,7 @@ bookkeeping, surfacing as bogus "redefinition of <X>" errors in headers that pla
 once, and `--fresh-pch` forces it up front (`scripts/build-windows.sh:177-191`). Related:
 `STALE_PCH` also fires when two ninja processes share one build tree — reported as a FAIL
 on purpose, because that is exactly when the tree must not be trusted
-(`docs/igi-re-parity/BUILD_GATE.md:480-485`).
+(`docs/parity/BUILD_GATE.md:480-485`).
 
 **Do not put the exe name on a command line for the smoke launcher.**
 `scripts/run-wine-smoke.sh` uses a launcher that begins with `pkill -9 -f "<the exe name>"`,
@@ -338,7 +338,7 @@ what does not need `windows.h`; a suite that links is linked **strictly** first 
 falls back to `-Wl,-undefined,dynamic_lookup` if the strict link fails
 (`tools/host-tests/host_test_runner.py:290-312`). A lazily linked suite that then calls an
 unresolved symbol aborts inside `dyld`; the runner reports it as "not host-portable" and
-names the first symbol `ld` reported (`docs/igi-re-parity/BUILD_GATE.md:131-134`).
+names the first symbol `ld` reported (`docs/parity/BUILD_GATE.md:131-134`).
 
 So:
 
@@ -358,16 +358,16 @@ post-build step; they are synthetic and committed (`docs/TESTS.md:173-181`).
 
 ---
 
-## 6. How to add an IGI-RE-derived rule
+## 6. How to add an retail-derived rule
 
-Engine behaviour is reconstructed from IGI-RE
-(`/Users/haseeb-mir/Documents/Code/IGI-RE`), and every claim about it must cite
+Engine behaviour is reconstructed from retail engine
+(`the retail engine source`), and every claim about it must cite
 **function + address + file:line**. No web sources, and open-igi (C#) is not an authority
 (`AGENTS.md:105-111`, `source/runtime/rain_rules.h:12-14`). The established shape is:
 
 1. **A pure rule module** — `source/runtime/<feature>_rules.{h,cpp}` (or
    `source/level/<feature>_rules.h` for placement/geometry rules). Constants live here as
-   data, each cited to its IGI-RE address; the header states whether the module is WIRED
+   data, each cited to its retail engine address; the header states whether the module is WIRED
    into the editor or an extracted-but-unwired audit. A new file under `source/runtime/` is
    picked up by the glob — no `CMakeLists.txt` edit for the editor
    (`CMakeLists.txt:75-84`).
@@ -375,10 +375,10 @@ Engine behaviour is reconstructed from IGI-RE
    discriminating case, not just the happy path: e.g. the cutscene camera test pins that
    two keys 100 units apart give **37.5** under the engine's cubic Hermite and **50** under
    the linear blend it replaced (`git show 0e0c3d9f`).
-3. **A parity document** — `docs/igi-re-parity/<SUBSYSTEM>.md`, opening with a `Status:`
+3. **A parity document** — `docs/parity/<SUBSYSTEM>.md`, opening with a `Status:`
    line that names the rule module and its test, and says plainly what is wired, what is
-   audited only, and what was not verified. `docs/igi-re-parity/RAIN.md:1-25` is a good
-   template; `docs/igi-re-parity/MENU_UI.md` shows the citation density expected.
+   audited only, and what was not verified. `docs/parity/RAIN.md:1-25` is a good
+   template; `docs/parity/MENU_UI.md` shows the citation density expected.
 4. **Wire it, or say you did not.** A rule module with no caller is a known failure mode in
    this repo: `cutscene_rules.*` was correct and unreachable until `0e0c3d9f` gave it a
    caller (`git show 0e0c3d9f`). If your change is extraction-only, say so in the doc's
@@ -405,12 +405,12 @@ CutScene_Spline HOOK 0x4F6290 (src/cutscene/cutscene.c:631-651)
 | [`AGENTS.md`](AGENTS.md) | the binding project rules (gate order, evidence standard) |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | the layers, and a map of `renderer_draw.cpp` |
 | [`docs/TESTS.md`](docs/TESTS.md) | the test inventory and the suite table |
-| [`docs/igi-re-parity/BUILD_GATE.md`](docs/igi-re-parity/BUILD_GATE.md) | build gate + host lane mechanics, build-integrity rules |
-| [`docs/igi-re-parity/WINE_SMOKE.md`](docs/igi-re-parity/WINE_SMOKE.md) | the Wine lane |
-| [`docs/igi-re-parity/`](docs/igi-re-parity/) | one audit per engine subsystem, with its IGI-RE citations |
+| [`docs/parity/BUILD_GATE.md`](docs/parity/BUILD_GATE.md) | build gate + host lane mechanics, build-integrity rules |
+| [`docs/parity/WINE_SMOKE.md`](docs/parity/WINE_SMOKE.md) | the Wine lane |
+| [`docs/parity/`](docs/parity/) | one audit per engine subsystem, with its retail engine citations |
 | [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) | known defects and their status |
 
 Two of the older lane documents predate the Wine lanes and still say this host cannot
-execute a Windows binary (`docs/igi-re-parity/BUILD_GATE.md:6-9`); Wine is installed and
+execute a Windows binary (`docs/parity/BUILD_GATE.md:6-9`); Wine is installed and
 the headless lanes run under it. Where a document and a script disagree, the script is what
 actually runs — check the script.

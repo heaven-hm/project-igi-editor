@@ -23,7 +23,7 @@
 // src/soldier/soldier.c:877, src/humanbase/human.c:1368-1387) — that split is
 // `AnimPlayback::Update` vs `AnimPlayback::AdvanceClock`.
 //
-// The retail EDITOR's own loop has NO oracle in IGI-RE (it decompiles IGI.exe
+// The retail EDITOR's own loop has NO oracle in retail engine (it decompiles IGI.exe
 // only, and the retail editor binary is not in the install), so the editor maps
 // the ENGINE's rule onto its own viewport: pose the AI the editor's visual pass
 // would DRAW.  That mapping is what makes an AI that is not selected animate at

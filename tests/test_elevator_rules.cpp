@@ -2,7 +2,7 @@
 // rule that places the platform on its rail (GitHub issue #40, "moving
 // platforms").
 //
-// Oracle: /Users/haseeb-mir/Documents/Code/IGI-RE (read-only), the verified
+// Oracle: the retail engine source (read-only), the verified
 // decompilation of retail IGI.exe. Every expectation below names the function
 // and file:line it comes from. The retail fixture is the shipped LEVEL3 script
 // as the editor's own QVM decompiler emits it.

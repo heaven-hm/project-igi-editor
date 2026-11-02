@@ -358,7 +358,7 @@ bool QvmExecutionContext::ExecuteLoopBinary(uint8_t opcode) {
             case 0x1A: Push(QvmRuntimeValue::FromReal(left_value - right_value)); break;
             case 0x1B: Push(QvmRuntimeValue::FromReal(left_value * right_value)); break;
             case 0x1C:
-                // In IGI-RE Qvm_OpBinary (0x4BDC40, src/qsc/qvmop.c:133):
+                // in retail engine Qvm_OpBinary (0x4BDC40, src/qsc/qvmop.c:133):
                 // case OP_DIV: Qvm_PushFloat(vm, fa / fb); break;
                 // The engine performs standard IEEE float division without raising VM error.
                 Push(QvmRuntimeValue::FromReal(left_value / right_value));
@@ -392,12 +392,12 @@ bool QvmExecutionContext::ExecuteLoopBinary(uint8_t opcode) {
             Push(QvmRuntimeValue::FromInt(left_value / right_value));
             break;
         case 0x1D:
-            // In IGI-RE Qvm_OpBinary (0x4BDC40, src/qsc/qvmop.c:113):
+            // in retail engine Qvm_OpBinary (0x4BDC40, src/qsc/qvmop.c:113):
             // case OP_SHL: Qvm_PushInt(vm, (int)((unsigned int)ia << (ib & 31))); break;
             Push(QvmRuntimeValue::FromInt(static_cast<int32_t>(static_cast<uint32_t>(left_value) << (right_value & 31))));
             break;
         case 0x1E:
-            // In IGI-RE Qvm_OpBinary (0x4BDC40, src/qsc/qvmop.c:114):
+            // in retail engine Qvm_OpBinary (0x4BDC40, src/qsc/qvmop.c:114):
             // case OP_SHR: Qvm_PushInt(vm, ia >> (ib & 31)); break;
             Push(QvmRuntimeValue::FromInt(left_value >> (right_value & 31)));
             break;
@@ -550,7 +550,7 @@ bool QvmExecutionContext::StepLoopInstruction() {
             if (!TryPopNumber(condition)) {
                 break;
             }
-            // In IGI-RE Qvm_OpBranch (0x4BD730, src/qvm/qvm.c:594) and Qvm_IsZero (:79-82):
+            // in retail engine Qvm_OpBranch (0x4BD730, src/qvm/qvm.c:594) and Qvm_IsZero (:79-82):
             // f == 0.0f || isnan(f) is treated as zero/false (x87 fcomp C3 flag on unordered).
             const bool is_true = condition.type == QvmValueType::Real
                 ? (condition.real_val != 0.0 && !std::isnan(condition.real_val))

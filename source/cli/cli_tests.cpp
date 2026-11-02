@@ -474,7 +474,7 @@ static void TestOneFNT(const std::string& path, const std::string& tag) {
     //
     // These retail fonts are FIXED-pitch. FNTH.proportional (+0) is 0 in both
     // editor.fnt and editorsm.fnt, which is exactly what makes the retail
-    // loader pass FRAME_FIXED (IGI-RE src/res/sprite.c:192), and retail
+    // loader pass FRAME_FIXED (retail engine src/res/sprite.c:192), and retail
     // accumulates a text run's width from the per-frame advance field,
     // s->frames[c - 1].advance (sprite.c:318-324). In the shipped files all 104
     // ANMF entries store the same advance -- 8 for editor.fnt, 5 for
@@ -557,7 +557,7 @@ static void TestFNT() {
     // CWD-relative "assets\\editor\\qed\\..." path only resolved when the suite
     // happened to be run from the repo root, so in any deployed or staged
     // layout both fonts failed to load and ~196 assertions were silently
-    // skipped (see docs/igi-re-parity/WINE_SMOKE.md).
+    // skipped (see docs/parity/WINE_SMOKE.md).
     const std::string qedDir = Utils::ToNativePath(Utils::GetExeDirectory() + "\\editor\\qed");
     TestOneFNT(Utils::ToNativePath(qedDir + "\\editor.fnt"), "editor");
     TestOneFNT(Utils::ToNativePath(qedDir + "\\editorsm.fnt"), "editorsm");

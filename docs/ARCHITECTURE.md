@@ -1,8 +1,8 @@
 # Architecture
 
 This is the map of the **code**: the layers, what owns what, and how a frame is produced.
-Its companion is [`docs/igi-re-parity/`](igi-re-parity/), which is the map of the **engine
-behaviour** the code reconstructs — one audit per subsystem, each citing IGI-RE as
+Its companion is [`docs/parity/`](parity/), which is the map of the **engine
+behaviour** the code reconstructs — one audit per subsystem, each citing retail engine as
 function + address + file:line.
 
 Scope of the line numbers: they are pinned to commit `7b281355`, where
@@ -177,7 +177,7 @@ Two consequences worth knowing before you change anything here:
 1. **Its layout is baked into every object file.** `App` even holds a second copy for
    gameplay (`std::optional<LevelObjects> runtime_level_objects_`, `source/app.h:221`), so a
    change to this struct is the exact case `scripts/check-build-integrity.sh` exists for —
-   see `docs/igi-re-parity/BUILD_GATE.md` §8.
+   see `docs/parity/BUILD_GATE.md` §8.
 2. **The parser is not the only loader.** Everything the CLI converter can do is delegated
    to the bundled `igi1conv.exe` through one shared spawner
    (`source/utils_igi1conv.h:1-10`, path built at `source/utils_igi1conv.cpp:23-25`); only
@@ -244,7 +244,7 @@ resolution entry points directly (`source/cli/smoke_level.cpp:10-20`,
 before you write engine logic of your own. It has two kinds of file:
 
 - **rule modules** — `<feature>_rules.{h,cpp}`, pure arithmetic with every constant cited
-  to IGI-RE. In `source/runtime/`: `rain_rules.*`, `anim_rules.*`, `spline_rules.*`,
+  to retail engine. In `source/runtime/`: `rain_rules.*`, `anim_rules.*`, `spline_rules.*`,
   `heli_rules.*`, `lightmap_rules.*`, `cutscene_rules.*`, `elevator_rules.*`,
   `pickup_rules.*`. Placement/geometry rules live next to the data they describe instead:
   `source/level/collision_drop_rules.h`, `source/level/terrain_snap_rules.h`. The
@@ -258,7 +258,7 @@ before you write engine logic of your own. It has two kinds of file:
 
 The convention is that a rule module is *either* wired into a caller *or* explicitly marked
 as an audit that is not. Both states exist in the tree and the module header says which
-(`source/runtime/rain_rules.h:4-10` says WIRED; `docs/igi-re-parity/RAIN.md:3` records the
+(`source/runtime/rain_rules.h:4-10` says WIRED; `docs/parity/RAIN.md:3` records the
 audit state of the document). A correct module with no caller is a known failure mode here:
 `cutscene_rules.*` was correct and unreachable until `0e0c3d9f` gave it a caller
 (`git show 0e0c3d9f`).
@@ -296,8 +296,8 @@ App::HandlePauseMenuClick / MovePauseMenuFocus / ActivateFocusedPauseMenuRow
 engine's own menu scripts have (`source/menu/menu_qvm_writer.h:1-14`).
 
 The retail frame, palette and geometry rules are pinned in
-[`docs/igi-re-parity/PAUSE_MENU_STYLE.md`](igi-re-parity/PAUSE_MENU_STYLE.md) and
-[`MENU_UI.md`](igi-re-parity/MENU_UI.md), and the values themselves live in
+[`docs/parity/PAUSE_MENU_STYLE.md`](parity/PAUSE_MENU_STYLE.md) and
+[`MENU_UI.md`](parity/MENU_UI.md), and the values themselves live in
 `source/runtime/pause_menu_*.h` (`pause_menu_layout.h`, `pause_menu_style.h`,
 `pause_menu_rows.h`, `pause_menu_font.*`).
 
@@ -326,7 +326,7 @@ are usable as evidence about the loader.
 
 ## 9. How the parity work is organised
 
-[`docs/igi-re-parity/`](igi-re-parity/) is the project's knowledge base about the retail
+[`docs/parity/`](parity/) is the project's knowledge base about the retail
 engine, and it is organised by subsystem, not by issue:
 
 - **one document per engine subsystem**, named after the subsystem (`RAIN.md`, `SNOW.md`,
@@ -347,8 +347,8 @@ engine, and it is organised by subsystem, not by issue:
 - **triage documents**: `ISSUE_TRIAGE_FULL.md` and `TRIAGE_REMAINING_ISSUES.md` map issues
   to subsystems and record what is still open.
 
-The authority rule is in `AGENTS.md:105-111`: IGI-RE
-(`/Users/haseeb-mir/Documents/Code/IGI-RE`) is the only authority for engine behaviour, and
+The authority rule is in `AGENTS.md:105-111`: retail engine
+(`the retail engine source`) is the only authority for engine behaviour, and
 a claim must cite function + address + line. open-igi (C#) is not an authority
 (`source/runtime/rain_rules.h:12-14`). A build is not a test, and a test passing is not
 behavioural equivalence — say which one was proved.

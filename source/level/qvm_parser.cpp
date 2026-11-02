@@ -198,7 +198,7 @@ QVMFile QVM_Parse(const std::string& filepath) {
             "accepted here and its instructions are then misread.  The "
             "mod-author toolchain reads this word as ver_minor and switches "
             "opcode tables on it (backend/NeonixTools/src/Qvm.cs:213-224, "
-            "46-50); this reader does not, because IGI-RE has no such table for "
+            "46-50); this reader does not, because retail engine has no such table for "
             "IGI1.";
     }
 

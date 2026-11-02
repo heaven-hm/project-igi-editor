@@ -3,7 +3,7 @@
  * @brief   Host-native tests for the ATTA attachment rules in
  *          `source/renderer/atta_children.h`.
  *
- * The oracle is IGI-RE (the verified decompilation of the retail IGI.exe); each
+ * The oracle is retail engine (the verified decompilation of the retail IGI.exe); each
  * test names the function it transcribes. The fixture records in
  * `RealHeliAttachmentRecord` are the exact bytes of the shipped
  * `709_01_1.mef` (level 1, the Black-Hawk-class hull) ATTA entries 0 and 1,
@@ -19,7 +19,7 @@
 
 namespace {
 
-// ─── Literal transcription of the IGI-RE oracle ─────────────────────────────
+// ─── Literal transcription of the retail engine oracle ─────────────────────────────
 // `src/magicobj/rigidcoll.c:399-450` (RigidDynCubeObj_CreateMagicObjs) and the
 // identical product in `src/shadow/sector.c:545-630`. `M` is the parent's
 // row-major 3x3, `o` its position, `attPos`/`a` the raw ATTA record fields.
@@ -112,7 +112,7 @@ const double kParentO[3] = {1000.0, 2000.0, 300.0};
 } // namespace
 
 // ─── Record layout ──────────────────────────────────────────────────────────
-// IGI-RE `src/model/modeltypes.h:26` ("ATTA, 0x44 bytes each"), the 0x44 stride
+// retail engine `src/model/modeltypes.h:26` ("ATTA, 0x44 bytes each"), the 0x44 stride
 // in `src/lod/mesh3d.c:493-497`, and the field order of `MagicAttach`
 // (`src/magicobj/rigidcoll.c:359-366`).
 TEST(AttaChildren, RecordLayoutIs68BytesWithIgiReFieldOffsets) {
@@ -145,7 +145,7 @@ TEST(AttaChildren, RecordLayoutIs68BytesWithIgiReFieldOffsets) {
 }
 
 // ─── Child local rotation ───────────────────────────────────────────────────
-// IGI-RE builds R with the orthonormalized COLUMNS of `m` as its ROWS
+// retail engine builds R with the orthonormalized COLUMNS of `m` as its ROWS
 // (`src/magicobj/rigidcoll.c:419-436`), which for an orthonormal basis is
 // `transpose(m)`.
 TEST(AttaChildren, LocalRotationIsTheTransposeOfTheStoredBasis) {
@@ -267,7 +267,7 @@ TEST(AttaChildren, RetailMainRotorLocalXAxisIsTheVerticalShaft) {
 }
 
 // ─── Rotor spin ─────────────────────────────────────────────────────────────
-// IGI-RE `src/rotor/rotor.c:139-152`: `copy.matrix = base * RotX(a)` — a
+// retail engine `src/rotor/rotor.c:139-152`: `copy.matrix = base * RotX(a)` — a
 // post-multiplied rotation about the part's own local X, leaving its local X
 // axis and its position untouched.
 TEST(AttaChildren, RotorSpinPostMultipliesLocalXAndKeepsShaftAndPosition) {

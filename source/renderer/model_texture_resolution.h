@@ -104,7 +104,7 @@ bool TextureIdHasAlphaSuffix(const std::string& textureId);
 
 // Which id to load for one entry of a model's texture list.
 //
-// IGI-RE: the engine loads exactly the ids the model's own texture table names —
+// retail engine: the engine loads exactly the ids the model's own texture table names —
 // ModelFile_LoadTextures walks the MTP TEXF names of that model file and calls
 // Texture_LoadFile("LOCAL:textures/<name>.tex") for each, pixel-format suffix and
 // all (HOOK 0x4CF790, src/model/model.c:452-470); ModelFile_Setup is what binds
@@ -130,7 +130,7 @@ std::string ResolveAiModelTextureId(
 
 // Whether the editor may fall back to "the model's own name is a texture id".
 //
-// IGI-RE: a model's texture list IS its own MTP INST record's GTT list
+// retail engine: a model's texture list IS its own MTP INST record's GTT list
 // (ModelFile_Setup, HOOK 0x4CF080, src/model/model.c:271-314) and the engine
 // binds l->textures[g->texture] only for a group whose index is not 0xFFFF
 // (lod_texture, src/render/render.c:216-219; draw_group, :524-531). An INST
@@ -148,7 +148,7 @@ bool ModelNameIsTextureIdFallbackAllowed(bool modelFoundInDat);
 // Whether the editor may fill a model's EMPTY texture list with ANOTHER model's
 // list — its ATTA parent hull's, or a "_02_1" sibling variant's.
 //
-// IGI-RE: it may not, and an empty list the DAT answered for is not a gap at all.
+// retail engine: it may not, and an empty list the DAT answered for is not a gap at all.
 //
 //  * A model's textures are its own MTP INST record's GTT list and nothing else:
 //    ModelFile_Setup walks the INST chunk one record per ModelLod, `n = *inst++`,
@@ -217,7 +217,7 @@ struct ModelEntryHit {
 // Resolve a model's .mef bytes from indexed archives by the engine's own resource
 // identity, returning the archive they came from.
 //
-// IGI-RE: Mesh_Load (HOOK 0x4CF390) asks the resource system for
+// retail engine: Mesh_Load (HOOK 0x4CF390) asks the resource system for
 // "LOCAL:models/%s.mef" (src/model/model.c:364) and the match is on the folded
 // full name — String_ToUpper 0x4B5AF0 folds it (src/res/resource.c:98-104) and
 // Resource_IsLoaded compares the folded string (:136-138). A bare "<id>.mef" is
@@ -268,7 +268,7 @@ std::vector<uint8_t> FindModelSourceEntry(
 // Search order for a texture lookup whose owning archive is known: that archive
 // first, every other archive after it in its existing order.
 //
-// IGI-RE: the game resolves a model's textures from exactly one archive, the one
+// retail engine: the game resolves a model's textures from exactly one archive, the one
 // of the level the model file belongs to. ModelFile_Setup loads
 // "%stextures/%s.res" for that level (src/model/model.c:261, HOOK(0x4CF080)),
 // ModelFile_LoadTextures turns the MTP_TEXF table of that resource into the
@@ -289,7 +289,7 @@ std::vector<ModelSourceArchiveIndex> OrderTextureArchivesByOwner(
 // "...\common\models\location0.res" -> 0. 0 also means "not a level archive", which
 // is the only answer a caller may treat as unknown.
 //
-// IGI-RE: a model file and its textures always come from ONE level directory.
+// retail engine: a model file and its textures always come from ONE level directory.
 // `Model_SetDir` copies the level's directory into `gModelDir` before that level's
 // models are loaded (src/game/game.c:411-418; HOOK(0x4CFBD0) at
 // src/lod/modelfile.c:153-157), and `ModelFile_Load` / `ModelFile_Setup` read the
@@ -305,7 +305,7 @@ int ModelArchiveOwnerLevel(const std::string& resPath);
 // (`textureIdOwnerLevel`: the first level whose DAT lists that texture id) only
 // when the model's archive is not a level archive (0).
 //
-// IGI-RE: the model file and its textures come from one directory, so the model's
+// retail engine: the model file and its textures come from one directory, so the model's
 // own archive decides — never the first level whose DAT happens to list the
 // texture id, and never the level being previewed. The texture-id owner is the
 // editor's fallback for a model read from the shared/common archive, where the

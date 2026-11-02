@@ -1,6 +1,6 @@
 // Binary MEF reader — a faithful C++ transcription of the retail IGI loader.
 //
-// Oracle: /Users/haseeb-mir/Documents/Code/IGI-RE (decompiled retail game).  Every
+// Oracle: the retail engine source (decompiled retail game).  Every
 // structural rule below is copied from it: same constants, same order of
 // operations, same branches, same early-outs.
 //

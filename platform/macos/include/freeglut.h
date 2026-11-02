@@ -16,7 +16,7 @@
  * Those five are provided by platform/macos/src/glut_compat.c.  Their
  * semantics on macOS differ from FreeGLUT where Apple's GLUT makes the
  * FreeGLUT behaviour impossible -- each difference is documented at its
- * definition, and in docs/igi-re-parity/MACOS_NATIVE.md.
+ * definition, and in docs/parity/MACOS_NATIVE.md.
  *****************************************************************************/
 
 #pragma once

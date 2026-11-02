@@ -15,7 +15,7 @@
 //
 // This class is the transcription of that task. It owns the pool, the cells and
 // the vertex groups; every constant comes from source/runtime/rain_rules.h,
-// which cites IGI-RE for each one.
+// which cites retail engine for each one.
 class Renderer_Rain {
 public:
     // The engine's per-cell ground probe (Rain_UpdateGrid, HOOK 0x498BD0,

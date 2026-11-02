@@ -29,7 +29,7 @@ void Renderer_Objects::EnsurePortalDistancesLoaded() {
 
     // Task_New(-1, "ModelLODSettings", "300_01_1", "300_01_1", 70.0, 170.0, 300.0, 350.0, 500.0);
     // Three leading args then the five distances (gModelLODSettingsParams,
-    // IGI-RE src/animtrig/lodsettings.c:95,104-109). The tokenizer lives in
+    // retail engine src/animtrig/lodsettings.c:95,104-109). The tokenizer lives in
     // source/lod/lod_qvm_table.h so it is host-testable and single-sourced.
     for (const igi::lod::AuthoredLodEntry& entry : igi::lod::ParseAuthoredLodEntries(decompiled)) {
         // Portal/attachment culling distance, in metres: the authored "Distance
@@ -38,7 +38,7 @@ void Renderer_Objects::EnsurePortalDistancesLoaded() {
         portal_distances_[entry.model] = igi::lod::AuthoredCutoffDistance(entry);
 
         // The engine's copy of the table: non-decreasing clamp, then x4096
-        // (ModelLODSettings_Changed, IGI-RE src/animtrig/lodsettings.c:157-171).
+        // (ModelLODSettings_Changed, retail engine src/animtrig/lodsettings.c:157-171).
         // This is VirModel.unk28, the input to lod_select's authored branch.
         float raw[5];
         for (int i = 0; i < 5; ++i) raw[i] = entry.distance[static_cast<size_t>(i)];

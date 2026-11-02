@@ -10,7 +10,7 @@
  * behaviour it is wired to.  When the retail file is not there, the menu is built
  * from the rows the editor has always drawn, so the pause menu keeps working.
  *
- * ORACLE: IGI-RE, the verified C decompilation of retail IGI.exe.
+ * ORACLE: retail engine, the verified C decompilation of retail IGI.exe.
  *   src/menu/menumanager.c:94-113   menu state enum: MENU_IDLE=9, MENU_QUIT=10,
  *                                   MENU_QUIT_TO_MAIN=11, MENU_RESTART_LEVEL=12
  *   src/game/menumanager.c:249-261  MenuManager_LeaveMenus HOOK 0x417790:
@@ -24,7 +24,7 @@
  *
  * The two mappings below are the only retail items the editor has a behaviour
  * for; every other retail item is reported present-but-inert with the retail
- * action recorded, and docs/igi-re-parity/MENU_UI.md lists them.
+ * action recorded, and docs/parity/MENU_UI.md lists them.
  *
  * The fallback row list mirrors the rows source/renderer/renderer_draw.cpp has
  * always drawn (its `btn_labels`) and the hit boxes
@@ -434,7 +434,7 @@ void BuildModelInto(EditorMenu& menu, const MenuUiBuildOptions& options) {
     // same order, the same rects, the same colour indices -- but what the editor
     // DRAWS is its own text: `EditorLabelForRetailEntry` gives every retail text
     // row the editor's label for its slot, and the game's words are never shown
-    // (docs/igi-re-parity/PAUSE_MENU_STYLE.md "The editor's own strings come
+    // (docs/parity/PAUSE_MENU_STYLE.md "The editor's own strings come
     // first").  `label` / `display_label` keep the game's text verbatim: the
     // definition is data the editor edits and saves, and the reader and label
     // tests read those fields.

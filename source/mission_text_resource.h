@@ -6,7 +6,7 @@
  *          objective names), transcribed from the retail engine's resource
  *          layer.
  *
- * The engine oracle is /Users/haseeb-mir/Documents/Code/IGI-RE (decompiled
+ * The engine oracle is the retail engine source (decompiled
  * retail IGI.exe). The behavioural claim this module encodes is:
  *
  *   A mission text parameter (a StatusMessage's `text`, a

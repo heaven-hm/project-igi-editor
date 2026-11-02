@@ -11,7 +11,7 @@
  *     measured numbers. They self-skip when the corpus is absent.
  *
  * The corpus numbers asserted here were measured on the retail install at
- * `/Users/haseeb-mir/Downloads/IGI` (see docs/igi-re-parity/MAGIC_OBJECTS.md).
+ * `/Users/haseeb-mir/Downloads/IGI` (see docs/parity/MAGIC_OBJECTS.md).
  *****************************************************************************/
 #include <gtest/gtest.h>
 

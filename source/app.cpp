@@ -3057,7 +3057,7 @@ void App::SetupRuntimeDoors() {
 		// Everything that depends on the engine's argument layout lives in
 		// `runtime/door_params.h`, so the mapping is a pure function that
 		// `tests/test_door_params.cpp` drives with all 33 retail `Door` tasks. See
-		// that header for the IGI-RE citations; in short, `slide` is two components
+		// that header for the retail engine citations; in short, `slide` is two components
 		// (`door.h:45`) and the three expression arguments are 17/18/19
 		// (lock/open/close), which this call site previously read one slot early.
 		igi::ApplyDoorArgumentLayout(
@@ -3133,7 +3133,7 @@ void App::ApplyRuntimeDoorStates() {
 
 		LevelObject& object = objects[static_cast<size_t>(snapshot.object_index)];
 		// The slide offset is rotated by the door's CLOSED basis, in the
-		// engine's Euler order. IGI-RE `Door_Place` (HOOK 0x446290,
+		// engine's Euler order. retail engine `Door_Place` (HOOK 0x446290,
 		// src/door/door.c:121-138) computes, with `base` the closed matrix
 		// (row-major 3x3) and `m = base.m`:
 		//     u = slide[0]*slidePos*kSlideScale;  v = slide[1]*slidePos*kSlideScale;
@@ -4019,7 +4019,7 @@ void App::SetupRuntimeLadders() {
             continue;
         }
 
-        // Authored IGI rotation, in the engine's order. IGI-RE `Matrix_SetEuler`
+        // Authored IGI rotation, in the engine's order. retail engine `Matrix_SetEuler`
         // (HOOK 0x4B38E0, src/math/matrix.c:99-110) composes Rz(az)*Ry(ay)*Rx(ax)
         // and `ParamReal32x9_Parse` (HOOK 0x4EFBA0) feeds the QSC triple straight
         // into it. This site previously composed Z -> X -> Y (i.e. Rz*Rx*Ry),

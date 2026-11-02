@@ -1,4 +1,4 @@
-// alarm_light.h - the retail "AlarmLight" task, resolved the way IGI-RE
+// alarm_light.h - the retail "AlarmLight" task, resolved the way retail engine
 // resolves it.
 //
 // Issue #43 asked for "create/edit lights and smoke FX"; the triage note points
@@ -7,8 +7,8 @@
 // light fixture: it is a switchable, destructible lamp whose visible "blink" is
 // a reflector model that turns while the lamp is on.
 //
-// Everything here is cited to IGI-RE
-// (`/Users/haseeb-mir/Documents/Code/IGI-RE`), the only evidence source used.
+// Everything here is cited to retail engine
+// (`the retail engine source`), the only evidence source used.
 //
 //   src/fxobj/alarm.c          AlarmLight_Init 0x4397C0 (the ParamTable and the
 //                              reflector task type), AlarmLightReflector_Create
@@ -34,7 +34,7 @@
 //
 // NO retail level ships a decompiled `objects.qsc` containing an AlarmLight, so
 // the declaration is read from the QVM bytecode and the instances from the QVM
-// as well (5 levels, 10 instances). See docs/igi-re-parity/SMOKE_LIGHTS.md.
+// as well (5 levels, 10 instances). See docs/parity/SMOKE_LIGHTS.md.
 #pragma once
 
 #include <cstdint>
@@ -44,7 +44,7 @@
 namespace igi {
 
 // ---------------------------------------------------------------------------
-// Engine constants. Every one is IGI-RE DATA.
+// Engine constants. Every one is retail engine DATA.
 // ---------------------------------------------------------------------------
 
 // alarm.c:71 kTurn. Exactly pi/30 to float precision: pi / kTurn =
@@ -106,7 +106,7 @@ constexpr int kAlarmLightModelSlotWhenDestroyed = kAlarmLightModelSlotC;
 // One row of the authored parameter table.
 struct AlarmLightParamDesc {
     const char* authored_name;  // the retail declaration string, verbatim
-    const char* engine_field;   // the IGI-RE struct field the slot writes
+    const char* engine_field;   // the retail engine struct field the slot writes
     const char* type_name;      // the retail declared type
     int token_count;            // script arguments consumed
     int model_slot;             // AlarmLightModelSlot, or -1 when not a model

@@ -5,9 +5,9 @@
 // format carries a citation of the form
 //     <function> HOOK(0xADDR), src/path/file.c:LINE
 // pointing at the verified decompilation of retail IGI.exe in
-// /Users/haseeb-mir/Documents/Code/IGI-RE.  Measurements taken over the shipped
+// the retail engine source.  Measurements taken over the shipped
 // retail assets are labelled "measured (corpus)".  Anything neither cited nor
-// measured is labelled UNVERIFIED.  See docs/igi-re-parity/MEF_IMPORT.md.
+// measured is labelled UNVERIFIED.  See docs/parity/MEF_IMPORT.md.
 //
 
 #include "renderer/mef_writer.h"

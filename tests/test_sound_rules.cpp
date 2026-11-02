@@ -1,6 +1,6 @@
 // test_sound_rules.cpp - the authored sound-emitter model (#70).
 //
-// The oracle for every number here is IGI-RE (read-only). Key citations:
+// The oracle for every number here is retail engine (read-only). Key citations:
 //   condsound.c:73-93      ConditionalSound Init/Create and the ParamTable order
 //   condsound.c:121-136    Run: the condition edge and the once gate
 //   condsound.c:150-189    Play/Stop/UpdatePlaying, the stream branch

@@ -51,7 +51,7 @@ void ReportInitFailure(const char* subsystem) {
       "  extension.  If it is active (it prints 'GL 2.1 fallback active' above)\n"
       "  then this is a shader or uniform problem in the '21' tier, not a\n"
       "  context-version problem.  See the shader compile errors above (if any),\n"
-      "  docs/KNOWN_ISSUES.md and docs/igi-re-parity/GL21_FALLBACK.md.\n\n",
+      "  docs/KNOWN_ISSUES.md and docs/parity/GL21_FALLBACK.md.\n\n",
       subsystem, vendor ? vendor : "(null)", renderer ? renderer : "(null)",
       version ? version : "(null)", glsl ? glsl : "(null)", err ? err : "none");
 
@@ -216,7 +216,7 @@ void Renderer::ApplyFogIntensity() {
   // runtime/mission_fog.h (igi::FogIntensityDistanceScale, pinned by
   // MissionFogTest.FogIntensityScaleIsOneAtTheLevelDefault). 100 == the level's
   // authored fog, i.e. the engine's own density; there is no such control in
-  // IGI-RE, so 100 is the only value that reproduces retail and it is the value a
+  // retail engine, so 100 is the only value that reproduces retail and it is the value a
   // level starts at (App::LoadLevel resets it).
   const float scale = igi::FogIntensityDistanceScale(fog_intensity_);
   float effective_far = fog_base_far_ * scale;

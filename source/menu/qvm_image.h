@@ -11,7 +11,7 @@
 // `source/runtime/runtime_world.cpp:1042` all do `QVM_Parse(path)` and then work
 // with the resulting `QVMFile`. This header only turns that into a menu model.
 //
-// ORACLE: IGI-RE, a verified C decompilation of retail IGI.exe.
+// ORACLE: retail engine, a verified C decompilation of retail IGI.exe.
 //   * `src/qvm/qvmtypes.h` -- the container header and the loaded `Qvm` struct.
 //   * `src/qvm/qvm.c:641-689` `Qvm_OpCall` (HOOK 0x4BD880) -- the call encoding:
 //     the callee name is pushed first, then `code[pc] == OP_CALL`, then
@@ -79,7 +79,7 @@ struct MenuField {
 // no-op returning 0 (`src/level/level.c:156-166`), so this is data the script
 // holds for its own reader -- but its ORDER is the order `Level_NewTask` parses
 // arguments in (`src/level/level.c:214-221`) and it matches the C `ParamTable`
-// order (docs/igi-re-parity/MENU_SYSTEM.md section 7).
+// order (docs/parity/MENU_SYSTEM.md section 7).
 //
 // The reader used to parse these statements into a local and throw them away; a
 // widget's own `MenuField`s say what its arguments are, but only the declaration

@@ -174,7 +174,7 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(11, obj.rot.z);
             if (obj.argTokens.size() > 12) obj.modelId = unquote(obj.argTokens[12]);
         } else if (obj.type == "SCamera") {
-            // IGI-RE src/scamera/scamera.c:116-131 / retail objects.qsc declaration:
+            // retail engine src/scamera/scamera.c:116-131 / retail objects.qsc declaration:
             // 6 = "Holder Gamma" (yaw), 7 = "Holder Model" (the model THIS task draws:
             // `FIELD(model)` -> RigidDynCubeObj_SetModel, scamera.c:240), 8 = "Camera
             // Alpha" (pitch), 9 = "Camera Gamma" (an extra yaw, NOT roll), 10 = "Camera
@@ -197,7 +197,7 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readDouble(6, obj.rot.z);
             if (obj.argTokens.size() > 7) obj.modelId = unquote(obj.argTokens[7]);
         } else if (obj.type == "Wire") {
-            // IGI-RE Wire_Open (0x43EFF0, src/props/wire.c:89-113) & ParamTable_Add (:109-111):
+            // retail engine Wire_Open (0x43EFF0, src/props/wire.c:89-113) & ParamTable_Add (:109-111):
             // 3-5: start (ObjectPos), 6-8: end (ObjectPos), 9: model (String16).
             // A Wire has no authored rotation (it computes its orientation matrix from
             // end - start in Wire_ParamsChanged, HOOK 0x43F3D0, src/props/wire.c:160-191).
@@ -252,7 +252,7 @@ void LevelObjects::ParseTaskLine(const std::string& line, LevelObject& obj) {
             readBool(14, obj.splineAutoOrient);
         } else if (obj.type == "SplineObj") {
             // SplineObj container. The position is at args 9-11, NOT at 3-5:
-            // IGI-RE SplineObj_Open (HOOK 0x502250, src/editobj/spline.c:204-214)
+            // retail engine SplineObj_Open (HOOK 0x502250, src/editobj/spline.c:204-214)
             // declares Linear Segments @3, Collision @4, Snap Length @5,
             // Automatic Orientation @6, Number of Matrices/Segment @7,
             // Collision LOD @8, Position @9-11, Gamma Orientation @12,
@@ -475,7 +475,7 @@ void LevelObjects::UpdateCoordinatesInLine(LevelObject& obj) {
             }
         } else if (obj.type == "SplineObj") {
             // SplineObj container: the position belongs at args 9-11, not 3-5
-            // (IGI-RE SplineObj_Open, HOOK 0x502250, src/editobj/spline.c:204-214;
+            // (retail engine SplineObj_Open, HOOK 0x502250, src/editobj/spline.c:204-214;
             // the load path agrees, source/level/level_objects.cpp:235-243). Args
             // 3/4/5 are Linear Segments / Collision / Snap Length and are written
             // back only when their owning properties change, so they are left as

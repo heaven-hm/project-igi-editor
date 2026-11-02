@@ -21,8 +21,8 @@
 #include <vector>
 
 // Unit tests for the engine's LOD virtual-model chain rule.
-// Oracle: src/model/model.c:145-163 (HOOK(0x4CED50, VirModel_InitLods)) in IGI-RE.
-// See docs/igi-re-parity/LOD_CHAINS.md for the full trace and the corpus numbers.
+// Oracle: src/model/model.c:145-163 (HOOK(0x4CED50, VirModel_InitLods)) in retail engine.
+// See docs/parity/LOD_CHAINS.md for the full trace and the corpus numbers.
 
 namespace {
 
@@ -284,7 +284,7 @@ TEST(LodChainCorpusTest, EveryRetailLevelBundleMatchesTheMeasuredChainHistogram)
     EXPECT_TRUE(mismatchedMods.empty())
         << "VNAM/MODS name sets differ in levels: " << mismatchedMods.size();
 
-    // Measured on the retail install (see docs/igi-re-parity/LOD_CHAINS.md §3).
+    // Measured on the retail install (see docs/parity/LOD_CHAINS.md §3).
     EXPECT_EQ(names, 6605);
     EXPECT_EQ(multi, 3981);
     EXPECT_EQ(maxChain, 5);
@@ -557,8 +557,8 @@ TEST(LodChainCorpusTest, ThePackedModelArchiveResolvesTheEngineVnamChainExactly)
 // The renderer parses the level's `ModelLODSettings` tasks out of lod.qvm
 // (source/renderer/renderer_objects_metadata.cpp -> igi::lod::ParseAuthoredLodEntries),
 // monotonizes and scales each table exactly as ModelLODSettings_Changed does
-// (IGI-RE src/animtrig/lodsettings.c:157-171), and hands it to lod_select's
-// authored branch (IGI-RE src/lod/mesh3d.c:172-184). This test runs that whole
+// (retail engine src/animtrig/lodsettings.c:157-171), and hands it to lod_select's
+// authored branch (retail engine src/lod/mesh3d.c:172-184). This test runs that whole
 // pipeline on the shipped data.
 
 TEST(LodChainCorpusTest, AuthoredLodTablesFromRetailLodQvmSelectInsideTheResolvedChain) {

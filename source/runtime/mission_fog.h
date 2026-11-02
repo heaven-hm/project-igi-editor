@@ -1,4 +1,4 @@
-// mission_fog.h - per-mission authored fog, resolved the way IGI-RE resolves it.
+// mission_fog.h - per-mission authored fog, resolved the way retail engine resolves it.
 //
 // Issue #66 asked for fog "derived from the level's FlatSky task", citing
 // open-igi's FogPresets.cs. The premise is not baseless: FlatSky's ParamTable
@@ -21,9 +21,9 @@
 // This module implements the scene fog. FlatSky's ground band is a separate
 // feature and is deliberately not implemented here.
 //
-// Everything here is cited to IGI-RE. Where the reconstructed engine is
+// Everything here is cited to retail engine. Where the reconstructed engine is
 // self-inconsistent or leaves a value undefined, the divergence is named in a
-// comment and in docs/igi-re-parity/MISSION_FOG.md rather than silently fixed.
+// comment and in docs/parity/MISSION_FOG.md rather than silently fixed.
 #pragma once
 
 #include <string>
@@ -32,7 +32,7 @@
 namespace igi {
 
 // ---------------------------------------------------------------------------
-// Engine constants. Every one is IGI-RE DATA.
+// Engine constants. Every one is retail engine DATA.
 // ---------------------------------------------------------------------------
 
 // publish(): `g->sets[0].color.fogDensity * kFogScale` (globallight.c:115,133).
@@ -61,7 +61,7 @@ constexpr float kTerrainFogScaleMax = 16384.0f;
 // GlobalLight carries five light sets; set 0 is "terrain" (globallight.c:266-268).
 constexpr int kLightSetCount = 5;
 
-// The OBJECT renderer reads a DIFFERENT set from the terrain's, and IGI-RE proves
+// The OBJECT renderer reads a DIFFERENT set from the terrain's, and retail engine proves
 // it by address arithmetic rather than by naming it:
 //
 //   publish() fills, for i = 0..4 (globallight.c:127-134),
@@ -180,7 +180,7 @@ float ExponentialFogDistanceForFraction(float terrain_fog_scale, float fraction)
 // 2 000 000 / authored_density game units = 488.28125 / authored_density metres
 // (kFixed = 4096 units/m). It is the quantity a linear-fog renderer needs in
 // order to match, and it is where the editor's invented `120 / density` is wrong
-// by a factor of 4.069 -- see docs/igi-re-parity/MISSION_FOG.md §5.
+// by a factor of 4.069 -- see docs/parity/MISSION_FOG.md §5.
 float ExponentialFogEFoldingDistance(float terrain_fog_scale);
 
 // The editor's world scale: common.h:40 WORLD_UNITS_PER_METER = 4096.0f, which
@@ -221,7 +221,7 @@ float LinearFogFarMetresForAuthoredDensity(float authored_density, float fallbac
 
 // 100 == the level's OWN authored fog, i.e. the engine's density. This is the
 // value a level must START at: the engine has no fog-intensity control anywhere
-// (no GlobalLight field, no viewport field, nothing in IGI-RE), so a level's
+// (no GlobalLight field, no viewport field, nothing in retail engine), so a level's
 // level-start density is its authored "Fog density terrain" times kFogScale and
 // nothing else -- TerrainMesh_SetFog stores exactly that in gTerrainFogScale
 // (globallight.c:115,125 -> terrainmesh.c:302-320) and td_project exponentiates
@@ -236,7 +236,7 @@ constexpr int kFogIntensityLevelDefault = 100;
 // gTerrainFogScale; larger percentages shrink the distance (thicker fog).
 //
 // This is the editor's own preview control, NOT an engine rule: there is no
-// fog-intensity field anywhere in IGI-RE. It exists so a level can be previewed
+// fog-intensity field anywhere in retail engine. It exists so a level can be previewed
 // with thicker or thinner haze than it authors, and 100 is the only value that
 // reproduces retail.
 float FogIntensityDistanceScale(int intensity);
@@ -313,7 +313,7 @@ bool FogRangeIsDegenerate(const FogRange& range);
 // Fog_Compute HOOK 0x4DA790 (src/sector/light.c:55-72).
 //   haze_amount is the accumulated HazeLayer density, i.e. the value Haze_GetFog
 //   leaves in *out -- Fog_Compute calls it as its second statement, so the term
-//   IS defined in IGI-RE (an earlier note here claimed it was not; it is written
+//   IS defined in retail engine (an earlier note here claimed it was not; it is written
 //   by the callee, and with no visible HazeLayer -- which is every shipped level,
 //   no OBJECTS.QVM references "Hazinglayers" -- it is 0). It is an explicit
 //   argument because it is an input to the arithmetic, not because it is unknown.
@@ -351,7 +351,7 @@ struct HazeBox {
 // NO token parser is provided for HazeBox, deliberately. The engine's fields are
 // known (HazeLayer, src/haze/haze.h:56-63, written by HazeLayer_Set /
 // set_fields at haze.c:40-53), but HazeLayer_Open (haze.c:106-114) registers the
-// task type with NO ParamTable, so IGI-RE does not reconstruct the authored
+// task type with NO ParamTable, so retail engine does not reconstruct the authored
 // parameter order, and no retail level declares a "Hazinglayers" task to read one
 // from. A field-by-position parser here would be invented, so the caller must
 // fill the struct from a layout it has actually verified. HazeGetFog below is

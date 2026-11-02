@@ -3,7 +3,7 @@
  * @brief   The editor's animation PLAYBACK path and SKINNING call, driven by
  *          the engine's own methods (#73).
  *
- * `anim_rules.h` is the pure translation of IGI-RE's animation rules: it takes
+ * `anim_rules.h` is the pure translation of retail engine's animation rules: it takes
  * engine-shaped data and returns engine-shaped answers, and it reads no files.
  * This file is the DRIVER on top of it: it turns one of the editor's
  * `AnimationClip`s (the BEF text that `igi1conv` emits from the retail
@@ -11,7 +11,7 @@
  * own functions on them, and hands back what the renderer needs.
  *
  * Every step below is a call into `anim_rules.h`, not a re-implementation, and
- * every step is cited to IGI-RE:
+ * every step is cited to retail engine:
  *
  *   Anim_Play            0x4D61D0  src/boneobj/anim.c:38-58
  *   Anim_PlayNow         0x4D6110  src/boneobj/anim.c:13-16
@@ -30,7 +30,7 @@
  *   BoneObj_GetRootMotion 0x4D2FB0 src/lod/boneobj.c:202-211
  *   BoneMesh_Skin        0x49B700  src/dxinit/d3drender.c:226-313
  *
- * The engine function the issue calls `MefSkinner` does not exist in IGI-RE;
+ * The engine function the issue calls `MefSkinner` does not exist in retail engine;
  * the retail skinner is `BoneMesh_Skin`, and `AnimPlayer::Skin` below is that
  * function over the engine's own vertex records.
  *

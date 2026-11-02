@@ -11,13 +11,13 @@ namespace {
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kRadiansToDegrees = 180.0f / kPi;
 
-// IGI-RE src/file/vec.c:183-187 IsZero: true for 0 and for NaN, exactly like the
+// retail engine src/file/vec.c:183-187 IsZero: true for 0 and for NaN, exactly like the
 // original's equality tests.
 inline bool IsZero(float value) {
     return !(value < 0.0f) && !(value > 0.0f);
 }
 
-// IGI-RE src/file/vec.c:189-208 Vec3_Angle (HOOK 0x4B2B30): the angle between two
+// retail engine src/file/vec.c:189-208 Vec3_Angle (HOOK 0x4B2B30): the angle between two
 // vectors in radians, with the clamped branches returning exactly 0 or pi.
 float AngleBetweenRadians(const glm::vec3& a, const glm::vec3& b) {
     if (IsZero(a.x) && IsZero(a.y) && IsZero(a.z)) return 0.0f;
@@ -28,7 +28,7 @@ float AngleBetweenRadians(const glm::vec3& a, const glm::vec3& b) {
     return std::acos(cosine);
 }
 
-// IGI-RE src/game/misc.c:42-56 Vec3d_PitchAngle (HOOK 0x4148F0): the angle of v
+// retail engine src/game/misc.c:42-56 Vec3d_PitchAngle (HOOK 0x4148F0): the angle of v
 // projected into the y/z plane, measured from +y, negative below.
 float PitchAngleRadians(const glm::vec3& v) {
     glm::vec3 projected(0.0f, v.y, v.z);
@@ -41,7 +41,7 @@ float PitchAngleRadians(const glm::vec3& v) {
     return angle;
 }
 
-// IGI-RE src/game/misc.c:58-72 Vec3d_YawAngle (HOOK 0x414950): the angle of v
+// retail engine src/game/misc.c:58-72 Vec3d_YawAngle (HOOK 0x414950): the angle of v
 // projected into the x/y plane, measured from +y, negative towards +x.
 float YawAngleRadians(const glm::vec3& v) {
     glm::vec3 projected(v.x, v.y, 0.0f);
@@ -62,7 +62,7 @@ LadderClimbLine::LadderClimbLine(
     const glm::vec3& climb_axis)
     : bottom_(bottom),
       top_(top) {
-    // IGI-RE src/props/ladder.c:86-91 Ladder_Create (HOOK 0x440280):
+    // retail engine src/props/ladder.c:86-91 Ladder_Create (HOOK 0x440280):
     //   Model_GetLocalPoint(&p2, l, 2); Model_GetLocalPoint(&p3, l, 3);
     //   h = |p2.z - p3.z|; l->rungs = (int)round_ll(h * kRungScale);
     // Two things matter here: p2/p3 are MODEL-LOCAL points, so the height is the
@@ -124,7 +124,7 @@ void LadderUseQuery::Consider(const LadderPlacement& ladder,
                               const glm::vec3& player_eye,
                               const ViewFrame& view,
                               int index) {
-    // IGI-RE src/props/ladder.c:130-138. The player's coordinates in the ladder's
+    // retail engine src/props/ladder.c:130-138. The player's coordinates in the ladder's
     // frame are built from the row-major matrix's columns, i.e. the local axes.
     const glm::vec3 from_origin = player_eye - ladder.GetOrigin();
     const float across = glm::dot(from_origin, ladder.GetAcrossAxis());
@@ -152,7 +152,7 @@ void LadderUseQuery::Consider(const LadderPlacement& ladder,
         }
     }
 
-    // IGI-RE src/props/ladder.c:164-173: the top offer runs unconditionally, needs
+    // retail engine src/props/ladder.c:164-173: the top offer runs unconditionally, needs
     // the eye on the reference point's -Y side, and then goes through
     // UseQuery_Consider.
     if (glm::dot(player_eye - ladder.GetActivationTop(),
@@ -165,7 +165,7 @@ void LadderUseQuery::ConsiderReferencePoint(const glm::vec3& reference,
                                             const glm::vec3& player_eye,
                                             const ViewFrame& view,
                                             int index) {
-    // IGI-RE src/game/game.c:903-927 UseQuery_Consider (HOOK 0x416AD0).
+    // retail engine src/game/game.c:903-927 UseQuery_Consider (HOOK 0x416AD0).
     const glm::vec3 delta = reference - player_eye;
     if (glm::length(delta) >= LadderPlacement::ActivateRadiusUnits) {
         return;

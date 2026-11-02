@@ -3,7 +3,7 @@
  * @brief   QSC tokenizer -- faithful C++ transcription of the retail engine's
  *          script reader/tokenizer.
  *
- * Engine call chain reproduced here (IGI-RE is the source of truth):
+ * Engine call chain reproduced here (retail engine is the source of truth):
  *
  *   Reader_InitMem    0x4BF1C0  src/qsc/reader.c:113-117
  *   Reader_ReadLine   0x4BEFE0  src/qsc/reader.c:36-111    line + "//" strip

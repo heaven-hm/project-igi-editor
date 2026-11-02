@@ -17,7 +17,7 @@
 // image LegacyFogFromTokens, and requires the NEW path to produce BIT-IDENTICAL
 // values on the retail corpus. A future change to any fog number fails here.
 //
-// The oracle for every rule involved is IGI-RE; the citations are in
+// The oracle for every rule involved is retail engine; the citations are in
 // source/runtime/mission_fog.h and source/level/fog_qsc.h.
 
 // gtest first: source/common.h (pulled in by level_common.h) uses std::exception,
@@ -287,7 +287,7 @@ ArgChain MakeKeyframeArgs(float density, float time, float r, float g, float b) 
 // ---------------------------------------------------------------------------
 
 TEST(MissionFogWiringTest, FogDistanceConstantIsTheEngineEFoldingDistance) {
-    // IGI-RE: 1 / (gWorldScale * gTerrainFogScale) = 1 / (0.001 * density * 0.0005)
+    // retail engine: 1 / (gWorldScale * gTerrainFogScale) = 1 / (0.001 * density * 0.0005)
     // = 2e6 / density world units (terraind3d.c:164, direct3d.c:532,
     // globallight.c:115,125), and 2e6 / 4096 units-per-metre = 488.28125 m.
     EXPECT_EQ(igi::kEFoldingMetresPerAuthoredDensity, 488.28125f);

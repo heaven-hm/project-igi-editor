@@ -1,5 +1,5 @@
 // Regression tests for the SplineObj span/rail port. Every expected value below
-// is derived from the reconstructed engine code in IGI-RE; the file:line cited in
+// is derived from the reconstructed engine code in retail engine; the file:line cited in
 // each test is the source of the constant or transform being asserted.
 
 #include "../source/renderer/spline_geometry.h"

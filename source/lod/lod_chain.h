@@ -3,7 +3,7 @@
 
 // LOD virtual-model chains — the engine's rule, verbatim.
 //
-// IGI-RE (faithful decompilation of retail IGI.exe):
+// retail engine (faithful decompilation of retail IGI.exe):
 //
 //   void VirModel_InitLods(VirModel *m)                       src/model/model.c:145-163
 //   {
@@ -37,7 +37,7 @@
 //      (model.c:154): 100, 25, 11, 6, 4 for levels 1..5.
 //
 // IMPORTANT: `lod_dist` is written by VirModel_InitLods and then never read —
-// `grep -rn "lod_dist" src/` in IGI-RE matches only the write at model.c:154 and
+// `grep -rn "lod_dist" src/` in retail engine matches only the write at model.c:154 and
 // the field declaration at modeltypes.h:57. The LOD actually drawn is chosen by
 // `lod_select` (src/lod/mesh3d.c:160-208) from one of two other sources:
 //   - if VirModel.unk24 is set, the AUTHORED per-model distance table

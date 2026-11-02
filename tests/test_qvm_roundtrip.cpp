@@ -628,7 +628,7 @@ INSTANTIATE_TEST_SUITE_P(
 // ============================================================
 //  Defect 1 — `EscapeQSCString` must escape the backslash
 //
-//  Recorded in docs/igi-re-parity/TRIAGE_REMAINING_ISSUES.md as latent
+//  Recorded in docs/parity/TRIAGE_REMAINING_ISSUES.md as latent
 //  ("a change would have no test that can fail") because no retail string
 //  contains a backslash.  The input is synthetic, not unreachable: a QVM whose
 //  string pool holds a single backslash is a two-byte pool entry plus a
@@ -745,7 +745,7 @@ TEST(QvmStringEscapeTest, CompileDecompilePipelinePreservesEscapedStrings) {
 // ============================================================
 //  Defect 2 — operand layout for PUSHA / BLK / JSR
 //
-//  Recorded in docs/igi-re-parity/TRIAGE_REMAINING_ISSUES.md.  The retail
+//  Recorded in docs/parity/TRIAGE_REMAINING_ISSUES.md.  The retail
 //  toolchain contradicts itself, so a reader has to pick a side and say which:
 //
 //    BLK  (47)  interpreter `Qvm_OpBlk` (HOOK 0x4BE980, src/qsc/qvmop.c:338-342)

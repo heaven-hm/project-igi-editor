@@ -14,7 +14,7 @@
  *   * the corner -> uv mapping of the flake quad, and
  *   * the colour domain of the particle's vertex diffuse.
  *
- * Oracle: IGI-RE, the decompiled retail IGI.exe. Function + HOOK + file:line:
+ * Oracle: retail engine, the decompiled retail IGI.exe. Function + HOOK + file:line:
  *   src/fxobj/rain.c:82        RainEffect_Init HOOK 0x436780
  *                                gRainTexture = Game_AddTexture("snow.tex")
  *   src/fxobj/rain.c:141       RainEffect_Changed HOOK 0x436A50 passes

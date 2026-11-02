@@ -336,7 +336,7 @@ private:
 	// gQCubeMinSize, re-derived every frame from the quality preset and the
 	// field of view (QCube_Begin HOOK 0x4D2540, src/lod/qcube.c:338-342).
 	// In units of (cell half size / 32); see source/level/terrain_lod_settings.h
-	// and docs/igi-re-parity/TERRAIN_LOD.md.
+	// and docs/parity/TERRAIN_LOD.md.
 	int						min_size_ = 0;
 
 	// cube data pools

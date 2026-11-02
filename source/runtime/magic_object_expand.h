@@ -9,7 +9,7 @@
  * `DefineMagicObj` table; this module is the consumer that turns an attachment
  * NAME into the definition's MODEL and walks the graph the way the engine does.
  *
- * Every rule below cites IGI-RE (the verified decompilation of retail
+ * Every rule below cites retail engine (the verified decompilation of retail
  * IGI.exe) as `file:line`. Nothing here touches GL, the filesystem or Windows:
  * the model data is supplied through callbacks, so the whole rule set is
  * unit-testable on the host build.

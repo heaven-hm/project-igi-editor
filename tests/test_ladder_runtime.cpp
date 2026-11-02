@@ -7,7 +7,7 @@
  * runtime drives from source/runtime/runtime_world.cpp. Everything under test is
  * pure (glm only), so this file needs no GL, no windows.h and no level archive.
  *
- * Oracle: /Users/haseeb-mir/Documents/Code/IGI-RE
+ * Oracle: the retail engine source
  *   src/props/ladder.c:65-93     Ladder_Create 0x440280 (rung count, round_ll)
  *   src/props/ladder.c:122-175   Ladder_Use 0x4404C0 (both offers)
  *   src/props/ladder.c:200-203   kReachMin/kReachMax DATA 0x533868/0x533440
@@ -38,7 +38,7 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
-// IGI-RE composes orientations as Rz*Ry*Rx (src/math/matrix.c:99-110
+// retail engine composes orientations as Rz*Ry*Rx (src/math/matrix.c:99-110
 // Matrix_SetEuler 0x4B38E0); glm post-multiplies each rotate() call, so this
 // order matches.
 glm::mat3 RotationBasis(float x_degrees, float y_degrees, float z_degrees) {
@@ -92,7 +92,7 @@ float DistanceTo(const glm::vec3& a, const glm::vec3& b) {
 
 TEST(LadderRungCount, RoundsInsteadOfTruncating) {
     // Retail 314_01_1.mef (measured in task-9): foot z 7.0300, head z 47681.5352.
-    // IGI-RE src/props/ladder.c:86-91 computes
+    // retail engine src/props/ladder.c:86-91 computes
     //   h = |p2.z - p3.z| = 47674.5052; l->rungs = (int)round_ll(h * kRungScale)
     // with kRungScale = 1/1228.8 (src/props/ladder.c:202), so 38.7975 -> 39.
     const LadderPlacement retail(
@@ -123,7 +123,7 @@ TEST(LadderRungCount, TruncationWouldHaveProducedTheOldEditorValue) {
 }
 
 TEST(LadderRungCount, MeasuresTheLaddersLocalZAxisNotWorldZ) {
-    // IGI-RE measures the distance between two MODEL-LOCAL points
+    // retail engine measures the distance between two MODEL-LOCAL points
     // (src/props/ladder.c:86-90 Model_GetLocalPoint), so a ladder rotated onto its
     // side still counts rungs along its own Z axis. Rotating +90 degrees about X
     // maps the local +Z column onto world -Y.
@@ -161,7 +161,7 @@ TEST(LadderRungCount, KeepsAtLeastOneRung) {
 }
 
 // ---------------------------------------------------------------------------
-// task-12 defect 3: the facing test used a 2-D yaw vector. IGI-RE compares the
+// task-12 defect 3: the facing test used a 2-D yaw vector. retail engine compares the
 // view matrix's column 1 with the ladder's column 1 (src/props/ladder.c:143-157).
 // ---------------------------------------------------------------------------
 
@@ -205,7 +205,7 @@ TEST(LadderUseQuery, BottomOfferRejectsExactlyAtTheHalfWidth) {
 TEST(LadderUseQuery, BottomOfferRejectsAtTheActivateRadius) {
     // src/props/ladder.c:136-138 compares |ly| against q->range, which
     // Human_UpdateUse fills with 8192.0 (the double at src/game/game.c:185-191's
-    // 0x78 slot; see docs/igi-re-parity/LADDER_PLACEMENT.md section 2.1).
+    // 0x78 slot; see docs/parity/LADDER_PLACEMENT.md section 2.1).
     const LadderPlacement ladder = MakeLadder(
         glm::vec3(0.0f, 0.0f, 0.0f),
         glm::vec3(0.0f, 0.0f, 30000.0f));
@@ -307,7 +307,7 @@ TEST(LadderUseQuery, BottomOfferUsesTheViewFrameNotAFlatYawVector) {
 }
 
 // ---------------------------------------------------------------------------
-// task-12 defect 2: selection was "nearest origin". IGI-RE lets every ladder
+// task-12 defect 2: selection was "nearest origin". retail engine lets every ladder
 // update one shared UseQuery during the task scan (src/humanbase/human.c:1291-1298)
 // and UseQuery_Consider keeps the item closest to straight ahead
 // (src/game/game.c:182,897-928).
@@ -365,7 +365,7 @@ TEST(LadderUseQuery, TopOfferRejectsAtTheActivateRadius) {
 TEST(LadderUseQuery, NearestOriginLosesToTheBetterAlignedTopOffer) {
     // Two top offers. Ladder 0 is nearer by origin distance but 31 degrees off
     // the view axis on both axes; ladder 1 is further away and dead ahead.
-    // IGI-RE's rule (src/game/game.c:914-926) keeps the one closest to straight
+    // retail engine's rule (src/game/game.c:914-926) keeps the one closest to straight
     // ahead; the pre-fix editor rule picked the nearer origin.
     const glm::vec3 eye(0.0f, 0.0f, 30000.0f);
     const ViewFrame view = MakeView(glm::vec3(0.0f, 1.0f, 0.0f));

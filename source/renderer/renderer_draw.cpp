@@ -1267,7 +1267,7 @@ void Renderer::Draw(const draw_params_s &params,
         }
       }
 
-      // 2. Fall back to terrain raycast from camera ray (IGI-RE map.c:503-515)
+      // 2. Fall back to terrain raycast from camera ray (retail engine map.c:503-515)
       if (!hit_terrain && params.raycast_terrain_ && params.view_define_ &&
           params.view_define_->viewport_width_ > 0 && params.view_define_->viewport_height_ > 0) {
         float sx = (task_tree_view.mouse_x_ - params.view_define_->viewport_width_ * 0.5f) /
@@ -1872,7 +1872,7 @@ void Renderer::Draw(const draw_params_s &params,
       const igi::MenuUiScreen* pause_screen = pause_menu.CurrentScreen();
       if (pause_screen != nullptr) {
         const int viewport_h = params.view_define_->viewport_height_;
-        // Always use the retail IGI-RE menu font (`font3.fnt` from
+        // Always use the retail retail engine menu font (`font3.fnt` from
         // `MENUSYSTEM/ingamemenu.res`, Sprite_Load HOOK 0x4B6720,
         // MenuManager_AddResource HOOK 0x417E20) at its native 21px line height
         // and 25px row pitch (`MenuWindow_Arrange` HOOK 0x4244B0,
@@ -1957,7 +1957,7 @@ void Renderer::Draw(const draw_params_s &params,
         // which would put a 0.66-alpha black fill over every label.  The labels go
         // through Text_DrawAlt (HOOK 0x4B6F50, src/res/text.c:102-107) with
         // `flags | 0x40000000`, and what that bit does is NOT recoverable from
-        // IGI-RE -- the strip driver that receives the flags is the undecoded D3D
+        // retail engine -- the strip driver that receives the flags is the undecoded D3D
         // method above -- so whether retail's labels survive the fill cannot be
         // established.  Drawing the background first keeps the editor's labels
         // legible and leaves every colour, alpha and coordinate retail's.
@@ -2142,7 +2142,7 @@ void Renderer::Draw(const draw_params_s &params,
             // editor's label for the row's slot, built by
             // `app_menu::EditorLabelForRetailEntry` (source/app_menu.cpp); a retail
             // row with no editor counterpart says so in the editor's own words.
-            // See docs/igi-re-parity/PAUSE_MENU_STYLE.md "The editor's own strings
+            // See docs/parity/PAUSE_MENU_STYLE.md "The editor's own strings
             // come first".
             const std::string& text = entry.editor_label;
             if (text.empty()) {

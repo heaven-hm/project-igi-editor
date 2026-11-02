@@ -9,7 +9,7 @@
  *   engine does not do that: its ground probe queries the terrain AND every
  *   rigid object in the dynamic-cube trees, and takes the nearest hit.
  *
- * ENGINE BASIS (IGI-RE, /Users/haseeb-mir/Documents/Code/IGI-RE, read-only)
+ * ENGINE BASIS (retail engine, the retail engine source, read-only)
  *
  *   * Human_ProbeGround HOOK 0x462390 (src/humanbase/human.c:1746-1772):
  *         Coll_DropPointsEx(world, hits, pts, 2, dz, ev, &filter, -1, 1);  // :1759
@@ -76,7 +76,7 @@
  *
  * WHAT IS NOT REPRODUCED (and why)
  *   * `data->unk28` (:124) is an unknown word in the model data; a non-zero
- *     value would skip an object.  Its writer is not in IGI-RE, so nothing is
+ *     value would skip an object.  Its writer is not in retail engine, so nothing is
  *     assumed about it.
  *   * Qvm_GetArgLine (:327) is a per-triangle QVM script test the engine runs
  *     before accepting a hit.  The editor does not execute object QVM scripts;

@@ -418,7 +418,7 @@ GLuint Renderer_Objects::GetOrLoadTexture(const std::string& textureId, int owne
 
     // ── 0. Which level's archive supplies this texture ────────────────────────
     //
-    // IGI-RE: a model file and its textures come from ONE level directory.
+    // retail engine: a model file and its textures come from ONE level directory.
     // Model_SetDir copies the level's directory into gModelDir before that level's
     // models are loaded (src/game/game.c:411-418; HOOK(0x4CFBD0),
     // src/lod/modelfile.c:153-157), and ModelFile_Load / ModelFile_Setup read the
@@ -453,7 +453,7 @@ GLuint Renderer_Objects::GetOrLoadTexture(const std::string& textureId, int owne
 
     // ── 1. Try in-memory .res index (preferred: no disk extraction) ───────────
     //
-    // IGI-RE resolves a model's textures from the archive of the level that owns
+    // retail engine resolves a model's textures from the archive of the level that owns
     // the model file, and from no other archive: ModelFile_Setup loads
     // "%stextures/%s.res" for that level (src/model/model.c:261, HOOK(0x4CF080)),
     // ModelFile_LoadTextures turns the MTP_TEXF table of that same resource into
@@ -820,7 +820,7 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
 
     // Index the archive of the level that owns this model before any lookup.
     //
-    // IGI-RE: a model's textures come from exactly one archive, the one of the
+    // retail engine: a model's textures come from exactly one archive, the one of the
     // level the model file belongs to. ModelFile_Setup loads
     // "%stextures/%s.res" (src/model/model.c:261, HOOK(0x4CF080)), the MTP_TEXF
     // table read from that same resource is the model's texture table
@@ -852,7 +852,7 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
     // HOOK 0x4CF080) — so the archive the model was actually read from decides which
     // copy of an id is bound, not the first level whose DAT lists that id (the case
     // that bound an unrelated archive's image before;
-    // docs/igi-re-parity/CHARACTER_TEXTURE_RESOLUTION.md).
+    // docs/parity/CHARACTER_TEXTURE_RESOLUTION.md).
     const int textureOwnerLevel = meshOwnerLevel;
 
     // For AI character models (sunglasses-bearing), load the STRIPPED texture id
@@ -904,7 +904,7 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
 
             // ── The engine selects a group's texture by the group's OWN index ──
             //
-            // IGI-RE: a render group carries its own texture index and the engine
+            // retail engine: a render group carries its own texture index and the engine
             // binds the LOD texture at that index — never the group's ordinal
             // position in the group chain:
             //   lod_texture(l, i) => ((Texture *)l->textures[i])->surface
@@ -1041,7 +1041,7 @@ void Renderer_Objects::ApplyTexturesToMesh(Mesh& mesh, const std::string& modelI
             " untextured=" + std::to_string(untextured) +
             " outOfRange=" + std::to_string(outOfRange));
 
-        // IGI-RE: a model's render-group count and its texture-list length are
+        // retail engine: a model's render-group count and its texture-list length are
         // independent, so a difference between them is NOT an error.
         // ModelFile_Setup gives one ModelLod per MTP INST record, and that record's
         // `n` is the number of GTT-indexed textures of the mesh

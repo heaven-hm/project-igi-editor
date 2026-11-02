@@ -4,11 +4,11 @@
  *          AIStationaryGunHolder parity maths of GitHub issue #42 and the
  *          "Wire Width" entry in docs/KNOWN_ISSUES.md.
  *
- * Every expectation below is derived from the IGI-RE oracle, cited by file:line.
+ * Every expectation below is derived from the retail engine oracle, cited by file:line.
  * The helpers under test are pure (source/level/task_schema.cpp), so this file
  * needs no GL, no windows.h and no level archive.
  *
- * Oracle: /Users/haseeb-mir/Documents/Code/IGI-RE
+ * Oracle: the retail engine source
  *   src/props/wire.c             Wire_Open 0x43EFF0, Wire_ParamsChanged 0x43F3D0,
  *                                Wire_IsSloped 0x43F8A0, kWireScale/kWireSlope
  *   src/game/misc.c              Matrix_SetYAxis 0x414A60, kNearlyUp
@@ -35,7 +35,7 @@ constexpr double kPi      = 3.14159265358979323846;
 constexpr double kDegToRad = kPi / 180.0;
 
 // A wire direction with the given elevation above the XY plane, at length 4096
-// (exactly 1 metre at 4096 world units/m — IGI-RE src/props/wire.c:320).
+// (exactly 1 metre at 4096 world units/m — retail engine src/props/wire.c:320).
 Vec3 AnchorsForElevation(double degrees, double sign_z = 1.0) {
     const double r = 4096.0;
     return Vec3(r * std::cos(degrees * kDegToRad), 0.0,
@@ -51,7 +51,7 @@ std::vector<std::string> WireArgs(const char* a, const char* b, const char* c,
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-// IGI-RE src/props/wire.c:320-321:
+// retail engine src/props/wire.c:320-321:
 //   DATA(5334B0) double kWireScale INIT(0.000244140625);
 //   ALIAS(kUnitsToMeters, kWireScale, 0);
 TEST(PropsParityConstants, WireScaleIsOneUnitPerMetre) {
@@ -59,13 +59,13 @@ TEST(PropsParityConstants, WireScaleIsOneUnitPerMetre) {
     EXPECT_DOUBLE_EQ(kWireScale, 0.000244140625);
 }
 
-// IGI-RE src/props/wire.c:323: DATA(533834) float kWireSlope INIT(0.034906585f)
+// retail engine src/props/wire.c:323: DATA(533834) float kWireSlope INIT(0.034906585f)
 // — 2 degrees, the Wire_IsSloped threshold (wire.c:304-317).
 TEST(PropsParityConstants, WireSlopeIsTwoDegrees) {
     EXPECT_NEAR(kWireSlope, 2.0 * kDegToRad, 1e-7);
 }
 
-// IGI-RE src/humanstate/humanstate.c:1394 — the zipline integrator's constant
+// retail engine src/humanstate/humanstate.c:1394 — the zipline integrator's constant
 // and friction: `speed = -ziplineDir[2] * 0x1.613d32p+6f + speed * 0.99f`.
 TEST(PropsParityConstants, ZiplineIntegratorConstants) {
     EXPECT_DOUBLE_EQ(kZiplineAccel, 88.30976104736328);
@@ -73,7 +73,7 @@ TEST(PropsParityConstants, ZiplineIntegratorConstants) {
     EXPECT_DOUBLE_EQ(kZiplineFriction, 0.99);
 }
 
-// IGI-RE src/weapon/humanplayer.c:136-138: kWireEnd 3072.0 (0.75 m),
+// retail engine src/weapon/humanplayer.c:136-138: kWireEnd 3072.0 (0.75 m),
 // kZiplineDown 3686.4 (0.9 m).
 TEST(PropsParityConstants, ZiplineRiderOffsets) {
     EXPECT_DOUBLE_EQ(kWireEnd, 3072.0);
@@ -82,7 +82,7 @@ TEST(PropsParityConstants, ZiplineRiderOffsets) {
     EXPECT_NEAR(kZiplineDown * kWireScale, 0.9, 1e-12);
 }
 
-// IGI-RE src/statgun/statgun.c:113-118 (StationaryGun_CreateHandler defaults) and
+// retail engine src/statgun/statgun.c:113-118 (StationaryGun_CreateHandler defaults) and
 // src/statgun/statgun.c:140-141 (`gStatGunAmmoRange[0] = 0; [1] = 100000;`).
 TEST(PropsParityConstants, StationaryGunDefaults) {
     EXPECT_STREQ(kStatGunDefaultWeapon, "WEAPON_ID_M2HB");
@@ -96,7 +96,7 @@ TEST(PropsParityConstants, StationaryGunDefaults) {
     EXPECT_NEAR(kStatGunTurnStep, 5.0 * kDegToRad, 1e-6);
 }
 
-// IGI-RE src/comprun/gunholder.c:121-126 defaults and gunholder.c:155-156
+// retail engine src/comprun/gunholder.c:121-126 defaults and gunholder.c:155-156
 // (`gGunHolderRange[0] = 0.0f; [1] = 100.0f;`).
 TEST(PropsParityConstants, GunHolderDefaults) {
     EXPECT_DOUBLE_EQ(kGunHolderDefaultAngleX, 360.0);
@@ -109,7 +109,7 @@ TEST(PropsParityConstants, GunHolderDefaults) {
 
 // ── Wire span geometry (Wire_ParamsChanged 0x43F3D0) ─────────────────────────
 
-// IGI-RE src/props/wire.c:179 — `w->obj.scale[1] = len * kWireScale;` — so a wire
+// retail engine src/props/wire.c:179 — `w->obj.scale[1] = len * kWireScale;` — so a wire
 // spanning exactly one metre gets scale[1] == 1.0, which is what the editor's
 // 40.96 * scale convention maps onto the game's RigidDynCubeObj.scale[].
 TEST(WireSpan, YScaleIsLengthOverMetres) {
@@ -126,7 +126,7 @@ TEST(WireSpan, YScaleIsLengthOverMetres) {
     EXPECT_DOUBLE_EQ(s.dir.z, 0.0);
 }
 
-// IGI-RE src/props/wire.c:181-186 — the object is placed at the anchor midpoint.
+// retail engine src/props/wire.c:181-186 — the object is placed at the anchor midpoint.
 TEST(WireSpan, MidpointAndLengthForDiagonal) {
     const WireSpan s = ComputeWireSpan(Vec3(100, 200, 300), Vec3(1100, 1200, 1300));
     ASSERT_TRUE(s.valid);
@@ -147,7 +147,7 @@ TEST(WireSpan, DegenerateAnchorsAreInvalid) {
     EXPECT_DOUBLE_EQ(s.yScale, 0.0);
 }
 
-// IGI-RE src/game/misc.c:129-190 Matrix_SetYAxis (HOOK 0x414A60): the basis whose
+// retail engine src/game/misc.c:129-190 Matrix_SetYAxis (HOOK 0x414A60): the basis whose
 // second column is the wire direction. Hand-derived for dir = +X:
 //   w = (0,-1,0), u = (0,0,1)  =>  m = [0 1 0; -1 0 0; 0 0 1]
 // i.e. local X -> -Y, local Y -> +X, local Z -> +Z.
@@ -187,7 +187,7 @@ TEST(WireSpan, YAxisBasisPutsTheWireAlongLocalY) {
 
 // ── Zipline classification (Wire_IsSloped 0x43F8A0) ──────────────────────────
 
-// IGI-RE src/props/wire.c:304-317 compares the matrix X-Euler against 2 degrees;
+// retail engine src/props/wire.c:304-317 compares the matrix X-Euler against 2 degrees;
 // src/humanstate/humanstate.c:958-963 turns that into ziplineEnter vs wireEnter.
 // A level wire is a hand-over-wire prop.
 TEST(WireSlope, LevelWireIsNotAZipline) {
@@ -230,7 +230,7 @@ TEST(WireSlope, NearVerticalWireSaturatesTheXEuler) {
 
 // ── Zipline ride direction and speed ─────────────────────────────────────────
 
-// IGI-RE src/weapon/humanplayer.c:557-568 HumanPlayer_UpdateZipline: the ride
+// retail engine src/weapon/humanplayer.c:557-568 HumanPlayer_UpdateZipline: the ride
 // direction is the model's point 0 -> point 1 vector, negated when d.z > 0 so the
 // ride always runs downhill, then normalised.
 TEST(ZiplineRide, AlwaysRunsDownhill) {
@@ -255,7 +255,7 @@ TEST(ZiplineRide, DegenerateAnchorsGiveZeroDirection) {
     EXPECT_DOUBLE_EQ(d.z, 0.0);
 }
 
-// IGI-RE src/humanstate/humanstate.c:1394-1398.
+// retail engine src/humanstate/humanstate.c:1394-1398.
 TEST(ZiplineRide, SpeedIntegratesToTheTerminalSpeed) {
     const Vec3 dir = ZiplineRideDirection(Vec3(0, 0, 0), AnchorsForElevation(45.0, -1.0));
     const double expectedTerminal = -dir.z * kZiplineAccel / (1.0 - kZiplineFriction);
@@ -280,7 +280,7 @@ TEST(ZiplineRide, SpeedIntegratesToTheTerminalSpeed) {
 
 // ── QSC argument parsing ─────────────────────────────────────────────────────
 
-// IGI-RE src/props/wire.c:89-113 Wire_Open (0x43EFF0) param order:
+// retail engine src/props/wire.c:89-113 Wire_Open (0x43EFF0) param order:
 // start ObjectPos (args 3-5), end ObjectPos (args 6-8), model String16 (arg 9).
 TEST(ParseWireAnchors, ReadsBothAnchors) {
     Vec3 a, b;
@@ -302,7 +302,7 @@ TEST(ParseWireAnchors, RejectsMissingOrNonNumericEnd) {
     EXPECT_FALSE(ParseWireAnchors(WireArgs("10", "20", "30", "40", "50", ""), a, b));
 }
 
-// IGI-RE src/statgun/statgun.c:142-150 StationaryGun_Open (0x473ED0) param order.
+// retail engine src/statgun/statgun.c:142-150 StationaryGun_Open (0x473ED0) param order.
 TEST(ParseStationaryGunArgs, ReadsTheFireArcAndAmmo) {
     const std::vector<std::string> args = {
         "7", "\"StationaryGun\"", "\"mg\"", "100", "200", "300",
@@ -333,7 +333,7 @@ TEST(ParseStationaryGunArgs, FallsBackToGameDefaults) {
     EXPECT_FALSE(ParseStationaryGunArgs({"7", "\"StationaryGun\"", "\"mg\""}).valid);
 }
 
-// IGI-RE src/comprun/gunholder.c:157-165 GunHolder_Init (0x46E370) param order.
+// retail engine src/comprun/gunholder.c:157-165 GunHolder_Init (0x46E370) param order.
 TEST(ParseGunHolderArgs, ReadsAnglesRangeAndExpressions) {
     const std::vector<std::string> args = {
         "9", "\"AIStationaryGunHolder\"", "\"n\"", "1", "2", "3",
@@ -388,7 +388,7 @@ TEST(BuiltinSchema, WireExposesBothAnchors) {
     EXPECT_EQ((*sc)[2].argOffset, 9);
 }
 
-// The End anchor uses Real64x3 (the type ObjectPos aliases, IGI-RE
+// The End anchor uses Real64x3 (the type ObjectPos aliases, retail engine
 // src/physobj/paramops.c:185) so the editor's ObjectPos position-drag — which
 // always writes obj.pos — cannot be triggered on it.
 TEST(BuiltinSchema, WireEndIsAThreeComponentField) {
@@ -402,7 +402,7 @@ TEST(BuiltinSchema, WireEndIsAThreeComponentField) {
     EXPECT_EQ(TypeArgCount("String32"), 1);
 }
 
-// IGI-RE src/statgun/statgun.c:142-150.
+// retail engine src/statgun/statgun.c:142-150.
 TEST(BuiltinSchema, StationaryGunExposesWeaponArcAndAmmo) {
     const TaskSchema* sc = GetBuiltinSchema("StationaryGun");
     ASSERT_NE(sc, nullptr);
@@ -419,7 +419,7 @@ TEST(BuiltinSchema, StationaryGunExposesWeaponArcAndAmmo) {
     }
 }
 
-// IGI-RE src/comprun/gunholder.c:157-165.
+// retail engine src/comprun/gunholder.c:157-165.
 TEST(BuiltinSchema, GunHolderExposesAnglesRangeAndExpressions) {
     const TaskSchema* sc = GetBuiltinSchema("AIStationaryGunHolder");
     ASSERT_NE(sc, nullptr);
@@ -436,7 +436,7 @@ TEST(BuiltinSchema, GunHolderExposesAnglesRangeAndExpressions) {
     }
 }
 
-// IGI-RE src/props/fence.c:100-121 Fence_Open (0x43F900): the electric-fence
+// retail engine src/props/fence.c:100-121 Fence_Open (0x43F900): the electric-fence
 // condition expression at arg 8 was never exposed.
 TEST(BuiltinSchema, FenceExposesItsConditionExpression) {
     const TaskSchema* sc = GetBuiltinSchema("Fence");

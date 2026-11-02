@@ -1,6 +1,6 @@
-// test_rain_rules.cpp - the retail rain rules (#58), extracted from IGI-RE.
+// test_rain_rules.cpp - the retail rain rules (#58), extracted from retail engine.
 //
-// The oracle for every number here is IGI-RE (read-only). Key citations:
+// The oracle for every number here is retail engine (read-only). Key citations:
 //   dxinit/rain.c:39-96        the RainDrop / RainList / Rain task layout
 //   dxinit/rain.c:122-123      kSnowSpeed 204.8, kRainSpeed 2048.0
 //   dxinit/rain.c:144-167      Rain_New HOOK 0x498960 (snow = rain == 0)

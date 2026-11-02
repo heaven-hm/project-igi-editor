@@ -1,7 +1,7 @@
 // test_cutscene_rules.cpp - the authored cutscene camera timeline, pure-logic
 // port (#80 "Intro/outro cutscenes").
 //
-// The oracle for every number here is IGI-RE (read-only). Key citations:
+// The oracle for every number here is retail engine (read-only). Key citations:
 //   cutscene/cutscene.c:139-147   kPi/kNegPi/kTwoPi/kHalf/kUnits/kShakeAngle
 //   cutscene/cutscene.c:163-180   CutScene_CollectKeys 0x4F4880
 //   cutscene/cutscene.c:184-191   CutScene_GetKey 0x4F4910

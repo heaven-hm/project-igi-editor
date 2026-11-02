@@ -184,7 +184,7 @@ TEST(PauseMenuInput, EnterActivatesAndEscapeGoesBack) {
 }
 
 TEST(PauseMenuInput, TabIsAcceptedAndIgnored) {
-    // `case -11: in->select = 1; break;` (:524-526) - and no code in IGI-RE ever
+    // `case -11: in->select = 1; break;` (:524-526) - and no code in retail engine ever
     // reads `MenuInput::select`, so it is Ignore, not Consume.
     EXPECT_EQ(PauseMenuCharKeyAction(igi::kKeyTab, false), PauseKeyAction::Ignore);
 }

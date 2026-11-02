@@ -9,7 +9,7 @@
 // reproduces the *structure* and *navigation* the retail menu manager
 // implements.
 //
-// Oracle: IGI-RE, the verified C decompilation of retail IGI.exe.  Every
+// Oracle: retail engine, the verified C decompilation of retail IGI.exe.  Every
 // behaviour below cites a function and its retail address:
 //
 //   * item collection   `MenuManager_CollectItems` HOOK 0x4187F0
@@ -223,7 +223,7 @@ struct MenuUiEntry {
     // for the "Restart Game" key.  These fields carry that resolution, and are left
     // empty when the entry declares no text, so a consumer finding `display_label`
     // empty must fall back to `label`.
-    // See docs/igi-re-parity/MENU_TEXT_RES.md.
+    // See docs/parity/MENU_TEXT_RES.md.
     std::string label_key;       // the raw key == `label`, kept for diagnostics
     std::string display_label;   // resolved language text, or the engine's miss string
     bool label_resolved = false; // display_label came from a language archive
@@ -236,7 +236,7 @@ struct MenuUiEntry {
     // panel title for a retail screen's title, or the explicit
     // `kRetailNotInEditorLabel` when the editor has no counterpart for the row.
     // See `EditorLabelForRetailEntry` (source/app_menu.cpp) for the rule and
-    // docs/igi-re-parity/PAUSE_MENU_STYLE.md for why.
+    // docs/parity/PAUSE_MENU_STYLE.md for why.
     //
     // Left empty for a container and for an entry that declares no text, exactly
     // like `display_label`; the retail text is never copied here.
@@ -448,7 +448,7 @@ constexpr int kEditorAddedRowCount = 0;
 // The strings `EditEditorMenuText` cycles the retail main screen's title text
 // through, in order.  They are the EDITOR's own strings: the retail menu's text
 // is data the editor may change, and the editor never writes the game's text back
-// into its own UI (see docs/igi-re-parity/PAUSE_MENU_STYLE.md).
+// into its own UI (see docs/parity/PAUSE_MENU_STYLE.md).
 inline constexpr const char* kEditorMenuTitleCycle[] = {
     "IGI EDITOR",
     "IGI EDITOR PAUSED",
@@ -475,7 +475,7 @@ inline constexpr char kEditorKeybindingsLabel[] = "Keybindings";
 // entry declares no text.
 //
 // The rule, in order (source/app_menu.cpp documents each branch and
-// docs/igi-re-parity/PAUSE_MENU_STYLE.md records the decision):
+// docs/parity/PAUSE_MENU_STYLE.md records the decision):
 //   1. a retail screen's title (a non-item text row in the retail title colour)
 //      shows the editor's own panel title, or the editor's own title string the
 //      loaded definition currently carries (the `Menu Text` row's cycle), so an
@@ -611,7 +611,7 @@ bool EditEditorMenuText(EditorMenu& menu, const MenuUiBuildOptions& options,
 // The editor behaviour an item is wired to, from its retail "On Click Script":
 //   `MenuManager_LeaveMenus(<id>, MENUMANAGER_IDLE)`         -> Resume
 //   `MenuManager_LeaveMenus(<id>, MENUMANAGER_QUITTOMAINMENU)` -> Quit
-// Anything else is `None`; see docs/igi-re-parity/MENU_UI.md for the reasoning.
+// Anything else is `None`; see docs/parity/MENU_UI.md for the reasoning.
 MenuUiAction EditorActionForRetailItem(const MenuUiEntry& entry);
 
 // Row count of the fallback menu, and the row labels in order.

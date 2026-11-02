@@ -30,7 +30,7 @@
  * This is pure data reading (QVM + filesystem); it renders nothing and knows no
  * engine task.
  *
- * Oracle: /Users/haseeb-mir/Documents/Code/IGI-RE (read-only).
+ * Oracle: the retail engine source (read-only).
  *****************************************************************************/
 
 #include <map>

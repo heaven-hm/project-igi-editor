@@ -1,6 +1,6 @@
 /******************************************************************************
  * @file    magic_object_expand.cpp
- * @brief   The expansion rule from IGI-RE, implemented once and cited in place.
+ * @brief   The expansion rule from retail engine, implemented once and cited in place.
  *
  * Retail spawns magic objects from a placed object in
  * `Sector_CreateMagicObjs` (HOOK 0x4DFA50, `src/shadow/sector.c:538-687`), and
@@ -59,7 +59,7 @@ struct TypeExpansionEntry {
 };
 
 // ─── Which task types expand their own attachments ──────────────────────────
-// Derived mechanically from IGI-RE: for every `TASKTYPE_*` the retail table
+// Derived mechanically from retail engine: for every `TASKTYPE_*` the retail table
 // uses, `Script_RegisterConstant("TASKTYPE_X", gXType)` gives the task type,
 // `TaskType_SetHandler(gXType, 0, Handler)` gives its create handler (slot 0),
 // and the handler expands when its body calls

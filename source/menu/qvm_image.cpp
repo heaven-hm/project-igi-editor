@@ -3,7 +3,7 @@
 // (source/level/qvm_parser.h) is the codebase's parser and the source of the
 // instruction stream this walks.
 //
-// ORACLE: IGI-RE, a verified C decompilation of retail IGI.exe.
+// ORACLE: retail engine, a verified C decompilation of retail IGI.exe.
 //   * `src/qvm/qvm.c:641-689` `Qvm_OpCall` (HOOK 0x4BD880) -- the call encoding:
 //     `code[pc] == OP_CALL`, `argc = *(int32*)(code+pc+1)`, then `argc` int32 code
 //     offsets, one per argument; the interpreter resumes at `pc + argc*4 + 5`.
@@ -296,7 +296,7 @@ private:
     // One BRK-terminated argument block, from its first instruction.
     //
     // A block produces exactly one value, and the retail menu scripts produce it in
-    // exactly two ways (census in docs/igi-re-parity/MENU_SYSTEM.md): a single
+    // exactly two ways (census in docs/parity/MENU_SYSTEM.md): a single
     // literal push (optionally with a unary operator), or a nested `Task_New` call,
     // whose callee push the CALL consumes.  The `values` count is therefore the
     // number of values on the stack: a push adds one, and a call replaces its callee

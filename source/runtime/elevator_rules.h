@@ -33,7 +33,7 @@
 // walk the train path uses, so the editor's existing `RailPath` is the right
 // input.
 //
-// Everything here is cited to IGI-RE (`/Users/haseeb-mir/Documents/Code/IGI-RE`,
+// Everything here is cited to retail engine (`the retail engine source`,
 // read-only), function + HOOK/ORIG address + `file:line`. Nothing here touches
 // GL or Windows, so the whole rule is unit-testable on the host build.
 //

@@ -2,7 +2,7 @@
  * @file    fnt_parser.cpp
  * @brief   FNT (ILFF-based bitmap font) parser.
  *
- * Transcribed from IGI-RE (decompiled retail IGI.exe):
+ * Transcribed from retail engine (decompiled retail IGI.exe):
  *   Sprite_Load        0x4B6720  src/res/sprite.c:162-262  (FONT branch :171-207)
  *   Sprite_SetFrame    0x4B6540  src/res/sprite.c:22-39
  *   Sprite_Init        0x4B65E0  src/res/sprite.c:41-64

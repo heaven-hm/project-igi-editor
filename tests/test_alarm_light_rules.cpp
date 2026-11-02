@@ -1,7 +1,7 @@
 // test_alarm_light_rules.cpp - the retail "AlarmLight" task, pure-logic port
 // (#43).
 //
-// The oracle for every number here is IGI-RE (read-only). Key citations:
+// The oracle for every number here is retail engine (read-only). Key citations:
 //   fxobj/alarm.c:92-124        AlarmLight_Init 0x4397C0: the 8-parameter
 //                               ParamTable and the three model slots
 //   fxobj/alarm.c:126-151       AlarmLightReflector_Create 0x439A50: angle = 0

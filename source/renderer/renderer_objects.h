@@ -214,7 +214,7 @@ public:
     // (src/comprun/pickup.c:172-177). Cached per model id because the lookup
     // reads the .res entry off disk and the pickup pass runs every tick.
     float GetMeshHeaderRadius(const std::string& modelId, bool isBuilding);
-    // LOD-0 MeshHeader of `modelId` (`lod_header(vm->lods[0])`, IGI-RE
+    // LOD-0 MeshHeader of `modelId` (`lod_header(vm->lods[0])`, retail engine
     // src/lod/mesh3d.c:220-224), cached per (level, model id).  The draw path
     // needs its center/sphere/valid words for every placement on every frame;
     // reading them costs a .res entry read off disk, so it is done once per
@@ -246,9 +246,9 @@ public:
     // The engine resolves a model's detail levels by walking its name: LOD 1 is
     // the requested name, LOD i+1 is the previous name with its LAST CHARACTER
     // incremented, stopping at the first name that does not resolve and at five
-    // levels (VirModel_InitLods, IGI-RE src/model/model.c:145-163, HOOK 0x4CED50;
+    // levels (VirModel_InitLods, retail engine src/model/model.c:145-163, HOOK 0x4CED50;
     // ported in source/lod/lod_chain.h). Resolution is an exact strcmp against
-    // every LOD of every loaded model file (ModelLod_Find, IGI-RE
+    // every LOD of every loaded model file (ModelLod_Find, retail engine
     // src/model/model.c:165-178, HOOK 0x4CEE30).
 
     // True when `modelId` resolves in the editor's loaded model set by EXACT
@@ -260,7 +260,7 @@ public:
 
     // The model's chain under that rule, cached per level. `count == 0` means the
     // model's own name did not resolve, which VirModel_Get reports as not-found
-    // (IGI-RE src/model/model.c:118-139); `count == 1` is a model with no
+    // (retail engine src/model/model.c:118-139); `count == 1` is a model with no
     // lower-detail sibling. `names[i]` is LOD i+1, `distance[i]` is
     // VirModel.lod_dist (written but never read by the engine).
     const igi::lod::LodChain& GetLodChain(const std::string& modelId, bool isBuilding);
@@ -293,14 +293,14 @@ public:
 
     // The authored ModelLODSettings table for `modelId` in raw world units
     // (metres x 4096): monotonized and scaled exactly as
-    // ModelLODSettings_Changed does (IGI-RE src/animtrig/lodsettings.c:157-171,
+    // ModelLODSettings_Changed does (retail engine src/animtrig/lodsettings.c:157-171,
     // HOOK 0x4EDB60). False when the model has no authored entry, in which case
     // VirModel.unk24 stays 0 and lod_select takes its complexity branch -- see
     // SelectLodForDistance, which implements BOTH branches.
     bool GetAuthoredLodDistances(const std::string& modelId, float out[5]);
 
     // The LOD to draw for a mesh at view depth `dist` with bounding radius
-    // `radius`, by lod_select's authored branch (IGI-RE src/lod/mesh3d.c:172-184,
+    // `radius`, by lod_select's authored branch (retail engine src/lod/mesh3d.c:172-184,
     // ported as igi::lod::SelectAuthoredLod). `fov` and `k` are the engine's
     // gTransContext.fov and gLodScale (src/lod/mesh3d.c:224); dist/radius are in
     // raw world units, the same units as GetAuthoredLodDistances' output.
@@ -330,7 +330,7 @@ public:
     void DrawAttachedMesh(const std::string& modelId, bool isBuilding, const glm::mat4& worldMat, GLuint ubo_mats);
     // Draws every placed StationaryGun's MOUNTED weapon: the gun's matrix x the
     // weapon's local mount matrix, exactly StationaryGun_Aim 0x474420
-    // (IGI-RE src/statgun/statgun.c:241-258) hands to Weapon_Move 0x4F2310 and
+    // (retail engine src/statgun/statgun.c:241-258) hands to Weapon_Move 0x4F2310 and
     // Gun_MoveHandler 0x478A90 adopts verbatim (src/guncasing/gun.c:511-512).
     // The composition is `igi::statgun::ComposeWeaponMount`
     // (runtime/statgun_mount.h); this pass performs no arithmetic of its own
@@ -342,7 +342,7 @@ public:
     // Draws the MOUNTED WEAPON of every placed `AIStationaryGunHolder` whose
     // holder model carries a TASKTYPE_AISTATIONARYGUN attachment: the holder
     // model's ATTA record is looked up in MAGICOBJ.QVM (CreateMagicObjs,
-    // IGI-RE src/magicobj/rigidcoll.c:381-434), the definition's first data
+    // retail engine src/magicobj/rigidcoll.c:381-434), the definition's first data
     // argument is a WeaponType key, and the weapon model is that type's `key`
     // field (AIStationaryGun_Create HOOK 0x46EAE0, src/binocular/stationarygun.c:
     // 123-155; AIStationaryGun_PlaceWeapon HOOK 0x470050, :464-487). Level 14's
@@ -352,7 +352,7 @@ public:
     void DrawMountedSentryGuns(const std::vector<LevelObject>& objects, int draw_parts,
                                GLuint ubo_mats);
     // Draws every placed SCamera's LENS: the child task the engine always creates
-    // (SCamera_Create `c->lens = Task_New(c, gLensType, NULL)`, IGI-RE
+    // (SCamera_Create `c->lens = Task_New(c, gLensType, NULL)`, retail engine
     // src/scamera/scamera.c:204, HOOK 0x4423F0) and loads the authored "Camera
     // Model" into (SCameraLens_ParamsChanged HOOK 0x4420D0,
     // src/scamera/scameralens.c:393-419). Only the holder/body model was drawn
@@ -778,7 +778,7 @@ private:
     std::vector<std::string> GetTextureIdsForSourceModel(const std::string& modelId, int sourceLevel);
     // `ownerLevel` is the level whose archive supplied the MODEL's bytes
     // (ModelArchiveOwnerLevel over the archive the mesh was read from), 0 when that
-    // archive is not a level archive. IGI-RE: a model's textures come from the same
+    // archive is not a level archive. retail engine: a model's textures come from the same
     // level directory as the model's own file — ModelFile_Load / ModelFile_Setup
     // read the `.mtp`, `models/<name>.res` and `textures/<name>.res` out of
     // `gModelDir` (src/model/model.c:233, :261, :267, HOOK 0x4CF080), which

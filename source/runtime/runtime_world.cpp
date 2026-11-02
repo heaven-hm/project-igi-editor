@@ -28,7 +28,7 @@ constexpr std::array<float, 4> kMapComputerFieldOfViews = {
 };
 constexpr float kMapComputerViewportAspect = 16.0f / 9.0f;
 
-// In IGI-RE soldier/human.c:300-303:
+// in retail engine soldier/human.c:300-303:
 //   gHumanCriteria = AreaActivate_AddCriteria("CRITERIA_HUMAN", Human_Criteria);
 //   gHumanTeamCriteria[0] = AreaActivate_AddCriteria("CRITERIA_HUMAN0", Human_CriteriaN);
 // "criteria_human" covers both general human criteria and team 0 (player).
@@ -62,7 +62,7 @@ glm::mat3 BuildEngineOrientation(const glm::vec3& angles) {
     return glm::mat3(orientation);
 }
 
-// In IGI-RE EditVariable_Run (HOOK 0x4889B0, src/levelflow/editvar.c:59-66):
+// in retail engine EditVariable_Run (HOOK 0x4889B0, src/levelflow/editvar.c:59-66):
 //   v->nValue += round_int(VarString_EvalReal(&v->inc, v));
 //   v->nValue -= round_int(VarString_EvalReal(&v->dec, v));
 // where round_int invokes fistpll (HOOK round_int, src/levelflow/levelflow.h:41-47).
@@ -99,7 +99,7 @@ bool TryEvaluateRoundedCondition(
         static_cast<char>(rounded) != 0;
 }
 
-// In IGI-RE seconds-to-ticks conversions use round_ll (fistpll):
+// in retail engine seconds-to-ticks conversions use round_ll (fistpll):
 //   - CutScene_Open (HOOK 0x4F4B70, src/cutscene/cutscene.c:259)
 //   - CutScene_Update (HOOK 0x4F5400, src/cutscene/cutscene.c:445)
 //   - ExplodeObject_BlastHandler (HOOK 0x481EA0, src/camera/explodeobject.c:371)
@@ -169,7 +169,7 @@ bool WeaponProducesMuzzleFlash(const WeaponDefinition& weapon) {
     }
 }
 
-// The player's view frame. IGI-RE hands the use query the view matrix's columns
+// The player's view frame. retail engine hands the use query the view matrix's columns
 // (src/humanbase/human.c:1284 HumanView_GetMatrix) and reads column 1 as the look
 // direction (src/game/game.c:909,912). The look direction here is the one the
 // runtime already uses for the aim and interaction rays
@@ -771,7 +771,7 @@ void RuntimeWorld::ApplyExplosionDamage(
 
         // Explosive props are part of the blast graph: a grenade can start a
         // barrel chain, and a barrel can start the next authored prop.
-        // In IGI-RE (src/camera/explodeobject.c:368-372 ExplodeObject_BlastHandler):
+        // in retail engine (src/camera/explodeobject.c:368-372 ExplodeObject_BlastHandler):
         //   d = Game_BlastFalloff(...) + o->damage;
         //   if (d >= o->health) o->timer = (int)round_ll(o->delay * kFrames);
         // Blast damage arms the authored delay timer so chain explosions stagger.
@@ -963,7 +963,7 @@ void RuntimeWorld::UpdateAuthoredMissionState() {
             player_position.y <= area.maximum.y &&
             player_position.z >= area.minimum.z &&
             player_position.z <= area.maximum.z) {
-            // In IGI-RE AreaActivate_Contains (HOOK 0x5042B0, src/editobj/areaactivate.c:83-107):
+            // in retail engine AreaActivate_Contains (HOOK 0x5042B0, src/editobj/areaactivate.c:83-107):
             // Check within oriented bounding box using matrix^T * (pos - pos.a)
             const glm::vec3 delta = player_position - area.position;
             const glm::vec3 local = glm::transpose(area.orientation) * delta;
@@ -1017,7 +1017,7 @@ void RuntimeWorld::UpdateAuthoredMissionState() {
         int& tick_count = mission_level_timer_ticks_[timer_index];
         bool is_running = mission_level_timer_running_[timer_index] != 0;
 
-        // In IGI-RE LevelTimer_Run (HOOK 0x51BE10, src/nodereg/leveltimer.c:159-174):
+        // in retail engine LevelTimer_Run (HOOK 0x51BE10, src/nodereg/leveltimer.c:159-174):
         // 1. Evaluate run expression first:
         //    if (VarString_HasExpr(&t->run)) t->isRun = x87_fistp(VarString_EvalReal(&t->run, t));
         // 2. Evaluate reset expression second:
@@ -1677,7 +1677,7 @@ void RuntimeWorld::SetLadderPlacements(std::vector<LadderPlacement> ladder_place
 
 bool RuntimeWorld::TryMountNearestLadder() {
     // The name is kept for the existing declaration (source/runtime/runtime_world.h:352),
-    // but the rule is no longer "nearest origin". IGI-RE src/humanbase/human.c:1291-1298
+    // but the rule is no longer "nearest origin". retail engine src/humanbase/human.c:1291-1298
     // Human_UpdateUse walks the whole task list and lets every ladder's Ladder_Use
     // (src/props/ladder.c:122-174) update one shared query; the winner is whatever
     // that query holds afterwards (see igi::LadderUseQuery). The editor's placement
@@ -1689,7 +1689,7 @@ bool RuntimeWorld::TryMountNearestLadder() {
     const glm::vec3 player_eye = player_.GetEyePosition();
     const ViewFrame view = BuildPlayerViewFrame(player_);
     // The default-constructed bounds are the player's kQuarterPi pair
-    // (IGI-RE src/humanbase/human.c:1286).
+    // (retail engine src/humanbase/human.c:1286).
     LadderUseQuery query;
     for (size_t ladder_index = 0;
          ladder_index < ladder_placements_.size();
@@ -2138,7 +2138,7 @@ void RuntimeWorld::UpdateAuthoredGuardGenerators() {
             mission_expression_state_,
             definition.condition_expression);
 
-        // In IGI-RE GuardGenerator_Run (0x487EE0, src/levelflow/guardgen.c:114-135):
+        // in retail engine GuardGenerator_Run (0x487EE0, src/levelflow/guardgen.c:114-135):
         // 1. If !isOn: if no active guard alive, isSpawned = 0.
         // 2. If isOn and nSpawns < maxSpawns:
         //    if no guard spawned yet or current spawned guard is dead,
@@ -2392,7 +2392,7 @@ void RuntimeWorld::TriggerAuthoredExplodeObject(
 void RuntimeWorld::UpdateAuthoredExplodeObjects() {
     for (AuthoredExplodeObjectRuntime& runtime_object : mission_explode_objects_) {
         if (!runtime_object.is_exploded) {
-            // In IGI-RE (src/camera/explodeobject.c:260-263 ExplodeObject_RunHandler):
+            // in retail engine (src/camera/explodeobject.c:260-263 ExplodeObject_RunHandler):
             //   if (VarString_HasExpr(&o->trigger))
             //       o->triggered = (char)round_ll(VarString_EvalReal(&o->trigger, o));
             //   if (o->triggered || !o->timer) {

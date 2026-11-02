@@ -431,7 +431,7 @@ Layout LayoutFor(const std::string& type) {
                    (field.typeName == "String16" || field.typeName == "String32" ||
                     field.typeName == "String256" ||
                     field.typeName == "VarString")) {
-            // "Holder Model" is the model the SCamera task itself draws (arg 7): IGI-RE
+            // "Holder Model" is the model the SCamera task itself draws (arg 7): retail engine
             // src/scamera/scamera.c:116-131 makes it the third param-table entry, which
             // SCamera_Create passes to RigidDynCubeObj_SetModel (scamera.c:240). The
             // SCamera's other two strings are the SCameraLens child's model (arg 10) and

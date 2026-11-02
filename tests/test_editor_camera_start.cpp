@@ -105,7 +105,7 @@ TEST(EditorCameraStartTest, F11MeshCenterFollowsEditRigidRotation) {
 
 TEST(EditorCameraStartTest, F11MeshCenterUsesGameEulerOrderForMultiAxisRotation) {
     // The retail game composes Rz * Ry * Rx for every authored object
-    // (`Matrix_SetEuler`, IGI-RE src/math/matrix.c:99). The old editor code had a
+    // (`Matrix_SetEuler`, retail engine src/math/matrix.c:99). The old editor code had a
     // per-model whitelist (`IsZyxEulerModel`) for 506_/615_01_1; it is gone, so a
     // multi-axis rotation must be order-sensitive in the same way for every model.
     const glm::dvec3 rot(0.3, 0.4, 0.5);

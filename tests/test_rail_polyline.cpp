@@ -7,7 +7,7 @@
 // made of, and that is what this file pins:
 //
 //   * `spline_geometry::RailPolyline` — the polyline is the engine's own
-//     `setup_segments` joints (IGI-RE src/sound/segsetup.c:88-199) in order, so
+//     `setup_segments` joints (retail engine src/sound/segsetup.c:88-199) in order, so
 //     joint i is exactly the point `SampleRailPoint` returns for `arc[i]` and the
 //     drawn segment chain has the rail's own length. A "rail" drawn from anything
 //     else (chords between waypoints, control points, a decimated curve) fails
@@ -20,7 +20,7 @@
 //     the overlay offers, derived from the level's own references rather than
 //     from a model id, a task-type list or a level number.
 //
-// Oracle: /Users/haseeb-mir/Documents/Code/IGI-RE (read-only), the verified
+// Oracle: the retail engine source (read-only), the verified
 // decompilation of retail IGI.exe. Every expectation names its function and
 // file:line.
 

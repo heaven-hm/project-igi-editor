@@ -4,11 +4,11 @@
  *          issue #68 ("Ladder placement parity: activation volume, mount points,
  *          climb-line gizmos").
  *
- * Every expectation below is derived from the IGI-RE oracle, cited by file:line.
+ * Every expectation below is derived from the retail engine oracle, cited by file:line.
  * The helpers under test are pure (source/level/task_schema.cpp), so this file
  * needs no GL, no windows.h and no level archive.
  *
- * Oracle: /Users/haseeb-mir/Documents/Code/IGI-RE
+ * Oracle: the retail engine source
  *   src/props/ladder.c:65-93     Ladder_Create 0x440280 (rung count)
  *   src/props/ladder.c:122-175   Ladder_Use 0x4404C0 (activation, both mounts)
  *   src/props/ladder.c:200-203   kReachMin/kReachMax DATA 0x533868/0x533440
@@ -37,7 +37,7 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
-// 1 world unit = 1/4096 m (IGI-RE src/props/wire.c:320-321 kWireScale), so a
+// 1 world unit = 1/4096 m (retail engine src/props/wire.c:320-321 kWireScale), so a
 // centimetre is 40.96 units. Every ladder constant is a round number of
 // centimetres, which is how the retail values were authored.
 constexpr double kUnitsPerCm = 40.96;
@@ -71,7 +71,7 @@ Vec3 ViewAxisForYaw(double degrees) {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-// IGI-RE src/props/ladder.c:200-203
+// retail engine src/props/ladder.c:200-203
 //   DATA(533440) double kReachMax INIT(2867.2);
 //   DATA(533860) double kReachMin INIT(-2867.2);
 // applied to the player's local X in ladder.c:138. 2867.2 units = 70 cm.
@@ -81,7 +81,7 @@ TEST(LadderParityConstants, HalfWidthIsSeventyCentimetres) {
 }
 
 // The activation radius is not a stored constant: Human_UpdateUse writes
-// `q.unk78 = 0` then `q.range = kUseRange` (IGI-RE src/humanbase/human.c:1287-1288,
+// `q.unk78 = 0` then `q.range = kUseRange` (retail engine src/humanbase/human.c:1287-1288,
 // kUseRange = 6.0f at human.c:168) into a HumanUseQuery whose fields at +0x78 and
 // +0x7C are an int and a float. Ladder_Use reads `q->range` through the
 // UseQuery/ViewQuery view (src/props/propstypes.h:14, src/game/game.c:190) where
@@ -99,7 +99,7 @@ TEST(LadderParityConstants, ActivationRadiusIsTheReinterpretedUseRange) {
     EXPECT_DOUBLE_EQ(reinterpreted, kLadderActivateRadiusUnits);
 }
 
-// IGI-RE src/props/ladder.c:55 declares kLadderAngle; src/plane/gear.c:156-157
+// retail engine src/props/ladder.c:55 declares kLadderAngle; src/plane/gear.c:156-157
 // gives it ALIAS(kLadderAngle, kQuarterPi) with INIT(0.7853982f).
 TEST(LadderParityConstants, FacingGateIsFortyFiveDegrees) {
     EXPECT_DOUBLE_EQ(kLadderFacingAngleRadians, 0.7853982);
@@ -113,7 +113,7 @@ TEST(LadderParityConstants, FacingGateIsFortyFiveDegrees) {
     EXPECT_GT(static_cast<double>(0.7853982f), kPi / 4.0);
 }
 
-// IGI-RE src/weapon/humanplayer.c:130-133.
+// retail engine src/weapon/humanplayer.c:130-133.
 TEST(LadderParityConstants, MountOffsetsAreCentimetreValues) {
     EXPECT_DOUBLE_EQ(kLadderBottomStandoffUnits, 1515.52);
     EXPECT_DOUBLE_EQ(kLadderBottomStandoffUnits, 37.0 * kUnitsPerCm);
@@ -125,7 +125,7 @@ TEST(LadderParityConstants, MountOffsetsAreCentimetreValues) {
     EXPECT_DOUBLE_EQ(kLadderTopStandoffUnits, 40.0 * kUnitsPerCm);
 }
 
-// IGI-RE src/props/ladder.c:52 + DATA(533860) kRungScale INIT(1/1228.8).
+// retail engine src/props/ladder.c:52 + DATA(533860) kRungScale INIT(1/1228.8).
 TEST(LadderParityConstants, RungSpacingIsThirtyCentimetres) {
     EXPECT_DOUBLE_EQ(kLadderRungSpacingUnits, 1228.8);
     EXPECT_DOUBLE_EQ(kLadderRungSpacingUnits, 30.0 * kUnitsPerCm);
@@ -136,7 +136,7 @@ TEST(LadderParityConstants, RungSpacingIsThirtyCentimetres) {
 
 // ── Mount points (HumanPlayer_UpdateLadder) ──────────────────────────────────
 
-// IGI-RE src/weapon/humanplayer.c:308-314 — entering from the bottom starts at
+// retail engine src/weapon/humanplayer.c:308-314 — entering from the bottom starts at
 // magic point 2 plus kLadderBack along the matrix's +Y column and kLadderUp
 // along its +Z column.
 TEST(LadderMounts, BottomMountUsesPointTwoPlusStandoffAndLift) {
@@ -147,7 +147,7 @@ TEST(LadderMounts, BottomMountUsesPointTwoPlusStandoffAndLift) {
     EXPECT_DOUBLE_EQ(l.bottomMount.z, 7.03 + kLadderBottomLiftUnits);
 }
 
-// IGI-RE src/weapon/humanplayer.c:299-306 — entering from the top starts at
+// retail engine src/weapon/humanplayer.c:299-306 — entering from the top starts at
 // magic point 3 plus kLadderTopBack along +Z minus kLadderTopUp along +Y, i.e.
 // on the opposite side of the face from the bottom mount.
 TEST(LadderMounts, TopMountUsesPointThreeBackAndMinusStandoff) {
@@ -193,7 +193,7 @@ TEST(LadderMounts, DegenerateBasisIsInvalid) {
 
 // ── Rung count and climb line (Ladder_Create) ────────────────────────────────
 
-// IGI-RE src/props/ladder.c:86-91 — `l->rungs = (int)round_ll(h * kRungScale)`
+// retail engine src/props/ladder.c:86-91 — `l->rungs = (int)round_ll(h * kRungScale)`
 // with h = |point2.z - point3.z|. round_ll rounds to nearest, so a height of
 // 38.8 rungs is 39, not the 38 a truncating conversion would give.
 TEST(LadderClimbLine, RungCountRoundsToNearest) {
@@ -224,7 +224,7 @@ TEST(LadderClimbLine, RungCountUsesLocalNotWorldHeight) {
     EXPECT_EQ(l.topStep, 14);
 }
 
-// IGI-RE src/weapon/humanplayer.c:320-322 — the mounted yaw is
+// retail engine src/weapon/humanplayer.c:320-322 — the mounted yaw is
 // Matrix_GetEuler(m).z + pi, and Matrix_GetEuler reads az = atan2(m[3], m[0]).
 TEST(LadderClimbLine, PlayerYawIsMatrixEulerZPlusPi) {
     const LadderPlacement l = MakeLadder(0.0, 1228.8);

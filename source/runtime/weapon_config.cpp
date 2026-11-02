@@ -1,8 +1,8 @@
 // Weapon / item configurator — the pure data layer (issue #49 part 1).
 //
-// Every rule below is transcribed from IGI-RE and cited at the point of use.
+// Every rule below is transcribed from retail engine and cited at the point of use.
 // See source/runtime/weapon_config.h for the oracle summary and
-// docs/igi-re-parity/WEAPON_CONFIGURATOR.md for the full trace.
+// docs/parity/WEAPON_CONFIGURATOR.md for the full trace.
 
 #include "weapon_config.h"
 
@@ -430,7 +430,7 @@ std::vector<std::string> EmitWeaponTypeArgs(const std::vector<CallArg>& args,
 namespace {
 
 // The value of one argument as the engine's symbol table would hold it: the
-// literal itself, a constant IGI-RE names, or whatever the caller can resolve.
+// literal itself, a constant retail engine names, or whatever the caller can resolve.
 // Returns false when the argument's value cannot be established, which the
 // callers below treat as a refusal rather than a zero.
 bool ResolveInt(const CallArg& a, const ConstantResolver& extra, int* out) {

@@ -13,9 +13,9 @@
 //   3. the accept/reject test for an `.olm` already on disk, and the parameters
 //      that decide a bake                  Lightmap_BuildLod + LightmapInfo_Changed 0x523930
 //
-// Everything here is cited to IGI-RE (`/Users/haseeb-mir/Documents/Code/IGI-RE`),
+// Everything here is cited to retail engine (`the retail engine source`),
 // the verified C decompilation of retail `IGI.exe`. No web source and no other
-// port is used as authority. Files used, all under IGI-RE/src:
+// port is used as authority. Files used, all under retail engine/src:
 //
 //   litmap/lightmap.c:66-101     Lightmap_FreeBuffers 0x521040, Lightmap_GetDir
 //                                0x5210C0, Lightmap_GetResPath 0x5210E0
@@ -170,10 +170,10 @@
 //     BuildLod loop: with lightmaps off the previous set is reused and still baked.
 //
 // What is NOT in the decompilation: the `.olm` WRITER. `Lightmap_BuildLod` only
-// builds or loads; `gLightmapBuilt` is set (:95) and never read anywhere in IGI-RE,
+// builds or loads; `gLightmapBuilt` is set (:95) and never read anywhere in retail engine,
 // so the serialisation of a new bake to disk is outside the oracle's coverage.
 // That is expected: baking is a tool feature, not a retail code path (see
-// docs/igi-re-parity/TRIAGE_REMAINING_ISSUES.md row 72).
+// docs/parity/TRIAGE_REMAINING_ISSUES.md row 72).
 #pragma once
 
 #include <cstddef>
@@ -185,7 +185,7 @@ namespace igi {
 namespace lightmap_rules {
 
 // ---------------------------------------------------------------------------
-// Constants. Every one is IGI-RE DATA or a literal from a cited line.
+// Constants. Every one is retail engine DATA or a literal from a cited line.
 // ---------------------------------------------------------------------------
 
 // lightmapbuild.c:26 `#define LIGHTMAP_MAGIC 0x3DF5C28F` (a float, 0.12f), written

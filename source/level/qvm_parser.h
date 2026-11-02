@@ -6,7 +6,7 @@
 // ============================================================================
 // The "LOOP" container, read the way the retail engine reads it.
 //
-// ORACLE: IGI-RE, the verified C decompilation of retail IGI.exe.
+// ORACLE: retail engine, the verified C decompilation of retail IGI.exe.
 //   * `src/qvm/qvmtypes.h:4-20`  -- struct QvmHeader (the 60-byte file header)
 //   * `src/qvm/qvmtypes.h:23-30` -- struct QvmStrings (one string/name pool)
 //   * `src/qvm/qvm.c:433-486`    -- Qvm_Load (HOOK 0x4BD220): the validation,

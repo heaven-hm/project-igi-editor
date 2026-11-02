@@ -1,6 +1,6 @@
 // lightmap_rules.cpp - the retail object-lightmap rules of issue #72.
 //
-// Every branch below carries the IGI-RE file:line it mirrors. Where this port
+// Every branch below carries the retail engine file:line it mirrors. Where this port
 // deviates (a guard the engine does not need because it is the engine, or a
 // bound on a loop the engine leaves unbounded) the comment says so and names the
 // deviation. See source/runtime/lightmap_rules.h for the full citation block.

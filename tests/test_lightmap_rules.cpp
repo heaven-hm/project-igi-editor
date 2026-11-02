@@ -1,6 +1,6 @@
 // test_lightmap_rules.cpp - the retail object-lightmap rules, pure-logic port (#72).
 //
-// The oracle for every number here is IGI-RE (read-only). Key citations:
+// The oracle for every number here is retail engine (read-only). Key citations:
 //   litmap/lightmap.c:89-101     Lightmap_GetDir 0x5210C0, Lightmap_GetResPath 0x5210E0
 //   litmap/lightmap.c:186-190    LightmapInfo_ScanFile 0x523420 (the strstr, isDir test)
 //   litmap/lightmap.c:231-257    LightmapInfo_MakeName 0x5235A0 (obj%05d allocation)
@@ -51,7 +51,7 @@ fs::path GameRoot() {
 
 // ---------------------------------------------------------------------------
 // Synthetic `.olm` builder, mirroring the layout litmaptypes.h:36-48 declares
-// and the arithmetic lightmapbuild.c:72-109 writes. (IGI-RE's own test helper is
+// and the arithmetic lightmapbuild.c:72-109 writes. (retail engine's own test helper is
 // tests/test_dirlight_lightmap.py:411-421 `olm_file`; this is the same shape.)
 // ---------------------------------------------------------------------------
 
@@ -214,7 +214,7 @@ TEST(LightmapRulesMakeNameTest, MatchIsSubstringNotEquality) {
 }
 
 TEST(LightmapRulesMakeNameTest, SkipsTakenIndicesInBothSources) {
-    // lightmap.c:236-253, the four cases IGI-RE's own test asserts
+    // lightmap.c:236-253, the four cases retail engine's own test asserts
     // (tests/test_litmap_lightmap.py:121-122 CASES).
     EXPECT_EQ(FindFreeObjectLightmapIndex({}, {}), 0);
     EXPECT_EQ(FindFreeObjectLightmapIndex({"obj00000"}, {}), 1);
@@ -437,7 +437,7 @@ TEST(LightmapRulesAcceptTest, MagicVersionAndCountReject) {
     ASSERT_TRUE(OlmHeaderAccepted(file, mesh));
 
     OlmFileHeader bad_magic = file;
-    bad_magic.magic = 0x1234;  // IGI-RE's own test uses this value (:496)
+    bad_magic.magic = 0x1234;  // retail engine's own test uses this value (:496)
     EXPECT_FALSE(OlmHeaderAccepted(bad_magic, mesh));
 
     OlmFileHeader bad_version = file;

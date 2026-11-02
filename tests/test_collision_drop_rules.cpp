@@ -1,7 +1,7 @@
 // test_collision_drop_rules.cpp -- the engine's vertical drop query
 // (source/level/collision_drop_rules.h).
 //
-// ORACLE (IGI-RE, read-only):
+// ORACLE (retail engine, read-only):
 //   game/misc.c:75-97      Game_DropToGround HOOK 0x4149B0: dz = -1638400.0
 //                          (:82), Coll_DropPoints (:87), down then UP (:88-92),
 //                          a second miss returns with pos untouched (:92-93),

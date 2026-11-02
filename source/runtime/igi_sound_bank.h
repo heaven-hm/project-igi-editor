@@ -1,11 +1,11 @@
 #pragma once
 
 // igi_sound_bank.h - the retail sound container and sample format of Project
-// IGI 1, established from IGI-RE (the decompiled retail source, read-only) and
+// IGI 1, established from retail engine (the decompiled retail source, read-only) and
 // proven against the shipped data.
 //
 // THE ORACLE. Every rule below is cited to a HOOK address and a file:line in
-// /Users/haseeb-mir/Documents/Code/IGI-RE. Nothing here is taken from open-igi
+// the retail engine source. Nothing here is taken from open-igi
 // or from web research, and no field is named that the engine's own reader does
 // not name. The two fields whose purpose the decompilation does not establish
 // (`unk1A` and format code 3's payload layout) are reported as raw numbers and

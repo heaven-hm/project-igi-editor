@@ -2,7 +2,7 @@
  * @file    test_character_texture_resolution.cpp
  * @brief   Character-model texture resolution order (issue #47 follow-on).
  *
- * IGI-RE is the oracle for the archive a texture must come from. The game
+ * retail engine is the oracle for the archive a texture must come from. The game
  * resolves a model's textures from exactly one archive, the one of the level the
  * model file belongs to:
  *
@@ -17,7 +17,7 @@
  * There is no cross-level search and no name-based fallback: the level's own
  * archive is authoritative. That matters because retail archives really do carry
  * different images under one texture id (the measured table is in
- * docs/igi-re-parity/CHARACTER_TEXTURE_RESOLUTION.md), so whichever archive the
+ * docs/parity/CHARACTER_TEXTURE_RESOLUTION.md), so whichever archive the
  * editor happened to index first used to decide the look.
  *
  * The suite is host-native and needs no game install for the synthetic cases.
@@ -316,7 +316,7 @@ TEST(CharacterTextureResolution, ModelArchiveOwnerLevelReadsTheArchivePath) {
 // Retail evidence for the rule. `020_01_1` is read from level4's models archive, and
 // one of the ids its own record lists (018_03_1) is defined by BOTH level4's and
 // level7's texture archives with different bytes (4128 B and 65568 B; measured, and
-// the same id/archives table as docs/igi-re-parity/CHARACTER_TEXTURE_RESOLUTION.md
+// the same id/archives table as docs/parity/CHARACTER_TEXTURE_RESOLUTION.md
 // section 2). The old texture-id-owner rule hoisted a level listed first by the DATs
 // (level1, whose copy is byte-identical to level7's); the engine's rule hoists the
 // archive the model came from, so level4's copy is the one that is bound.

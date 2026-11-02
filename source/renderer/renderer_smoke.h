@@ -56,7 +56,7 @@
 // THE BLEND. The quad's flags are the group's (Smoke_Changed's fade-mode
 // switch, smoke.c:366-379, OR'd with 0x40000 by Particle2D_New, particle.c:515,
 // OR'd again with 0x1000000 by Particle2D_Draw itself). They drive three D3D
-// states that IGI-RE transcribes, and this file reproduces all three:
+// states that retail engine transcribes, and this file reproduces all three:
 //
 //   D3DQVertex_SetBlendStates  HOOK 0x50E000  src/qvertex/d3d.c:633-646
 //       flags & 8          -> SRCALPHA / ONE            (additive)

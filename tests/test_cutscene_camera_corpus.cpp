@@ -19,7 +19,7 @@
  *
  * The three levels that author a cutscene are LEVEL1, LEVEL2 and LEVEL4
  * (measured: 9 CutScene calls and 120 EditCamera keys in their `objects.qsc`,
- * the counts docs/igi-re-parity/CUTSCENES.md section 5.1 records).
+ * the counts docs/parity/CUTSCENES.md section 5.1 records).
  *
  * WINDOWS LANE ONLY: `LevelObjects::Load` cannot be linked by the host-native
  * lane, which is why this is a separate file from the pure-rule suite -- a
@@ -27,7 +27,7 @@
  * when IGI_GAME_PATH is unset or a retail file is absent, so it never fails for
  * a missing corpus.
  *
- * Oracle: /Users/haseeb-mir/Documents/Code/IGI-RE
+ * Oracle: the retail engine source
  *   src/cutscene/cutscene.c:163-180   CutScene_CollectKeys 0x4F4880
  *   src/cutscene/cutscene.c:417-462   CutScene_Update 0x4F5400
  *   src/cutscene/cutscene.c:631-651   CutScene_Spline 0x4F6290

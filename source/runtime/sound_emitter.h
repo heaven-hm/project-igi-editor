@@ -1,5 +1,5 @@
 // sound_emitter.h - the authored sound-emitter model of Project IGI, resolved the
-// way IGI-RE resolves it (issue #70).
+// way retail engine resolves it (issue #70).
 //
 // IGI has exactly two task types that a LEVEL AUTHOR places to emit sound:
 //
@@ -51,9 +51,9 @@
 // script VM (src/param/varstring.c:160-168), so a condition enters this module
 // as a resolved number, exactly as it enters ConditionalSound_Run.
 //
-// Everything here is cited to IGI-RE. Where the reconstructed engine is
+// Everything here is cited to retail engine. Where the reconstructed engine is
 // self-inconsistent or leaves a value undefined, the divergence is named in a
-// comment and in docs/igi-re-parity/SOUND.md rather than silently fixed.
+// comment and in docs/parity/SOUND.md rather than silently fixed.
 #pragma once
 
 #include <cstdint>
@@ -63,7 +63,7 @@
 namespace igi {
 
 // ---------------------------------------------------------------------------
-// Engine constants. Every one is IGI-RE DATA.
+// Engine constants. Every one is retail engine DATA.
 // ---------------------------------------------------------------------------
 
 // Game units per metre. Voice_SetParams multiplies a sound's authored min/max
@@ -96,7 +96,7 @@ constexpr int kAmbientSoundListCapacity = 0x100;
 constexpr int kAmbientSoundSlots = 8;
 constexpr int kAmbientSoundSlotCapacity = 0x20;
 
-// Struct sizes pinned by IGI-RE's own _Static_asserts, and the offsets of the
+// Struct sizes pinned by retail engine's own _Static_asserts, and the offsets of the
 // fields the editor inspects (condsound.c:58-59, ambientarea.c:45;
 // tests/test_vehicle_condsound.py and tests/test_aiaction_area.py pin the same
 // offsets against the retail binary).

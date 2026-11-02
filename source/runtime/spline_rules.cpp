@@ -1,5 +1,5 @@
 // spline_rules.cpp - the SplineObj / SplineObjWaypoint rules, ported branch by
-// branch from IGI-RE. Every function carries the IGI-RE file:line it mirrors;
+// branch from retail engine. Every function carries the retail engine file:line it mirrors;
 // every branch that differs from the obvious reading says so.
 //
 // See spline_rules.h for the issue mapping (#79 authored model, #69 curve) and

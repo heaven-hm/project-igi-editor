@@ -471,7 +471,7 @@ void Level::LoadFogInfo(const QSC* qsc_objects, IRenderResLoader* render_res_loa
 	// ONE fog path. The authored GlobalLightKeyframe is parsed by
 	// igi::ResolveMissionFog (source/runtime/mission_fog.cpp) through the QSC
 	// bridge in fog_qsc.h; this function no longer carries its own copy of the
-	// parse. Both halves of the rule are IGI-RE's:
+	// parse. Both halves of the rule are retail engine's:
 	//
 	//   * which keyframe: the level's default state is the one with the smallest
 	//     Time. A level can list more than one keyframe (every retail level

@@ -7,10 +7,10 @@
  * fixtures below are hand-built, but their shape is not invented: they mirror the
  * structure the retail corpus file `menusystem/ingamemenu.qvm` declares, which is
  * reproduced verbatim in the comment above `RetailShapedFixture()`.  The oracle
- * for every behaviour asserted here is IGI-RE, cited by file:line in
+ * for every behaviour asserted here is retail engine, cited by file:line in
  * source/menu/menu_ui.h.
  *
- * Oracle: /Users/haseeb-mir/Documents/Code/IGI-RE
+ * Oracle: the retail engine source
  *   src/menu/menumanager.c:479-535  MenuManager_ReadInput 0x418580 (wrapping nav)
  *   src/menu/menumanager.c:594-625  MenuManager_CollectItems 0x4187F0 /
  *                                   MenuManager_AddItems 0x418840 (item list)
@@ -1011,7 +1011,7 @@ TEST(MenuUiRetail, RealIngameMenuProducesTheDeclaredScreensAndItems) {
 TEST(MenuUiRetail, OnlyTheRetailItemsTheEditorImplementsAreWired) {
     // The wiring decision: MENUMANAGER_IDLE -> Resume, MENUMANAGER_QUITTOMAINMENU ->
     // Quit, everything else inert with the retail action recorded.  See
-    // docs/igi-re-parity/MENU_UI.md.
+    // docs/parity/MENU_UI.md.
     const std::string root = FindRetailRoot();
     if (root.empty()) {
         GTEST_SKIP() << "retail corpus not reachable (set IGI_GAME_PATH)";
@@ -1666,7 +1666,7 @@ TEST(MenuUiLive, AFallbackMenuHasNoWriteSide) {
 // order, the same rects and colour indices, and the game's text verbatim in
 // `label` / `display_label` (the definition is data the editor edits and saves).
 // What the editor SHOWS is `editor_label`, the editor's own text for the row.
-// docs/igi-re-parity/PAUSE_MENU_STYLE.md records the rule.
+// docs/parity/PAUSE_MENU_STYLE.md records the rule.
 
 namespace {
 

@@ -27,7 +27,7 @@ public:
     static constexpr float StepLengthUnits = 1228.8f;
     static constexpr int TopStepMargin = 6;
 
-    // `climb_axis` is the ladder's model-local +Z column: IGI-RE measures the
+    // `climb_axis` is the ladder's model-local +Z column: retail engine measures the
     // rung height along the MODEL's Z axis, not along world Z (see the .cpp).
     LadderClimbLine(const glm::vec3& bottom, const glm::vec3& top,
                     const glm::vec3& climb_axis);
@@ -45,7 +45,7 @@ private:
     int top_step_ = 0;
 };
 
-// The player's view frame: the columns of the view matrix IGI-RE hands the use
+// The player's view frame: the columns of the view matrix retail engine hands the use
 // query as `q.matrix` (src/humanbase/human.c:1284 HumanView_GetMatrix). Column 1
 // is the look direction -- UseQuery_Consider requires a positive component along
 // it (src/game/game.c:909,912) -- which is also the convention this codebase's
@@ -62,7 +62,7 @@ public:
     // the vanilla ladder activation and mount handlers.
     static constexpr float ActivateRadiusUnits = 8192.0f;
     static constexpr float ActivateHalfWidthUnits = 2867.2f;
-    // IGI-RE src/props/ladder.c:55 declares kLadderAngle and
+    // retail engine src/props/ladder.c:55 declares kLadderAngle and
     // src/plane/gear.c:156-157 resolves it to kQuarterPi = 0.7853982f.
     // ladder.c:157 gates on the ANGLE between the view's column 1 and the
     // ladder's column 1, so the previous cosine comparison is replaced by it.
@@ -88,7 +88,7 @@ public:
     const LadderClimbLine& GetClimbLine() const { return climb_line_; }
     float GetPlayerYawDegrees() const { return player_yaw_degrees_; }
 
-    // The object matrix's columns, i.e. the ladder's local axes: IGI-RE reads
+    // The object matrix's columns, i.e. the ladder's local axes: retail engine reads
     // them as m[0..2] (across), m[1],m[4],m[7] (the face normal) and
     // m[2],m[5],m[8] (up) in src/props/ladder.c:133-148.
     const glm::vec3& GetAcrossAxis() const { return orientation_[0]; }
@@ -105,7 +105,7 @@ private:
     float player_yaw_degrees_ = 0.0f;
 };
 
-// IGI-RE src/game/game.c:897-928 UseQuery_Consider (HOOK 0x416AD0) plus the query
+// retail engine src/game/game.c:897-928 UseQuery_Consider (HOOK 0x416AD0) plus the query
 // state Ladder_Use shares across every ladder of the engine's task scan
 // (src/humanbase/human.c:1291-1298). bestPitch/bestYaw start at kQuarterPi for a
 // player (src/humanbase/human.c:1286), so the first top candidate must already be
@@ -117,7 +117,7 @@ public:
 
     void Reset();
 
-    // Applies one ladder's Ladder_Use (IGI-RE src/props/ladder.c:122-174) to the
+    // Applies one ladder's Ladder_Use (retail engine src/props/ladder.c:122-174) to the
     // shared query. `index` identifies the ladder in the caller's own list.
     void Consider(const LadderPlacement& ladder, const glm::vec3& player_eye,
                   const ViewFrame& view, int index);
@@ -129,7 +129,7 @@ public:
     float GetBestYaw() const { return best_yaw_; }
 
 private:
-    // IGI-RE src/game/game.c:903-927, the body of UseQuery_Consider.
+    // retail engine src/game/game.c:903-927, the body of UseQuery_Consider.
     void ConsiderReferencePoint(const glm::vec3& reference,
                                 const glm::vec3& player_eye,
                                 const ViewFrame& view, int index);

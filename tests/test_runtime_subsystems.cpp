@@ -1537,7 +1537,7 @@ TEST(PlayerLadderTest, ResolvesBottomAndTopActivationGeometry) {
     const ViewFrame view;
 
     // Standing at the foot, looking at the ladder: the bottom offer
-    // (IGI-RE src/props/ladder.c:130-162).
+    // (retail engine src/props/ladder.c:130-162).
     LadderUseQuery from_bottom;
     from_bottom.Consider(ladder, glm::vec3(0.0f, -2000.0f, 1000.0f), view, 0);
     ASSERT_TRUE(from_bottom.HasBest());
@@ -1545,7 +1545,7 @@ TEST(PlayerLadderTest, ResolvesBottomAndTopActivationGeometry) {
     EXPECT_FALSE(from_bottom.IsBestAtTop());
 
     // Standing above the activation reference on the far side, looking back at
-    // it: the top offer (IGI-RE src/props/ladder.c:164-173).
+    // it: the top offer (retail engine src/props/ladder.c:164-173).
     LadderUseQuery from_top;
     from_top.Consider(ladder, glm::vec3(0.0f, -1000.0f, 10500.0f), view, 0);
     ASSERT_TRUE(from_top.HasBest());
@@ -2778,13 +2778,13 @@ TEST(RuntimeWorldTest, CompletesAuthoredLadderStepFromRootMotionEvent) {
 // engine's behaviour, not an editor defect, and it is why this test asserts Climbing
 // rather than GettingOnTop.
 //
-// IGI-RE src/props/ladder.c:155-160 -- the bottom offer fires when the player is inside
+// retail engine src/props/ladder.c:155-160 -- the bottom offer fires when the player is inside
 // the ladder's world-Z span and facing it, and as part of winning it ZEROES the shared
 // query's angle bounds:
 //     if (!(angle >= kLadderAngle) && topz > q->pos.z && q->pos.z > l->obj.pos.z) {
 //         q->best = l; q->best_pitch = 0; q->best_yaw = 0; HUMAN_LADDER_TOP(human) = 0;
 //     }
-// IGI-RE src/game/game.c:921 -- the top offer then goes through UseQuery_Consider, which
+// retail engine src/game/game.c:921 -- the top offer then goes through UseQuery_Consider, which
 // rejects anything not STRICTLY closer to straight ahead:
 //     if (pitch >= q->bestPitch || yaw >= q->bestYaw) return 0;
 // With bestPitch and bestYaw now 0, `pitch >= 0` is always true, so the top offer can
@@ -4070,7 +4070,7 @@ TEST(RuntimeWorldTest, AuthoredExplodeObjectScriptTriggerDetonatesImmediately) {
     ASSERT_EQ(world.GetExplodeObjectSnapshots().size(), 1U);
     EXPECT_FALSE(world.GetExplodeObjectSnapshots()[0].is_exploded);
 
-    // In IGI-RE (src/camera/explodeobject.c:260-263 ExplodeObject_RunHandler),
+    // in retail engine (src/camera/explodeobject.c:260-263 ExplodeObject_RunHandler),
     // script trigger detonates immediately without waiting for explosion delay.
     world.SetMissionStateBoolean("TriggerExplosion", true);
     world.UpdateSimulationTick(1, PlayerInputCmd());
@@ -4098,7 +4098,7 @@ TEST(RuntimeWorldTest, AuthoredExplodeObjectBlastDamageRespectsExplosionDelay) {
     world.SetAuthoredMissionState(
         {}, {}, {}, {}, {}, {}, {explode_object});
 
-    // In IGI-RE (src/camera/explodeobject.c:368-372 ExplodeObject_BlastHandler),
+    // in retail engine (src/camera/explodeobject.c:368-372 ExplodeObject_BlastHandler),
     // blast damage initiates the delay countdown: o->timer = round_ll(o->delay * kFrames).
     ProjectileLaunch launch;
     launch.position = glm::vec3(0.0f);

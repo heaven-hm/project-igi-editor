@@ -1,13 +1,13 @@
 /******************************************************************************
  * @file    test_spline_waypoint_params.cpp
- * @brief   SplineObjWaypoint QSC argument layout, against IGI-RE and the shipped
+ * @brief   SplineObjWaypoint QSC argument layout, against retail engine and the shipped
  *          retail level scripts.
  *
- * IGI-RE is the oracle.  `SplineObj_Open` (HOOK 0x502250, src/editobj/spline.c:
+ * retail engine is the oracle.  `SplineObj_Open` (HOOK 0x502250, src/editobj/spline.c:
  * 184-225) registers the waypoint parameter table at :215 with eight entries, in
  * this order, and the retail `objects.qsc` declaration repeats it verbatim:
  *
- *   IGI-RE field       retail name              QSC arg
+ *   retail engine field       retail name              QSC arg
  *   ----------------   ------------------------  -------
  *   w.rot   Real32x9   "Orientation"             3,4,5
  *   w.point ObjectPos  "Position"                6,7,8

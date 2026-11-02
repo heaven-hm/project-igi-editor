@@ -1,6 +1,6 @@
 // test_anim_rules.cpp - the retail animation player's rules, pure-logic port (#73).
 //
-// The oracle for every number here is IGI-RE (read-only). Key citations:
+// The oracle for every number here is retail engine (read-only). Key citations:
 //   boneobj/anim.c:9          kTicksPerSecond = 4800.0f, "Times are in ticks,
 //                             4800 a second"
 //   boneobj/anim.c:38-58      Anim_Play 0x4D61D0: the blend conversion and the
@@ -25,8 +25,8 @@
 //
 // The corpus half reads the retail ANIMS IFF files and the authored LEVEL2
 // objects.qsc / OBJECTS.QVM. The IFF container walk is the TEST's own decoder:
-// IGI-RE has `Iff_Parse` only as an ORIG stub, so the framing is not cited to
-// IGI-RE. It is validated by internal consistency instead (every chunk tiles its
+// retail engine has `Iff_Parse` only as an ORIG stub, so the framing is not cited to
+// retail engine. It is validated by internal consistency instead (every chunk tiles its
 // parent exactly, BALH[0] equals the number of BOAN forms, the ids are unique),
 // and the values it produces are the ones BoneObj_Load then consumes.
 

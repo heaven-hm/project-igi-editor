@@ -4,7 +4,7 @@
  * @brief   The engine's own placement/bounds for a `Wire`, shared by the draw
  *          pass and the pick pass so they cannot disagree.
  *
- * ORACLE: /Users/haseeb-mir/Documents/Code/IGI-RE (read-only).
+ * ORACLE: the retail engine source (read-only).
  *
  * WHAT A WIRE IS. `Wire` (Wire_Open HOOK 0x43EFF0, src/props/wire.c:89-113) is
  * a RigidDynCubeObj with exactly three authored parameters -- two ObjectPos

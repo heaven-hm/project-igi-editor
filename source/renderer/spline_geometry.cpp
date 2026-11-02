@@ -300,7 +300,7 @@ static_assert(offsetof(RenderVertex, uv) == 9 * sizeof(float),
 // (src/render/render.c:641-643).
 //
 // The engine reads this frame out of `ModelObj.matrix` (:635), and nothing in
-// IGI-RE writes a spline ModelObj's spline state, so the copy itself has no
+// retail engine writes a spline ModelObj's spline state, so the copy itself has no
 // oracle. What the oracle does prove is which transform a rigid span gets:
 // SplineObj_BendVerts' rigid branch (src/shadow/spline.c:29-46) applies `s->rot`
 // - the frame setup_rigid built - to the same vertex array, and the rigid joints

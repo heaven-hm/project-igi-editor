@@ -3,7 +3,7 @@
 // The SAVE-BACK half of the QVM-driven in-game menu (issue #74): turns the menu
 // model back into the exact byte image the engine's own menu scripts have.
 //
-// ORACLE: IGI-RE, a verified C decompilation of retail IGI.exe. The engine's file
+// ORACLE: retail engine, a verified C decompilation of retail IGI.exe. The engine's file
 // producer is a three-stage chain, and this writer reproduces all three stages:
 //
 //   1. QSC source -> QVM assembler TEXT
@@ -52,7 +52,7 @@
 //
 // WHAT THE MENU MODEL MUST CARRY. The retail menu containers hold a script whose
 // top-level statements are N `Task_DeclareParameters` calls followed by ONE
-// `Task_New` (`docs/igi-re-parity/MENU_SYSTEM.md` sections 2 and 5). The widget
+// `Task_New` (`docs/parity/MENU_SYSTEM.md` sections 2 and 5). The widget
 // tree is the argument tree of that `Task_New`:
 //
 //   Task_New(id, type, name, <declared parameters...>, <child Task_New calls...>)

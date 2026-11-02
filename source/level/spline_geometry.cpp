@@ -1,5 +1,5 @@
 // spline_geometry.cpp - the engine's own road/bridge/rail geometry evaluation,
-// branch by branch from IGI-RE. See the header for the issue mapping (#79, #69),
+// branch by branch from retail engine. See the header for the issue mapping (#79, #69),
 // the oracle function list and the named divergences.
 //
 // The two functions that matter here are `spline_params` and `spline_point`

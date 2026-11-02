@@ -3,7 +3,7 @@
  * @brief   FNT (ILFF-based bitmap font) parser.
  *
  * The engine loads a .fnt through Sprite_Load 0x4B6720, FONT branch
- * (IGI-RE src/res/sprite.c:171-207):
+ * (retail engine src/res/sprite.c:171-207):
  *   - children of the root form are located with Chunk_FirstChild /
  *     Chunk_Find (src/res/chunk.c:17-32, :74-81);
  *   - FNTH (FontHeader, src/res/sprite.c:86-92): proportional(0), nframes(4),

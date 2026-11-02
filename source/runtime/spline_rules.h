@@ -1,5 +1,5 @@
 // spline_rules.h - the retail SplineObj / SplineObjWaypoint data model and the
-// curve the engine turns its control points into, resolved the way IGI-RE
+// curve the engine turns its control points into, resolved the way retail engine
 // resolves it.
 //
 // Two editor issues are answered here, and they are one family:
@@ -19,7 +19,7 @@
 //       interpolated between the two waypoints' Euler X angles - it is not a
 //       zero-roll frame, which is the fidelity gap #69 reports.
 //
-// Every rule below is cited to IGI-RE (`/Users/haseeb-mir/Documents/Code/IGI-RE`,
+// Every rule below is cited to retail engine (`the retail engine source`,
 // read-only), function + address + file:line. The oracle files this module is
 // built from:
 //
@@ -177,7 +177,7 @@ enum SplineObjWaypointParamIndex {
 // One row of an authored parameter table.
 struct SplineParamDesc {
     const char* authored_name;  // the retail Task_DeclareParameters string
-    const char* engine_field;   // the IGI-RE struct field the slot writes
+    const char* engine_field;   // the retail engine struct field the slot writes
     const char* type_name;      // the retail declared type
     int token_count;            // script arguments consumed
     bool has_range;             // whether Open registers a RangeI
@@ -195,7 +195,7 @@ const SplineParamDesc* SplineObjWaypointParamTable();
 // ---------------------------------------------------------------------------
 
 // The resolved parameters of one "SplineObj" container. Field names follow the
-// AUTHORED names, with the IGI-RE struct field in the comment, because two
+// AUTHORED names, with the retail engine struct field in the comment, because two
 // retail labels do not say what the field does ("Display waypoints" writes
 // `collide`; "Collision LOD" writes `unk20`, which the engine only clamps at
 // zero - `src/editobj/spline.c:316-317`).

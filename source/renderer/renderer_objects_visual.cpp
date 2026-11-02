@@ -11,7 +11,7 @@
 #include "runtime/smoke.h"
 #include "runtime/statgun_mount.h"
 // The AIStationaryGunHolder detection volume, ported from AIView_Contains
-// (HOOK 0x489960, IGI-RE src/levelflow/aidetect.c:282-305) and the gun it
+// (HOOK 0x489960, retail engine src/levelflow/aidetect.c:282-305) and the gun it
 // carries (AIStationaryGun 0x46EAE0, src/binocular/stationarygun.c:123-155).
 // Host-tested in tests/test_props_wire_interactables.cpp.
 #include "runtime/gunholder_view.h"
@@ -83,11 +83,11 @@ static void DrawLadderGizmoGeometry(const glm::mat3& frame, const glm::vec3& ori
 
 // ─── Pickup touch radius (GitHub issue #75) ──────────────────────────────────
 //
-// `radius()` (IGI-RE src/comprun/pickup.c:172-177) is
+// `radius()` (retail engine src/comprun/pickup.c:172-177) is
 //     VirModel_GetRadius(o->model) * max_scale(o)
 // and VirModel_GetRadius 0x4D0950 (src/lod/mesh3d.c:381-387) returns
 // `lod_header(vm->lods[0])->radius` - the MeshHeader.radius field
-// (IGI-RE src/model/modeltypes.h:21) - or kOne when there is no model at all
+// (retail engine src/model/modeltypes.h:21) - or kOne when there is no model at all
 // (mesh3d.c:88, `static const float kOne = 1.0f;`). A pickup whose model never
 // resolved keeps `model == NULL` (GunPickup_Changed's `if (m)
 // RigidDynCubeObj_SetModel(...)` guard, pickup.c:580-581; AmmoPickup_Changed
@@ -104,7 +104,7 @@ static void DrawLadderGizmoGeometry(const glm::mat3& frame, const glm::vec3& ori
 //   * inside it `radius` sits at +0x78: version 0x00, time[7] 0x04, format 0x20,
 //     data 0x24, unk28 0x28, coll 0x2C, center 0x30, sphere 0x3C, unk40[0x20]
 //     0x40, complexity 0x60, unk64[0x14] 0x64, radius 0x78
-//     (IGI-RE src/model/modeltypes.h:9-27, sizeof(MeshHeader) == 0x90).
+//     (retail engine src/model/modeltypes.h:9-27, sizeof(MeshHeader) == 0x90).
 //
 // A chunk that is absent, short or out of bounds yields
 // igi::kPickupNoModelRadius, i.e. the engine's own value for an object whose
@@ -254,7 +254,7 @@ void Renderer_Objects::DrawMagicObjSpheres(const std::vector<LevelObject>& objec
     // (the magicobj_ids_ / sphere_vao_ guards above).
     //
     // Each cylinder is the exact volume `touches()` accepts a toucher in
-    // (IGI-RE src/comprun/pickup.c:180-200), whose two entry points are
+    // (retail engine src/comprun/pickup.c:180-200), whose two entry points are
     // GenericPickup_Touch 0x46C630 (pickup.c:361-366) and GunPickup_Touch
     // 0x46D230 (pickup.c:599-616) — the addresses the issue cites. Nothing in
     // the game draws it.
@@ -317,7 +317,7 @@ void Renderer_Objects::DrawMagicObjSpheres(const std::vector<LevelObject>& objec
 
         const Mesh& mesh = GetOrLoadMesh(obj.modelId, obj.isBuilding);
         // Magic points 1, 2 and 3 are the activation reference, the foot and the
-        // head (IGI-RE src/props/ladder.c:86-87,155,164 and
+        // head (retail engine src/props/ladder.c:86-87,155,164 and
         // src/weapon/humanplayer.c:300,308); point 0 is unused by the ladder
         // handlers, which is why the shipped ladder MEFs carry four XTVM points.
         if (mesh.magicVertices.size() < 4) continue;
@@ -577,7 +577,7 @@ void Renderer_Objects::DrawAttachedMesh(const std::string& modelId, bool isBuild
 // A placed `StationaryGun` is not only its holder model: the engine creates a
 // Gun task for the authored `weapon` string and mounts it at the muzzle
 // (StationaryGun_Changed 0x474980 -> WeaponType_Find 0x413BD0 -> Gun_New
-// 0x477C50 -> StationaryGun_Aim 0x474420; IGI-RE src/statgun/statgun.c:310-339,
+// 0x477C50 -> StationaryGun_Aim 0x474420; retail engine src/statgun/statgun.c:310-339,
 // :225-272). StationaryGun_Aim composes
 //
 //     obj.matrix = baseMatrix * RotZ(outYaw)
@@ -657,7 +657,7 @@ void Renderer_Objects::DrawMountedStationaryGuns(const std::vector<LevelObject>&
 // ─── DrawSCameraLenses ───────────────────────────────────────────────────────
 // An SCamera is TWO engine objects: the holder/body task (its own `model`, QSC
 // arg 7) and an SCameraLens CHILD that SCamera_Create always creates —
-// `c->lens = Task_New(c, gLensType, NULL)` (IGI-RE src/scamera/scamera.c:204,
+// `c->lens = Task_New(c, gLensType, NULL)` (retail engine src/scamera/scamera.c:204,
 // SCamera_Create HOOK 0x4423F0). The child's model is the camera's authored
 // "Camera Model" (arg 10, `FIELD(lens_model)`, scamera.c:122), which
 // SCameraLens_ParamsChanged loads and places (HOOK 0x4420D0,
@@ -1048,7 +1048,7 @@ void main() {
 // shader/VAO/VBO in function-local statics and takes the Matrices UBO handles
 // from the caller — so it never reads or writes Renderer_Objects state.
 //
-// Everything drawn here is traceable to IGI-RE; the only presentation choices are
+// Everything drawn here is traceable to retail engine; the only presentation choices are
 // the line lengths/radii noted inline (the game has no gizmo, so it defines no
 // such constant).
 namespace {
@@ -1184,7 +1184,7 @@ void FlushGizmo(const GzBatch& b, GLuint prog, GLuint ubo_mats, GLuint ubo_bindi
     if (cull_was_enabled) glDisable(GL_CULL_FACE);
     // Default line width only: glLineWidth > 1 is not portable (core profile
     // allows just 1.0), which is why the wire gizmo is a line list rather than a
-    // thick quad strip. See docs/igi-re-parity/PROPS_WIRE_INTERACTABLES.md.
+    // thick quad strip. See docs/parity/PROPS_WIRE_INTERACTABLES.md.
     if (geometryEnd == 0) {
         glUniform4fv(glGetUniformLocation(prog, "u_color"), 1, glm::value_ptr(c0));
         glDrawArrays(GL_LINES, 0, (GLsizei)b.count());
@@ -1228,7 +1228,7 @@ void DrawPropsGizmos(const LevelObject& obj, GLuint ubo_mats, GLuint ubo_binding
     if (prog == 0) return;
 
     const glm::vec3 origin((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z);
-    // Authored IGI rotation: Rz * Ry * Rx (IGI-RE src/math/matrix.c:99-110
+    // Authored IGI rotation: Rz * Ry * Rx (retail engine src/math/matrix.c:99-110
     // Matrix_SetEuler, HOOK 0x4B38E0; the QSC Real32x9 block is parsed as three
     // Euler angles by ParamReal32x9_Parse, HOOK 0x4EFBA0).
     const glm::mat3 frame = glm::mat3(igi::IgiEulerRotationMatrix(obj.rot));
@@ -1266,7 +1266,7 @@ void DrawPropsGizmos(const LevelObject& obj, GLuint ubo_mats, GLuint ubo_binding
 
         // A sloped Wire is a zipline: Wire_IsSloped (0x43F8A0, wire.c:304-317) is
         // what HumanPlayer_StartAction case 9 tests to choose ziplineEnter
-        // (IGI-RE src/humanstate/humanstate.c:958-963).
+        // (retail engine src/humanstate/humanstate.c:958-963).
         if (span.isZipline) {
             const TaskSchemaNS::Props::Vec3 rd = TaskSchemaNS::Props::ZiplineRideDirection(
                 TaskSchemaNS::Props::Vec3(a.x, a.y, a.z), TaskSchemaNS::Props::Vec3(e.x, e.y, e.z));
@@ -1275,7 +1275,7 @@ void DrawPropsGizmos(const LevelObject& obj, GLuint ubo_mats, GLuint ubo_binding
                 d = glm::normalize(d);
                 // The first kWireEnd (0.75 m) of an anchor is not rideable and the
                 // rider hangs kZiplineDown (0.9 m) below the wire
-                // (IGI-RE src/weapon/humanplayer.c:136-138).
+                // (retail engine src/weapon/humanplayer.c:136-138).
                 const glm::vec3 enter = A + d * (float)TaskSchemaNS::Props::kWireEnd;
                 b.line(enter, enter - glm::vec3(0.0f, 0.0f, (float)TaskSchemaNS::Props::kZiplineDown));
                 // Downhill ride arrow (HumanPlayer_UpdateZipline flips d when
@@ -1300,7 +1300,7 @@ void DrawPropsGizmos(const LevelObject& obj, GLuint ubo_mats, GLuint ubo_binding
 
     // ── StationaryGun (player-mannable machinegun) ────────────────────────────
     // basePos args 3-5, baseMatrix args 6-8, maxPitch@11, minPitch@12,
-    // yawRange@13 (IGI-RE src/statgun/statgun.c:142-150).
+    // yawRange@13 (retail engine src/statgun/statgun.c:142-150).
     if (obj.type == "StationaryGun") {
         const TaskSchemaNS::Props::StationaryGunParams gp = obj.StatGunParams();
         if (!gp.valid) return;
@@ -1344,7 +1344,7 @@ void DrawPropsGizmos(const LevelObject& obj, GLuint ubo_mats, GLuint ubo_binding
 
     // ── AIStationaryGunHolder ────────────────────────────────────────────────
     // The authored params ARE the AI detector's view (GunHolder_Changed HOOK
-    // 0x46E7F0, IGI-RE src/comprun/gunholder.c:228-230):
+    // 0x46E7F0, retail engine src/comprun/gunholder.c:228-230):
     //   view.maxPitch = angleX * kDegToRad   // arg 10 "Viewcone Alpha"
     //   view.maxYaw   = angleY * kDegToRad   // arg 11 "Viewcone Gamma"
     //   view.range    = range  * 4096.0      // arg 12 "Viewcone Length", metres
@@ -1528,8 +1528,8 @@ bool RailPathGizmosEnabled() { return g_rail_path_gizmos_enabled; }
 // ─── DrawLadderGizmoGeometry ─────────────────────────────────────────────────
 // Viewport previews for the ladder contract of GitHub issue #68. The game draws
 // nothing of the sort: every line below is geometry that Ladder_Use (HOOK
-// 0x4404C0, IGI-RE src/props/ladder.c:122-175) and HumanPlayer_UpdateLadder
-// (HOOK 0x4113E0, IGI-RE src/weapon/humanplayer.c:273-340) actually act on,
+// 0x4404C0, retail engine src/props/ladder.c:122-175) and HumanPlayer_UpdateLadder
+// (HOOK 0x4113E0, retail engine src/weapon/humanplayer.c:273-340) actually act on,
 // resolved by TaskSchemaNS::Props::ComputeLadderPlacement (task_schema.h), which
 // carries the per-constant citations. The caller passes world-space points: the
 // activation reference, foot and head are magic points 1, 2 and 3.
@@ -1555,7 +1555,7 @@ static void DrawLadderGizmoGeometry(const glm::mat3& frame, const glm::vec3& ori
 
     // ── Activation volume ────────────────────────────────────────────────────
     // { |localX| < 2867.2, |localY| < 8192, origin.z < worldZ < reference.z }
-    // (IGI-RE src/props/ladder.c:133-138,157). The Z gate is a *world* Z test,
+    // (retail engine src/props/ladder.c:133-138,157). The Z gate is a *world* Z test,
     // not a local one, so the four corners of the local rectangle are extruded
     // straight up and clipped to that slab.
     GzBatch volume;
@@ -1580,7 +1580,7 @@ static void DrawLadderGizmoGeometry(const glm::mat3& frame, const glm::vec3& ori
 
     // ── Climb line ───────────────────────────────────────────────────────────
     // The authored foot -> head axis, the mount-to-mount path the player
-    // actually travels (IGI-RE src/weapon/humanplayer.c:304-314), and one tick
+    // actually travels (retail engine src/weapon/humanplayer.c:304-314), and one tick
     // per rung at kLadderRungSpacingUnits (src/props/ladder.c:52,86-91).
     GzBatch climb;
     climb.line(foot, head);
@@ -1623,7 +1623,7 @@ static void DrawLadderGizmoGeometry(const glm::mat3& frame, const glm::vec3& ori
 // ─── DrawPickupTouchVolume ───────────────────────────────────────────────────
 // Viewport preview of the volume the engine's pickup touch test accepts a
 // toucher in, for GitHub issue #75. The game draws nothing of the sort; every
-// line below is geometry `touches()` (IGI-RE src/comprun/pickup.c:180-200)
+// line below is geometry `touches()` (retail engine src/comprun/pickup.c:180-200)
 // actually tests, reached from GenericPickup_Touch 0x46C630 (pickup.c:361-366),
 // GunPickup_Touch 0x46D230 (pickup.c:599-616) and AmmoPickup_Touch 0x46D990
 // (pickup.c:734-749):

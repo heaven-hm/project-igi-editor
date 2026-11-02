@@ -6,7 +6,7 @@
  *          and the rule that drives the fill, exactly as the engine draws them.
  *
  * Everything here comes from ONE place: the engine's loading-screen code in
- * IGI-RE, the verified C decompilation of retail IGI.exe.  Each constant names
+ * retail engine, the verified C decompilation of retail IGI.exe.  Each constant names
  * the function, the HOOK address and the file:line that carries it.
  *
  *   src/loadscreen/loadscreen.c:18-23   struct LoadingScreen { total, done,
@@ -310,7 +310,7 @@ static_assert(kLevelResetStages[kLevelResetStageCount - 1].percent < 100,
 
 // ── how this was verified (2026-10-28) ──────────────────────────────────────
 // The i686 editor runs under Wine on this host through the GL 2.1 fallback
-// (docs/igi-re-parity/GL21_FALLBACK.md), so the overlay's own frames are
+// (docs/parity/GL21_FALLBACK.md), so the overlay's own frames are
 // observable in the editor's log with DEBUG logging on (`QEDLogLevel(0)` in the
 // staged `qedconfig.qsc`; `App::DrawProgressOverlay` logs one DEBUG line per
 // presented frame).  A startup run (`igi1ed.exe -level 1 -w 1280 -h 720`, game

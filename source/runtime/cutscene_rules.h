@@ -1,5 +1,5 @@
 // cutscene_rules.h - the authored cutscene camera timeline, resolved the way
-// IGI-RE resolves it (#80 "Intro/outro cutscenes").
+// retail engine resolves it (#80 "Intro/outro cutscenes").
 //
 // WHAT THIS IS FOR. The editor is a level/object editor, so the half of #80 it
 // needs is the AUTHORED camera/screen data model and the rule that turns it
@@ -9,14 +9,14 @@
 // filters, the leave-world teardown and the IntroScreen .avi screens are all
 // left out, and section "Out of scope" below says why for each.
 //
-// Everything here is cited to IGI-RE (`/Users/haseeb-mir/Documents/Code/IGI-RE`),
+// Everything here is cited to retail engine (`the retail engine source`),
 // which is the only evidence source used. The authored parameter names and
 // types come from the retail `Task_DeclareParameters("CutScene", ...)` and
 // `Task_DeclareParameters("EditCamera", ...)` lines, which ship inside every
 // OBJECTS.QVM that authors one and are also present as decompiled text in
 // `MISSIONS/location0/level1/objects.qsc:9-10` and `:4`.
 //
-// The IGI-RE files this module is built from:
+// the retail engine files this module is built from:
 //
 //   src/cutscene/cutscene.c   CutScene_Open 0x4F4B00 (the 14-parameter table,
 //                             the 0..20 time range, the 30 Hz tick rate),
@@ -34,7 +34,7 @@
 //   src/game/game.c:465       CutScene_SetTicksPerSecond(30)
 //   src/math/matrix.c         Matrix_SetEuler 0x4B38E0 (the editor already has
 //                             this as igi::IgiEulerRotationMatrix, see
-//                             docs/igi-re-parity/SCAMERA_PARAMS.md)
+//                             docs/parity/SCAMERA_PARAMS.md)
 //   src/dxinit/dxinit.h:21-34 x87_fistp (fistpll) and x87_eq
 //
 // Named divergences (never silently fixed):
@@ -61,7 +61,7 @@
 namespace igi {
 
 // ---------------------------------------------------------------------------
-// Engine constants. Every one is IGI-RE DATA.
+// Engine constants. Every one is retail engine DATA.
 // ---------------------------------------------------------------------------
 
 constexpr double kCutScenePi = 0x1.921fb54442d1bp+1;    // cutscene.c:139 kPi
@@ -118,7 +118,7 @@ constexpr int kCutSceneScreenTokenCount = 21;
 // ObjectPos/Real32x9/RGB, 1 for every scalar and string).
 struct CutSceneParamDesc {
     const char* authored_name;  // the retail declaration string
-    const char* engine_field;   // the IGI-RE struct field the slot writes
+    const char* engine_field;   // the retail engine struct field the slot writes
     const char* type_name;      // the retail declared type
     int token_index;            // first script-argument index in argTokens
     int token_count;            // script arguments consumed
@@ -142,7 +142,7 @@ const CutSceneParamDesc* CutSceneScreenParamTable();
 // ---------------------------------------------------------------------------
 
 // One authored EditCamera key. Field names follow the AUTHORED names where the
-// two disagree, and the IGI-RE struct field is named in the comment.
+// two disagree, and the retail engine struct field is named in the comment.
 //
 // `filter_name` is `EditCamera.filterName` (an EnumString32 whose constants are
 // every "CAMERAFILTER_TYPE_.*" symbol, editcamera.c:72-73); `filter` is the
@@ -456,7 +456,7 @@ bool EvaluateCutScene(const std::vector<CutSceneKey>& keys, float end,
 //   * MenuManager_RequestScreen 0x4174A0 (src/game/menumanager.c:216-224) is
 //     four lines that set `mm->screen`, `nextState` and `state`; the triage
 //     entry that pointed #80 at it was pointing at the menu system, which #74
-//     already ported (docs/igi-re-parity/MENU_SYSTEM.md). It sequences screens,
+//     already ported (docs/parity/MENU_SYSTEM.md). It sequences screens,
 //     not cameras.
 
 }  // namespace igi

@@ -303,10 +303,10 @@ std::filesystem::path AudioAssetResolver::ExtractPackedSound(
 
         // A packed retail sound is an "ILSF" sample, not a RIFF/WAVE file: the
         // 15 MB COMMON/SOUNDS/SOUNDS.RES holds 333 of them (see
-        // docs/igi-re-parity/SOUND.md and source/runtime/igi_sound_bank.h). A
+        // docs/parity/SOUND.md and source/runtime/igi_sound_bank.h). A
         // RIFF header is what PlaySoundA and MCI's waveaudio device need, so the
         // sample is converted here. The conversion is the engine's own format
-        // work - the header fields and the IMA ADPCM decoder come from IGI-RE -
+        // work - the header fields and the IMA ADPCM decoder come from retail engine -
         // and a file that is already RIFF is passed through untouched.
         if (resource_data.size() >= 4 &&
             std::memcmp(resource_data.data(), "ILSF", 4) == 0) {

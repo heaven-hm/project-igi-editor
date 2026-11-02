@@ -1,5 +1,5 @@
 // rain_rules.h - the retail weather-particle rules of IGI's "Rain" task, extracted
-// from IGI-RE as pure arithmetic.
+// from retail engine as pure arithmetic.
 //
 // WIRED. source/renderer/renderer_rain.cpp is the editor's transcription of the
 // engine's Rain task: the same 80-drop pool, the same tile lattice and cell
@@ -9,8 +9,8 @@
 // invented constants. The rules are also executable, tested arithmetic rather
 // than prose, so the editor cannot silently drift back to a private model.
 //
-// Every constant and every rule below is cited to IGI-RE
-// (/Users/haseeb-mir/Documents/Code/IGI-RE), function + address + file:line.
+// Every constant and every rule below is cited to retail engine
+// (the retail engine source), function + address + file:line.
 // open-igi (C#) is not an authority and was not consulted.
 //
 // Two distinct precipitation systems exist in the oracle:
@@ -20,7 +20,7 @@
 //   * `RainObj_*`        - HOOK 0x4F65E0.., src/cutscene/rain.c. A world-space
 //     DynCube volume with its own 11-parameter schema ("RainDynCubeObj"). A
 //     different feature; not ported here.
-// IGI-RE contains NO symbol named `Snow`; `Rain_New`'s `snow` flag (rain.c:153)
+// retail engine contains NO symbol named `Snow`; `Rain_New`'s `snow` flag (rain.c:153)
 // is the only snow path, selected by the authored "Is Rain" == FALSE.
 #pragma once
 
@@ -32,7 +32,7 @@
 namespace igi::rain {
 
 // ---------------------------------------------------------------------------
-// Engine constants. Every one is IGI-RE DATA at the address shown.
+// Engine constants. Every one is retail engine DATA at the address shown.
 // ---------------------------------------------------------------------------
 
 // Game units per metre (mathvars.h:6-7 `extern const float k4096`; rain.c:675-676
@@ -144,7 +144,7 @@ constexpr float kRainLevelMax = 1.0f;
 //
 // Derived and test-pinned: the bit trick yields an ARGB colour whose alpha byte
 // is exactly trunc(alpha * 255), and whose RGB is white. See
-// docs/igi-re-parity/RAIN.md section 3 for the derivation.
+// docs/parity/RAIN.md section 3 for the derivation.
 int AlphaByte(float authored_alpha);
 
 // ---------------------------------------------------------------------------
@@ -291,7 +291,7 @@ AuthoredRainEffect ParseRainEffect(const std::string& type,
 // R7 - SNOW. There is no snow system: snow is rain's `snow` flag set.
 // ---------------------------------------------------------------------------
 //
-// IGI-RE contains no symbol named `Snow`. `Rain_New`'s third argument becomes
+// retail engine contains no symbol named `Snow`. `Rain_New`'s third argument becomes
 // `r->snow = rain == 0` (rain.c:153) and every snow difference is a branch on
 // that one field. The authored selector is the `Is Rain` bool8 parameter
 // (fxobj/rain.c:77), fed from `RainEffect::unk24` at fxobj/rain.c:141, so the
@@ -311,7 +311,7 @@ AuthoredRainEffect ParseRainEffect(const std::string& type,
 //
 // Rain and snow share everything else: the same pool, accumulator, tile lattice,
 // 6 m wrap band, 18 m draw band, ground probe, fade, vertex groups, blend and
-// clip states. See docs/igi-re-parity/SNOW.md.
+// clip states. See docs/parity/SNOW.md.
 
 // rain.c:153 `r->snow = rain == 0`, where `rain` is the authored `Is Rain` bool
 // (fxobj/rain.c:141). Returns true when the object is a snow emitter.
@@ -410,7 +410,7 @@ int SnowTextureStageArgCountWithTexture();
 int SnowTextureStageArgCountWithoutTexture();
 
 // One row per site where `snow` changes a Rain_* rule. Addresses are the IGI.exe
-// HOOK addresses; citations are IGI-RE file:line.
+// HOOK addresses; citations are retail engine file:line.
 struct SnowRuleDifference {
     const char* rule;
     const char* function;

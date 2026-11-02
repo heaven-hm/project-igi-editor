@@ -17,7 +17,7 @@
  *   LANGUAGE/<lang>/MESSAGES.RES, not objectives.res. The editor was looking in
  *   the wrong archive.
  *
- * ENGINE ORACLE (IGI-RE, decompiled retail IGI.exe)
+ * ENGINE ORACLE (retail engine, decompiled retail IGI.exe)
  *   StatusMessageScreen_AddMessage 0x486650  src/mission/statusmessage.c:653-656
  *       if (strlen(m->text) < 0x80 && Resource_Find(m->text)) {
  *           char *text = Resource_Load(m->text, NULL);

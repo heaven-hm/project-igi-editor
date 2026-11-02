@@ -177,7 +177,7 @@ TEST(EditorQuickActions48, CameraTripleTextIsCopyPasteableAndUnlabelled) {
 //   Anim_SetSpeed        0x4D6580  src/boneobj/anim.c:172-179
 // and the end test / wrap / reverse branch the step reproduces are
 // `BoneObj_AnimEventsCB`'s (boneobj.c:892-937), documented in
-// docs/igi-re-parity/ANIMATION.md §5.
+// docs/parity/ANIMATION.md §5.
 
 TEST(AnimFrameStep73, OneFrameIsTicksPerFrameTimesSpeed) {
     // 4800/30 = 160 ticks at the 30 fps the game installs

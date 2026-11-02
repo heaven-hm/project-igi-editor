@@ -13,7 +13,7 @@
 //      the header check and is then misread.  This is not hypothetical: a
 //      third-party level archive on this machine ships 102 QVM files with
 //      `version = 8, unk08 = 7` whose code sections do not decode at all —
-//      see docs/igi-re-parity/NEO_REMASTERED.md for the measurement.
+//      see docs/parity/NEO_REMASTERED.md for the measurement.
 //
 //   2. THE v11 TEXTURE FORMAT 0x43.  `D3DTex_DownloadTexture` HOOK 0x50AD10
 //      (src/sysmisc/d3dtex.c:411-432) has a `case 0x43` that goes through

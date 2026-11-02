@@ -9,7 +9,7 @@
  * constant, so it never scaled with the field of view. This header carries the
  * engine's rule so the editor can.
  *
- * Oracle: IGI-RE (decompilation of retail IGI.exe).
+ * Oracle: retail engine (decompilation of retail IGI.exe).
  *   QCube_Begin        HOOK 0x4D2540  src/lod/qcube.c:319-345
  *   QCube_SetDetail    HOOK 0x4D2C20  src/lod/qcube.c:567-571
  *   gQCubeDetail       DATA 0x54844C  src/lod/qcube.c:578        (INIT 115)
@@ -19,7 +19,7 @@
  *   setup_view         (in TerrainMesh_Update HOOK 0x50FE60)
  *                                      src/glowmesh/terrainmesh.c:329-360
  *
- * See docs/igi-re-parity/TERRAIN_LOD.md for the full trace.
+ * See docs/parity/TERRAIN_LOD.md for the full trace.
  *****************************************************************************/
 #pragma once
 

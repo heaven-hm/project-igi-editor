@@ -7,7 +7,7 @@
 // that Smoke_Changed builds. It is pure logic -- no GL, no level, no Windows --
 // so the host lane can step it and assert on it.
 //
-// The two IGI-RE functions it is a transcription of:
+// The two retail engine functions it is a transcription of:
 //
 //   Smoke_Run         HOOK 0x437DB0  src/fxobj/smoke.c:298-339
 //   Particle2D_Run    HOOK 0x4FD660  src/graphtask/particle.c:264-305

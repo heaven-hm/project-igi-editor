@@ -36,7 +36,7 @@ SetEventBinding("CameraStrafeRight",                        "<D>");
 //     (source/app_input_keyboard.cpp:466-471).
 //   CameraStrafe (<Alt><Shift><Space>) — strafing is the two continuous held
 //     bindings CameraStrafeLeft/Right above; a bare "strafe" has no path.
-// See docs/igi-re-parity/KEYBINDINGS.md.
+// See docs/parity/KEYBINDINGS.md.
                                                             
 // Tasks                                                    
 SetEventBinding("TaskMoveUp",                               "<Shift><PageUp>");
@@ -62,7 +62,7 @@ SetEventBinding("TaskMakeTemplate",                         "<Ctrl><M>");
 SetEventBinding("TaskSortChildren",                         "<Shift><F5>");
 
 // Animtask — removed in #48. This editor has no animation-task timeline,
-// keyframe recorder, playback sync or anim camera window, and IGI-RE (which
+// keyframe recorder, playback sync or anim camera window, and retail engine (which
 // decompiles IGI.exe only, never the QED editor) has no counterpart to define
 // their behaviour, so the bindings were advertised but could never act. Removed:
 //   AnimTaskIncreaseKeyframeInterpolation <F8>, AnimTaskDecreaseKeyframeInterpolation
@@ -74,7 +74,7 @@ SetEventBinding("TaskSortChildren",                         "<Shift><F5>");
 // retail table is implemented under the Timer names below — QED.doc documents
 // F12 / Shift F12 as "Increment / Decrement AnimTask speed"; the keyframe
 // *interpolation* half (F8 / Shift F8) has no keyframe editor here and stays
-// removed. See docs/igi-re-parity/KEYBINDINGS.md.
+// removed. See docs/parity/KEYBINDINGS.md.
 
 // Timer — implemented in #48 against the editor's one playback clock. QED.doc,
 // "General keystrokes": "Ctrl R  Reset timer", "Ctrl T  Timer Start / Stop",

@@ -17,7 +17,7 @@
 // ─── Rotor attachment classification (TASKTYPE_ROTOR) ────────────────────────
 // Every ATTA record name is a magic-object name: the game walks a model's ATTA
 // records, looks each name up in the DefineMagicObj table and creates a task of
-// that definition's type (IGI-RE `src/magicobj/rigidcoll.c:385-434`,
+// that definition's type (retail engine `src/magicobj/rigidcoll.c:385-434`,
 // `src/shadow/sector.c:540-560`). The retail MAGICOBJ.QVM defines exactly six
 // names as TASKTYPE_ROTOR — 700_02_1, 700_03_1, 700_04_1, 711_01_1, 711_02_1
 // and 712_01_1 (verified against the shipped file; `DefineMagicObj` itself is
@@ -49,7 +49,7 @@ static const std::set<std::string>& RotorAttachmentIds() {
 // ─── Magic-object model resolution (issue #67) ───────────────────────────────
 // The engine spawns `def->model` for an ATTA record, not the record's name:
 // `arg.model = def->model` before the task is created
-// (IGI-RE `src/shadow/sector.c:667`, `src/magicobj/rigidcoll.c:484`), and the
+// (retail engine `src/shadow/sector.c:667`, `src/magicobj/rigidcoll.c:484`), and the
 // attachment name is only ever used to look the definition up by exact strcmp
 // (`src/shadow/sector.c:656-658`). On the retail MAGICOBJ.QVM every definition
 // has `model == name` (measured: 374 of 374), so this resolves to the
@@ -75,7 +75,7 @@ const igi::MagicObjectRegistry& MagicObjectTable() {
 }
 
 // The model an attachment spawns, or the attachment name when the table has no
-// entry for it (the engine warns and skips such a record: IGI-RE
+// entry for it (the engine warns and skips such a record: retail engine
 // `src/shadow/sector.c:659-663`; the editor keeps drawing the name it always
 // drew rather than dropping the node).
 std::string MagicObjectModelId(const std::string& attachmentName) {
@@ -86,7 +86,7 @@ std::string MagicObjectModelId(const std::string& attachmentName) {
 
 // ─── DrawMountedSentryGuns ──────────────────────────────────────────────────
 // A placed `AIStationaryGunHolder` is not one model. GunHolder_Changed
-// (HOOK 0x46E7F0, IGI-RE src/comprun/gunholder.c:223-224) gives it an attached
+// (HOOK 0x46E7F0, retail engine src/comprun/gunholder.c:223-224) gives it an attached
 // MagicObjContainer built from the holder MODEL's ATTA records
 // (RigidDynCubeObj_CreateMagicObjs 0x4C4950, src/magicobj/rigidcoll.c:381-434:
 // each record's NAME is looked up in the DefineMagicObj table and a task of that
@@ -1410,7 +1410,7 @@ void Renderer_Objects::DrawAttachmentsRecursive(
 
         // Child world transform: child_world = parent_world * child_local, with the
         // child's world position = parent_pos + parent_rot * ATTA pos. See
-        // renderer/atta_children.h (IGI-RE src/magicobj/rigidcoll.c:399-450).
+        // renderer/atta_children.h (retail engine src/magicobj/rigidcoll.c:399-450).
         // ATTA px/py/pz are raw floats in the same raw game units as obj.pos, and
         // parentWorldMat is unscaled (translate + rotate), so no conversion is needed.
         const float attPos[3] = {att.px, att.py, att.pz};
@@ -1420,7 +1420,7 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         const glm::mat4 childWorldMat = igi::IgiAttaChildWorld(parentWorldMat, attPos, attMat);
 
         auto recurse_children = [&]() {
-            // In IGI-RE, child attachment expansion only recurses if the child is a
+            // in retail engine, child attachment expansion only recurses if the child is a
             // sector (model has portals; src/shadow/sector.c:673-676) or if its task
             // type create handler calls RigidDynCubeObj_CreateMagicObjs
             // (src/magicobj/rigidcoll.c:383-496, igi::MagicObjectTypeChildExpansion).
@@ -1454,9 +1454,9 @@ void Renderer_Objects::DrawAttachmentsRecursive(
         // Rotor preview (TASKTYPE_ROTOR attachments). The retail game spins a
         // Rotor magic object about its own local X axis, post-multiplied, and only
         // for the DRAWING copy — the frame its children inherit stays unspun. See
-        // renderer/atta_children.h (IGI-RE src/rotor/rotor.c:139-152, :180-181).
+        // renderer/atta_children.h (retail engine src/rotor/rotor.c:139-152, :180-181).
         // Classification comes from MAGICOBJ.QVM, not from the parent object's
-        // type (IGI-RE src/magicobj/rigidcoll.c:385-434).
+        // type (retail engine src/magicobj/rigidcoll.c:385-434).
         glm::mat4 drawWorldMat = childWorldMat;
         if (RotorAttachmentIds().count(att.modelId) > 0) {
             // Preview rate only: the retail rate is `dir * speed * car speed`, with

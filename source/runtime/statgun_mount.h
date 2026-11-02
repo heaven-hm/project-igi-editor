@@ -74,7 +74,7 @@
  * The arithmetic here is double; the engine stores float, so a caller that
  * needs the engine's exact bits must round to float. Angles are radians.
  *
- * Oracle: /Users/haseeb-mir/Documents/Code/IGI-RE (read-only). Every constant
+ * Oracle: the retail engine source (read-only). Every constant
  * and every operation below cites its function + address + file:line.
  *****************************************************************************/
 

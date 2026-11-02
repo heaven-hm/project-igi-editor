@@ -170,7 +170,7 @@ bool IsHumanShadowOwner(const std::string& type) {
     // (human.c:357-358) through TaskType_New's handler-row copy (task.c:397-398).
     //
     // "HumanSoldierFemale" is the editor's defensive name for the female soldier
-    // variant (IGI-RE declares the struct at src/soldier/soldiertypes.h:102 and the
+    // variant (retail engine declares the struct at src/soldier/soldiertypes.h:102 and the
     // binary carries its state tables, src/addr.c:456-457) -- it is a
     // HumanSoldier-family soldier, so if the editor ever holds one it is a shadow
     // owner too. No retail level declares it: the 7 shipped levels declare

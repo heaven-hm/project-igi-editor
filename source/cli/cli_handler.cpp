@@ -19,7 +19,7 @@ bool CLIHandler::IsCLICommand(int argc, char **argv) {
   // inline duplicate of the test would be a second copy that nothing checks:
   // mef_writer::IsImportMefInvocation is what tests/test_mef_import.cpp covers,
   // and calling it makes that coverage apply to the real dispatch.  See
-  // docs/igi-re-parity/MEF_IMPORT.md section 10.1.
+  // docs/parity/MEF_IMPORT.md section 10.1.
   if (mef_writer::IsImportMefInvocation(argc, argv)) {
     return true;
   }

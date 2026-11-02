@@ -5,7 +5,7 @@
 // `lod_select`'s format/sphere/complexity, plus the `radius` that
 // VirModel_GetRadius returns and the pickup touch range is built from.
 //
-// IGI-RE (faithful decompilation of retail IGI.exe):
+// retail engine (faithful decompilation of retail IGI.exe):
 //
 //   MeshHeader (src/model/modeltypes.h:8-28, _Static_assert(sizeof == 0x90)):
 //       float version;        /* 0x00 */
@@ -37,7 +37,7 @@
 //       feq(mh->version, file->version)     -> conjunct 2           (lightmapbuild.c:63)
 //       DateTime_Compare(mh->time, file->time) < 0 -> conjunct 3    (lightmapbuild.c:64)
 //
-//   `time` is read ONLY there in IGI-RE (`grep -rn "mh->time" src/` matches
+//   `time` is read ONLY there in retail engine (`grep -rn "mh->time" src/` matches
 //   lightmapbuild.c:64 alone); the engine never writes it, so the seven ints are
 //   authored by the model tool that produced the .mef, in DateTime_Get's order
 //   (year, month, day, hour, minute, second, ms -- src/terredit/datetime.c:16-26).

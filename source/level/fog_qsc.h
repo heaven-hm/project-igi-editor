@@ -10,7 +10,7 @@
  * only bridge: LoadFogInfo is its only editor caller, and
  * tests/test_mission_fog_wiring.cpp drives it over the retail corpus.
  *
- * Oracle: IGI-RE. The declared parameter order comes from GlobalLight_Open's
+ * Oracle: retail engine. The declared parameter order comes from GlobalLight_Open's
  * ParamTable (src/animcam/globallight.c:264-285) -- "Fog color terrain" is
  * parameters 4..6 and "Fog density terrain" is parameter 7, so with the three
  * leading Task_New arguments (id, type, name) they are QSC args 7..9 and 10.

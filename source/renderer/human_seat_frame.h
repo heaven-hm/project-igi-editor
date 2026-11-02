@@ -15,7 +15,7 @@
  *   other human with the mesh's FEET at the authored position instead, which is
  *   a different frame 3990.4 raw units (0.974 m) lower.
  *
- * ENGINE BASIS (IGI-RE, /Users/haseeb-mir/Documents/Code/IGI-RE, read-only)
+ * ENGINE BASIS (retail engine, the retail engine source, read-only)
  *
  *   * The pose puts the root bone AT THE OBJECT'S ORIGIN:
  *     `BoneObj_Update` HOOK 0x4D38C0 (`src/boneobj/boneobj.c:371-419`) poses
@@ -121,7 +121,7 @@ inline bool IsVehicleSeatedAnimation(int anim) {
 
 // True when `objects[index]` is a human whose PARENT CHAIN contains a vehicle
 // task, OR whose HumanAI child attaches to an AIGraph that is parented to a vehicle
-// (IGI-RE Human_ProbeGround 0x462390 in src/humanbase/human.c:1746-1750: path = ai->graph;
+// (retail engine Human_ProbeGround 0x462390 in src/humanbase/human.c:1746-1750: path = ai->graph;
 //  if (path->attached) Human_SetPlatform(h, path->task.parent);).
 // The walk is bounded, so a malformed parent cycle cannot hang a draw pass.
 template <typename ObjectList>

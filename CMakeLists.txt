@@ -436,7 +436,7 @@ add_executable(igi_tests
     tests/test_seated_human.cpp
     tests/test_props_wire_interactables.cpp
     # A placed StationaryGun's MOUNTED WEAPON: the gun-matrix x mount-local-matrix
-    # product of StationaryGun_Aim 0x474420 (IGI-RE src/statgun/statgun.c:241-258)
+    # product of StationaryGun_Aim 0x474420 (retail engine src/statgun/statgun.c:241-258)
     # against an independent transcription of the same oracle lines, plus the
     # shipped LEVEL4 record and the retail WEAPONS/*/WEAPON.QVM model arguments.
     # NEW FILE.

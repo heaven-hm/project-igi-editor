@@ -16,7 +16,7 @@
  * CutScene + EditCamera task data the editor already parses into the timeline
  * `cutscene_rules` evaluates, so the camera path has ONE rule.
  *
- * Everything here is cited to IGI-RE (`/Users/haseeb-mir/Documents/Code/IGI-RE`,
+ * Everything here is cited to retail engine (`the retail engine source`,
  * read-only), which is the only evidence source used:
  *
  *   src/cutscene/cutscene.c  CutScene_Open         0x4F4B00 (:227) the screen table
@@ -33,10 +33,10 @@
  * this header adds only the authored-object -> timeline step and the tick.
  *
  * Relationship to #74's menu work: none. `MenuManager_RequestScreen` 0x4174A0
- * sequences MENU SCREENS (docs/igi-re-parity/MENU_SYSTEM.md); the cutscene
+ * sequences MENU SCREENS (docs/parity/MENU_SYSTEM.md); the cutscene
  * camera is the CutScene task driving EditCamera keys, which is what this
  * module resolves. The triage entry that pointed #80 at `MenuManager_*` was a
- * red herring (docs/igi-re-parity/CUTSCENES.md section 8).
+ * red herring (docs/parity/CUTSCENES.md section 8).
  *
  * Out of scope, deliberately, and why (the full list is in cutscene_rules.h):
  *   * the run/reset/speed EXPRESSION gating (`CutScene_RunHandler` 0x4F51D0) --
@@ -124,7 +124,7 @@ struct AuthoredCameraKeyObject {
     int parent_index = -1;   // the parent's index in the SAME list; -1 for a root
     std::string type;        // the task type, e.g. "CutScene" / "EditCamera"
     std::vector<std::string> arg_tokens;
-    // Editor-only tombstone. IGI-RE has no equivalent: a retail task either
+    // Editor-only tombstone. retail engine has no equivalent: a retail task either
     // exists in the compiled data or does not. A deleted object is skipped
     // together with its whole subtree, so deleting a key cannot leave its
     // children to be spliced into the timeline at the wrong place.

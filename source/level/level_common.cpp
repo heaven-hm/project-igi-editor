@@ -8,7 +8,7 @@
 #include "logger.h"
 #include <string>
 
-// Reader_ReadLine, HOOK 0x4BEFE0, src/qsc/reader.c:36-111 (IGI-RE).
+// Reader_ReadLine, HOOK 0x4BEFE0, src/qsc/reader.c:36-111 (retail engine).
 //
 // The engine's line reader is the only place the QSC format has comments: its
 // strip block (reader.c:80-109) ends the line at the first "//".  The quoted

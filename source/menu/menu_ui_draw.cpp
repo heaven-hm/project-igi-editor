@@ -7,7 +7,7 @@
  *   source/runtime/pause_menu_font.*     the two bitmap fonts and their metrics
  *   source/renderer/renderer_draw.cpp    the panel/border/text idiom this follows
  *
- * ORACLE (IGI-RE) for the retail parts:
+ * ORACLE (retail engine) for the retail parts:
  *   src/widget/menuwindow.c:366+  MenuWindow_DrawEnd HOOK 0x424980 -- focused
  *                                 windows outline with r=b=0.5, g=1.0, unfocused
  *                                 with r=b=0, g=1.

@@ -3,7 +3,7 @@
  * @brief   Texture-id policy of ApplyTexturesToMesh: the AI opaque-body
  *          preference and the model-name-as-texture-id guess.
  *
- * IGI-RE is the oracle for both rules. A model's texture list IS its own MTP
+ * retail engine is the oracle for both rules. A model's texture list IS its own MTP
  * INST record's GTT list, and the engine loads exactly the ids that list names:
  *
  *   src/model/model.c:271-314  ModelFile_Setup, HOOK(0x4CF080):

@@ -981,7 +981,7 @@ void App::CommitPropTextEdit() {
 
 	// A StationaryGun's "Weapon" field (ParamTable slot 3, arg@10) selects the
 	// weapon model the engine mounts on the gun (StationaryGun_Changed 0x474980,
-	// IGI-RE src/statgun/statgun.c:331-336 -> WeaponType_Find 0x413BD0 ->
+	// retail engine src/statgun/statgun.c:331-336 -> WeaponType_Find 0x413BD0 ->
 	// `wt->key` at gun.c:506). Re-resolve on commit so the viewport shows the
 	// newly authored weapon immediately instead of after a reload.
 	if (obj.type == "StationaryGun") {
@@ -1293,7 +1293,7 @@ void App::PromoteAttaToObject(int entry) {
 	// back to local coordinates and patches the bytes directly in the MEF binary.
 	// No renaming, no QSC tasks, no game-engine warnings.
 	// Extract the authored Euler triple from the captured world rotation with the
-	// engine's own decomposition. IGI-RE `Matrix_GetEuler` (HOOK 0x4B3C50,
+	// engine's own decomposition. retail engine `Matrix_GetEuler` (HOOK 0x4B3C50,
 	// src/math/matrix.c:181-208) is the inverse of `Matrix_SetEuler`'s Rz*Ry*Rx;
 	// this site used an Rz*Rx*Ry extraction, so a promoted ATTA child inherited
 	// the wrong orientation whenever the parent had more than one authored axis.

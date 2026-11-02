@@ -623,7 +623,7 @@ private:
   // host-portable translation units: the host gtest lane compiles without a PCH
   // and therefore without `windows.h`, which is why 11 of the 13 engine sources
   // the lane could not compile all failed on this one block (see
-  // `docs/igi-re-parity/BUILD_GATE.md` §5.3). On Windows the members keep their
+  // `docs/parity/BUILD_GATE.md` §5.3). On Windows the members keep their
   // real Win32 types; elsewhere they are declared as opaque pointers/longs so the
   // header itself still compiles. This is a type-level portability shim only:
   // nothing in the host lane launches or monitors a process, and any translation

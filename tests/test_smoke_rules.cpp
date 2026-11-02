@@ -1,6 +1,6 @@
 // test_smoke_rules.cpp - the retail "Smoke" emitter, pure-logic port (#43).
 //
-// The oracle for every number here is IGI-RE (read-only). Key citations:
+// The oracle for every number here is retail engine (read-only). Key citations:
 //   fxobj/smoke.c:125-193      Smoke_Init 0x437510: the 21-parameter ParamTable,
 //                              the ranges, the four sprites
 //   fxobj/smoke.c:212-247      Smoke_Create 0x437B90: the defaults, and

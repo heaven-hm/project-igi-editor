@@ -12,7 +12,7 @@
 // ─── LOD virtual-model chains (issue #62) ────────────────────────────────────
 // Four pieces, all of them the engine's:
 //   1. an exact-name existence predicate over the editor's loaded model set
-//      (ModelLod_Find's strcmp, IGI-RE src/model/model.c:165-178);
+//      (ModelLod_Find's strcmp, retail engine src/model/model.c:165-178);
 //   2. the chain itself (VirModel_InitLods' rule, src/model/model.c:145-163);
 //   3. the per-frame switch — BOTH branches of `lod_select`
 //      (src/lod/mesh3d.c:161-208), ported in source/lod/lod_select.h, which
@@ -95,7 +95,7 @@ bool Renderer_Objects::GetAuthoredLodDistances(const std::string& modelId, float
 namespace {
 
 // The level-wide `LODSettings` task after `LODSettings_Changed`
-// (IGI-RE src/animtrig/lodsettings.c:129-137): gLodRange, gLodBlend and the six
+// (retail engine src/animtrig/lodsettings.c:129-137): gLodRange, gLodBlend and the six
 // gLod*Detail / gLod*Cull globals that `lod_select`'s complexity branch reads
 // (src/lod/mesh3d.c:187,196,205). Read from <IGI>/lod.qvm, the same file
 // EnsurePortalDistancesLoaded parses for the per-model tables.
@@ -157,7 +157,7 @@ std::vector<uint8_t> ReadFileBytes(const std::string& path) {
 
 int Renderer_Objects::SelectLodForDistance(const std::string& modelId, bool isBuilding,
                                            float fov, float dist, float radius, float k) {
-    // The chain is what `ModelObj_GetLOD` walks (IGI-RE src/lod/mesh3d.c:209-227).
+    // The chain is what `ModelObj_GetLOD` walks (retail engine src/lod/mesh3d.c:209-227).
     //
     // A model with NO chain must still be DRAWN, at LOD 0.  lod_select
     // (src/lod/mesh3d.c:161-208) with `lod_count == 0` computes n = 0, so both loops are
@@ -332,7 +332,7 @@ float Renderer_Objects::GetMeshHeaderRadius(const std::string& modelId, bool isB
 const igi::lod::MefMeshHeader& Renderer_Objects::GetLod0MeshHeader(const std::string& modelId) {
     // The per-frame LOD switch in Renderer_Objects::Draw needs three words out of
     // LOD 0's MeshHeader -- `valid`, `center` and `sphere` (the reference point
-    // and bounding radius of ModelObj_GetLOD, IGI-RE src/lod/mesh3d.c:220-224).
+    // and bounding radius of ModelObj_GetLOD, retail engine src/lod/mesh3d.c:220-224).
     // Reading them is a .res entry read: FindMeshData builds the archive-identity
     // key, walks the loaded indexes and RES_ReadEntry seeks and reads the whole
     // .mef off disk.  The draw path did that once per object per pass per frame,

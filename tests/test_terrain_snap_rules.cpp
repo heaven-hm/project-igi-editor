@@ -7,7 +7,7 @@
 // real level the gate left every placed AI unsnapped -- the report's own log:
 //     [App] Snap complete. snapped=0 skipped=1843 no_terrain=26
 //
-// ORACLE (IGI-RE, read-only):
+// ORACLE (retail engine, read-only):
 //   game/misc.c:75-97      Game_DropToGround HOOK 0x4149B0: probe DOWN by
 //                          1,638,400 units (:82, :87), then UP (:88-92), then
 //                          `return` with pos untouched on a second miss (:92-95).

@@ -3,7 +3,7 @@
  * @brief   Host-portable transcription of the ENGINE's Z for a human that has
  *          an AI controller, used by App::SnapObjectsToTerrain.
  *
- * THE ENGINE RULE (IGI-RE, /Users/haseeb-mir/Documents/Code/IGI-RE, read-only)
+ * THE ENGINE RULE (retail engine, the retail engine source, read-only)
  *   Human_ProbeGround HOOK 0x462390 (src/humanbase/human.c:1676-1857) splits on
  *   `h->ai` at :1697:
  *

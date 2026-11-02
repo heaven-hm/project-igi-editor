@@ -37,7 +37,7 @@ Apple's legacy profile is the only OpenGL context Wine offers on macOS.  It
 reports GL_VERSION "2.1 Metal - 89.3" and GLSL 1.20, and Wine returns NULL for
 both a 4.1 core and a 4.1 compatibility context request, so the shaders/41 and
 shaders/45 tiers can never compile there.  A probe of that context under Wine
-11.0 (docs/igi-re-parity/GL21_FALLBACK.md) reported:
+11.0 (docs/parity/GL21_FALLBACK.md) reported:
 
     glGenVertexArrays / glBindVertexArray / glDeleteVertexArrays   NULL
     GL_APPLE_vertex_array_object                                   YES
@@ -130,7 +130,7 @@ static void LegacyUploadUboToCurrentProgram(const legacy_ubo_s& ubo) {
 // is NULL on a 2.1 context; the GL 1.0 glDepthRange takes the same arguments as
 // doubles.  A probe of every GL entry point this source calls found this to be
 // the only NULL one not already guarded by support_version_45_ or emulated
-// above.  See docs/igi-re-parity/GL21_FALLBACK.md.
+// above.  See docs/parity/GL21_FALLBACK.md.
 static void GLAPIENTRY LegacyDepthRangef(GLfloat n, GLfloat f) {
 	glDepthRange(static_cast<GLdouble>(n), static_cast<GLdouble>(f));
 }
@@ -228,7 +228,7 @@ bool GL_Init() {
 		// "glewInit error" cannot distinguish a driver that reports no GL
 		// version from one that reports GL 1.0/1.1 only from a WGL-level
 		// failure -- all three have completely different fixes.  See
-		// docs/igi-re-parity/WINE_SMOKE.md for the observed values.
+		// docs/parity/WINE_SMOKE.md for the observed values.
 		LogStartup(log_type_t::LOG_ERROR, __FILE__, __LINE__,
 		           "glewInit error %u: %s\n",
 		           (unsigned)glew_status, (const char *)glewGetErrorString(glew_status));

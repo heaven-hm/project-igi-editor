@@ -1,8 +1,8 @@
-// anim_rules.h - the retail animation player's rules, resolved the way IGI-RE
+// anim_rules.h - the retail animation player's rules, resolved the way retail engine
 // resolves them.
 //
 // Issue #73 is titled "Animation playback + skinning". The word "skinning" is
-// open-igi's class name: IGI-RE has NO symbol called "skinning". It has
+// open-igi's class name: retail engine has NO symbol called "skinning". It has
 // BoneMesh_Skin 0x49B700 (src/dxinit/d3drender.c:226), and that is what this
 // module ports on the skin side. Say that plainly: this is a port of the
 // retail rules, not of open-igi's structure.
@@ -17,15 +17,15 @@
 //   * the frame/tick timing rules: the engine's tick rate, the per-frame
 //     advance, loop-vs-one-shot and the wrap/clamp arithmetic;
 //   * what GenericTBA_GetAnim 0x4485D0 returns and what its callers do with it;
-//   * the bone/skin data layout and the skinning transform, as far as IGI-RE
+//   * the bone/skin data layout and the skinning transform, as far as retail engine
 //     actually exposes them.
 //
 // It deliberately does NOT cover the AI action system, combat animation
 // selection or the network path: those are out of scope for an editor. Where
 // the AI path is mentioned it is only as the provenance of a number.
 //
-// Everything here is cited to IGI-RE (`/Users/haseeb-mir/Documents/Code/IGI-RE`),
-// the verified C decompilation of retail `IGI.exe`. The IGI-RE files this
+// Everything here is cited to retail engine (`the retail engine source`),
+// the verified C decompilation of retail `IGI.exe`. the retail engine files this
 // module is built from:
 //
 //   src/boneobj/anim.c        Anim_Play 0x4D61D0, Anim_PlayNow 0x4D6110,
@@ -97,7 +97,7 @@
 namespace igi {
 
 // ---------------------------------------------------------------------------
-// Engine constants. Every one is IGI-RE DATA.
+// Engine constants. Every one is retail engine DATA.
 // ---------------------------------------------------------------------------
 
 // anim.c:9 (and the same literal at lod/boneobj.c:39) - the header comment of
@@ -608,7 +608,7 @@ int AnimUseTimeFrames(float use_time_seconds);
 // GenericTBA_GetAnim HOOK 0x4485D0 (tba.c:280-284) is a bare field read:
 //   `int16_t GenericTBA_GetAnim(GenericTBA *t) { return t->anim; }`
 // The two extra parameters in the humanstate.c:35 declaration
-// (`(void *obj, int a, int b)`) are not in the signature - IGI-RE declares the
+// (`(void *obj, int a, int b)`) are not in the signature - retail engine declares the
 // ORIG with them to match the call site, and the callee ignores them (a
 // `__cdecl` caller-cleans-stack artifact, not an argument).
 // So there is nothing to compute: the return is the authored Int16 at 0x24A.

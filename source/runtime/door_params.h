@@ -4,7 +4,7 @@
 // mapping is a pure function that a host-native test can drive with real retail
 // task lines (see `tests/test_door_params.cpp`).
 //
-// IGI-RE `src/door/door.c:257-269` registers the fields in this order:
+// retail engine `src/door/door.c:257-269` registers the fields in this order:
 //
 //     ParamTable_Add(gDoorParams, NULL, FIELD(place),    Param_ObjectPos(), 7, NULL);      // 3,4,5
 //     ParamTable_Add(gDoorParams, NULL, FIELD(slide[0]), Param_Real32(),    7, &slideRange); // 6

@@ -581,7 +581,7 @@ int AnimUseTimeFrames(float use_time_seconds) {
 int GenericTbaGetAnim(const GenericTbaAnim& authored) {
     // tba.c:280-284: `int16_t GenericTBA_GetAnim(GenericTBA *t) { return t->anim; }`
     // A bare field read of the Int16 at 0x24A (tba.c:29-51). The two extra
-    // arguments IGI-RE's ORIG declares at humanstate.c:35 are a
+    // arguments retail engine's ORIG declares at humanstate.c:35 are a
     // caller-cleans-stack artifact of the call site, not parameters.
     return authored.anim;
 }

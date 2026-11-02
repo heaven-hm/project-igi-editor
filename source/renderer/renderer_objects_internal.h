@@ -29,7 +29,7 @@
 #include "../level/qvm_parser.h"
 #include "../level/qvm_decompiler.h"
 // The engine's own placement/bounds for a `Wire` (Wire_ParamsChanged
-// 0x43F3D0, IGI-RE src/props/wire.c:160-191), shared by the draw and pick
+// 0x43F3D0, retail engine src/props/wire.c:160-191), shared by the draw and pick
 // passes so they cannot disagree -- see source/runtime/props_preview.h.
 #include "../runtime/props_preview.h"
 #include "dat_writer.h"
@@ -69,7 +69,7 @@ inline bool IsWeaponModel(const std::string& modelId) {
     return false;
 }
 
-// Magic-object model resolution (IGI-RE src/shadow/sector.c:667,
+// Magic-object model resolution (retail engine src/shadow/sector.c:667,
 // src/magicobj/rigidcoll.c:484: arg.model = def->model).
 // Defined in renderer_objects_atta.cpp.
 std::string MagicObjectModelId(const std::string& attachmentName);
@@ -80,7 +80,7 @@ namespace igi {
 // Renderer_Objects::DrawLadderGizmos (renderer_objects_visual.cpp) is opt-out.
 // The editor has no render menu — it is GLUT-based and its overlays are keyboard
 // toggles in app_input_keyboard.cpp — so this is the process-wide switch a UI
-// hook can flip. Default: on. See docs/igi-re-parity/LADDER_PLACEMENT.md.
+// hook can flip. Default: on. See docs/parity/LADDER_PLACEMENT.md.
 void SetLadderGizmosEnabled(bool enabled);
 bool LadderGizmosEnabled();
 

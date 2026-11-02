@@ -182,7 +182,7 @@ void LevelObjects::Load(ILevelDynCube* level_dyn_cube, const QSC* qsc_objects) {
 
     // Resolve each placed StationaryGun's MOUNTED weapon (see ResolveMountedWeapon):
     // a StationaryGun creates a Gun task for its authored "Weapon ID" and mounts it
-    // (StationaryGun_Changed 0x474980, IGI-RE src/statgun/statgun.c:310-339), so the
+    // (StationaryGun_Changed 0x474980, retail engine src/statgun/statgun.c:310-339), so the
     // editor must draw that weapon model rather than only the holder.
     for (int i = 0; i < (int)objects_.size(); ++i) {
         if (objects_[i].type == "StationaryGun") ResolveMountedWeapon(i);
@@ -495,7 +495,7 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 case 9: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.modelId = Utils::Trim(cur_a->str_); break;
             }
         } else if (isCamera) {
-            // SCamera layout, from IGI-RE src/scamera/scamera.c:116-131 (HOOK 0x442730,
+            // SCamera layout, from retail engine src/scamera/scamera.c:116-131 (HOOK 0x442730,
             // ParamTable_New(15)) and confirmed by the retail level script's own
             // declaration in objects.qsc:
             //   "Holder Position","ObjectPos"          -> args 3,4,5
@@ -506,7 +506,7 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
             //   "Camera Model","String16"              -> arg 10  lens model (child)
             //   "Camera Destroyed Model","String16"    -> arg 11  broken model
             //   "Rotate Gamma Right (d)","Int16"       -> arg 12  yaw_min (NOT a model)
-            // Arg 7 is the model the SCamera task itself draws: IGI-RE builds the param
+            // Arg 7 is the model the SCamera task itself draws: retail engine builds the param
             // table in declaration order (src/scamera/scamera.c:116-131) and the third
             // entry is `FIELD(model)`, which SCamera_Create then feeds to
             // `RigidDynCubeObj_SetModel(c, VirModel_Find(c->model))` (scamera.c:240) and
@@ -546,7 +546,7 @@ void LevelObjects::LoadRecursive(const QSC* qsc, const QSC::func_s* func, int pa
                 case 11: if (cur_a->type_ == QSC::arg_s::type_t::STR) obj.secondaryModelId = Utils::Trim(cur_a->str_); break;
             }
         } else if (isFence) {
-            // IGI-RE `src/props/fence.c:115-119` registers exactly four parameters:
+            // retail engine `src/props/fence.c:115-119` registers exactly four parameters:
             //   pos (ObjectPos -> args 3/4/5), angle (Angle -> arg 6, "about z"),
             //   model (String16 -> arg 7), cond (VarString -> arg 8).
             // `struct Fence` (`:63-72`) has one float `angle` and no other Euler
@@ -987,15 +987,15 @@ void LevelObjects::ResolveMountedWeapon(int index) {
 // These read the authored QSC argument tokens on demand instead of caching a
 // second copy of the values, so an inspector edit of the "End" anchor, the
 // StationaryGun weapon/arc/ammo or the AIStationaryGunHolder detection arc is
-// visible in the viewport immediately. See docs/igi-re-parity/
-// PROPS_WIRE_INTERACTABLES.md for the IGI-RE evidence behind every field.
+// visible in the viewport immediately. See docs/parity/
+// PROPS_WIRE_INTERACTABLES.md for the retail engine evidence behind every field.
 // ─────────────────────────────────────────────────────────────────────────────
 
 bool LevelObject::WireAnchors(glm::dvec3& start, glm::dvec3& end) const {
     if (type != "Wire") return false;
 
     TaskSchemaNS::Props::Vec3 s, e;
-    // Wire_Open (0x43EFF0, IGI-RE src/props/wire.c:89-113): start ObjectPos at
+    // Wire_Open (0x43EFF0, retail engine src/props/wire.c:89-113): start ObjectPos at
     // args 3-5, end ObjectPos at args 6-8.
     if (!TaskSchemaNS::Props::ParseWireAnchors(argTokens, s, e)) return false;
 

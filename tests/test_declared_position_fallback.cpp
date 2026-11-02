@@ -34,7 +34,7 @@
 // The wiring — `LoadRecursive` flagging a candidate and `Load()` placing or reverting it —
 // cannot run in this host-native lane: `QSC::Load` and `LevelObjects::Load` both need
 // `common.cpp` (File_LoadText / MEM_ALLOC) and `logger.cpp`, which are Windows-only. The
-// wiring is therefore compile-verified by `tools/igi-re-parity/tu-check.py`, and the
+// wiring is therefore compile-verified by `tools/parity/tu-check.py`, and the
 // decision it depends on is what these tests pin down, over real retail declarations.
 
 #include <gtest/gtest.h>

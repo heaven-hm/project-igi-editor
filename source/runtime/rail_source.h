@@ -4,7 +4,7 @@
 // cannot disagree about the curve.
 //
 // The curve itself is the engine's, and it is not re-derived here: one cubic
-// Hermite span per waypoint pair (`setup_segments`, IGI-RE
+// Hermite span per waypoint pair (`setup_segments`, retail engine
 // src/sound/segsetup.c:88-199) chained into the joint list
 // `spline_geometry::BuildRailPath` returns, which is what the editor already
 // places cars and platforms on - `Train_Place` HOOK 0x42A2C0

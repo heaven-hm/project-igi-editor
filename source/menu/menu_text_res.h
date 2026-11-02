@@ -2,7 +2,7 @@
  * @file    menu_text_res.h
  * @brief   Retail menu label text, read from the game's per-language .RES archives.
  *
- * ORACLE: IGI-RE (/Users/haseeb-mir/Documents/Code/IGI-RE), a verified C
+ * ORACLE: retail engine (the retail engine source), a verified C
  * decompilation of retail IGI.exe.
  *
  *   src/menu/menumanager.c:832-852  MenuManager_GetString (HOOK 0x418EA0)
@@ -26,7 +26,7 @@
  *
  * The shipped archives name their entries `LOCAL:<langname>/<Key>` in all six
  * language directories (measured on the retail install; see
- * docs/igi-re-parity/MENU_TEXT_RES.md), which is exactly the path
+ * docs/parity/MENU_TEXT_RES.md), which is exactly the path
  * MenuManager_GetString builds -- so that form is the primary lookup here.
  * `LookupForm::FinalComponent` is a documented fallback for archives that store a
  * mount path instead (the legacy `menusystem/ENGLISH.RES`), and which form matched

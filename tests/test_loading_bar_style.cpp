@@ -2,7 +2,7 @@
  * @file    test_loading_bar_style.cpp
  * @brief   The retail loading screen's progress bar: geometry, colours, fill.
  *
- * Every assertion here is a value or a rule from IGI-RE, the verified C
+ * Every assertion here is a value or a rule from retail engine, the verified C
  * decompilation of retail IGI.exe, cited per test:
  *
  *   src/loadscreen/loadscreen.c:63-96    LoadingScreen_New  HOOK 0x48A440

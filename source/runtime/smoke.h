@@ -1,4 +1,4 @@
-// smoke.h - the retail "Smoke" particle emitter, resolved the way IGI-RE
+// smoke.h - the retail "Smoke" particle emitter, resolved the way retail engine
 // resolves it.
 //
 // Issue #43 asked for "create/edit lights and smoke FX". The editor already
@@ -7,13 +7,13 @@
 // "AlarmLight" (the only light-with-runtime-state task type in retail). This
 // module is the pure-logic half for Smoke; alarm_light.h is the other half.
 //
-// Everything here is cited to IGI-RE (`/Users/haseeb-mir/Documents/Code/IGI-RE`),
+// Everything here is cited to retail engine (`the retail engine source`),
 // which is the only evidence source used. The authored parameter names and
 // types come from the retail `Task_DeclareParameters("Smoke", ...)` line, which
 // ships inside every OBJECTS.QVM that authors a smoke task and is also present
 // as decompiled text in `location0/LEVEL2/objects.qsc:59-61`.
 //
-// The five IGI-RE files this module is built from:
+// The five retail engine files this module is built from:
 //
 //   src/fxobj/smoke.c        Smoke_Init 0x437510, Smoke_Create 0x437B90,
 //                            Smoke_Run 0x437DB0, Smoke_Changed 0x438000,
@@ -30,7 +30,7 @@
 //
 // A "Smoke" task consumes exactly 25 argument tokens (3 for ObjectPos, 3 for
 // RGB, 19 scalars), which every one of the 71 retail Smoke instances in the
-// shipped QVMs satisfies. See docs/igi-re-parity/SMOKE_LIGHTS.md.
+// shipped QVMs satisfies. See docs/parity/SMOKE_LIGHTS.md.
 //
 // Named divergences (never silently fixed):
 //   * x87 `fsin`/`fcos` (smoke.c:104-114) are not bit-identical to libm
@@ -48,7 +48,7 @@
 namespace igi {
 
 // ---------------------------------------------------------------------------
-// Engine constants. Every one is IGI-RE DATA (src/fxobj/smoke.c).
+// Engine constants. Every one is retail engine DATA (src/fxobj/smoke.c).
 // ---------------------------------------------------------------------------
 
 constexpr float kSmokeTwoPi = 0x1.921fb6p+2f;      // smoke.c:94  kTwoPi
@@ -78,7 +78,7 @@ constexpr int kSmokeTokenCount = 25;
 //     rate 150 -> 4, 5, 5, 5, ...     rate  45 -> 1, 1, 2, 1, 2, ...
 //     rate   1 -> 0 for the first 29 ticks, then 1 every 30 ticks
 //
-// Reproduced, not corrected; docs/igi-re-parity/SMOKE_LIGHTS.md records it.
+// Reproduced, not corrected; docs/parity/SMOKE_LIGHTS.md records it.
 constexpr float kSmokeSteadyStateDivisor = 30.0f;  // == kSmokeTickRate
 
 // Token layout of an editor LevelObject::argTokens vector:
@@ -88,7 +88,7 @@ constexpr std::size_t kSmokeFirstParam = 3;
 
 // The 21 authored parameters, in the order ParamTable_Add registers them
 // (smoke.c:167-187) and in the order the retail declaration line lists them
-// (LEVEL2/objects.qsc:59-61). The engine field is the IGI-RE struct field the
+// (LEVEL2/objects.qsc:59-61). The engine field is the retail engine struct field the
 // slot writes; where the two disagree the disagreement is called out, because
 // it is load-bearing for the runtime rule.
 enum SmokeParamIndex {
@@ -118,7 +118,7 @@ enum SmokeParamIndex {
 // One row of the authored parameter table.
 struct SmokeParamDesc {
     const char* authored_name;  // the retail declaration string
-    const char* engine_field;   // the IGI-RE struct field the slot writes
+    const char* engine_field;   // the retail engine struct field the slot writes
     const char* type_name;      // the retail declared type
     int token_count;            // script arguments consumed (paramops.c arg count)
     float default_value;        // Smoke_Create (smoke.c:212-247)
@@ -142,8 +142,8 @@ struct SmokeTaskObject {
 };
 
 // The resolved parameters of one "Smoke" instance. Field names follow the
-// AUTHORED names (what the level author sees), not the IGI-RE struct field
-// names, because two of the retail slots write a field whose IGI-RE name means
+// AUTHORED names (what the level author sees), not the retail engine struct field
+// names, because two of the retail slots write a field whose retail engine name means
 // the opposite thing:
 //
 //   authored "Minimum Velocity" (slot 6) -> Smoke.speedMax, default 4.5

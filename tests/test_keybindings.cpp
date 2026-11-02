@@ -11,7 +11,7 @@
  *   source/config.cpp / source/config.h         the binding -> named-field router
  *   source/app.h                                editor state (removed flags)
  *   assets/editor/qed/qedkeybindings.qsc        the shipped default bindings
- *   docs/igi-re-parity/KEYBINDINGS.md           the per-binding decision record
+ *   docs/parity/KEYBINDINGS.md           the per-binding decision record
  *
  * They encode the issue's acceptance criteria directly:
  *   (a) no "[Keybind] ... not implemented" line survives in the dispatcher;
@@ -381,7 +381,7 @@ struct RepoFiles {
         config_h_path = FindRepoFile("source/config.h", &tried);
         app_h_path = FindRepoFile("source/app.h", &tried);
         bindings_path = FindRepoFile("assets/editor/qed/qedkeybindings.qsc", &tried);
-        doc_path = FindRepoFile("docs/igi-re-parity/KEYBINDINGS.md", &tried);
+        doc_path = FindRepoFile("docs/parity/KEYBINDINGS.md", &tried);
         if (app_input_path.empty() || app_view_path.empty() || app_cpp_path.empty() ||
             config_cpp_path.empty() ||
             config_h_path.empty() || app_h_path.empty() || bindings_path.empty() ||
@@ -415,7 +415,7 @@ struct RepoFiles {
                         "source/app.cpp, "                                        \
                         "source/config.cpp, source/config.h, source/app.h, "     \
                         "assets/editor/qed/qedkeybindings.qsc, "                 \
-                        "docs/igi-re-parity/KEYBINDINGS.md)";                    \
+                        "docs/parity/KEYBINDINGS.md)";                    \
     }
 
 // ---------------------------------------------------------------------------
@@ -448,7 +448,7 @@ TEST(Keybindings48, EveryRemovedBindingIsGuardedByAStatusBarMessage) {
         EXPECT_TRUE(expected.count(name) == 1)
             << "Removed(\"" << name << "\") is neither one of the 25 bindings of "
                "#48 nor one of the task-11 adjacent removals (see kAdjacentRemovals "
-               "and docs/igi-re-parity/KEYBINDINGS.md)";
+               "and docs/parity/KEYBINDINGS.md)";
     }
 
     // The guard must actually write the status bar, not just log.
@@ -707,7 +707,7 @@ TEST(Keybindings48, DecisionTableIsTheTwentyFiveBindingsOfTheIssue) {
     EXPECT_EQ(ExpectedRemoved().size(), 17u);
     EXPECT_EQ(sizeof(kAdjacentRemovals) / sizeof(kAdjacentRemovals[0]), 3u)
         << "task-11 removed exactly three adjacent bindings; if that changed, the "
-           "list and docs/igi-re-parity/KEYBINDINGS.md must change together";
+           "list and docs/parity/KEYBINDINGS.md must change together";
 }
 
 // The eight implemented bindings must keep the combos the retail manual and the
@@ -779,7 +779,7 @@ TEST(Keybindings48, Task11DocumentRecordsTheFiveAdjacentDecisions) {
     REQUIRE_REPO_FILES();
     // The second table of the doc: each of the five task-11 items must be recorded
     // with what the user now sees, and the doc must state plainly that these are
-    // editor-only decisions with no IGI-RE oracle.
+    // editor-only decisions with no retail engine oracle.
     for (const char* name : kAdjacentRemovals) {
         EXPECT_NE(files.doc.find(name), std::string::npos)
             << name << " has no row in " << files.doc_path;

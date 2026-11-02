@@ -10,10 +10,10 @@
 #      MSVC x64 import libs and MinGW-w64 consumes them directly, so this is the
 #      architecture a fresh checkout can always LINK for.  This gate must exit 0.
 #      (x64 links but does not RUN: no x64 freeglut/glew runtime DLLs exist, see
-#      docs/igi-re-parity/WINE_SMOKE.md.  The runnable target is i686.)
+#      docs/parity/WINE_SMOKE.md.  The runnable target is i686.)
 #
 #   2. i686 compile-only gate — build-mingw/ (i686-w64-mingw32)
-#      The shipping target is Win32, and tools/igi-re-parity/tu-check.py replays
+#      The shipping target is Win32, and tools/parity/tu-check.py replays
 #      the 32-bit compile commands from build-mingw/compile_commands.json, so
 #      this tree stays i686.  The x86 GL import libraries
 #      (third_party/GL/lib/x86/{libfreeglut,libglew32}.a) are NOT tracked -- the
@@ -346,7 +346,7 @@ fi
 # on exactly the tree the Windows test suite is about to consume.  It must run
 # after the build, not before: an object that is merely older than a header the
 # gate is about to rebuild is not a defect, so a pre-build check would cry wolf.
-# See scripts/check-build-integrity.sh and docs/igi-re-parity/BUILD_GATE.md §8.
+# See scripts/check-build-integrity.sh and docs/parity/BUILD_GATE.md §8.
 INTEGRITY_RC=0
 if [ "$ARCH" != "x64" ] && [ "$I686_RC" -eq 0 ]; then
   say ""

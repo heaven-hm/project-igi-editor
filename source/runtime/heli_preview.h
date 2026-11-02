@@ -15,7 +15,7 @@
  * `cutscene_rules` (commit 0e0c3d9f, `source/runtime/cutscene_camera.{h,cpp}`):
  * a correct port with no caller.
  *
- * Everything here is cited to IGI-RE (`/Users/haseeb-mir/Documents/Code/IGI-RE`,
+ * Everything here is cited to retail engine (`the retail engine source`,
  * read-only), which is the only evidence source used. The rule itself is NOT
  * restated: `HeliControlApplyAxes`, `HeliControlReset` and `HeliMoveStep` all
  * live in `heli_rules.h` and are called, not copied. This header adds only the

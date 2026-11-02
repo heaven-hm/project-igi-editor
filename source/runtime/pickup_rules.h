@@ -1,7 +1,7 @@
-// pickup_rules.h - what a placed weapon/ammo pickup IS, the way IGI-RE treats it.
+// pickup_rules.h - what a placed weapon/ammo pickup IS, the way retail engine treats it.
 //
 // Issue #75 ("weapon/ammo pickup parity") cites 0x46C630 and 0x46D230. Both
-// resolve in IGI-RE's symbols/names.tsv:
+// resolve in retail engine's symbols/names.tsv:
 //
 //   0046c630  GenericPickup_Touch  manual  entry
 //   0046d230  GunPickup_Touch      manual  entry
@@ -23,9 +23,9 @@
 //     GunPickup/AmmoPickup delete their task;
 //   * the `<type>_<id>.isPickedUp` script flag the pickup publishes.
 //
-// Everything below is cited to IGI-RE as FUNCTION + ADDRESS + FILE:LINE. Where
+// Everything below is cited to retail engine as FUNCTION + ADDRESS + FILE:LINE. Where
 // the reconstructed engine is ambiguous or leaves a value undefined, the
-// divergence is named in a comment and in docs/igi-re-parity/PICKUPS.md rather
+// divergence is named in a comment and in docs/parity/PICKUPS.md rather
 // than silently invented.
 //
 // Deliberately NOT ported here (see PICKUPS.md "Not modelled"):
@@ -96,7 +96,7 @@ constexpr int kPickupCountBits = 16;
 // Declared parameter layout
 // ---------------------------------------------------------------------------
 
-// The IGI-RE parameter types the pickup ParamTables use. Each maps to a number
+// the retail engine parameter types the pickup ParamTables use. Each maps to a number
 // of .qsc argument tokens; that count is what fixes every later argument index.
 enum class PickupParamType {
     ObjectPos,        // Param_ObjectPos 0x4F1010 -> 3 args (x, y, z)
@@ -391,7 +391,7 @@ bool PickupIsOneShot(PickupKind kind);
 // Task_GetName 0x4F1270 (src/param/task.c:123-135) uses the level name event
 // handler when the task's type has one, and otherwise the fallback
 //     crt_sprintf(out, "%s_%d", TaskType_GetName(task->type), id);  // task.c:130
-// No task type in IGI-RE ever registers a handler on Level_GetNameEvent
+// No task type in retail engine ever registers a handler on Level_GetNameEvent
 // (`gLevelNameEvent`, src/param/paramvars.h:7; accessor Level_GetNameEvent
 // src/param/task.c:89). The only writers of that slot are the alloc in
 // src/physobj/paramops.c:220 and the free/reset in src/level/level.c:287,292,

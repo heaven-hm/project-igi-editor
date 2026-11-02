@@ -8,7 +8,7 @@
  * exists to pick a LOD when a model has NO authored table, and the editor
  * always has one (it reads lod.qvm), so that branch is not reachable here.
  *
- * Oracle: IGI-RE (decompilation of retail IGI.exe).
+ * Oracle: retail engine (decompilation of retail IGI.exe).
  *   ModelLODSettings_Changed  HOOK 0x4EDB60  src/animtrig/lodsettings.c:157-173
  *   lod_select (unk24 branch)                src/lod/mesh3d.c:160-184
  *   ModelLODSettings_Create   HOOK 0x4EDB30  src/animtrig/lodsettings.c:146-154

@@ -9,7 +9,7 @@
  * model.  Until this test existed the resolution code and the model were both
  * correct but unconnected, so the menu would still have drawn keys.
  *
- * Oracle: IGI-RE (/Users/haseeb-mir/Documents/Code/IGI-RE)
+ * Oracle: retail engine (the retail engine source)
  *   src/menu/menumanager.c:832-852  MenuManager_GetString HOOK 0x418EA0
  *       crt_sprintf(path, "LOCAL:%s/%s", Config_GetLanguageName(mm->language), name);
  *       miss -> "RM: %s"                                     (:849-851)
@@ -112,7 +112,7 @@ TEST(MenuLabels, RetailModelResolvesKeysToTheGamesOwnText) {
         << "the engine draws the archive's text, not the key";
 
     // `ingamemenu.qvm` declares exactly two labels whose text differs from the key
-    // (measured; see docs/igi-re-parity/MENU_TEXT_RES.md).  Both must resolve to the
+    // (measured; see docs/parity/MENU_TEXT_RES.md).  Both must resolve to the
     // archive's text, because that is what the game draws.
     const igi::MenuUiEntry* reset = FindByKey(menu.model, "Reset to Default");
     ASSERT_NE(reset, nullptr) << "retail ingamemenu.qvm should declare 'Reset to Default'";

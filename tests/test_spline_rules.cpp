@@ -1,7 +1,7 @@
 // test_spline_rules.cpp - the SplineObj / SplineObjWaypoint road-and-track rules
 // (#79 authored model, #69 curve). Pure logic plus a retail-data half.
 //
-// The oracle for every number here is IGI-RE (read-only). Key citations:
+// The oracle for every number here is retail engine (read-only). Key citations:
 //   editobj/spline.c:177-225   SplineObj_Open 0x502250: the two ParamTables, the
 //                              10/8 parameter rows, gSplineObjSegmentRange 2..20
 //   editobj/spline.c:227-242   SplineObj_Create 0x5026E0: the authored defaults

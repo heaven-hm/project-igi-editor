@@ -45,7 +45,7 @@ bool RES_StreamMerge(const std::string& srcResPath,
 // ---------------------------------------------------------------------------
 // Engine texture resolution: which archive supplies a model file's textures
 //
-// Transcribed from IGI-RE. The engine has no global texture-name map, so the
+// Transcribed from retail engine. The engine has no global texture-name map, so the
 // editor must not build one:
 //
 //   ModelFile_Setup 0x4CF080 (src/model/model.c:251-266) loads exactly one

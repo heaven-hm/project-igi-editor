@@ -19,7 +19,7 @@
  *   which are the same steps GetOrLoadMesh / GetOrExtractMefTemp / GetOrLoadTexture
  *   already perform inline.
  *
- * RESOLUTION RULE (IGI-RE, the only authority):
+ * RESOLUTION RULE (retail engine, the only authority):
  *   Mesh_Load            HOOK 0x4CF390  asks for "LOCAL:models/%s.mef"
  *                                       (src/model/model.c:364)
  *   ModelFile_LoadTextures HOOK 0x4CF790 asks for "LOCAL:textures/%s.tex"

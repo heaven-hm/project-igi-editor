@@ -2,7 +2,7 @@
 
 // Canonical IGI object transform maths, taken from the retail decompilation.
 //
-// Evidence (IGI-RE, the verified decompilation of the retail IGI.exe):
+// Evidence (retail engine, the verified decompilation of the retail IGI.exe):
 //   * `src/math/matrix.c` — `Matrix_SetEuler`, HOOK(0x4B38E0):
 //
 //         Matrix_SetRotZ(m, az);

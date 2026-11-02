@@ -14,11 +14,11 @@
 // ---------------------------------------------------------------------------
 // Editor camera radius (task-8 CameraResetRadius; used by task-11 item 1 notes).
 // EDITOR-ONLY: this value describes the editor's own orbit camera
-// (igi::ObjectOrbitCamera, the only camera radius this editor has). IGI-RE
+// (igi::ObjectOrbitCamera, the only camera radius this editor has). retail engine
 // decompiles IGI.exe and contains no QED editor code, so there is no game-side
 // behaviour to match and none is claimed.
 // Units: world units, 4096 wu = 1 m (the editor's 40.96 cm->wu scale convention,
-// see docs/igi-re-parity/PROPS_WIRE_INTERACTABLES.md).
+// see docs/parity/PROPS_WIRE_INTERACTABLES.md).
 // ---------------------------------------------------------------------------
 static constexpr float kDefaultOrbitRadius = 40960.0f;   // 10 m
 
@@ -91,7 +91,7 @@ void App::DispatchEventBindings() {
 	// assets/editor/qed/qedkeybindings.qsc, but an already-deployed copy of that
 	// file in a user's QED folder can still bind them — so rather than silently
 	// doing nothing, say why. Every name here has a row in
-	// docs/igi-re-parity/KEYBINDINGS.md.
+	// docs/parity/KEYBINDINGS.md.
 	auto Removed = [&](const char* name) -> bool {
 		if (!Check(name)) return false;
 		// "no editor handler": accurate for every name below, including
@@ -99,8 +99,8 @@ void App::DispatchEventBindings() {
 		// belongs to the F11 special-key handler's Shift path
 		// (source/app_input_keyboard.cpp:466-471), not to this event name.
 		status_message_ = std::string(name) +
-			" was removed (#48): no editor handler and no IGI-RE counterpart — "
-			"see docs/igi-re-parity/KEYBINDINGS.md";
+			" was removed (#48): no editor handler and no retail engine counterpart — "
+			"see docs/parity/KEYBINDINGS.md";
 		return true;
 	};
 
@@ -123,7 +123,7 @@ void App::DispatchEventBindings() {
 		// BeginObjectOrbit and only ever reset by CameraResetRadius). Any rate,
 		// direction or preset ladder would have been invented, so the binding is
 		// gone from assets/editor/qed/qedkeybindings.qsc and a stale user config
-		// gets this message instead. Editor-only: IGI-RE decompiles IGI.exe and
+		// gets this message instead. Editor-only: retail engine decompiles IGI.exe and
 		// contains no QED editor code, so there is no game behaviour to match.
 		if (Removed("CameraAdjustRadius")) return;
 	}
@@ -137,11 +137,11 @@ void App::DispatchEventBindings() {
 		// a degenerate fallback when the camera is already on top of the target —
 		// 1 wu is 0.24 mm, not a usable viewing distance, so the reset uses
 		// kDefaultOrbitRadius (10 m) instead.
-		// IGI-RE has no counterpart to cite: it decompiles IGI.exe only, and its
+		// retail engine has no counterpart to cite: it decompiles IGI.exe only, and its
 		// editor-camera module attaches the camera to a target with no orbit radius
 		// at all (src/editcam/editcamera.c:212 EditCamera_AttachRotation,
 		// :273 EditCamera_AttachPosition). Editor-only feature; see
-		// docs/igi-re-parity/KEYBINDINGS.md.
+		// docs/parity/KEYBINDINGS.md.
 		if (orbit_active_) {
 			ApplyOrbitRadius(kDefaultOrbitRadius);
 			status_message_ = "Camera radius reset to " +
@@ -157,7 +157,7 @@ void App::DispatchEventBindings() {
 		// (the mouse owns pitch, source/app_view.cpp:43); any step size or rate
 		// would have been invented, so the binding is gone from
 		// assets/editor/qed/qedkeybindings.qsc and a stale user config gets this
-		// message instead. Editor-only: IGI-RE decompiles IGI.exe and contains no
+		// message instead. Editor-only: retail engine decompiles IGI.exe and contains no
 		// QED editor code, so there is no game behaviour to match.
 		if (Removed("CameraLookDown")) return;
 	}
@@ -167,7 +167,7 @@ void App::DispatchEventBindings() {
 		// clipboard (Utils::SetClipboardText, source/utils.cpp:445 — the same call
 		// source/app_editor.cpp:136 uses for text edits) and its live camera is
 		// viewer_.pos_, so this copies that value and nothing else: no new state
-		// and no second clipboard path. Editor-only: IGI-RE decompiles IGI.exe and
+		// and no second clipboard path. Editor-only: retail engine decompiles IGI.exe and
 		// contains no QED code, so there is no game-side behaviour to match.
 		const std::string text = igi::FormatCameraTripleForClipboard(
 			viewer_.pos_.x, viewer_.pos_.y, viewer_.pos_.z);
@@ -335,7 +335,7 @@ void App::DispatchEventBindings() {
 		// state already exists (find_open_/find_mode_/find_query_, source/app.h:365-369)
 		// and its default mode is FindMode::TaskNameTypeId, so the generic find opens
 		// that mode — the same four lines as its siblings, no new state and no new
-		// behaviour invented. Editor-only: IGI-RE decompiles IGI.exe and has no QED
+		// behaviour invented. Editor-only: retail engine decompiles IGI.exe and has no QED
 		// task-tree find bar, so no game-side claim is made.
 		find_mode_  = FindMode::TaskNameTypeId;
 		find_open_  = true;
@@ -505,7 +505,7 @@ void App::DispatchEventBindings() {
 	// panel's buttons call (`App::ToggleSelectedAnimPlayback`, `ResetSelectedAnim`,
 	// `AdjustSelectedAnimSpeed` in source/app.cpp), so the keys and the panel
 	// cannot drift apart. The key names are still what the status bar reports.
-	// Editor-only: IGI-RE contains no QED code, so no game-side counterpart is
+	// Editor-only: retail engine contains no QED code, so no game-side counterpart is
 	// claimed for the keys themselves; the engine call the speed reaches
 	// (Anim_SetSpeed 0x4D6580) is cited above.
 	if (Check("TimerStartStop")) {
@@ -773,7 +773,7 @@ void App::DispatchEventBindings() {
 		// uses (source/main.cpp:439-450, MENU_SHOW_ALL). Renderer::DRAW_OBJECTS
 		// short-circuits the whole object pass (renderer_objects.cpp:760-766);
 		// BUILDINGS/PROPS are the per-kind fallbacks consulted once it is cleared.
-		// This is an editor viewport option: IGI-RE decompiles IGI.exe only and has
+		// This is an editor viewport option: retail engine decompiles IGI.exe only and has
 		// no equivalent, so the evidence is the editor's own draw-part system
 		// (main.cpp:342-346, debug_command_manager.cpp:104).
 		const int kAllObjects = Renderer::DRAW_OBJECTS | Renderer::DRAW_BUILDINGS |

@@ -66,7 +66,7 @@ igi::MenuUiBuildOptions App::PauseMenuBuildOptions() const {
 	igi::MenuUiBuildOptions options;
 	options.viewport_width = window_state_.viewport_width_;
 	options.viewport_height = window_state_.viewport_height_;
-	// The pause menu always uses the retail IGI-RE menu font (`font3.fnt` from
+	// The pause menu always uses the retail retail engine menu font (`font3.fnt` from
 	// `MENUSYSTEM/ingamemenu.res`, Sprite_Load HOOK 0x4B6720, MenuManager_AddResource
 	// HOOK 0x417E20) at its native 21px line height (`MAKE_LABEL`,
 	// src/menuscreen/menutext.c:126-149), independent of the editor HUD font toggle.

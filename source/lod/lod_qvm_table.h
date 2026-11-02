@@ -3,7 +3,7 @@
 
 // The authored per-model LOD distance table, read out of a level's `lod.qvm`.
 //
-// IGI-RE (faithful decompilation of retail IGI.exe):
+// retail engine (faithful decompilation of retail IGI.exe):
 //
 //   `ModelLODSettings` is a task type `{ char name[16]; float dist[5]; }` whose
 //   six parameters are the model name plus five distances
@@ -21,7 +21,7 @@
 //
 //   `lod_select`'s authored branch (src/lod/mesh3d.c:172-184) is the only reader
 //   of that table; `VirModel.lod_dist[5] = 100/(i*i)` from VirModel_InitLods is
-//   dead data (no reader in IGI-RE).
+//   dead data (no reader in retail engine).
 //
 // The decompiled line shape this parses is
 //

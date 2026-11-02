@@ -1,7 +1,7 @@
 // Differential test for the `Door` argument layout against the shipped retail
 // scripts.
 //
-// IGI-RE is the oracle. `src/door/door.c:257-269` registers the parameter table in
+// retail engine is the oracle. `src/door/door.c:257-269` registers the parameter table in
 // this order, and `ParamReal32x9_Parse` (HOOK 0x4EFBA0,
 // `src/physobj/paramops.c:423-436`) consumes exactly THREE arguments for the
 // `Real32x9` orientation, not nine:
@@ -37,7 +37,7 @@ namespace {
 
 // The editor's units per metre, as passed by App::SetupRuntimeDoors
 // (`igi::PlayerController::WORLD_METER`, source/player_controller.h:60). It is
-// also the engine's own scale: IGI-RE `kSlideScale` is aliased to `kMeter` and
+// also the engine's own scale: retail engine `kSlideScale` is aliased to `kMeter` and
 // `k4096` at 0x5333B8 (`src/addr.c:25-29`), and `Door_Place` multiplies the slide
 // by it (src/door/door.c:125-126). So the editor's conversion is the engine's.
 constexpr float kUnitsPerMetre = 4096.0f;

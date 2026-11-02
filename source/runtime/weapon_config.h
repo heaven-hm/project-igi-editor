@@ -12,7 +12,7 @@
 // The editor's inspector rows, the round-trip writer and the corpus checks are
 // all derived from these tables, so they cannot drift from the engine.
 //
-// ORACLE.  IGI-RE is the only authority used here; every row carries its
+// ORACLE.  retail engine is the only authority used here; every row carries its
 // `file:line`.  The one function that defines a weapon type is
 //
 //   DefineWeaponType   HOOK 0x413F90   src/weapon/weapontype.c:287-360
@@ -26,7 +26,7 @@
 // THERE IS NO AUTHORED PARAMETER NAME.  Unlike the level task types, a weapon
 // type is not declared with `Task_DeclareParameters`, so the shipped data
 // carries no parameter names at all — only positions.  Every label below is
-// therefore either (a) the field name the IGI-RE decompilation recovered for
+// therefore either (a) the field name the retail engine decompilation recovered for
 // the `WeaponType` member the argument lands in, or (b) explicitly marked
 // `Unk<offset>` when nothing reads that member.  Nothing here is invented.
 // ============================================================================
@@ -81,7 +81,7 @@ struct CallArg {
     // HOOK 0x4BEA30 (src/qsc/qvmop.c:378-459) resolves the pool index through
     // `vm->symVars` / `Script_FindSymbol` and calls `Qvm_PushSymbol` (:447), so
     // `Script_GetArgInt` returns whatever the symbol currently holds.  For the
-    // enum constants IGI-RE names (`WEAPONTYPE_*`, `SIGHTDISPLAYTYPE_*`,
+    // enum constants retail engine names (`WEAPONTYPE_*`, `SIGHTDISPLAYTYPE_*`,
     // `AMMODISPLAYTYPE_*`, registered at src/weapon/weapontype.c:246-261) that
     // value is known; for a constant some other script registers
     // (`HUMANAI_DETECTIONEVENT_*`, `TASKTYPE_*`) it is not, and this flag is
@@ -102,7 +102,7 @@ struct CallArg {
 };
 
 // The integer value a registered script constant holds, for the constants
-// IGI-RE names.  Returns false for a name the editor cannot prove a value for
+// retail engine names.  Returns false for a name the editor cannot prove a value for
 // (one registered by a script it has not run), which is what leaves
 // `CallArg::value_known` false.
 bool KnownConstantValue(const std::string& name, int* out);
@@ -131,7 +131,7 @@ CallArgs ReadCallArgsFromQvmFile(const std::string& path, const std::string& cal
 // One row of `DefineWeaponType`'s argument list.
 struct WeaponParamDesc {
     // The label the configurator shows.  See the file header: the shipped data
-    // has no names, so this is the IGI-RE `WeaponType` member name where the
+    // has no names, so this is the retail engine `WeaponType` member name where the
     // decompilation recovered one and "Unk<offset>" where it did not.
     const char* name;
     // Index into the Task_New-shaped argument vector: `DefineWeaponType` reads

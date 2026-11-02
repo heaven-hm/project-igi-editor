@@ -7,7 +7,7 @@
 // drives (Particle2D_New 0x4FDF00, Particle2D_Add 0x4FE120, Particle2D_Emit
 // 0x4FE210, Particle2D_Run 0x4FD660, Particle2D_Remove 0x4FDD30).
 //
-// Oracle (IGI-RE, read-only) for every number here:
+// Oracle (retail engine, read-only) for every number here:
 //   src/fxobj/smoke.c:298-339       Smoke_Run: the accumulator and the emission
 //   src/fxobj/smoke.c:344-410       Smoke_Changed: dir, the group's arguments,
 //                                   the rebuild-unless-only-level-changed rule

@@ -1,4 +1,4 @@
-// pickup_rules.cpp - see pickup_rules.h for the full IGI-RE citations.
+// pickup_rules.cpp - see pickup_rules.h for the full retail engine citations.
 //
 // This file is pure logic: no engine types, no filesystem, no globals. Every
 // branch below mirrors a branch of src/comprun/pickup.c.

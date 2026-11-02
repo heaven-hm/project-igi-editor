@@ -2,10 +2,10 @@
 
 /******************************************************************************
  * @file    res_chunks.h
- * @brief   ILFF chunk layer and resource-name identity, transcribed from IGI-RE.
+ * @brief   ILFF chunk layer and resource-name identity, transcribed from retail engine.
  *
  * Every function here is a direct C++ transcription of the retail engine's own
- * code. The oracle is /Users/haseeb-mir/Documents/Code/IGI-RE (the decompiled
+ * code. The oracle is the retail engine source (the decompiled
  * retail IGI.exe); the HOOK address of each engine function is given at its
  * transcription site. No behaviour is added that the engine does not have, and
  * no fallback is invented for a case the engine treats as fatal.

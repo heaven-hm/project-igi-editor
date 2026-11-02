@@ -1,6 +1,6 @@
 # Changelogs
 
-## 4.0.0-pre — IGI-RE Parity Campaign (branch `feature`)
+## 4.0.0-pre — Retail Parity Campaign (branch `feature`)
 
 ### Credits — this version is built on the original game
 
@@ -14,8 +14,8 @@ That is only possible because of work other people did first:
 - **SlickDaddy** (and the **Neonix Modding Team**) and **BlankName** — for reverse engineering
   the game's natives and making the decompilation project possible. Without a correct map of the
   engine's own functions there is nothing to be faithful *to*.
-- **The decompilation project** (IGI-RE) — for turning `igi.exe` back into readable source. This
-  campaign's rule was that IGI-RE is the only authority: no web sources, no other ports, and no
+- **The decompilation project** (retail engine) — for turning `igi.exe` back into readable source. This
+  campaign's rule was that retail engine is the only authority: no web sources, no other ports, and no
   invented logic. Where the engine has no behaviour to copy, this changelog says so instead of
   guessing.
 
@@ -24,7 +24,7 @@ and that is their work as much as anyone's.
 
 ### What this entry covers
 
-Every behaviour in this entry was derived from **IGI-RE**, the decompiled retail source of
+Every behaviour in this entry was derived from **retail engine**, the decompiled retail source of
 Project IGI 1, and each fix cites the engine function + HOOK address + `file:line` in the code
 and in its commit message. Where the engine has no behaviour to copy, that is stated rather
 than invented. Tested and verified on both **Windows** and **macOS**.
@@ -32,7 +32,7 @@ than invented. Tested and verified on both **Windows** and **macOS**.
 ### AI Vehicle Driver/Passenger Placement Parity (`Human_ProbeGround` & `Human_SetPlatform`)
 
 - **AI Vehicle Driver/Passenger Seat Positioning (`Human_ProbeGround` / `Human_SetPlatform`)**:
-  - Aligned vehicle passenger and driver ground-probing with IGI-RE (`Human_ProbeGround` HOOK `0x462390`, `src/humanbase/human.c:1746-1750`). Vehicle drivers and passengers attached either directly as children or via a `HumanAI` child referencing an `AIGraph` attached to a vehicle are recognized via `HumanSitsInVehicle`.
+  - Aligned vehicle passenger and driver ground-probing with retail engine (`Human_ProbeGround` HOOK `0x462390`, `src/humanbase/human.c:1746-1750`). Vehicle drivers and passengers attached either directly as children or via a `HumanAI` child referencing an `AIGraph` attached to a vehicle are recognized via `HumanSitsInVehicle`.
   - In `SnapObjectsToTerrain()`, vehicle riders bypass ground/terrain/graph drop, preserving their authored vehicle-relative seat coordinate `Z` without being corrupted or floating above the vehicle roof (`Human_SetPlatform` HOOK `0x463310`, `src/humanbase/human.c:2018`).
   - `ComputeAnimationIdsForObject()` resolves vehicle patrol paths via `FindAiScriptPatrolPathId()` and includes driver animation clips (e.g. driving animation `61` for truck drivers).
   - `App::OnLevelLoaded()` seeds `guard.stand_animation = param` when `obj.standAnimation < 0 && cmdCode == 0 && igi::HumanSitsInVehicle(objects, i)` so AI drivers start seated in the driving pose.
@@ -43,7 +43,7 @@ than invented. Tested and verified on both **Windows** and **macOS**.
 - **Play Mode Interactive Responsiveness & Framerate**:
   - Eliminated duplicate `CaptureGameplayRenderSnapshot()` invocation in the render loop.
   - Bypassed hover scene picking (`PickObjectAtScreenPos`) completely while `render_gameplay` is active, removing ~23ms GPU stall per mouse move in Play mode.
-  - Implemented view cone & distance LOD culling (`PassesEditorViewCone` & `GetObjectDrawLod`) in `GetGameplayDrawnAnimationIndices()` matching IGI-RE `Human_WakeIfVisible` (`0x45F140`, `src/humanbase/human.c:704-712`), cutting CPU skinning down from all level guards to only the guards inside the active camera view cone.
+  - Implemented view cone & distance LOD culling (`PassesEditorViewCone` & `GetObjectDrawLod`) in `GetGameplayDrawnAnimationIndices()` matching retail engine `Human_WakeIfVisible` (`0x45F140`, `src/humanbase/human.c:704-712`), cutting CPU skinning down from all level guards to only the guards inside the active camera view cone.
   - Replaced per-call dynamic heap allocations in `Renderer::DrawSkinnedMesh()` with static thread-local reusable buffers.
   - Added bounding sphere distance pre-cull in `CheckCollision()` before performing expensive inverse matrix transforms.
 
@@ -63,17 +63,17 @@ than invented. Tested and verified on both **Windows** and **macOS**.
 
 ### TaskTree Property Editor & Camera Look Parity
 
-- **TaskTree Position Sliders (`ApplyPropPositionDrag`), `.qvm` Keybindings, Viewport Selection/Manipulation Performance, & Pause Menu Font Parity (`v3.6.11-pre` & IGI-RE)**:
+- **TaskTree Position Sliders (`ApplyPropPositionDrag`), `.qvm` Keybindings, Viewport Selection/Manipulation Performance, & Pause Menu Font Parity (`v3.6.11-pre` & retail engine)**:
   - **TaskTree XYZ Position Sliders & Pad (`ApplyPropPositionDrag`)**: Restored `v3.6.11-pre` velocity-ramped position dragging across all `ObjectPos` controls (`NumBox` X/Y/Z, `PosPad`, and `PosZSlider`) with cursor-distance speed scaling (`kBase = 120.0f`, `kGrowth = 1.08f`, `kMax = 12000.0f`) and camera follow (`viewer_.pos_ += deltaPos`), and guarded `UpdateMarkerManipulation()` so dragging inside the Property Editor never triggers 3D marker manipulation.
   - **Viewport Mouse Selection & Object Move/Rotate Performance**: Matched `v3.6.11-pre` editor-mode `skinnedReplacementIndices` (`selected_object_index_` only in `!render_gameplay`), added 3x3 pixel `GL_SCISSOR_TEST` around the pick coordinate in `Renderer_Objects::PickObjectAtScreen`, and mirrored `Renderer_Objects::Draw`'s attachment distance cull (`ShouldDrawBuildingAttachments`) and cache check in `DrawForPicking`, eliminating frame stalls when moving the mouse to select objects or dragging/rotating objects (`Shift`/`Ctrl`/`A`/`B`/`G`).
   - **`.qvm` Keybindings Authority (`qedkeybindings.qvm`)**: `Config::Load()` and `App::LoadHelpEntries()` now parse the compiled `qedkeybindings.qvm` via `QVM_Parse` + `QVM_DecompileToString` (just like `qedconfig.qvm`), and `App::ProcessInput()` reads all continuous camera bindings (`CameraMoveForward`, `CameraMoveBackward`, `CameraStrafeLeft`, `CameraStrafeRight`, `CameraMoveUp`, `CameraMoveDown`) strictly from `Config::Get()` / `eventBindings_` with zero hardcoded key codes.
-  - **Pause Menu IGI-RE Font & Layout (`font3.fnt`)**: `App::PauseMenuBuildOptions()`, `App::PauseMenuLayoutNow()`, and the pause menu renderer in `Renderer::Draw` now always use the retail `font3.fnt` extracted from `MENUSYSTEM/ingamemenu.res` (`Sprite_Load` HOOK `0x4B6720`, `MenuManager_AddResource` HOOK `0x417E20`) at its native `21px` line height and `25px` row pitch (`MenuWindow_Arrange` HOOK `0x4244B0`, `MenuWindow_Place` HOOK `0x424420`), while the `Font: Editor/System` row continues to control the editor HUD font.
-- **QVM Bytecode Execution & Arithmetic Parity (`Qvm_OpBinary` / `Qvm_OpBranch`)** — aligned QVM bytecode instruction semantics with IGI-RE (`Qvm_OpBinary` HOOK `0x4BDC40`, `src/qsc/qvmop.c:113-133`; `Qvm_OpBranch` HOOK `0x4BD730`, `src/qvm/qvm.c:594`; `Qvm_IsZero` `:79-82`):
+  - **Pause Menu retail engine Font & Layout (`font3.fnt`)**: `App::PauseMenuBuildOptions()`, `App::PauseMenuLayoutNow()`, and the pause menu renderer in `Renderer::Draw` now always use the retail `font3.fnt` extracted from `MENUSYSTEM/ingamemenu.res` (`Sprite_Load` HOOK `0x4B6720`, `MenuManager_AddResource` HOOK `0x417E20`) at its native `21px` line height and `25px` row pitch (`MenuWindow_Arrange` HOOK `0x4244B0`, `MenuWindow_Place` HOOK `0x424420`), while the `Font: Editor/System` row continues to control the editor HUD font.
+- **QVM Bytecode Execution & Arithmetic Parity (`Qvm_OpBinary` / `Qvm_OpBranch`)** — aligned QVM bytecode instruction semantics with retail engine (`Qvm_OpBinary` HOOK `0x4BDC40`, `src/qsc/qvmop.c:113-133`; `Qvm_OpBranch` HOOK `0x4BD730`, `src/qvm/qvm.c:594`; `Qvm_IsZero` `:79-82`):
   - Integer shift left/right (`0x1D`/`0x1E`) now masks the shift count with `& 31` and uses unsigned casts for left shift, matching the engine and eliminating C++ UB on shift count >= 32.
   - Floating-point division (`0x1C`) matches the retail x87 FPU IEEE behavior by returning IEEE inf/nan on zero denominators instead of aborting the script VM.
   - Floating-point branch conditions (`0x15` BF, `0x16` BT) evaluate `!isnan(f) && f != 0.0f`, correctly treating NaN as false/zero matching retail x87 `fcomp` C3 unordered flag semantics.
 - **Wire Serialization & Notepad Parse Parity (`Wire_Open`)** — `LevelObjects::ParseTaskLine` now explicitly handles `Wire` tasks (`Wire_Open` HOOK `0x43EFF0`, `src/props/wire.c:89-113`), preventing args 6-8 (`end` ObjectPos) from being misparsed as Euler rotation angles `rot.x, rot.y, rot.z`. Wires dynamically compute their orientation from `end - start` (`Wire_ParamsChanged` HOOK `0x43F3D0`), and both anchors are now accurately preserved.
-- **GuardGenerator Lifecycle Parity (`GuardGenerator_Run` / `GuardGenerator_Activate`)** — aligned `RuntimeWorld` guard generator lifecycle and mission script symbol registration with IGI-RE (`GuardGenerator_Run` HOOK `0x487EE0`, `src/levelflow/guardgen.c:114-135`; `GuardGenerator_Activate` HOOK `0x488430`, `:320-334`). Guard generators now track active guard deaths before triggering sequential spawns up to `maxSpawns`, and correctly register `<name>.isSpawned` and `<name>.nSpawns` expressions in addition to `.isOn` and `.nMaxSpawns`. Added regression unit test verifying `isSpawned` lifecycle across generator on/off transitions.
+- **GuardGenerator Lifecycle Parity (`GuardGenerator_Run` / `GuardGenerator_Activate`)** — aligned `RuntimeWorld` guard generator lifecycle and mission script symbol registration with retail engine (`GuardGenerator_Run` HOOK `0x487EE0`, `src/levelflow/guardgen.c:114-135`; `GuardGenerator_Activate` HOOK `0x488430`, `:320-334`). Guard generators now track active guard deaths before triggering sequential spawns up to `maxSpawns`, and correctly register `<name>.isSpawned` and `<name>.nSpawns` expressions in addition to `.isOn` and `.nMaxSpawns`. Added regression unit test verifying `isSpawned` lifecycle across generator on/off transitions.
 - **TaskTree Right-Click Selection & Transparent HUD Overlay Parity (`v3.6.11-pre` / `80320697`)** — fixed right-click behavior and restored the transparent overlay style when interacting with the TaskTree hierarchy and property panels:
   - Right-clicking any node in the TaskTree HUD (`x < 350`) now queries `ProcessTreeViewHover(x, y)` to immediately select the clicked node, open its property panel, synchronize `marker_manip_.start_pos_` and `marker_manip_.start_rot_`, load its AI script, and disarm terrain sculpting mode.
   - Right-clicking a 3D object in the viewport when hover picking has not yet settled now performs an immediate `PickObjectAtScreenPos(x, y)` fallback before entering terrain sculpting mode, and arrow-key / `Tab` selection in the TaskTree synchronizes `marker_manip_.start_pos_` and `marker_manip_.start_rot_`.
@@ -85,14 +85,14 @@ than invented. Tested and verified on both **Windows** and **macOS**.
   - Unified `ProcessInput` movement, strafe, and `move_speed_` acceleration so holding `ALT` + `WASD`/`Q`/`E` (polled via `Utils::IsKeyPressed` when FreeGLUT suppresses `OnKeyboard` under `ALT`) and `ALT+Shift`/`ALT+Ctrl` smoothly accelerate and move the camera at full WASD speed.
   - Cached `BuildEngineSkinVertices` per model in `Renderer::DrawSkinnedMesh` (`engine_skin_vertices_cache_`) and restricted `skinnedReplacementIndices` to `selected_object_index_` while `ALT` camera mode is held (`camMode`), eliminating per-frame CPU skinning allocations and keeping the TaskTree HUD steady without 100 ms fast-preview flickering.
   - Fixed boundary pointer-warp race in `Input_OnMotion` so synthetic warp events to screen center are cleanly ignored without misinterpreting queued pre-warp mouse deltas.
-- **Mission Runtime Engine Fidelity (`EditVariable`, `LevelTimer`, `AreaActivate`, `CutScene`, `Door`, `StatusMessage`)** — aligned core mission evaluation mechanisms in `RuntimeWorld` with IGI-RE:
+- **Mission Runtime Engine Fidelity (`EditVariable`, `LevelTimer`, `AreaActivate`, `CutScene`, `Door`, `StatusMessage`)** — aligned core mission evaluation mechanisms in `RuntimeWorld` with retail engine:
   - **`EditVariable` rounding** (`EditVariable_Run` HOOK `0x4889B0`, `src/levelflow/editvar.c:59-66`): Replaced integer truncation with `TryRoundMissionExpressionValue` (`std::llround`), matching `round_int` using x87 FPU `fistpll` rounding (`src/levelflow/levelflow.h:41-47`).
   - **Seconds-to-ticks & `CutScene` speed rounding** (`CutScene_Open` HOOK `0x4F4B70`, `src/cutscene/cutscene.c:259`; `CutScene_RunHandler` HOOK `0x4F51D0`, `:374-391`; `CutScene_Update` HOOK `0x4F5400`, `:445`; `ExplodeObject_BlastHandler` HOOK `0x481EA0`, `src/camera/explodeobject.c:371`; `StatusMessageScreen_UpdateLine` HOOK `0x485B80`, `src/mission/statusmessage.c:322, 328`): `SecondsToSimulationTicks` and `CutScene` `time_delta_expression` (`speedExpr`) now round via `std::llround` (`round_ll`), support `0.0` (pause) and negative speed deltas, and clamp `c->tick` at `>= 0`.
   - **Boolean condition `round_ll` / `x87_fistp` conversion** (`LevelTimer_Run` HOOK `0x51BE10`, `src/nodereg/leveltimer.c:164`; `Door_RunHandler` HOOK `0x446D10`, `src/door/door.c:417`; `CutScene_RunHandler` HOOK `0x4F51D0`, `src/cutscene/cutscene.c:375-376`; `GuardGenerator_Run` HOOK `0x487EE0`, `src/levelflow/guardgen.c:119`; `ExplodeObject_RunHandler` HOOK `0x481970`, `src/camera/explodeobject.c:261`): Evaluated condition expressions via `TryEvaluateRoundedCondition` (`(char)std::llround(val) != 0`), matching the engine's FPU rounding rather than non-zero float comparison.
   - **`LevelTimer` execution sequence** (`LevelTimer_Run` HOOK `0x51BE10`, `src/nodereg/leveltimer.c:159-174`): Evaluates `run` expression first, `reset` expression second (resetting `nTick = 0`), and increments `nTick` third when running.
   - **`AreaActivate` containment & criteria** (`AreaActivate_Contains` HOOK `0x5042B0`, `src/editobj/areaactivate.c:83-107`, and `AreaActivate_AddCriteria` HOOK `0x504A30`, `src/soldier/human.c:300-303`): Replaced AABB check with exact OBB containment test in local coordinates (`local = transpose(orientation) * delta` tested against `[-half, +half]`), and matched `CRITERIA_HUMAN` as well as team 0 criteria for human player detection.
   - Added unit regression tests in `tests/test_runtime_subsystems.cpp` verifying fractional `EditVariable` rounding, `CutScene` `speedExpr` rounding/clamping, `round_ll` boolean condition rounding, `LevelTimer` reset execution order, and exact OBB rejection outside rotated activation zones.
-- **Weather Parse Sequence Parity** — `ResolveLevelWeather` now continues parsing instead of dropping weather when an inactive `RainEffect` precedes an active one (closes D14 in `docs/igi-re-parity/RAIN.md`).
+- **Weather Parse Sequence Parity** — `ResolveLevelWeather` now continues parsing instead of dropping weather when an inactive `RainEffect` precedes an active one (closes D14 in `docs/parity/RAIN.md`).
 
 ### Loaders now follow the engine's own path
 
@@ -153,26 +153,26 @@ than invented. Tested and verified on both **Windows** and **macOS**.
 
 ### Fixes to reported defects
 
-- **ExplodeObject script trigger and blast delay parity with IGI-RE** —
+- **ExplodeObject script trigger and blast delay parity with retail engine** —
   aligned `RuntimeWorld::UpdateAuthoredExplodeObjects` and `ApplyExplosionDamage` with retail
   `ExplodeObject_RunHandler` (`src/camera/explodeobject.c:260-263`) and `ExplodeObject_BlastHandler`
   (`:368-372`). Script expressions detonate immediately upon evaluating true without waiting for
   explosion delay, while blast damage from adjacent explosions arms the authored countdown timer
   (`delay * kFrames`), staggering chain explosions.
-- **Magic object ATTA expansion rules and sibling recursion aligned with IGI-RE** —
+- **Magic object ATTA expansion rules and sibling recursion aligned with retail engine** —
   `DrawAttachmentsRecursive` and `DrawAttachmentsForPicking` now enforce retail child expansion
   rules (`src/shadow/sector.c:673-676`, `:190`, `src/magicobj/rigidcoll.c:383-496` via
   `igi::MagicObjectTypeChildExpansion`). Sibling attachments sharing identical models are no longer
   improperly blocked by static string keys; cycle prevention is now tracked along the active ancestor
   call-stack.
-- **AmbientArea runtime simulation wired to IGI-RE oracle** — authored `AmbientArea` tasks
+- **AmbientArea runtime simulation wired to retail engine oracle** — authored `AmbientArea` tasks
   (162 across retail corpus) are now loaded in `mission_state_loader.cpp` and ticked during
   gameplay simulation via `RuntimeWorld::UpdateAuthoredAmbientAreas()`. Fades in (+0.05/tick)
   when the player enters the authored 3D box, triggers delay-gated audio loops, and fades out
   (-0.05/tick) upon exit, matching `src/aiaction/ambientarea.c:125-179`.
 - **ALT camera movement lag eliminated** — camera look and orbit no longer stutter or drop frames
   relative to WASD movement.
-- **ConditionalSound one-shot loop rule aligned with IGI-RE** — `RuntimeWorld` now invokes
+- **ConditionalSound one-shot loop rule aligned with retail engine** — `RuntimeWorld` now invokes
   `igi::TickConditionalSound` matching `ConditionalSound_Run` (`src/vehicle/condsound.c:121-136`):
   one-shot conditional loops are never prematurely terminated when their trigger condition falls.
 - **ATTACH child picking transform and model ID parity** — unified `DrawObjectParts` in picking
@@ -208,7 +208,7 @@ than invented. Tested and verified on both **Windows** and **macOS**.
 - **No in-process lightmap baker.** The engine has **no `.olm` writer at all** (`.olm` appears
   three times in the decompilation, all read-side; `gLightmapBuilt` is never read), so "bake
   in-process and save" has no engine behaviour to be faithful to. See
-  `docs/igi-re-parity/LIGHTMAP_BAKE.md` §9.
+  `docs/parity/LIGHTMAP_BAKE.md` §9.
 
 ## 3.6.11-pre — Weather Controls, Rail Tracks/Spline Accuracy, and Viewport Fixes
 

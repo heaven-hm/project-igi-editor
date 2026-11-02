@@ -9,7 +9,7 @@ namespace igi {
 // The pause panel's geometry, derived from the retail in-game menu.
 //
 // Every number that is a *retail* number lives in source/runtime/pause_menu_style.h
-// with its IGI-RE citation; this header only turns those into a layout for the
+// with its retail engine citation; this header only turns those into a layout for the
 // editor's viewport, which is a different size from the game's 640x480 menu
 // space and which carries more rows (16, or 21 with the terrain options open)
 // than the game's five.

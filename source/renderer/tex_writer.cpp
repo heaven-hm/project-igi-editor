@@ -3,7 +3,7 @@
  * @brief   LOOP texture parser (engine Texture_LoadFile) and TGA export.
  *
  * Every field offset, size and pixel-format rule below is transcribed from
- * IGI-RE, the decompiled retail IGI.exe:
+ * retail engine, the decompiled retail IGI.exe:
  *
  *   Texture_LoadFile            0x4B24C0  src/file/texture.c:231-252
  *     LoopHeader2  (v2)                   src/file/texture.c:11-21

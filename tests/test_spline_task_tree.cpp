@@ -29,7 +29,7 @@
  *
  * THE ORACLE
  * ----------
- *   IGI-RE src/editobj/spline.c:177-225  SplineObj_Open HOOK 0x502250
+ *   retail engine src/editobj/spline.c:177-225  SplineObj_Open HOOK 0x502250
  *     ParamTable_New(10) @:204, ParamTable_Add @:205-214 (gSplineObjSegmentRange
  *     2..20 @:202-203); ParamTable_New(8) @:215, ParamTable_Add @:216-223.
  *   MISSIONS/location0/level1/objects.qsc:2-4 — the shipped level's own

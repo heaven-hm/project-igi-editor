@@ -28,7 +28,7 @@ constexpr float kDamagingImpactHearingRadiusUnits = 40960.0f;
 // In IEEE float32 the same expression is exactly 14.0f, so this was invisible in
 // the host-native lane and only appeared in the 32-bit build.
 //
-// The engine has this hazard too and IGI-RE answers it with
+// The engine has this hazard too and retail engine answers it with
 // `#pragma GCC optimize("excess-precision=standard")` (src/dirlight/lightmapbuild.c:4-5).
 // That pragma governs a whole translation unit; here only one comparison matters, so
 // the excess is clamped against the threshold instead.  The tolerance is the precision

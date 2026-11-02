@@ -7,7 +7,7 @@
  * containers, byte for byte where the operand layouts are concerned, and against
  * hand-written `QVM_DecompileToString`-format text for the second entry point.
  *
- * Oracle: IGI-RE, a verified C decompilation of retail IGI.exe.
+ * Oracle: retail engine, a verified C decompilation of retail IGI.exe.
  *   src/qvm/qvm.c:641-689      Qvm_OpCall 0x4BD880 -- CALL = count at +1, one int32
  *                              code offset per argument, resume at pc + argc*4 + 5
  *   src/qvm/qvm.c:433-486      Qvm_Load 0x4BD220 -- "LOOP", version 8, unk08 >= 5
@@ -136,7 +136,7 @@ std::vector<std::string> DescendantTypes(const igi::MenuWidget& widget) {
 }
 
 // The declared parameter count each retail container carries, read from its own
-// Task_DeclareParameters statements (see the dump in docs/igi-re-parity/MENU_SYSTEM.md).
+// Task_DeclareParameters statements (see the dump in docs/parity/MENU_SYSTEM.md).
 const std::map<std::string, int>& IngameMenuDeclaredFields() {
     static const std::map<std::string, int> declared = {
         {"MenuManager", 3},  {"MenuFrame", 9},   {"MenuScreen", 8},     {"MenuText", 5},

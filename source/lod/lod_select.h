@@ -3,7 +3,7 @@
 
 // The per-frame LOD switch — `lod_select` and `ModelObj_GetLOD`, verbatim.
 //
-// IGI-RE (faithful decompilation of retail IGI.exe):
+// retail engine (faithful decompilation of retail IGI.exe):
 //
 //   static int lod_select(const VirModel *vm, long double dist, long double r,
 //                         long double k, float detail, float cull, int warn)   src/lod/mesh3d.c:161-208

@@ -6,7 +6,7 @@
 //       atan2/asin instead of the engine's Hermite curve + Matrix_SetDirection
 //       + orient(), and
 //   (c) spaced every wagon by a cumulative offset that also drove its heading.
-// Each test below asserts the IGI-RE behaviour the replacement helpers implement,
+// Each test below asserts the retail engine behaviour the replacement helpers implement,
 // with the old result named where it differs. Every expected value is derived
 // from the reconstructed engine code; the file:line in each test is the source of
 // the rule being pinned.

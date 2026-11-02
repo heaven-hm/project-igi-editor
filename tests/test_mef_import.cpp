@@ -7,7 +7,7 @@
 //                         (ParseMefFile) and the geometry is compared.  The
 //                         ILFF container, the render chunks and the collision
 //                         chunks are each checked against the layout derived
-//                         from IGI-RE (see docs/igi-re-parity/MEF_IMPORT.md).
+//                         from retail engine (see docs/parity/MEF_IMPORT.md).
 //
 //   * MefImportCorpus*  — enabled by pointing IGI_MEF_CORPUS or IGI_GAME_PATH
 //                         at a retail IGI install.  Every static retail model

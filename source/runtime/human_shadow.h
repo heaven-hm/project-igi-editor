@@ -6,13 +6,13 @@
  * WHY THIS EXISTS
  *   Issue #63 asked for "infer light fixtures from emissive geometry + baked
  *   lightmaps", ported from open-igi's `LightFixtureExtractor`. That premise is
- *   refuted: IGI-RE has no `LightFixture` type, no `fixture` symbol and no
+ *   refuted: retail engine has no `LightFixture` type, no `fixture` symbol and no
  *   PointLight/SpotLight/DirectionalLight task type, so there is NO ENGINE ORACLE
  *   for an inferred fixture list and none is implemented here. The one shadow the
  *   engine does have is a flat blob quad under each human, and that is what this
  *   module ports.
  *
- * ENGINE BASIS (IGI-RE, /Users/haseeb-mir/Documents/Code/IGI-RE, read-only):
+ * ENGINE BASIS (retail engine, the retail engine source, read-only):
  *
  *   src/shadow/shadow.h:13-38   the `Shadow` task and its `ShadowPoly` triangles
  *                               ("a blob shadow quad under its owner")
@@ -107,7 +107,7 @@
 namespace igi {
 
 // ---------------------------------------------------------------------------
-// Engine constants. Every one is IGI-RE DATA.
+// Engine constants. Every one is retail engine DATA.
 // ---------------------------------------------------------------------------
 
 // statgun/mp5sd.c:120-122 -- DATA(5336CC) float kZoomIn INIT(0.8f), and

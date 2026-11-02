@@ -10,7 +10,7 @@
  *   what the band did: `[App] Snap complete. snapped=0 skipped=1843
  *   no_terrain=26` -- no human was ever moved.
  *
- * ENGINE BASIS (IGI-RE, /Users/haseeb-mir/Documents/Code/IGI-RE, read-only)
+ * ENGINE BASIS (retail engine, the retail engine source, read-only)
  *
  *   * Game_DropToGround HOOK 0x4149B0 (src/game/misc.c:75-97) is the engine's
  *     canonical "put this on the ground":

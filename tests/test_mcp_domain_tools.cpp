@@ -501,7 +501,7 @@ TEST_F(McpDomainToolsTest, DerivesTransformAndModelLayoutsFromSchemas) {
     const auto camera = mcp::CallObjectTool(
         *service_, "object_get_schema", mcp::JsonValue::Object{{"type", "SCamera"}}, error);
     ASSERT_TRUE(error.empty()) << error;
-    // SCamera has no 3-float orientation in retail. IGI-RE src/scamera/scamera.c:116-131
+    // SCamera has no 3-float orientation in retail. retail engine src/scamera/scamera.c:116-131
     // (HOOK 0x442730) and the retail objects.qsc declaration both give:
     // Holder Gamma (yaw)@6, Holder Model (String16)@7, Camera Alpha (pitch)@8,
     // Camera Gamma (extra yaw)@9, Camera Model (String16)@10, Camera Destroyed

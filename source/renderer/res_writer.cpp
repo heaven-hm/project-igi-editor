@@ -3,7 +3,7 @@
  * @brief   RES archive reader and writer.
  *
  * Reader: a transcription of the engine's own resource layer. Oracle:
- * /Users/haseeb-mir/Documents/Code/IGI-RE (decompiled retail IGI.exe).
+ * the retail engine source (decompiled retail IGI.exe).
  *
  *   Resource_Add        0x4B5F80  src/res/resource.c:281-317
  *   Resource_AddChunks  0x4B60F0  src/res/resource.c:328-375

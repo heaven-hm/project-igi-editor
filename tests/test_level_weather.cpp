@@ -224,7 +224,7 @@ TEST(LevelWeatherTest, FalseVarStringDoesNotEnableWeather) {
 }
 
 TEST(LevelWeatherTest, InactivePrecedingRainEffectDoesNotMaskActiveRainEffect) {
-    // D14 (docs/igi-re-parity/RAIN.md): An inactive RainEffect should not cause
+    // D14 (docs/parity/RAIN.md): An inactive RainEffect should not cause
     // the parser to return 'no weather' and ignore a subsequent active effect.
     const igi::LevelWeatherSettings weather = igi::ResolveLevelWeather({
         RainEffect("TRUE", "FALSE"),

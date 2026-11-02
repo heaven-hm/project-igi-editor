@@ -8,7 +8,7 @@
  * This header carries ONLY values that come from one of two places, both named
  * per constant below:
  *
- *   (a) the engine's own drawing code, in IGI-RE (a verified C decompilation of
+ *   (a) the engine's own drawing code, in retail engine (a verified C decompilation of
  *       retail IGI.exe), cited as function + HOOK address + file:line; and
  *   (b) the retail menu DATA, `menusystem/ingamemenu.qvm` screen 900, which the
  *       engine loads through `MenuManager_New` (HOOK 0x418B00,
@@ -53,7 +53,7 @@ namespace igi {
 //
 // `menusystem/ingamemenu.qvm`, screen 900 "Main Menu".  Decoded with
 // `igi::MenuDefinition::FromQvmFile`; the field names are the screen's own
-// `Task_DeclareParameters` names (docs/igi-re-parity/MENU_SYSTEM.md §6), and the
+// `Task_DeclareParameters` names (docs/parity/MENU_SYSTEM.md §6), and the
 // argument order is the C `ParamTable` order registered by
 // `MenuScreen_Init` (HOOK 0x421750, src/menuscreen/menuscreen.c:58-67) and
 // `MenuFrame_Init` (HOOK 0x4223D0, src/widget/menuframe.c:48-58):

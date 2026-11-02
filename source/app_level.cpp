@@ -892,7 +892,7 @@ void App::FlushAttaProxiesToMef() {
 		// Rotation: rebuild the world rotation matrix from the authored Euler
 		// triple in the engine's order, then convert to local rotation:
 		// localRot = parentRotInv * worldRot. The upper-left 3x3 of
-		// attaInvParentMat IS parentRotInv. IGI-RE `Matrix_SetEuler`
+		// attaInvParentMat IS parentRotInv. retail engine `Matrix_SetEuler`
 		// (HOOK 0x4B38E0, src/math/matrix.c:99-110) composes Rz*Ry*Rx; this site
 		// used Rz*Rx*Ry, so a promoted ATTA child on a rotated parent was written
 		// back to the MEF with the wrong local rotation. See renderer/igi_transform.h.

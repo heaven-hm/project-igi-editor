@@ -1,7 +1,7 @@
 // test_heli_preview.cpp - the placed-helicopter FLIGHT PREVIEW (#60): the engine's
 // own per-tick sequence, pinned tick by tick.
 //
-// The oracle for every number here is IGI-RE (read-only). Key citations:
+// The oracle for every number here is retail engine (read-only). Key citations:
 //   heli/heli.c:358-405   Heli_Control 0x431B70: the axes assignment, the -1.0f
 //                         throttle sentinel, the tick-0 reset, the `tick > 0`
 //                         Heli_Move gate
@@ -225,7 +225,7 @@ std::vector<std::vector<std::string>> ExtractHeliCalls(const QVMFile& qvm) {
 }
 
 // The level-2 helicopter the shipped LEVEL2/OBJECTS.QVM places. LEVEL2 is the
-// only retail level with a placed Heli (docs/igi-re-parity/HELICOPTER.md).
+// only retail level with a placed Heli (docs/parity/HELICOPTER.md).
 std::vector<std::string> Level2HeliTokens() {
     const fs::path path = GameRoot() / "MISSIONS" / "location0" / "LEVEL2" / "OBJECTS.QVM";
     if (!fs::is_regular_file(path)) return {};

@@ -65,7 +65,7 @@ struct LevelObject {
     // authored "Weapon ID" string (arg@10, default "WEAPON_ID_M2HB"). The engine
     // creates that Gun task as a child and mounts it at
     // `baseMatrix * Matrix_SetEuler(outPitch, 0, PI)` -- StationaryGun_Aim
-    // 0x474420, IGI-RE src/statgun/statgun.c:241-258, with the weapon type's
+    // 0x474420, retail engine src/statgun/statgun.c:241-258, with the weapon type's
     // model from `WeaponType_Find(id)->key` (src/guncasing/gun.c:506,
     // DefineWeaponType arg 29). Empty = no weapon resolved; the renderer then
     // draws no weapon (it never substitutes one).
@@ -124,13 +124,13 @@ struct LevelObject {
     std::string secondaryModelId;  // SCamera arg 11: "Camera Destroyed Model" (the broken model)
     std::string lensModelId;       // SCamera arg 10: "Camera Model" — the SCameraLens child's model
     // SCamera arg 7 ("Holder Model") is the model THIS task draws, so it is stored in
-    // modelId: IGI-RE src/scamera/scamera.c:116-131 declares it third in the param
+    // modelId: retail engine src/scamera/scamera.c:116-131 declares it third in the param
     // table and SCamera_Create hands `c->model` to RigidDynCubeObj_SetModel
     // (scamera.c:240) before placing it at the authored spot (scamera.c:242). Arg 10
     // is `FIELD(lens_model)` and belongs to the separate SCameraLens child task
     // (scameralens.c:204), which the retail scripts never instantiate.
     // SCamera "Camera Gamma" (QSC arg 9): an extra yaw added to the lens direction.
-    // IGI-RE src/scamera/scameralens.c:204 builds the camera eye with
+    // retail engine src/scamera/scameralens.c:204 builds the camera eye with
     //   Matrix_SetEuler(&l->o.matrix, l->pitch, 0, l->yaw + c->yaw + c->yaw_offset)
     // i.e. arg 9 is a YAW offset, never roll. The editor keeps the authored value
     // separately so the QSC round-trip stays lossless, and folds it into rot.z for
@@ -168,7 +168,7 @@ struct LevelObject {
     bool preserveTaskId = false; // Keep Task_New arg[0] as an integer token
     int modelIdArgIdx = -1; // Index of the modelId argument in argTokens
 
-    // ── Wire / zipline (IGI-RE src/props/wire.c, GitHub issue #42) ────────────
+    // ── Wire / zipline (retail engine src/props/wire.c, GitHub issue #42) ────────────
     // A "Wire" task owns two ObjectPos anchors: start at args 3-5 (mirrored by the
     // live `pos`) and end at args 6-8. The end anchor is read straight from
     // argTokens so an inspector edit of the "End" field previews immediately.
@@ -176,12 +176,12 @@ struct LevelObject {
     // numeric (in which case start/end are left untouched).
     bool WireAnchors(glm::dvec3& start, glm::dvec3& end) const;
 
-    // Resolved fire arc / ammo of a StationaryGun (args 10-14, IGI-RE
+    // Resolved fire arc / ammo of a StationaryGun (args 10-14, retail engine
     // src/statgun/statgun.c:142-150). `valid` is false for any other task type.
     TaskSchemaNS::Props::StationaryGunParams StatGunParams() const;
 
     // Resolved detection arc / range / expressions of an AIStationaryGunHolder
-    // (args 10-14, IGI-RE src/comprun/gunholder.c:157-165).
+    // (args 10-14, retail engine src/comprun/gunholder.c:157-165).
     TaskSchemaNS::Props::GunHolderParams GunHolderParams() const;
 };
 

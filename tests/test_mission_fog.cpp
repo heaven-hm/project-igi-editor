@@ -1,6 +1,6 @@
 // test_mission_fog.cpp - per-mission authored fog (#66).
 //
-// The oracle for every number here is IGI-RE (read-only). Key citations:
+// The oracle for every number here is retail engine (read-only). Key citations:
 //   globallight.c:115,117-140,264-285   the fog colour/density ParamTable, publish()
 //   light.c:55-72,172-175               Fog_Compute and its constants
 //   spline.c:13-20                      Float_Log2 - a bit trick, NOT log2
@@ -128,7 +128,7 @@ TEST(MissionFogTest, EFoldingDistanceIsTheEngineFogDistance) {
 }
 
 TEST(MissionFogTest, FogIntensityScaleIsOneAtTheLevelDefault) {
-    // The Fog Intensity spinner is the editor's OWN preview control -- IGI-RE has
+    // The Fog Intensity spinner is the editor's OWN preview control -- retail engine has
     // no fog-intensity field anywhere -- so the one value that reproduces retail is
     // 100, and a level must start there (App::LoadLevel resets it; the default was
     // 200, i.e. TWICE retail's density, because the exponent is doubled).

@@ -15,7 +15,7 @@
 // depth 17); the engine's 32-byte walk from node 1 reaches 2 nodes.  So the
 // fatal-abort is what loses the level, not the parse.
 //
-// ORACLE (IGI-RE, read-only):
+// ORACLE (retail engine, read-only):
 //   src/terrain/terrain.c:128-130  Terrain_Load HOOK 0x4C6240: t->ctr = Resource_Load(..., &ctr_size)
 //   src/terrain/terrain.c:142-143  the loop is `i < (ctr_size >> 5)` and adds the .cmd base to leaf
 //   src/coll/colltypes.h:95-101    CollNode: child[8] u16, code[8] u8, mask u8, pad[3], leaf

@@ -17,7 +17,7 @@
  *      through ParseTaskLine had no graph origin, no node count and no graph id.
  *
  * This file guards 3, and pins the argument layout of both types against the fields
- * LoadRecursive sets.  IGI-RE is the oracle throughout.
+ * LoadRecursive sets.  retail engine is the oracle throughout.
  ******************************************************************************/
 
 #include <gtest/gtest.h>

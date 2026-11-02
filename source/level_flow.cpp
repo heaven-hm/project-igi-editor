@@ -358,7 +358,7 @@ std::string LevelFlow::GetObjectiveDisplayText() const {
     // touch the archive again.
     //
     // ComputerObjectives_Draw is the engine's ONLY objective text display: a
-    // search of IGI-RE for "objective" outside src/compmap, src/computer and
+    // search of retail engine for "objective" outside src/compmap, src/computer and
     // the StatusMessage keys finds only the module registration
     // (src/flow/modules.c:201-210, :368-372) and the symbol table (src/addr.c).
     // Retail has no in-world HUD objective line at all -- the HUD's top-left

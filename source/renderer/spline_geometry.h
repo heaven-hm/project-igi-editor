@@ -79,7 +79,7 @@ struct BentSegmentMesh {
 };
 
 // ---------------------------------------------------------------------------
-// SplineObj spans and rails (IGI-RE src/editobj/spline.c, src/tagitem/spline.c,
+// SplineObj spans and rails (retail engine src/editobj/spline.c, src/tagitem/spline.c,
 // src/sound/segsetup.c, src/shadow/spline.c)
 // ---------------------------------------------------------------------------
 
@@ -93,7 +93,7 @@ glm::dmat3 EngineEulerMatrix(const glm::dvec3& euler) noexcept;
 // editor's Euler-typed object fields.
 glm::dvec3 EngineMatrixToEuler(const glm::dmat3& frame) noexcept;
 
-// One joint of a SplineObj span: IGI-RE SplineObjSegment.segPos (0x104) and
+// One joint of a SplineObj span: retail engine SplineObjSegment.segPos (0x104) and
 // .segRot (0x200), src/sound/soundtypes.h:57-58.
 struct SplineJoint {
     glm::dvec3 pos{0.0};   // relative to the span's mid point
@@ -101,7 +101,7 @@ struct SplineJoint {
 };
 
 // One SplineObj span: the segment running from waypoint `from` to waypoint `to`
-// (IGI-RE SplineObjSegment_Setup, HOOK 0x4E4530, src/sound/segsetup.c:256-366).
+// (retail engine SplineObjSegment_Setup, HOOK 0x4E4530, src/sound/segsetup.c:256-366).
 struct SplineSpan {
     glm::dvec3 from{0.0};
     glm::dvec3 to{0.0};

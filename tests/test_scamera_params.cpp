@@ -1,13 +1,13 @@
 /******************************************************************************
  * @file    test_scamera_params.cpp
- * @brief   SCamera QSC argument layout, against IGI-RE and the shipped retail
+ * @brief   SCamera QSC argument layout, against retail engine and the shipped retail
  *          level scripts.
  *
- * IGI-RE is the oracle. `SCamera`'s parameter table is built in
+ * retail engine is the oracle. `SCamera`'s parameter table is built in
  * src/scamera/scamera.c:116-131 (HOOK 0x442730, ParamTable_New(15)) in exactly
  * this order, which the retail `objects.qsc` declaration repeats verbatim:
  *
- *   index  IGI-RE field      retail name                QSC arg
+ *   index  retail engine field      retail name                QSC arg
  *   -----  ---------------   -------------------------  -------
  *   0      place (ObjectPos) "Holder Position"          3,4,5
  *   1      yaw (Angle)       "Holder Gamma"             6
@@ -61,7 +61,7 @@ namespace {
 // The first SCamera in the shipped MISSIONS/location0/LEVEL1/objects.qsc, copied
 // verbatim (only the trailing expression shortened). It is the strongest single
 // piece of evidence in this file: its args 7/10/11 are "313_01_1" / "313_02_1" /
-// "313_03_1", i.e. exactly IGI-RE's `model` / `lens_model` / `broken_model`
+// "313_03_1", i.e. exactly retail engine's `model` / `lens_model` / `broken_model`
 // defaults in scamera.c:181-185, in the declared order.
 constexpr const char* kRetailLevel1Scamera =
     "Task_New(1301, \"SCamera\", \"\", 24653762.0, -56288568.0, 174435808.0, "
@@ -155,7 +155,7 @@ std::filesystem::path GameRoot() {
 }  // namespace
 
 // The shipped line must land on the documented layout, and its three model ids
-// must be IGI-RE's own defaults for model / lens_model / broken_model.
+// must be retail engine's own defaults for model / lens_model / broken_model.
 TEST(ScameraParamsTest, RetailLevel1LineMatchesTheEngineLayout) {
     LevelObjects level;
     LevelObject obj;
@@ -175,7 +175,7 @@ TEST(ScameraParamsTest, RetailLevel1LineMatchesTheEngineLayout) {
     // No roll is ever authored for an SCamera.
     EXPECT_DOUBLE_EQ(obj.rot.y, 0.0);
 
-    // arg 7 / 10 / 11 == IGI-RE's model / lens_model / broken_model defaults.
+    // arg 7 / 10 / 11 == retail engine's model / lens_model / broken_model defaults.
     EXPECT_EQ(obj.modelId, "313_01_1");
     EXPECT_EQ(obj.lensModelId, "313_02_1");
     EXPECT_EQ(obj.secondaryModelId, "313_03_1");

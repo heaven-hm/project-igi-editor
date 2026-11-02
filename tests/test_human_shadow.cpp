@@ -1,7 +1,7 @@
 // test_human_shadow.cpp -- the engine's blob shadow quad
-// (source/runtime/human_shadow.h), pinned against IGI-RE.
+// (source/runtime/human_shadow.h), pinned against retail engine.
 //
-// ORACLE (read-only, /Users/haseeb-mir/Documents/Code/IGI-RE):
+// ORACLE (read-only, the retail engine source):
 //   Shadow_MagicObjEnterHandler HOOK 0x4E09D0 (src/shadow/shadow.c:84-146) -- the
 //   visibility gate, the fade, the clamp chain, the colour and the four corners;
 //   Shadow_New HOOK 0x4E0CC0 (src/shadow/shadow.c:154-198) -- the two triangles and
@@ -9,8 +9,8 @@
 //   ground basis; Human_CreateHandler HOOK 0x45EB30 (src/soldier/human.c:337-373) --
 //   the only caller of Shadow_New, and the two constants it passes.
 //
-// The same functions are verified against the retail binary by IGI-RE's own
-// emulator suite (IGI-RE tests/test_shadow_shadow.py, which runs the reconstruction
+// The same functions are verified against the retail binary by retail engine's own
+// emulator suite (retail engine tests/test_shadow_shadow.py, which runs the reconstruction
 // and the original side by side at 0x4E09D0 over 6 heights x 5 directions x 2
 // rounding modes), so these tests pin a rule that has been checked against the
 // shipped executable -- not just against a reading of the decompilation.
@@ -229,7 +229,7 @@ TEST(HumanShadowBasis, ScalesWithTheNormalBecauseTheOriginalNeverNormalizesIt) {
 
 TEST(HumanShadowBasis, TheDegenerateZeroNormalIsAZeroBasisNotNaN) {
     // Vec3f_Normalize returns a zero vector unchanged (matrix.c:48-49), so a zero
-    // direction collapses the quad instead of producing NaNs. IGI-RE's own emulator
+    // direction collapses the quad instead of producing NaNs. retail engine's own emulator
     // suite covers dir = (0,0,0) at 0x4E09D0 for exactly this reason.
     const double up[3] = {0.0, 0.0, 0.0};
     float m[9] = {};
@@ -472,7 +472,7 @@ TEST(HumanShadowOwners, NothingElseOwnsOne) {
 
 // ── The oracle itself ───────────────────────────────────────────────────────
 
-// The constants above are copies of IGI-RE DATA lines. This pins the copies to the
+// The constants above are copies of retail engine DATA lines. This pins the copies to the
 // files, so a change on either side fails here instead of silently drifting. The
 // oracle is an absolute path outside this repository: the test SKIPS when it is not
 // present, which is why it must not be the only check (the value tests above run
@@ -480,8 +480,8 @@ TEST(HumanShadowOwners, NothingElseOwnsOne) {
 class HumanShadowOracle : public ::testing::Test {
 protected:
     static std::string ReadOracle(const std::string& relative) {
-        const char* env = std::getenv("IGI_RE_PATH");
-        const std::string root = env && *env ? env : "/Users/haseeb-mir/Documents/Code/IGI-RE";
+        const char* env = std::getenv("IGI_ORACLE_PATH");
+        const std::string root = env && *env ? env : "the retail engine source";
         std::ifstream in(root + "/" + relative, std::ios::binary);
         if (!in) return std::string();
         return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -490,7 +490,7 @@ protected:
 
 TEST_F(HumanShadowOracle, TheFadeAndColourConstantsAreStillInShadowC) {
     const std::string src = ReadOracle("src/shadow/shadow.c");
-    if (src.empty()) GTEST_SKIP() << "IGI-RE not present (set IGI_RE_PATH)";
+    if (src.empty()) GTEST_SKIP() << "retail engine not present (set IGI_ORACLE_PATH)";
     EXPECT_NE(src.find("INIT({0.9f, 0.9f, 0.9f, 0.0f})"), std::string::npos)
         << "gShadowColor is no longer 0.9,0.9,0.9 in shadow.c:201";
     // The fade formula and the clamp chain.
@@ -502,7 +502,7 @@ TEST_F(HumanShadowOracle, TheFadeAndColourConstantsAreStillInShadowC) {
 
 TEST_F(HumanShadowOracle, ThePlacementConstantsAreStillInHumanC) {
     const std::string src = ReadOracle("src/soldier/human.c");
-    if (src.empty()) GTEST_SKIP() << "IGI-RE not present (set IGI_RE_PATH)";
+    if (src.empty()) GTEST_SKIP() << "retail engine not present (set IGI_ORACLE_PATH)";
     EXPECT_NE(src.find("kShadowSize = 4096000.0f"), std::string::npos);
     EXPECT_NE(src.find("kShadowHeight = 0x1.ccccccp+10f"), std::string::npos);
     EXPECT_NE(src.find("Game_AddTexture(\"shadow1.tex\")"), std::string::npos);
@@ -518,7 +518,7 @@ TEST_F(HumanShadowOracle, TheAliasedFadeConstantsAreStillTheValuesWeUse) {
     const std::string wheel = ReadOracle("src/heli/wheel.c");
     const std::string shatter = ReadOracle("src/glass/shatter.c");
     if (mp5.empty() || wheel.empty() || shatter.empty())
-        GTEST_SKIP() << "IGI-RE not present (set IGI_RE_PATH)";
+        GTEST_SKIP() << "retail engine not present (set IGI_ORACLE_PATH)";
     EXPECT_NE(mp5.find("DATA(5336CC) float kZoomIn INIT(0.8f)"), std::string::npos);
     EXPECT_NE(mp5.find("ALIAS(kShadowFade, kZoomIn, 0)"), std::string::npos);
     EXPECT_NE(wheel.find("DATA(5336A4) const float kThreeTenths INIT(0.3f)"), std::string::npos);
@@ -529,7 +529,7 @@ TEST_F(HumanShadowOracle, TheAliasedFadeConstantsAreStillTheValuesWeUse) {
 
 TEST_F(HumanShadowOracle, TheBlendAndAlphaSourceAreStillTheOnesPorted) {
     const std::string poly = ReadOracle("src/dxinit/polylist.c");
-    if (poly.empty()) GTEST_SKIP() << "IGI-RE not present (set IGI_RE_PATH)";
+    if (poly.empty()) GTEST_SKIP() << "retail engine not present (set IGI_ORACLE_PATH)";
     // The default (flags == 0) branch: ALPHABLENDENABLE 1, SRCBLEND 5 = SRCALPHA,
     // DESTBLEND 6 = INVSRCALPHA.
     EXPECT_NE(poly.find("SET_RS(0x1B, 1);"), std::string::npos);

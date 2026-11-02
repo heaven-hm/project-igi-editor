@@ -8,9 +8,9 @@
 // to the build.
 //
 // Every rule this writer encodes is cited to the verified decompilation of the
-// retail IGI.exe at /Users/haseeb-mir/Documents/Code/IGI-RE, as
+// retail IGI.exe at the retail engine source, as
 // `function_name HOOK(0xADDR), src/path/file.c:LINE`.  See
-// docs/igi-re-parity/MEF_IMPORT.md for the derived layout, the evidence, and
+// docs/parity/MEF_IMPORT.md for the derived layout, the evidence, and
 // the list of things that are NOT proven.
 //
 // Scope: STATIC meshes only (issue #29: "Start with static buildings only — no

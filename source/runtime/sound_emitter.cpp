@@ -583,7 +583,7 @@ AmbientAreaTick TickAmbientArea(AmbientAreaState& state, const AmbientAreaResolv
         // The engine's cond field is not in the ParamTable and no retail
         // instance authors it, so VarString_HasExpr is always false and this
         // branch is dead in the retail data. It is reproduced because it is
-        // what the code does; see docs/igi-re-parity/SOUND.md.
+        // what the code does; see docs/parity/SOUND.md.
         v = (long double)state.volume - kAmbientFadeStep;
     } else {
         // AmbientAreaContainsListener, not the decomposed LocalPoint+Contains

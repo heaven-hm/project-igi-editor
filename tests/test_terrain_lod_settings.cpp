@@ -1,6 +1,6 @@
 // Unit tests for the engine's terrain (QCube) LOD detail scaling.
 //
-// Oracle: IGI-RE (decompilation of retail IGI.exe).
+// Oracle: retail engine (decompilation of retail IGI.exe).
 //   QCube_Begin               HOOK 0x4D2540  src/lod/qcube.c:319-345
 //   QCube_SetDetail           HOOK 0x4D2C20  src/lod/qcube.c:567-571
 //   gQCubeDetail              DATA 0x54844C  src/lod/qcube.c:578
@@ -8,7 +8,7 @@
 //   QCube_Walk                HOOK 0x4D18F0  src/lod/qcubewalk.c:327-361
 //   TerrainMesh_SetupLighting HOOK 0x50FAE0  src/glowmesh/terrainmesh.c:277-292
 //
-// See docs/igi-re-parity/TERRAIN_LOD.md for the full trace, including the
+// See docs/parity/TERRAIN_LOD.md for the full trace, including the
 // derivation that the editor's hardcoded 163 IS this rule at fov <= 1.
 
 #include <gtest/gtest.h>

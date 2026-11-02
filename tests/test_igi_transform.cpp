@@ -2,7 +2,7 @@
 // `Matrix_SetEuler` exactly (issue #37).
 //
 // The reference below is a line-by-line transcription of the verified
-// decompilation in IGI-RE:
+// decompilation in retail engine:
 //   * `src/math/matrix.c:99-110`  Matrix_SetEuler   HOOK(0x4B38E0)
 //   * `src/math/matrix.c:112-164` Matrix_SetRotX/Y/Z HOOK(0x4B3B60/0x4B3BA0/0x4B3BE0)
 //   * `src/math/matrix.c:10-25`   Mul (out = a * b, row-major 3x3)
@@ -24,7 +24,7 @@ struct M3 {
     float m[9];
 };
 
-// --- transcription of IGI-RE src/math/matrix.c ---------------------------------
+// --- transcription of retail engine src/math/matrix.c ---------------------------------
 
 M3 SetRotX(float a) {
     long double s = std::sin(static_cast<long double>(a));
@@ -212,7 +212,7 @@ TEST(IgiTransform, ObjectMatrixIsScaleThenRotateThenTranslate) {
 
 // --- Matrix_GetEuler: the engine's own decomposition ---------------------------
 //
-// IGI-RE `src/math/matrix.c:181-208` `Matrix_GetEuler` (HOOK 0x4B3C50) is the
+// retail engine `src/math/matrix.c:181-208` `Matrix_GetEuler` (HOOK 0x4B3C50) is the
 // inverse of `Matrix_SetEuler`. Transcribed verbatim below, on the engine's
 // row-major 3x3, so the editor's `igi::IgiMatrixToEuler` can be checked against
 // it directly rather than against a round-trip that could hide a shared mistake.

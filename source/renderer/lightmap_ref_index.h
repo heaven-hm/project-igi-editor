@@ -4,7 +4,7 @@
 // Which `.olm` file a lightmapped object's lightmap lives in, and which ref
 // index identifies it -- the engine's rule, verbatim.
 //
-// IGI-RE (faithful decompilation of retail IGI.exe):
+// retail engine (faithful decompilation of retail IGI.exe):
 //
 //   static void fill_refs(int *n, LightmapSet *set, RigidDynCubeObj *o)   src/sector/sector.c:544-563
 //   {
@@ -164,7 +164,7 @@ inline std::string OlmFileNameForFirstLod(const std::string& object_name, const 
 // MEASURED over the retail install (all 14 level bundles, 25,337 shipped `.olm`
 // files): only 1,120 entries are an owner's own LOD, and all 1,120 pass the four
 // conjuncts against that LOD's mesh. The other 24,217 entries are the magic and
-// child refs the editor cannot identify. See docs/igi-re-parity/LIGHTMAP_BAKE.md.
+// child refs the editor cannot identify. See docs/parity/LIGHTMAP_BAKE.md.
 inline bool RefMeshIsIdentified(bool owner_binding, int owner_lod_count, int entry) {
     return owner_binding && entry >= 0 && entry < owner_lod_count;
 }
@@ -214,7 +214,7 @@ inline int LightmapRefForDrawnLod(const RefLayout& layout, int lod_index) {
 //
 // The refs of the OTHER objects in the set (magic objects, rigid children) start
 // at 0 + the owner's lod_count + every preceding object's lod_count, which needs
-// `SectorObject_LoadLightmaps`'s walk — see docs/igi-re-parity/LIGHTMAP_REFS.md.
+// `SectorObject_LoadLightmaps`'s walk — see docs/parity/LIGHTMAP_REFS.md.
 inline int OwnerLightmapEntryForDrawnLod(int lod_index) {
     return lod_index < 0 ? -1 : lod_index;
 }

@@ -51,7 +51,7 @@
 // `count > 1` it silently dropped pages 1..n. Measured on the retail install:
 // 13 shipped `.olm` files carry more than one page (12 with 2, one with 3), and
 // model `428_02_1.mef` is the one whose render groups name page 1 (7 of its
-// blocks; see docs/igi-re-parity/LIGHTMAP_BAKE.md).
+// blocks; see docs/parity/LIGHTMAP_BAKE.md).
 //
 // This is the fast load path for applying baked lightmaps: it avoids spawning
 // `igi1conv olm to-png` once per .olm (which was hundreds of subprocesses per

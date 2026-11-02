@@ -7,9 +7,9 @@
  *     and `font3.fnt` inside `menusystem/ingamemenu.res`), read here with the
  *     same readers the product uses (`igi::MenuDefinition::FromQvmFile`,
  *     `RES_Extract` + `FNT_ParseBytes`), or
- *   * a value from the engine's drawing code in IGI-RE, cited per assertion.
+ *   * a value from the engine's drawing code in retail engine, cited per assertion.
  *
- * Oracle: IGI-RE, a verified C decompilation of retail IGI.exe.
+ * Oracle: retail engine, a verified C decompilation of retail IGI.exe.
  *   src/menuscreen/menuscreen.c:131-150  MenuScreen_DrawHandler HOOK 0x421C20
  *   src/menuscreen/menuscreen.c:168-229  MenuScreen_DrawFrame   HOOK 0x421CD0
  *       :175-178 the +1 inset;  :179 line = y0 + 20;

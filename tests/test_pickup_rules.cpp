@@ -1,6 +1,6 @@
 // test_pickup_rules.cpp - weapon/ammo pickup parity (#75).
 //
-// The oracle for every number here is IGI-RE (read-only). Key citations:
+// The oracle for every number here is retail engine (read-only). Key citations:
 //   comprun/pickup.c:159-170          the touch constants (2867.2 / 4096.0)
 //   comprun/pickup.c:172-200          radius() and touches()
 //   comprun/pickup.c:203-225          register_flag / unregister_flag
@@ -169,7 +169,7 @@ std::vector<std::vector<std::string>> ExtractInstances(const QVMFile& qvm,
     return out;
 }
 
-// The (parameter name, IGI-RE type name) pairs of the first
+// The (parameter name, retail engine type name) pairs of the first
 // `Task_DeclareParameters("<task_type>", ...)` in the file. The task type string
 // itself is the call's first argument and is not part of the pairs.
 std::vector<std::pair<std::string, std::string>> ExtractDeclaration(const QVMFile& qvm,
@@ -838,7 +838,7 @@ TEST(PickupRulesTest, CheckPickupArgsRejectsTheWrongShape) {
 
 namespace {
 
-// IGI-RE's type name for each parameter type, so a declaration read from the
+// retail engine's type name for each parameter type, so a declaration read from the
 // bytecode can be compared against the module's table without a second mapping.
 const char* ParamTypeName(igi::PickupParamType type) {
     switch (type) {

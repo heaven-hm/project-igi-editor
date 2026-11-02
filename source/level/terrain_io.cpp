@@ -10,7 +10,7 @@
 
 /*
 ================================================================================
- Terrain child-task cell grid  (transcribed from IGI-RE, retail IGI.exe)
+ Terrain child-task cell grid  (transcribed from retail engine, retail IGI.exe)
 ================================================================================
 
  Every terrain child task is placed by snapping its script position to a

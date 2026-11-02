@@ -1,7 +1,7 @@
 // test_heli_rules.cpp - the retail "Heli" vehicle task and "Rotor" magic object,
 // pure-logic port (#60).
 //
-// The oracle for every number here is IGI-RE (read-only). Key citations:
+// The oracle for every number here is retail engine (read-only). Key citations:
 //   heli/heli.c:183-201     Heli_Init 0x4310F0: the 13-parameter ParamTable, the
 //                           two ranges, TASKTYPE_HELI
 //   heli/heli.c:359-407     Heli_Control 0x431B70: the -1.0f throttle sentinel,

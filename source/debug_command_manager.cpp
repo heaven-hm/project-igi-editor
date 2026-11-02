@@ -412,7 +412,7 @@ void DebugCommandManager::CaptureModel(const DebugCommand& cmd) {
     float boundRadius = glm::length(extEngine);
 
     // Compute true 3D center offset rotated by object's orientation, in the
-    // engine's Euler order. IGI-RE `Matrix_SetEuler` (HOOK 0x4B38E0,
+    // engine's Euler order. retail engine `Matrix_SetEuler` (HOOK 0x4B38E0,
     // src/math/matrix.c:99-110) composes Rz*Ry*Rx; this site used Rz*Rx*Ry, so
     // "centre on object" targeted the wrong point for any multi-axis object.
     // See renderer/igi_transform.h.

@@ -16,7 +16,7 @@ void Terrain::Update(update_params_s& params, const dyn_cube_s* root_dyn_cube) {
 	// a smaller threshold, i.e. finer terrain. The editor used to hardcode the
 	// preset value (CUBE_ACTIVE_COMPARE = 163) and so never scaled with fov at
 	// all. See source/level/terrain_lod_settings.h for the derivation that 163 IS
-	// QCubeMinSizeForFov(1.0f) and docs/igi-re-parity/TERRAIN_LOD.md for the trace.
+	// QCubeMinSizeForFov(1.0f) and docs/parity/TERRAIN_LOD.md for the trace.
 	min_size_ = igi::terrain_lod::QCubeMinSizeForFov(tan_half_fovx_);
 
 	pre_frame_ = cur_frame_;

@@ -28,7 +28,7 @@
 #   newer one prints "build log version is too old; starting over" and rebuilds the
 #   deps log from nothing.
 #
-# WHAT IT CHECKS (every rule is a hard FAIL; see docs/igi-re-parity/BUILD_GATE.md §8)
+# WHAT IT CHECKS (every rule is a hard FAIL; see docs/parity/BUILD_GATE.md §8)
 #
 #   A. STALE_PCH    — a `.obj` older than its own `cmake_pch.hxx.gch`.  THIS IS
 #                     THE PRIMARY CHECK, and it is load-bearing because of how a

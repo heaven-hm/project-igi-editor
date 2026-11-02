@@ -28,8 +28,8 @@
  *   `TimerIncreaseSpeed` and `TimerDecreaseSpeed`, so the retail "timer" and the
  *   retail "AnimTask speed" are one control: the animation playback clock.
  *
- *   IGI-RE is not an oracle here: it decompiles IGI.exe only and contains no QED
- *   editor code (see docs/igi-re-parity/KEYBINDINGS.md).  Nothing in this header
+ *   retail engine is not an oracle here: it decompiles IGI.exe only and contains no QED
+ *   editor code (see docs/parity/KEYBINDINGS.md).  Nothing in this header
  *   claims game-side behaviour.
  *****************************************************************************/
 #pragma once

@@ -793,7 +793,7 @@ int main(int argc, char **argv) {
         "  Shader tiers are '21' (GLSL 1.20), '41' and '45'.  A context below\n"
         "  OpenGL 3.0 uses the 2.1 fallback, selected automatically.  Check the\n"
         "  shader compile errors and the log file next to this executable for the\n"
-        "  specific failure; docs/igi-re-parity/GL21_FALLBACK.md records what the\n"
+        "  specific failure; docs/parity/GL21_FALLBACK.md records what the\n"
         "  fallback emulates.\n\n",
         renderer ? renderer : "(null)", version ? version : "(null)");
     Logger::Get().LogAlways(LogLevel::ERR,

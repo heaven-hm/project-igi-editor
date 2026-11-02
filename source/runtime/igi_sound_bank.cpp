@@ -1,6 +1,6 @@
 #include "runtime/igi_sound_bank.h"
 
-// The retail sound container and sample format. Every rule is cited to IGI-RE
+// The retail sound container and sample format. Every rule is cited to retail engine
 // by HOOK address and file:line; see the header for the layer overview.
 
 #include <cstdio>

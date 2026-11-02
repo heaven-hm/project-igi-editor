@@ -15,7 +15,7 @@
  *      mount model's point count, and the retail WEAPONS/<NAME>/WEAPON.QVM model
  *      argument, read read-only from the install (IGI_GAME_PATH; self-skips).
  *
- * ORACLE. /Users/haseeb-mir/Documents/Code/IGI-RE (read-only), cited per line:
+ * ORACLE. the retail engine source (read-only), cited per line:
  *   src/statgun/statgun.c    StationaryGun_Changed 0x474980 (:310-340),
  *                            StationaryGun_Aim 0x474420 (:225-272),
  *                            param table/Open 0x473ED0 (:142-150)
@@ -386,7 +386,7 @@ TEST(StatGunMount, ModelPointRuleIsIndexOneOrZero) {
 // StationaryGun_Open HOOK 0x473ED0, src/statgun/statgun.c:126 -- and its schema
 // carries all eight ParamTable rows (StationaryGun_Open, statgun.c:142-150),
 // including "Weapon" at arg 10. "StatGun" and "SentryGun" are not task types:
-// IGI-RE has no such symbol (the only mounted-gun source is statgun.c) and no
+// retail engine has no such symbol (the only mounted-gun source is statgun.c) and no
 // shipped level authors a Task_New of either name; SentryGun is a WEAPON
 // definition (WEAPONS/SENTRYGUN/WEAPON.QVM, WEAPON_ID_SENTRY) consumed through
 // this same StationaryGun path, not a task type of its own.

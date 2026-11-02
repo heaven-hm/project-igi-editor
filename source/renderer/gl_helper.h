@@ -20,7 +20,7 @@ struct gl_info_s {
 	// on macOS -- reports GL_VERSION 2.1 / GLSL 1.20 and lands here.  When
 	// set, GL_Init() repairs GLEW's NULL entry points and the uniform blocks
 	// are emulated with plain uniforms; see the compatibility block in
-	// gl_helper.cpp and docs/igi-re-parity/GL21_FALLBACK.md.
+	// gl_helper.cpp and docs/parity/GL21_FALLBACK.md.
 	bool	legacy_gl21_;
 } ;
 

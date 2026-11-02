@@ -75,7 +75,7 @@ void Renderer_Objects::DrawAttachmentsForPicking(
         if (sit == mesh_cache_.end()) continue;
         const Mesh& subMesh = sit->second;
 
-        // Build the ATTA world transform through the shared, IGI-RE-cited helper
+        // Build the ATTA world transform through the shared, retail-cited helper
         // rather than a second copy of the maths: this path and
         // DrawAttachmentsRecursive must agree exactly or a click lands on the
         // wrong sub-model. See atta_children.h for the oracle
@@ -120,7 +120,7 @@ void Renderer_Objects::DrawAttachmentsForPicking(
             }
         }
 
-        // Rule 5: in IGI-RE, a spawned child task expands its own attachments only
+        // Rule 5: in retail engine, a spawned child task expands its own attachments only
         // when it is a child Sector (its mesh has portals; src/shadow/sector.c:673-676)
         // or when its task type create handler calls RigidDynCubeObj_CreateMagicObjs
         // (src/magicobj/rigidcoll.c:383-496, igi::MagicObjectTypeChildExpansion).
@@ -285,7 +285,7 @@ void Renderer_Objects::DrawForPicking(GLuint ubo_mats,
             // Same sphere the draw pass uses (renderer_objects.cpp): a Wire's
             // engine sphere is centred on its anchor MIDPOINT and grown by the
             // stretched Y scale, not the unstretched model bound at the start
-            // anchor (IGI-RE Wire_ParamsChanged 0x43F3D0, src/props/wire.c:
+            // anchor (retail engine Wire_ParamsChanged 0x43F3D0, src/props/wire.c:
             // 184-189). One helper keeps a visible wire clickable.
             glm::vec3 boundCenter((float)obj.pos.x, (float)obj.pos.y, (float)obj.pos.z);
             float boundRadius =
@@ -780,7 +780,7 @@ Renderer_Objects::VisualEvidence Renderer_Objects::CaptureObjectVisualEvidence(
             if (sit == mesh_cache_.end()) continue;
             const Mesh& child = sit->second;
 
-            // Compute exact child world frame via IGI-RE orthonormalization
+            // Compute exact child world frame via retail engine orthonormalization
             // (src/magicobj/rigidcoll.c:399-450, src/shadow/sector.c:545-630)
             const float att_pos[3] = { att.px, att.py, att.pz };
             const glm::mat4 child_world = igi::IgiAttaChildWorld(parent_world, att_pos, att.r);

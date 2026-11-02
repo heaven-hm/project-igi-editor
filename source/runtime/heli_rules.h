@@ -1,5 +1,5 @@
 // heli_rules.h - the retail "Heli" vehicle task and the "Rotor" magic object,
-// resolved the way IGI-RE resolves them.
+// resolved the way retail engine resolves them.
 //
 // Issue #60 asked for "Helicopter rotor + flight preview". The triage recorded
 // the cited address 0x431B70 as `Heli_Control`; this module is the pure-logic
@@ -9,13 +9,13 @@
 // "Heli" parameters, the per-tick control semantics that drive a flight
 // preview, or the rotor's own spin/lift rules.
 //
-// Everything here is cited to IGI-RE (`/Users/haseeb-mir/Documents/Code/IGI-RE`),
+// Everything here is cited to retail engine (`the retail engine source`),
 // which is the only evidence source used. The authored parameter names and
 // types come from the retail `Task_DeclareParameters("Heli", ...)` line, which
 // ships inside every OBJECTS.QVM that authors a helicopter and is also present
 // as decompiled text in `location0/LEVEL2/objects.qsc:62-63`.
 //
-// The IGI-RE files this module is built from:
+// the retail engine files this module is built from:
 //
 //   src/heli/heli.c        Heli_Init 0x4310F0, Heli_Reset 0x431560,
 //                          Heli_Control 0x431B70, Heli_Move 0x431E30,
@@ -45,7 +45,7 @@
 // Real32x9, 3 for Real32x3 and 10 scalars), which every one of the 29 retail
 // helicopter instances in the shipped QVMs satisfies. A "Rotor" physics
 // definition consumes 6 tokens appended to the physics-def list. See
-// docs/igi-re-parity/HELICOPTER.md.
+// docs/parity/HELICOPTER.md.
 //
 // Named divergences (never silently fixed):
 //   * x87 `fsin`/`fcos` (matrix.c:113-115, :148-150) are not bit-identical to
@@ -72,7 +72,7 @@
 namespace igi {
 
 // ---------------------------------------------------------------------------
-// Engine constants. Every one is IGI-RE DATA; the file:line is where the value
+// Engine constants. Every one is retail engine DATA; the file:line is where the value
 // is stored (tools/gendefs.py renders the exe's own bytes).
 // ---------------------------------------------------------------------------
 

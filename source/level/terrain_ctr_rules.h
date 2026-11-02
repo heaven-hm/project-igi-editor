@@ -2,7 +2,7 @@
  * @file    terrain_ctr_rules.h
  * @brief   The engine's terrain.ctr invariants, checkable without a Terrain.
  *
- * ORACLE (IGI-RE, read-only) - what the engine does with a .ctr, and what it
+ * ORACLE (retail engine, read-only) - what the engine does with a .ctr, and what it
  * merely assumes:
  *
  *   src/terrain/terrain.c:128-130  Terrain_Load HOOK 0x4C6240

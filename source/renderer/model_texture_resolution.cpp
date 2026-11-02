@@ -187,7 +187,7 @@ std::string ResolveAiModelTextureId(
     if (stripped == textureId) return textureId;
 
     // The opaque preference is an editor-only look; it may only be taken when the
-    // opaque texture actually exists. See the header for the IGI-RE basis
+    // opaque texture actually exists. See the header for the retail engine basis
     // (ModelFile_LoadTextures HOOK 0x4CF790, src/model/model.c:452-470).
     return resolves(stripped) ? stripped : textureId;
 }

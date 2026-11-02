@@ -9,7 +9,7 @@
 #     plausible committed fixture, and every archive this build downloads lands
 #     under an already-ignored build tree).  They had silently excluded the
 #     entire Python verification harness (`tools/host-tests/host_test_runner.py`,
-#     `tools/igi-re-parity/tu-check.py`) from git, which would have broken the
+#     `tools/parity/tu-check.py`) from git, which would have broken the
 #     build gate on a fresh clone.
 #   * `*.log` is the one extension rule that stays, deliberately: run logs are
 #     output, not source (`source/cli/verify_level.cpp:405` writes `igi1ed.log`
@@ -39,7 +39,7 @@
 *.a
 # ...except the i686 GL import libraries, which are BUILD INPUTS, not build
 # output: they live in third_party/ and the 32-bit editor cannot link without
-# them (docs/igi-re-parity/WINE_SMOKE.md §1, scripts/run-wine-smoke.sh).  The
+# them (docs/parity/WINE_SMOKE.md §1, scripts/run-wine-smoke.sh).  The
 # blanket `*.a` rule above -- together with the unanchored `x86/` rule below --
 # is what hid them (issue #44).
 !third_party/GL/lib/x86/*.a

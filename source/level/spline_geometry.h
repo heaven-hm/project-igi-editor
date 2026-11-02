@@ -11,7 +11,7 @@
 // vertices it hands to D3D, including the vertex NORMALS, which the rules half
 // deliberately does not cover.
 //
-// Every rule below is cited to IGI-RE (`/Users/haseeb-mir/Documents/Code/IGI-RE`,
+// Every rule below is cited to retail engine (`the retail engine source`,
 // read-only), function + address + file:line. Nothing here is invented: where the
 // engine has a branch, the branch is transcribed; where the port cannot reproduce
 // the engine's behaviour (an unbounded read, a hang), the divergence is named in

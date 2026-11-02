@@ -3,7 +3,7 @@
  * @brief   LOOP texture parser for IGI-1 .tex files (Texture_LoadFile).
  *
  * .tex files are read by the engine's Texture_LoadFile 0x4B24C0
- * (IGI-RE src/file/texture.c:231-252). That function accepts exactly two
+ * (retail engine src/file/texture.c:231-252). That function accepts exactly two
  * versions and rejects everything else as a fatal error:
  *
  *   v2   LoopHeader2  (24 bytes): magic, version, unk08(H), pad0A(H),

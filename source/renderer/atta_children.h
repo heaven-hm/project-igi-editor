@@ -4,7 +4,7 @@
  *          record layout, the parent -> child world transform, and the rotor
  *          spin frame.
  *
- * Every rule below is taken from IGI-RE (the verified decompilation of the
+ * Every rule below is taken from retail engine (the verified decompilation of the
  * retail IGI.exe) and cites the exact `file:line`. Nothing here touches GL or
  * Windows, so the rules are unit-testable on the host build.
  *****************************************************************************/
@@ -19,7 +19,7 @@
 namespace igi {
 
 // ─── ATTA record layout ─────────────────────────────────────────────────────
-// IGI-RE `src/model/modeltypes.h:26` — the MESH header's `attach` pointer is
+// retail engine `src/model/modeltypes.h:26` — the MESH header's `attach` pointer is
 // documented "ATTA, 0x44 bytes each", and `ModelLod_GetAttach`
 // (`src/lod/mesh3d.c:493-497`) strides the chunk by exactly 0x44. The field
 // order is the decompiler's `MagicAttach` (`src/magicobj/rigidcoll.c:359-366`),
@@ -107,7 +107,7 @@ inline glm::mat4 IgiEngineMatrixToGlm4(const float m[9]) {
 }
 
 // ─── child_world = parent_world * child_local ───────────────────────────────
-// IGI-RE `src/magicobj/rigidcoll.c:399-409`:
+// retail engine `src/magicobj/rigidcoll.c:399-409`:
 //     rx = M[0]*pos[0] + M[1]*pos[1] + M[2]*pos[2];   (rows 1 and 2 likewise)
 //     arg.pos = (rx, ry, rz) + o->pos;
 // so the child's world position is `M * att->pos + o->pos`, with M the parent's

@@ -15,8 +15,8 @@
 
 // Unit tests for the engine's lightmap ref-index rule.
 // Oracle: src/sector/sector.c:546-562 (fill_refs) and
-//         src/dirlight/lightmapbuild.c:44-59 (Lightmap_BuildLod) in IGI-RE.
-// See docs/igi-re-parity/LIGHTMAP_REFS.md.
+//         src/dirlight/lightmapbuild.c:44-59 (Lightmap_BuildLod) in retail engine.
+// See docs/parity/LIGHTMAP_REFS.md.
 
 namespace {
 

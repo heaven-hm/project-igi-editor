@@ -8,8 +8,8 @@
 #include <vector>
 #include <random>
 
-// The engine's weather particle system, transcribed from IGI-RE
-// (/Users/haseeb-mir/Documents/Code/IGI-RE), function + HOOK + file:line:
+// The engine's weather particle system, transcribed from retail engine
+// (the retail engine source), function + HOOK + file:line:
 //
 //   Rain_Init       0x498AB0  src/dxinit/rain.c:169-178  (seeds gDxRainRandom)
 //   Rain_New        0x498960  rain.c:144-167             (snow = rain == 0, pool, alpha)
@@ -553,7 +553,7 @@ void Renderer_Rain::SetParams(bool active, bool is_snow, float startMeters, floa
     if (active_) {
         Logger::Get().Log(LogLevel::INFO,
             std::string("[Renderer_Rain] ") + (is_snow_ ? "SNOW" : "RAIN") +
-            " parity: IGI-RE Rain task - 80-drop pool, tile lattice, " +
+            " parity: retail engine Rain task - 80-drop pool, tile lattice, " +
             (is_snow_ ? "6-vertex camera-facing quad" : "2-vertex LINE") +
             " (rain.c:565-637,307-393)");
     }

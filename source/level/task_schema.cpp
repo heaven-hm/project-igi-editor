@@ -5,23 +5,23 @@
 
 // The authored parameter tables of the two retail FX task types (issue #43).
 // Deriving the inspector rows from these keeps one source of truth: every row is
-// already cited to IGI-RE inside the modules and corpus-tested against the
+// already cited to retail engine inside the modules and corpus-tested against the
 // shipping declaration.
 #include "runtime/alarm_light.h"
 #include "runtime/smoke.h"
 // The authored SplineObj / SplineObjWaypoint parameter tables (issue #79). Every row
-// carries the IGI-RE ParamTable_Add order and the retail Task_DeclareParameters name,
+// carries the retail engine ParamTable_Add order and the retail Task_DeclareParameters name,
 // so the inspector rows below cannot drift from the engine.
 #include "runtime/spline_rules.h"
 // The authored GunPickup / AmmoPickup / AddAmmo parameter layouts (issue #49).
-// Every row carries the IGI-RE ParamTable_Add order and argument type, so the
+// Every row carries the retail engine ParamTable_Add order and argument type, so the
 // three inventory-drop task types are derived rather than hand-copied.
 #include "runtime/pickup_rules.h"
 
 namespace TaskSchemaNS {
 
 int TypeArgCount(const std::string& t) {
-    // "ObjectPos" is an alias of "Real64x3" in the game (IGI-RE
+    // "ObjectPos" is an alias of "Real64x3" in the game (retail engine
     // src/physobj/paramops.c:185 — kParamAliases {"ObjectPos", &gParamObjectPos,
     // &gParamReal64x3}); both consume three script args (Param_Three op,
     // paramops.c:150).
@@ -88,7 +88,7 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
           add(sc, "Orientation", "Real32x9",  6);
           add(sc, "Model",       "String16",  11); }
         // Wire: start pos@3, end pos@6, model@9.
-        // IGI-RE src/props/wire.c:89-113 Wire_Open (0x43EFF0) adds exactly three
+        // retail engine src/props/wire.c:89-113 Wire_Open (0x43EFF0) adds exactly three
         // params in this order — Param_ObjectPos start, Param_ObjectPos end,
         // Param_String16 model — so the End anchor occupies args 6,7,8. Without
         // it the inspector showed only one anchor and the wire (and therefore any
@@ -110,7 +110,7 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
             add(s[t], "Orientation", "Real32x9",  6);
             add(s[t], "Model",       "String16",  9);
         }
-        // SCamera: layout from IGI-RE src/scamera/scamera.c:116-131 (HOOK 0x442730,
+        // SCamera: layout from retail engine src/scamera/scamera.c:116-131 (HOOK 0x442730,
         // ParamTable_New(15)) and from the retail level script's own declaration:
         //   Task_DeclareParameters("SCamera", "Holder Position","ObjectPos",
         //     "Holder Gamma","Angle", "Holder Model","String16",
@@ -144,7 +144,7 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
         // the segment model for the span that ends at it. Both types are declared by
         // the engine itself and by the shipped level script:
         //
-        //   IGI-RE src/editobj/spline.c:177-225  SplineObj_Open HOOK 0x502250
+        //   retail engine src/editobj/spline.c:177-225  SplineObj_Open HOOK 0x502250
         //     ParamTable_New(10) @:204, the ten ParamTable_Add calls @:205-214
         //     (the 2..20 segment range is gSplineObjSegmentRange @:202-203);
         //     ParamTable_New(8) @:215, the eight Add calls @:216-223.
@@ -194,7 +194,7 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
           add(sc, "Position", "TrainPos1D", 3);
           add(sc, "Model",    "String256",  6); }
         // Fence: pos@3, heading@6, model@7, condition@8.
-        // IGI-RE src/props/fence.c:100-121 Fence_Open (0x43F900) declares four
+        // retail engine src/props/fence.c:100-121 Fence_Open (0x43F900) declares four
         // params: Param_ObjectPos pos, Param_Angle angle, Param_String16 model,
         // Param_VarString cond. The condition was never exposed, so a level's
         // electric-fence expression was invisible in the inspector.
@@ -230,14 +230,14 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
             add(s[t], "Orientation", "Real32x9",  6);
             add(s[t], "Model",       "String16",  9);
         }
-        // GenericPickup's third parameter really is a model — IGI-RE
+        // GenericPickup's third parameter really is a model — retail engine
         // src/comprun/pickup.c:269-271 GenericPickup_Init (0x46C1xx) adds
         //   pos ObjectPos @3, obj.matrix Real32x9 @6, model Param_String16 @9
         // — which is why it is the one pickup-family layout whose third row is
         // "Model"/String16 rather than an enum.  It is built by the family loop
         // below; recorded here so the GunPickup contrast is unambiguous.
         //
-        // GunPickup: IGI-RE src/comprun/pickup.c:460-481 GunPickup_Init
+        // GunPickup: retail engine src/comprun/pickup.c:460-481 GunPickup_Init
         // (HOOK 0x46CB70) does ParamTable_New(3) and adds
         //   pos        ObjectPos      @3  (pickup.c:477)
         //   obj.matrix Real32x9       @6  (pickup.c:478)
@@ -288,7 +288,7 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
                 offset += igi::PickupParamArgCount(p.type);
             }
         }
-        // StationaryGun (the player-mannable machinegun): IGI-RE
+        // StationaryGun (the player-mannable machinegun): retail engine
         // src/statgun/statgun.c:142-150 StationaryGun_Open (0x473ED0) adds
         // exactly eight params in this order —
         //   basePos  ObjectPos  (3 args @3)
@@ -312,7 +312,7 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
           add(sc, "Yaw Range",   "Degrees",   13);
           add(sc, "Ammo",        "Int32",     14); }
         // AIStationaryGunHolder (the AI fixed gun that also spots for enemies):
-        // IGI-RE src/comprun/gunholder.c:157-165 GunHolder_Init (0x46E370) adds
+        // retail engine src/comprun/gunholder.c:157-165 GunHolder_Init (0x46E370) adds
         // eight params in this order —
         //   pos        ObjectPos (@3)   matrix Real32x9 (@6)  model String16 (@9)
         //   angleX     Degrees   (@10)  default 360 (gunholder.c:121)
@@ -329,7 +329,7 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
           add(sc, "Range",       "Real32",    12);
           add(sc, "Active Expr", "VarString", 13);
           add(sc, "Team Expr",   "VarString", 14); }
-        // AmmoPickup: IGI-RE src/comprun/pickup.c:642-664 AmmoPickup_Init
+        // AmmoPickup: retail engine src/comprun/pickup.c:642-664 AmmoPickup_Init
         // (HOOK 0x46D420) does ParamTable_New(4) and adds
         //   pos       ObjectPos         @3  (pickup.c:659)
         //   obj.matrix Real32x9         @6  (pickup.c:660)
@@ -351,7 +351,7 @@ const std::map<std::string, TaskSchema>& GetBuiltinSchemas() {
         // ─── The two retail FX task types (issue #43) ────────────────────────
         //
         // Both rows are DERIVED FROM THE PORTED ORACLE TABLES rather than
-        // hand-copied here, so the inspector cannot drift from IGI-RE: the
+        // hand-copied here, so the inspector cannot drift from retail engine: the
         // modules already carry the authored name / declared type / token count
         // of every parameter, and their corpus tests compare those rows against
         // the shipping declaration in the QVM bytecode and the decompiled
@@ -429,7 +429,7 @@ TaskSchema ParseDeclaration(const std::vector<std::string>& declArgs) {
     //   MISSIONS/location0/level1/objects.qsc:69
     //
     // which mirrors the engine's own table -- Wire_Open HOOK 0x43EFF0
-    // (IGI-RE src/props/wire.c:108-111) adds Param_ObjectPos(start),
+    // (retail engine src/props/wire.c:108-111) adds Param_ObjectPos(start),
     // Param_ObjectPos(end), Param_String16(model) in that order. Only the start
     // anchor is the task position the editor mirrors in `LevelObject::pos`; the
     // stop anchor is just three doubles (Param_ObjectPos is an alias of
@@ -514,7 +514,7 @@ namespace {
 
 constexpr double kTwoPi = 6.283185307179586476925286766559;
 
-// IGI-RE src/game/misc.c:129-190 Matrix_SetYAxis (HOOK 0x414A60): the rotation
+// retail engine src/game/misc.c:129-190 Matrix_SetYAxis (HOOK 0x414A60): the rotation
 // whose second column is `dir`. Row-major 3x3, like the game's `Matrix`.
 void SetYAxis(double m[9], const Vec3& dir) {
     const double x = dir.x, y = dir.y, z = dir.z;
@@ -549,7 +549,7 @@ void SetYAxis(double m[9], const Vec3& dir) {
     m[6] = w[2]; m[7] = z; m[8] = u[2];
 }
 
-// IGI-RE src/math/matrix.c:181-208 Matrix_GetEuler (HOOK 0x4B3C50): only the
+// retail engine src/math/matrix.c:181-208 Matrix_GetEuler (HOOK 0x4B3C50): only the
 // X-Euler is needed, and the game normalises it into [0, 2pi).
 double EulerX(const double m[9]) {
     const double cy = std::sqrt(m[0] * m[0] + m[3] * m[3]);
@@ -564,7 +564,7 @@ WireSpan ComputeWireSpan(const Vec3& start, const Vec3& end) {
     WireSpan s;
     s.start = start;
     s.end   = end;
-    // Wire_ParamsChanged (0x43F3D0, IGI-RE src/props/wire.c:181-186): the object
+    // Wire_ParamsChanged (0x43F3D0, retail engine src/props/wire.c:181-186): the object
     // is positioned at the midpoint of the two anchors.
     s.mid = (start + end) * 0.5;
 
@@ -603,7 +603,7 @@ Basis YAxisBasis(const Vec3& yAxis) {
 }
 
 Vec3 ZiplineRideDirection(const Vec3& start, const Vec3& end) {
-    // IGI-RE src/weapon/humanplayer.c:557-568 HumanPlayer_UpdateZipline: the
+    // retail engine src/weapon/humanplayer.c:557-568 HumanPlayer_UpdateZipline: the
     // model's point 0 -> point 1 vector, negated when d.z > 0 so the ride always
     // runs downhill, then normalised.
     Vec3 d = end - start;
@@ -614,12 +614,12 @@ Vec3 ZiplineRideDirection(const Vec3& start, const Vec3& end) {
 }
 
 double ZiplineSpeedStep(double speed, const Vec3& rideDir) {
-    // IGI-RE src/humanstate/humanstate.c:1394.
+    // retail engine src/humanstate/humanstate.c:1394.
     return -rideDir.z * kZiplineAccel + speed * kZiplineFriction;
 }
 
 Vec3 ZiplineVelocity(double speed, const Vec3& rideDir) {
-    // IGI-RE src/humanstate/humanstate.c:1396-1398.
+    // retail engine src/humanstate/humanstate.c:1396-1398.
     return rideDir * speed;
 }
 
@@ -648,7 +648,7 @@ std::string UnquoteToken(const std::string& token) {
 }
 
 bool ParseWireAnchors(const std::vector<std::string>& args, Vec3& start, Vec3& end) {
-    // Wire_Open (0x43EFF0, IGI-RE src/props/wire.c:89-113): start ObjectPos at
+    // Wire_Open (0x43EFF0, retail engine src/props/wire.c:89-113): start ObjectPos at
     // args 3-5, end ObjectPos at args 6-8.
     auto tok = [&](int i) -> const std::string& {
         static const std::string empty;
@@ -713,7 +713,7 @@ double LadderDot(const Vec3& a, const Vec3& b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
-// Vec3_Angle (HOOK 0x4B2B30, IGI-RE src/file/vec.c:189-208): the angle between
+// Vec3_Angle (HOOK 0x4B2B30, retail engine src/file/vec.c:189-208): the angle between
 // two vectors, 0 when either is zero, clamped at the acos domain edges.
 double LadderAngleBetween(const Vec3& a, const Vec3& b) {
     const double la = a.Length();
@@ -746,16 +746,16 @@ LadderPlacement ComputeLadderPlacement(
     // degenerate basis (no authored orientation) cannot produce a placement.
     if (p.axisY.Length() < 0.5 || p.axisZ.Length() < 0.5) return p;
 
-    // HumanPlayer_UpdateLadder, IGI-RE src/weapon/humanplayer.c:312-314.
+    // HumanPlayer_UpdateLadder, retail engine src/weapon/humanplayer.c:312-314.
     p.bottomMount = foot +
         p.axisY * kLadderBottomStandoffUnits +
         p.axisZ * kLadderBottomLiftUnits;
-    // IGI-RE src/weapon/humanplayer.c:304-306.
+    // retail engine src/weapon/humanplayer.c:304-306.
     p.topMount = head +
         p.axisZ * kLadderTopBackUnits -
         p.axisY * kLadderTopStandoffUnits;
 
-    // IGI-RE src/props/ladder.c:86-91: the rung count is
+    // retail engine src/props/ladder.c:86-91: the rung count is
     // (int)round_ll(|point2.z - point3.z| * kRungScale) on the *model-local* Z,
     // which is the foot->head difference projected on the ladder's own Z column.
     // `round_ll` is an x87 `fistpll` (src/props/props.h:50-57), i.e. round-to-
@@ -768,7 +768,7 @@ LadderPlacement ComputeLadderPlacement(
     p.topStep = p.rungCount - kLadderTopStepMargin;
     if (p.topStep < 0) p.topStep = 0;
 
-    // Matrix_GetEuler (HOOK 0x4B3C50, IGI-RE src/math/matrix.c:181-191) reads
+    // Matrix_GetEuler (HOOK 0x4B3C50, retail engine src/math/matrix.c:181-191) reads
     // az = atan2(m[3], m[0]); HumanPlayer_UpdateLadder adds pi and hands that to
     // Human_SetYaw (humanplayer.c:320-322).
     p.playerYawRadians = std::atan2(p.axisX.y, p.axisX.x) + 3.14159265358979323846;
@@ -783,7 +783,7 @@ LadderActivation LadderActivate(
     LadderActivation result;
     if (!ladder.valid) return result;
 
-    // IGI-RE src/props/ladder.c:130-138. lx/ly are the player's coordinates in
+    // retail engine src/props/ladder.c:130-138. lx/ly are the player's coordinates in
     // the ladder's frame: the row-major matrix's columns are the local axes.
     const Vec3 from_origin = player_eye - ladder.origin;
     const double lx = LadderDot(from_origin, ladder.axisX);

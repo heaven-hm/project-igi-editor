@@ -14,7 +14,7 @@
  * through a four-key window. The last test in this file is the one that would
  * fail if the linear path ever came back.
  *
- * Oracle: /Users/haseeb-mir/Documents/Code/IGI-RE
+ * Oracle: the retail engine source
  *   src/cutscene/cutscene.c:163-180   CutScene_CollectKeys 0x4F4880
  *   src/cutscene/cutscene.c:182-190   CutScene_GetKey 0x4F4910 (both-end clamp)
  *   src/cutscene/cutscene.c:193-211   CutScene_UnwrapAngles 0x4F4940

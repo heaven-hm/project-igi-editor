@@ -1,6 +1,6 @@
 // test_igi_sound_bank.cpp - the retail sound container and sample format (#70).
 //
-// The oracle for every number here is IGI-RE (read-only). Key citations:
+// The oracle for every number here is retail engine (read-only). Key citations:
 //   res/resource.h:32-38   the 20-byte chunk header (id,size,align,next,form)
 //   res/resource.h:7-13    RES_PACK/MEMBER/FILE/USER/PATH
 //   chunk.c:9-15           Chunk_Next: c + c->next

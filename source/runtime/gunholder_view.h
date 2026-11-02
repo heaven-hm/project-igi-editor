@@ -4,7 +4,7 @@
  * @brief   `AIStationaryGunHolder` -- the engine's detection volume and the gun
  *          it carries, as host-testable rules.
  *
- * ORACLE: /Users/haseeb-mir/Documents/Code/IGI-RE (read-only), the decompiled
+ * ORACLE: the retail engine source (read-only), the decompiled
  * retail IGI.exe. Every constant and every operation below cites its function,
  * its HOOK address and its file:line.
  *
@@ -51,7 +51,7 @@
  *     `maxPitch == maxYaw` gives a pyramid-like region, not a circular cone.
  *
  * The `pitch`/`yaw` helpers the angles call (Vec3d_IsZero 0x4B3320,
- * Vec3d_Normalize 0x4B3100) are only ORIG'd in IGI-RE, not decompiled; they are
+ * Vec3d_Normalize 0x4B3100) are only ORIG'd in retail engine, not decompiled; they are
  * transcribed here as their names state (an all-zero test and a divide by the
  * length), which is the only reading their two callers support.
  *

@@ -791,11 +791,11 @@ std::vector<uint8_t> Renderer_Objects::FindTextureDataFromLevel(
     // search walks them in that order: the level archive wins. That is the
     // oracle-correct precedence — the game resolves a model's textures from the
     // single archive of the level that owns the model file, with no cross-level
-    // search (`IGI-RE src/model/model.c:261,450-461,300-306`; measured on the
+    // search (`retail engine src/model/model.c:261,450-461,300-306`; measured on the
     // retail install, `001_02_1.tex` is a 128x32 strip in common and the
     // 128x128 sheet in level7). An earlier version of this comment claimed the
     // opposite order; the code was always right.
-    // See docs/igi-re-parity/CHARACTER_TEXTURE_RESOLUTION.md.
+    // See docs/parity/CHARACTER_TEXTURE_RESOLUTION.md.
     std::array<ModelSourceArchiveIndex, 2> bundle;
     for (size_t slot = 0; slot < 2; ++slot) {
         bundle[slot].resPath = bundleRes[slot];
@@ -1190,7 +1190,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
             // passes, so consuming the delta per pass would run the preview at
             // double speed. The rate is the game's own `kFps`
             // (src/math/mathvars.h:8); the rule that consumes a tick is
-            // `igi::HeliPreviewTick` (runtime/heli_preview.h, IGI-RE Heli_Control
+            // `igi::HeliPreviewTick` (runtime/heli_preview.h, retail engine Heli_Control
             // 0x431B70 src/heli/heli.c:358-405).
             AdvanceHeliPreviewClock(g_renderer_delta_secs);
             g_renderer_delta_secs = 0.0f;  // consume once per frame
@@ -1278,7 +1278,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         // is NOT a sphere at `obj.pos`: Wire_ParamsChanged centres it on the
         // anchor MIDPOINT and grows it by the stretched Y scale
         // (`DynCube_Move(world, w, &mid, VirModel_GetRadius(model) * max_scale)`,
-        // HOOK 0x43F3D0, IGI-RE src/props/wire.c:187-189). `obj.pos` is only the
+        // HOOK 0x43F3D0, retail engine src/props/wire.c:187-189). `obj.pos` is only the
         // start anchor, and the model is drawn stretched from it to the end
         // anchor, so testing the unstretched bound at the start anchor culled the
         // whole wire whenever that one end left the view -- the "Wire missing
@@ -1325,7 +1325,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
         model = glm::translate(model, glm::vec3(obj.pos.x, obj.pos.y, obj.pos.z));
 
         // 2. Apply the authored IGI rotation.
-        // IGI-RE `Matrix_SetEuler` (HOOK 0x4B38E0, src/math/matrix.c) composes
+        // retail engine `Matrix_SetEuler` (HOOK 0x4B38E0, src/math/matrix.c) composes
         // Rz(az) * Ry(ay) * Rx(ax) for EVERY authored object — there is no
         // per-model rotation order in the game (`ParamReal32x9_Parse`,
         // HOOK 0x4EFBA0, feeds the QSC triple straight into it). See
@@ -1392,7 +1392,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
         // 3. Scale
         // Wire props are stretched between their two authored anchors by the game
-        // itself: Wire_ParamsChanged (0x43F3D0, IGI-RE src/props/wire.c:160-191)
+        // itself: Wire_ParamsChanged (0x43F3D0, retail engine src/props/wire.c:160-191)
         // puts the object at the anchor midpoint, points its local +Y axis along
         // end - start, and sets obj.scale[1] = |end-start| * kWireScale (1/4096).
         // Only Y is scaled; X/Z keep the authored thickness. Without this the
@@ -1865,7 +1865,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     // Unbind shader
     glUseProgram(0);
 
-    // The weapon a placed StationaryGun mounts (IGI-RE StationaryGun_Aim
+    // The weapon a placed StationaryGun mounts (retail engine StationaryGun_Aim
     // 0x474420, src/statgun/statgun.c:241-258). Drawn here, once per frame and
     // after both object passes, because it is its own Gun task in the engine
     // and because DrawAttachedMesh changes GL state that the object loop's
@@ -1875,12 +1875,12 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
     // The mounted WEAPON of every AIStationaryGunHolder (Level 14's sentry
     // guns): the holder's ATTA turret mounts a Gun task for the definition's
     // weapon key, whose model the ATTA pass cannot reach (AIStationaryGun_Create
-    // 0x46EAE0, IGI-RE src/binocular/stationarygun.c:145-147;
+    // 0x46EAE0, retail engine src/binocular/stationarygun.c:145-147;
     // AIStationaryGun_PlaceWeapon 0x470050, :464-487).
     DrawMountedSentryGuns(objects, draw_parts, ubo_mats);
 
     // The SCameraLens child every SCamera task creates at runtime
-    // (SCamera_Create, IGI-RE src/scamera/scamera.c:204). Same post-object-pass
+    // (SCamera_Create, retail engine src/scamera/scamera.c:204). Same post-object-pass
     // placement as the mounted weapons above, for the same GL-state reason.
     DrawSCameraLenses(objects, draw_parts, ubo_mats);
 
@@ -1898,7 +1898,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 
 // ─── Helicopter flight preview: the vehicle config (GitHub issue #60) ─────────
 // `Heli_Move` reads `phys->data`, the `VehicleConfig` parsed from the
-// helicopter's own `DefinePhysicsObjType` entry (IGI-RE `Heli_ParseArgs`
+// helicopter's own `DefinePhysicsObjType` entry (retail engine `Heli_ParseArgs`
 // 0x432F60 -> `Heli_ParseConfig` 0x433030, src/plane/heli.c:34-88). The retail
 // tree ships two: `<IGI>/physicsobj/HELIS/BELL/HELI.QVM` (model 709_01_1) and
 // `<IGI>/physicsobj/HELIS/MIL/HELI.QVM` (model 700_01_1). This resolves them
@@ -1906,7 +1906,7 @@ void Renderer_Objects::Draw(GLuint ubo_mats, bool overlay_wireframe,
 //
 // The editor does not record which physics definition a placement resolves to,
 // so the first helicopter definition found is used. That is an editor
-// limitation, recorded here rather than hidden: `docs/igi-re-parity/
+// limitation, recorded here rather than hidden: `docs/parity/
 // HELICOPTER.md` lists the per-model values and the corpus test pins both.
 const igi::HeliVehicleConfig& Renderer_Objects::HeliPreviewConfig() {
     if (heli_preview_config_loaded_) return heli_preview_config_;

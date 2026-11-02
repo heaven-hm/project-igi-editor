@@ -780,7 +780,7 @@ void App::Input_OnKeyboard(unsigned char key, int x, int y) {
 			}
 			return;
 		case igi::PauseKeyAction::Ignore:
-			// KEY_TAB (-11): `in->select = 1`, and nothing in IGI-RE reads it.
+			// KEY_TAB (-11): `in->select = 1`, and nothing in retail engine reads it.
 			return;
 		case igi::PauseKeyAction::MoveUp:
 		case igi::PauseKeyAction::MoveDown:

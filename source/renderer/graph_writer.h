@@ -2,7 +2,7 @@
  * @file    graph_writer.h
  * @brief   IGI 1 navigation-graph (.dat) reader/writer.
  *
- * Transcribed from the retail engine (IGI-RE). Every layout detail, constant and
+ * Transcribed from the retail engine (retail engine). Every layout detail, constant and
  * branch below cites its origin function + HOOK address + file:line:
  *
  *   GraphOpen               0x4F9FF0  src/graphnode/stream.c:196-237

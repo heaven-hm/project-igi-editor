@@ -227,7 +227,7 @@ TEST(MenuTextRes, EnginePathFormMatchesTheRetailArchives) {
     ASSERT_TRUE(resources.empty() == false) << "no language archive loaded: " << error;
     EXPECT_EQ(resources.language_name(), "ENGLISH");
     // The two archives MenuManager_LoadLanguageRes is called with
-    // (IGI-RE src/menu/menumanager.c:254-255).
+    // (retail engine src/menu/menumanager.c:254-255).
     EXPECT_EQ(resources.file_count(), 2u);
     EXPECT_EQ(resources.file_paths().size(), 2u);
     EXPECT_EQ(resources.entry_count(), 289u);  // 262 menusystem.res + 28 missions.res, 2 shared,
@@ -334,7 +334,7 @@ TEST(MenuTextRes, MissIsVerbatimAndNoLanguageDataKeepsTheRawKey) {
     const mt::LanguageResources resources = LoadEnglish(error);
     ASSERT_FALSE(resources.empty()) << error;
 
-    // IGI-RE src/menu/menumanager.c:849-851 -- crt_sprintf(s->text, "RM: %s", name).
+    // retail engine src/menu/menumanager.c:849-851 -- crt_sprintf(s->text, "RM: %s", name).
     EXPECT_EQ(resources.Lookup("No Such Label").text, "RM: No Such Label");
     // The engine would answer "RM: " for an empty name; ResolveMenuLabels skips it.
     EXPECT_EQ(resources.Lookup("").text, "RM: ");

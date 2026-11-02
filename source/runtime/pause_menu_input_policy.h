@@ -4,7 +4,7 @@
  * @file    source/runtime/pause_menu_input_policy.h
  * @brief   Which keys the pause menu accepts, and what it does with the rest.
  *
- * Oracle: IGI-RE (/Users/haseeb-mir/Documents/Code/IGI-RE), the decompiled
+ * Oracle: retail engine (the retail engine source), the decompiled
  * retail IGI.exe.  The retail in-game (pause) menu is driven by exactly one
  * function, and by exactly the keys that function pops off the engine's own
  * key queue:
@@ -98,7 +98,7 @@
  *               `MenuManager_LeaveMenus(900, MENUMANAGER_IDLE)`
  *               (HOOK 0x417790, src/game/menumanager.c:249-261), which leaves
  *               the menus.
- *   TAB         sets `in->select`.  Nothing in IGI-RE ever reads
+ *   TAB         sets `in->select`.  Nothing in retail engine ever reads
  *               `MenuInput::select` - the only three writes are the
  *               initialisation and the TAB case in MenuManager_ReadInput
  *               (src/menu/menumanager.c:494, :525) and the struct declaration
@@ -131,7 +131,7 @@
  *   digits and BACKSPACE are accepted, because that is the only way the row can
  *   be typed into.  The deviation is marked at its use site in
  *   source/app_input_keyboard.cpp and documented in
- *   docs/igi-re-parity/PAUSE_MENU_STYLE.md.
+ *   docs/parity/PAUSE_MENU_STYLE.md.
  *****************************************************************************/
 
 namespace igi {

@@ -117,7 +117,7 @@ angles the game uses for the same authored values (`docs/KNOWN_ISSUES.md` §1
 ### Root cause
 
 The editor composed Euler rotations in a different order from the engine. The
-decompiled `Matrix_SetEuler` (`IGI-RE src/math/matrix.c:99-110`, `HOOK 0x4B38E0`)
+decompiled `Matrix_SetEuler` (`retail engine src/math/matrix.c:99-110`, `HOOK 0x4B38E0`)
 computes `R = Rz(az) · Ry(ay) · Rx(ax)` on row-major 3x3 matrices, with
 `Matrix_Mul(out, a, b)` meaning `a · b`, and `ParamReal32x9_Parse` (`HOOK 0x4EFBA0`)
 passes the QSC values through unchanged.
@@ -127,7 +127,7 @@ passes the QSC values through unchanged.
 `source/renderer/igi_transform.h` provides `igi::IgiEulerRotationMatrix` (`Rz·Ry·Rx`),
 `IgiEulerRotationMat3`, `IgiObjectMatrix` and — for the inverse direction —
 `IgiMatrixToEuler`, a transcription of the engine's own `Matrix_GetEuler`
-(`IGI-RE src/math/matrix.c:181-208`, `HOOK 0x4B3C50`) including its 0.0001 gimbal
+(`retail engine src/math/matrix.c:181-208`, `HOOK 0x4B3C50`) including its 0.0001 gimbal
 guard. A tree-wide sweep for every site that composes *or decomposes* an authored
 Euler triple found **ten** sites that disagreed with the engine, not just the six in
 the render path:
@@ -141,7 +141,7 @@ the render path:
 | `debug_command_manager.cpp:395-401` | `Rz·Rx·Ry` | "centre on object" targeted the wrong point |
 | `app_editor.cpp:1223-1243` | an `Rz·Rx·Ry` **decomposition** | a promoted ATTA proxy inherited the wrong orientation |
 
-The door site has its own oracle: `IGI-RE Door_Place` (`HOOK 0x446290`,
+The door site has its own oracle: `retail engine Door_Place` (`HOOK 0x446290`,
 `src/door/door.c:121-138`) rotates the slide offset by the door's **closed** basis
 (`x = m[1]*v + m[0]*u`, `y = m[4]*v + m[3]*u`, `z = m[7]*v + m[6]*u`, `m = base.m`),
 and the opening rotation is post-multiplied on top of it
@@ -151,7 +151,7 @@ is used and not `rot.z`.
 ### Verification
 
 `tests/test_igi_transform.cpp` (9 tests) transcribes `Matrix_SetEuler` /
-`Matrix_SetRotX/Y/Z` / `Matrix_Mul` line by line from IGI-RE and checks the helper
+`Matrix_SetRotX/Y/Z` / `Matrix_Mul` line by line from retail engine and checks the helper
 against it, including a 343-case grid over all three angles; it also transcribes
 `Matrix_GetEuler` and checks `IgiMatrixToEuler` against it on a 245-case grid, plus
 round-trips and a case that fails on the pre-fix `Rz·Rx·Ry` extraction. That last test
@@ -173,7 +173,7 @@ arg 9 yaw offset on load and on save.
 ### Root cause
 
 The `SCamera` parameter layout in the property/MCP layer did not match the engine's
-table (`IGI-RE src/scamera/scamera.c:116-131`, `HOOK 0x442730`, `ParamTable_New(15)`).
+table (`retail engine src/scamera/scamera.c:116-131`, `HOOK 0x442730`, `ParamTable_New(15)`).
 Arg 7 is the model the task itself draws (`RigidDynCubeObj_SetModel(c,
 VirModel_Find(c->model))`, `scamera.c:240`); arg 10 is the separate `SCameraLens`
 child's model (`scameralens.c:204`), a child the editor does not model. Arg 9 is an
@@ -192,7 +192,7 @@ write-back of args 6/8/9/7/10/11), `level_objects.h` (`yawOffset`),
 `tests/test_scamera_params.cpp` (4 tests) plus a replay of every `SCamera` line in the
 14 retail scripts; `tests/test_mcp_domain_tools.cpp` asserts `model_id` is parameter 7
 and that no `rotation_radians` field can clobber it. See
-`docs/igi-re-parity/SCAMERA_PARAMS.md`.
+`docs/parity/SCAMERA_PARAMS.md`.
 
 ### Visible change
 
@@ -234,7 +234,7 @@ types that merely have numbers there (`LightmapInfo`, `Dirlight`, `FlatSky`,
 
 `tests/test_declared_position_fallback.cpp` (5 tests) over 15 positional and 15
 non-positional declaration strings copied verbatim from the retail scripts. See
-`docs/igi-re-parity/DECLARED_POSITION_FALLBACK.md`.
+`docs/parity/DECLARED_POSITION_FALLBACK.md`.
 
 ## IGIED-FENCE-PARAMS-001 (Fence loader read a layout the engine does not have)
 
@@ -249,7 +249,7 @@ partially implemented a `Fence` parameter layout that contradicts the engine.
 ### Root cause
 
 `LevelObjects::LoadRecursive`'s `Fence` branch read arg 8 as `rot.x` and arg 9 as `rot.y`.
-IGI-RE `src/props/fence.c:115-119` registers exactly four parameters — `pos`
+retail engine `src/props/fence.c:115-119` registers exactly four parameters — `pos`
 (`Param_ObjectPos` → args 3/4/5), `angle` (`Param_Angle` → arg 6, commented "about z"),
 `model` (`Param_String16` → arg 7) and `cond` (`Param_VarString` → arg 8) — and
 `struct Fence` (`:63-72`) holds a single `float angle` and no other Euler component. So
@@ -289,7 +289,7 @@ expression or an open expression was driven by the wrong condition:
 
 ### Root cause
 
-IGI-RE `src/door/door.c:257-269` registers the parameter table in this order:
+retail engine `src/door/door.c:257-269` registers the parameter table in this order:
 
 | arg | field | arg | field |
 | --- | --- | --- | --- |
@@ -327,7 +327,7 @@ The call site therefore had three defects:
 
 The layout moved into `source/runtime/door_params.h` as `igi::ApplyDoorArgumentLayout`
 (header-only, `RuntimeDoorDefinition` only), with the argument positions named as constants
-and each IGI-RE citation inline. `App::SetupRuntimeDoors` now calls it once and no longer
+and each retail engine citation inline. `App::SetupRuntimeDoors` now calls it once and no longer
 carries the readers. The offset's Z component is `0.0f` with a comment saying why.
 
 Units were verified rather than assumed: the authored values are metres
