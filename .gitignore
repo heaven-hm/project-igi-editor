@@ -42,10 +42,11 @@
 # them (docs/parity/WINE_SMOKE.md §1, scripts/run-wine-smoke.sh).  The
 # blanket `*.a` rule above -- together with the unanchored `x86/` rule below --
 # is what hid them (issue #44).
-!third_party/GL/lib/x86/*.a
+!third_party/GL/lib/*/*.a
 *.la
 *.lai
 *.lib
+!third_party/GL/lib/*/*.lib
 *.so
 *.dylib
 *.dll

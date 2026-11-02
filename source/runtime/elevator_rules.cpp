@@ -1,4 +1,4 @@
-// elevator_rules.cpp - see elevator_rules.h for the oracle and the scope.
+// elevator_rules.cpp - Elevator rail placement and parameter parsing implementation.
 #include "runtime/elevator_rules.h"
 
 #include <algorithm>
@@ -12,91 +12,74 @@ namespace igi {
 
 namespace {
 
-// `kHalf` (src/math/mathvars.h:21) is 0.5f.
 constexpr float kHalf = 0.5f;
-
-// `kSmallAngle` DATA(0x533714) INIT(0.01f) (src/tagitem/spline.c:850).
 constexpr float kSmallAngle = 0.01f;
 
-// The engine's x87 intrinsics, on the host libm. The oracle is compiled with
-// excess precision kept, so every intermediate here is `long double`.
 inline long double X87Sqrt(long double x) { return std::sqrt(x); }
 inline long double X87Sin(long double x) { return std::sin(x); }
 
-// `IsZeroL` (src/tagitem/spline.c:62-65): the original's fcom/test treats a
-// value as zero unless it is strictly less-or-greater than 0, i.e. NaN and 0
-// both count as zero.
-inline bool IsZeroL(long double x) { return !(x < 0.0L || x > 0.0L); }
+inline bool IsZeroL(long double value) { return !(value < 0.0L || value > 0.0L); }
 
-// The engine's row-major `m[9]` -> glm. `g[col][row] == m[row * 3 + col]`, the
-// same mapping `renderer/spline_geometry.cpp`'s ToGlm/FromGlm use.
-inline double E(const glm::dmat3& g, int row, int col) { return g[col][row]; }
+// Row-major matrix indexing adapter.
+inline double MatrixElem(const glm::dmat3& matrix, int row, int col) {
+    return matrix[col][row];
+}
 
-// `Rot_ToQuat` (static, src/tagitem/spline.c:85-117). `q` is (x, y, z, w) plus
-// the engine's depth counter at q[4], which this port does not carry (it is
-// never read by the spline path: `Segment_BlendRot` only copies it through).
-void RotToQuat(double q[4], const glm::dmat3& e) {
-    static const int next[3] = {1, 2, 0};
-    const long double t = (E(e, 2, 2) + E(e, 1, 1)) + E(e, 0, 0);
+void RotToQuat(double quat[4], const glm::dmat3& matrix) {
+    static const int next_axis[3] = {1, 2, 0};
+    const long double trace = (MatrixElem(matrix, 2, 2) + MatrixElem(matrix, 1, 1)) + MatrixElem(matrix, 0, 0);
 
-    if (t > 0.0f) {
-        long double s = X87Sqrt(t + 1.0f);
+    if (trace > 0.0f) {
+        long double root = X87Sqrt(trace + 1.0f);
 
-        q[3] = static_cast<double>(s * kHalf);
-        s = kHalf / s;
-        // e[5] - e[7] == g[2][1] - g[1][2] == E(e, 1, 2) - E(e, 2, 1)
-        q[0] = -((E(e, 1, 2) - E(e, 2, 1)) * s);
-        // e[6] - e[2] == g[0][2] - g[2][0] == E(e, 2, 0) - E(e, 0, 2)
-        q[1] = -((E(e, 2, 0) - E(e, 0, 2)) * s);
-        // e[1] - e[3] == g[1][0] - g[0][1] == E(e, 0, 1) - E(e, 1, 0)
-        q[2] = -((E(e, 0, 1) - E(e, 1, 0)) * s);
+        quat[3] = static_cast<double>(root * kHalf);
+        root = kHalf / root;
+        quat[0] = -((MatrixElem(matrix, 1, 2) - MatrixElem(matrix, 2, 1)) * root);
+        quat[1] = -((MatrixElem(matrix, 2, 0) - MatrixElem(matrix, 0, 2)) * root);
+        quat[2] = -((MatrixElem(matrix, 0, 1) - MatrixElem(matrix, 1, 0)) * root);
     } else {
-        int i = 0;
-        long double s;
+        int primary_axis = 0;
+        long double root;
 
-        if (E(e, 1, 1) > E(e, 0, 0)) i = 1;
-        if (E(e, 2, 2) > E(e, i, i)) i = 2;
-        const int j = next[i];
-        const int k = next[j];
-        s = X87Sqrt(((E(e, i, i) - E(e, j, j)) - E(e, k, k)) + 1.0f);
-        q[i] = static_cast<double>(s * kHalf);
-        if (!IsZeroL(s)) s = kHalf / s;
-        q[j] = (E(e, i, j) + E(e, j, i)) * s;
-        q[k] = (E(e, i, k) + E(e, k, i)) * s;
-        q[3] = -((E(e, k, j) - E(e, j, k)) * s);
+        if (MatrixElem(matrix, 1, 1) > MatrixElem(matrix, 0, 0)) primary_axis = 1;
+        if (MatrixElem(matrix, 2, 2) > MatrixElem(matrix, primary_axis, primary_axis)) primary_axis = 2;
+        const int secondary_axis = next_axis[primary_axis];
+        const int tertiary_axis = next_axis[secondary_axis];
+        root = X87Sqrt(((MatrixElem(matrix, primary_axis, primary_axis) - MatrixElem(matrix, secondary_axis, secondary_axis)) -
+                        MatrixElem(matrix, tertiary_axis, tertiary_axis)) + 1.0f);
+        quat[primary_axis] = static_cast<double>(root * kHalf);
+        if (!IsZeroL(root)) root = kHalf / root;
+        quat[secondary_axis] = (MatrixElem(matrix, primary_axis, secondary_axis) + MatrixElem(matrix, secondary_axis, primary_axis)) * root;
+        quat[tertiary_axis] = (MatrixElem(matrix, primary_axis, tertiary_axis) + MatrixElem(matrix, tertiary_axis, primary_axis)) * root;
+        quat[3] = -((MatrixElem(matrix, tertiary_axis, secondary_axis) - MatrixElem(matrix, secondary_axis, tertiary_axis)) * root);
     }
 }
 
-// The tail of `Segment_BlendRot` (src/tagitem/spline.c:159-181): a unit
-// quaternion to the engine's row-major matrix.
-glm::dmat3 QuatToMatrix(const double r[4]) {
-    long double a = r[0] * r[0];
-    a = a + a;
-    long double b = r[1] * r[0];
-    b = b + b;
-    long double c = 2 * (r[2] * r[0]);
-    long double d = 2 * (r[3] * r[0]);
-    long double e = 2 * (r[1] * r[1]);
-    long double f = 2 * (r[2] * r[1]);
-    long double g = 2 * (r[3] * r[1]);
-    long double h = 2 * (r[2] * r[2]);
-    long double iz = r[3] * r[2];
-    iz = iz + iz;
+glm::dmat3 QuatToMatrix(const double quat[4]) {
+    long double x_sq2 = quat[0] * quat[0];
+    x_sq2 = x_sq2 + x_sq2;
+    long double xy2 = quat[1] * quat[0];
+    xy2 = xy2 + xy2;
+    long double xz2 = 2 * (quat[2] * quat[0]);
+    long double xw2 = 2 * (quat[3] * quat[0]);
+    long double y_sq2 = 2 * (quat[1] * quat[1]);
+    long double yz2 = 2 * (quat[2] * quat[1]);
+    long double yw2 = 2 * (quat[3] * quat[1]);
+    long double z_sq2 = 2 * (quat[2] * quat[2]);
+    long double zw2 = quat[3] * quat[2];
+    zw2 = zw2 + zw2;
 
-    // m[0] = (1 - e) - h    m[1] = b - iz      m[2] = g + c
-    // m[3] = iz + b         m[4] = (1 - a) - h  m[5] = f - d
-    // m[6] = c - g          m[7] = f + d        m[8] = (1 - a) - e
-    glm::dmat3 out(1.0);
-    out[0][0] = static_cast<double>((1.0f - e) - h);
-    out[1][0] = static_cast<double>(b - iz);
-    out[2][0] = static_cast<double>(g + c);
-    out[0][1] = static_cast<double>(iz + b);
-    out[1][1] = static_cast<double>((1.0f - a) - h);
-    out[2][1] = static_cast<double>(f - d);
-    out[0][2] = static_cast<double>(c - g);
-    out[1][2] = static_cast<double>(f + d);
-    out[2][2] = static_cast<double>((1.0f - a) - e);
-    return out;
+    glm::dmat3 out_matrix(1.0);
+    out_matrix[0][0] = static_cast<double>((1.0f - y_sq2) - z_sq2);
+    out_matrix[1][0] = static_cast<double>(xy2 - zw2);
+    out_matrix[2][0] = static_cast<double>(yw2 + xz2);
+    out_matrix[0][1] = static_cast<double>(zw2 + xy2);
+    out_matrix[1][1] = static_cast<double>((1.0f - x_sq2) - z_sq2);
+    out_matrix[2][1] = static_cast<double>(yz2 - xw2);
+    out_matrix[0][2] = static_cast<double>(xz2 - yw2);
+    out_matrix[1][2] = static_cast<double>(yz2 + xw2);
+    out_matrix[2][2] = static_cast<double>((1.0f - x_sq2) - y_sq2);
+    return out_matrix;
 }
 
 std::string ToLower(std::string value) {
@@ -231,20 +214,13 @@ ElevatorPlacement PlaceElevatorOnRail(const ElevatorRail& rail,
         return out;
     }
 
-    // The `else` branch: `SplineObj_GetPoints(graph, &m, &e->place, &found,
-    // dist, 0, 0, offset)` with `offset = {0, 0, 0}`.
     if (rail.path.joints.size() < 2 || !(len > 0.0)) return out;
 
-    // The engine wraps `dist` into [0, length) first (src/tagitem/spline.c:243-255)
-    // and refuses a non-positive result (`if (!(d > 0.0f)) { *found = 0; return; }`).
-    // `dist` is already inside [0, length] here because of the clamps above; the
-    // only value that reaches the refusal is exactly 0.
+    // Wrap distance along the rail.
     const double d = spline_geometry::WrapRailDistance(dist, len);
     if (!(d > 0.0)) return out;
 
-    // Walk to the joint pair containing `d`. `path.arc[i]` is the cumulative
-    // chord length to joint i, which is what `SEG_LEN` accumulates
-    // (src/sound/segsetup.c:141,174,195 -> `o->length = len + o->length`).
+    // Walk to the joint pair containing distance d.
     std::size_t i = 0;
     while (i + 2 < rail.path.arc.size() && rail.path.arc[i + 1] < d) ++i;
     const double segLen = rail.path.arc[i + 1] - rail.path.arc[i];
@@ -254,9 +230,7 @@ ElevatorPlacement PlaceElevatorOnRail(const ElevatorRail& rail,
                    (rail.path.joints[i + 1].pos - rail.path.joints[i].pos) * t;
     out.found = true;
 
-    // `if (!e->unk18D) mat_mul(&e->obj.matrix, &e->placeMatrix, &m, 4);`
-    // mat_mul is `out = a * b` (src/props/props.h:69-87); `b_rows = 4` only
-    // reorders the additions inside row 2, which does not change the value.
+    // Apply orientation unless explicitly forced by parameter.
     if (!params.force_orientation) {
         const glm::dmat3 frame =
             BlendJointRotation(rail.path.joints[i].rot, rail.path.joints[i + 1].rot, t);

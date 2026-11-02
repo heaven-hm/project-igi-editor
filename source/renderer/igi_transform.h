@@ -1,32 +1,10 @@
 #pragma once
 
-// Canonical IGI object transform maths, taken from the retail decompilation.
+// Canonical IGI object transform mathematics.
 //
-// Evidence (retail engine, the verified decompilation of the retail IGI.exe):
-//   * `src/math/matrix.c` — `Matrix_SetEuler`, HOOK(0x4B38E0):
-//
-//         Matrix_SetRotZ(m, az);
-//         Matrix_SetRotY(&r, ay);
-//         Mul(m, m, &r);        // m = m * r
-//         Matrix_SetRotX(&r, ax);
-//         Mul(m, m, &r);        // m = m * r
-//
-//     so the game composes `Rz(az) * Ry(ay) * Rx(ax)` — i.e. X is applied to a
-//     point first, then Y, then Z. `Mul` is `out = a * b` in the row-major 3x3
-//     layout used by `Matrix` (`src/math/matrix.c:10-25`), and `Matrix_SetRotX/Y/Z`
-//     build the ordinary right-handed rotation matrices for column vectors.
-//   * `src/physobj/paramops.c` — `ParamReal32x9_Parse`, HOOK(0x4EFBA0), reads the
-//     three authored QSC script arguments in order `x, y, z` and calls
-//     `Matrix_SetEuler(m, x, y, z)`. So a level object's authored rotation triple
-//     maps straight onto `(ax, ay, az)`; no permutation and no sign flip.
-//   * `src/camera/humancamera.c:393` — `Matrix_SetEuler(&e, c->pitch, 0, c->yaw)`
-//     confirms the axis convention: X is pitch, Z is yaw (the game's world is Z-up).
-//
-// `glm::rotate(m, angle, axis)` returns `m * R(axis, angle)`, so chaining
-// Z, Y, X reproduces the game's product order exactly. Before this header the
-// editor used `Z, X, Y` for most models and a hand-maintained `Z, Y, X`
-// whitelist (`IsZyxEulerModel`) for two model prefixes, which is why multi-axis
-// authored objects (issue #37) were mis-oriented.
+// Object rotation follows Rz(az) * Ry(ay) * Rx(ax) Euler product order.
+// Authored rotation triples map onto (ax, ay, az).
+// World coordinates are Z-up.
 
 #include <cmath>
 

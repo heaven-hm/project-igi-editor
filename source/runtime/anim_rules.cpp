@@ -1,12 +1,4 @@
-// anim_rules.cpp - see anim_rules.h for the full citation map.
-//
-// The engine files behind these rules all begin with
-// `#pragma GCC optimize("excess-precision=standard")` - anim.c:2,
-// boneobj.c:2, haze/anim.c, lod/boneobj.c, dxinit/d3drender.c, pistol/soldier.c,
-// soldier/soldier.c, glass/tba.c, loadscreen/human.c - which is why the
-// intermediate types below are spelled out rather than left to the compiler.
-// The two exceptions are named where they matter: humanstate.c and level.c do
-// NOT set it.
+// anim_rules.cpp - Animation track and bone hierarchy evaluation.
 #include "runtime/anim_rules.h"
 
 #include <cmath>
@@ -22,14 +14,15 @@ namespace igi {
 
 namespace {
 
-// `fistpll` with the x87 control word's rounding mode, low 32 bits. The engine
-// never changes the mode from round-to-nearest-even (humanbase/human.c:207-213
-// is the same helper). The "integer indefinite" the x87 produces for NaN or an
-// out-of-range value is 0x8000000000000000, and the engine's `return (int)r`
-// truncates that to 0.
+// 64-bit integer conversion limits.
+constexpr long long LONG_MIN_64 = -9223372036854775807LL - 1LL;
+constexpr long long LONG_MAX_64 =  9223372036854775807LL;
+
 int RoundInt(long double value) {
     if (std::isnan(value)) return 0;
-    if (!(value > -9.223372036854775808e18L && value < 9.223372036854775808e18L)) return 0;
+    const long double min_bound = static_cast<long double>(LONG_MIN_64);
+    const long double max_bound = static_cast<long double>(LONG_MAX_64);
+    if (!(value > min_bound && value < max_bound)) return 0;
     const long long rounded = static_cast<long long>(std::nearbyint(value));
     return static_cast<int>(rounded);
 }

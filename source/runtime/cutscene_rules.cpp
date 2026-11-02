@@ -81,16 +81,15 @@ bool X87Equal(long double a, long double b) {
     return !(a < b) && !(a > b);
 }
 
-// `round_ll` (src/mission/mission.h:113-119 and the identical copies in nine
-// other headers) is `fistpll` with the x87 control word's rounding mode, which
-// the engine never changes from the default round-to-nearest-even. The
-// "integer indefinite" the x87 produces for NaN or out-of-range input is
-// 0x8000000000000000, whose low 32 bits are zero; the engine's `(int)` cast
-// truncates to those, which is the same operation as the cast below. Same
-// transcription as igi::SmokeRoundInt (runtime/smoke.cpp).
+// 64-bit integer conversion limits.
+constexpr long long LONG_MIN_64 = -9223372036854775807LL - 1LL;
+constexpr long long LONG_MAX_64 =  9223372036854775807LL;
+
 int RoundLl(long double value) {
     if (std::isnan(value)) return 0;
-    if (!(value > -9.223372036854775808e18L && value < 9.223372036854775808e18L)) return 0;
+    const long double min_bound = static_cast<long double>(LONG_MIN_64);
+    const long double max_bound = static_cast<long double>(LONG_MAX_64);
+    if (!(value > min_bound && value < max_bound)) return 0;
     const long long rounded = static_cast<long long>(std::nearbyint(value));
     return static_cast<int>(rounded);
 }
@@ -103,16 +102,7 @@ int RoundLl(long double value) {
 
 namespace {
 
-// EditCamera_Init 0x507F10, src/editcam/editcamera.c:88-107. 16 ParamTable_Add
-// calls into a `ParamTable_New(17)` table (editcamera.c:83) -- the original
-// reserves one slot more than it fills. Token indices are in the editor's
-// argTokens layout ([3] is the first declared parameter).
-//
-// The authored names are the retail declaration's
-// (level1/objects.qsc:24-25, LEVEL2/objects.qsc:21-22), which names all sixteen
-// -- including "Time of day (-1 means use default)" for unk98, the sentence that
-// fixes the substitution CutScene_Interpolate makes at cutscene.c:488-492, and
-// "Noise" for filterLevel.
+// Camera keyframe parameters layout.
 const CutSceneParamDesc kKeyParams[] = {
     {"Position", "pos", "ObjectPos", 3, 3},
     {"Alpha", "angles[0]", "Angle", 6, 1},
@@ -132,10 +122,7 @@ const CutSceneParamDesc kKeyParams[] = {
     {"Camera shake", "shake", "Real32", 22, 1},
 };
 
-// CutScene_Open 0x4F4B00, src/cutscene/cutscene.c:250-263. 14 ParamTable_Add
-// calls into `ParamTable_New(14)` (cutscene.c:249). The authored names are the
-// ones the retail declaration line gives (level1/objects.qsc:9-10), and they
-// match the C table in order.
+// Cutscene screen parameters layout.
 const CutSceneParamDesc kScreenParams[] = {
     {"Position", "pos", "ObjectPos", 3, 3},
     {"Orientation", "matrix", "Real32x9", 6, 3},
@@ -179,7 +166,7 @@ bool ParseCutSceneKey(const std::vector<std::string>& arg_tokens, CutSceneKeyPar
     if (out == nullptr) return false;
     if (arg_tokens.size() < static_cast<std::size_t>(kCutSceneKeyTokenCount)) return false;
 
-    CutSceneKeyParams key;  // EditCamera_Create's defaults (editcamera.c:112-132)
+    CutSceneKeyParams key;
     for (int axis = 0; axis < 3; ++axis) {
         key.position[axis] = TokenDouble(arg_tokens, 3 + static_cast<std::size_t>(axis));
         key.angles[axis] = TokenFloat(arg_tokens, 6 + static_cast<std::size_t>(axis));
@@ -205,7 +192,7 @@ bool ParseCutSceneScreen(const std::vector<std::string>& arg_tokens, CutSceneScr
     if (out == nullptr) return false;
     if (arg_tokens.size() < static_cast<std::size_t>(kCutSceneScreenTokenCount)) return false;
 
-    CutSceneScreenParams screen;  // CutScene_CreateHandler's defaults (cutscene.c:269-297)
+    CutSceneScreenParams screen;
     screen.run_expression = TokenUnquoted(arg_tokens, 9);
     screen.reset_expression = TokenUnquoted(arg_tokens, 10);
     screen.time_delta_expression = TokenUnquoted(arg_tokens, 11);
@@ -224,7 +211,7 @@ bool ParseCutSceneScreen(const std::vector<std::string>& arg_tokens, CutSceneScr
 }
 
 // ---------------------------------------------------------------------------
-// CutScene_CollectKeys 0x4F4880
+// Collect keyframes
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -244,7 +231,7 @@ void WalkKeys(const std::vector<CutSceneKeyNode>& siblings, float scale, float* 
         key.params = node.params;
         key.start_time = *time;
         keys->push_back(std::move(key));
-        *time = scale * node.params.duration + *time;  // cutscene.c:172
+        *time = scale * node.params.duration + *time;
         WalkKeys(node.children, scale, time, keys, over_capacity);
     }
 }
@@ -260,9 +247,7 @@ std::vector<CutSceneKey> CollectCutSceneKeys(const std::vector<CutSceneKeyNode>&
     WalkKeys(cut_scene_children, scale, &time, &keys, &over_capacity);
 
     if (over_capacity) {
-        // The engine would have written past its stack array here
-        // (cutscene.c:170-173 has no bounds check). Report by returning nothing
-        // rather than a truncated timeline that would silently preview wrong.
+        // Timeline exceeded maximum capacity.
         keys.clear();
         time = 0.0f;
     }
@@ -289,8 +274,6 @@ void UnwrapCutSceneAngles(std::vector<CutSceneKey>* keys) {
         for (int axis = 0; axis < 3; ++axis) {
             float& angle = (*keys)[i].params.angles[axis];
             if (!std::isfinite(angle) || !std::isfinite(prev[axis])) {
-                // The engine's second loop cannot terminate on a NaN
-                // (cutscene.c:205-208); leave the authored value alone instead.
                 prev[axis] = angle;
                 continue;
             }
@@ -306,13 +289,11 @@ void UnwrapCutSceneAngles(std::vector<CutSceneKey>* keys) {
 // ---------------------------------------------------------------------------
 
 float CutSceneTimeFromTick(int tick) {
-    // cutscene.c:427: `float t = (long double)c->tick / gCutSceneTicksPerSec`.
     return static_cast<float>(static_cast<long double>(tick) /
                               static_cast<long double>(kCutSceneTicksPerSecond));
 }
 
 int CutSceneTickFromTime(double seconds) {
-    // cutscene.c:445 and :663: `(int)round_ll((long double)tps * seconds)`.
     return RoundLl(static_cast<long double>(kCutSceneTicksPerSecond) *
                    static_cast<long double>(seconds));
 }
@@ -337,8 +318,7 @@ CutSceneKeyWindow SelectCutSceneKeys(const std::vector<CutSceneKey>& keys, float
     for (int slot = 0; slot < 4; ++slot) {
         k[slot] = CutSceneKeyAt(keys, cur - 1 + slot);
     }
-    // cutscene.c:455-460, in this order: the third test reads k[2] as possibly
-    // rewritten by the second.
+    // Sequential smoothing collapses.
     if (!k[0]->params.smooth) k[0] = k[1];
     if (!k[1]->params.smooth) k[2] = k[1];
     if (!k[2]->params.smooth) k[3] = k[2];
@@ -354,12 +334,6 @@ CutSceneKeyWindow SelectCutSceneKeys(const std::vector<CutSceneKey>& keys, float
 
 long double CutSceneSpline(double p0, double p1, double p2, double p3, double t0, double t1, double t2,
                            double t3, double t) {
-    // cutscene.c:631-654, with Hermite_Init 0x518130 / Hermite_Eval 0x518190 from
-    // flare.c:46-60. Every intermediate keeps the engine's own width: the
-    // parameters are double, `half` and `d` are long double, the tangent
-    // expressions are double until the division by `d`, m1/m2/u are stored back
-    // into double locals, and Hermite_Eval's leading `u * h[0]` is a double
-    // product.
     const long double half = (p3 - p1) * kCutSceneHalfD;
     double m1 = 0.0;
     double m2 = 0.0;
@@ -395,11 +369,6 @@ CutSceneFade CutSceneFadeMix(const CutSceneScreenParams& screen, float t, float 
     float fade_in = 1.0f;
     float fade_out = 1.0f;
 
-    // cutscene.c:549-559. `x87_eq` treats NaN as equal to zero, so a NaN fadeIn
-    // skips the ramp and a NaN fadeOut takes the constant branch. The ramp's
-    // division is `t / c->fadeIn` with `t` a double and `fadeIn` a float, i.e. a
-    // double division stored back into a float; `d` is a double subtraction
-    // widened to the long double local.
     if (!X87Equal(screen.fade_in_seconds, 0.0f) && screen.fade_in_seconds > t) {
         fade_in = static_cast<float>(static_cast<double>(t) / screen.fade_in_seconds);
     }
@@ -419,16 +388,12 @@ CutSceneFade CutSceneFadeMix(const CutSceneScreenParams& screen, float t, float 
         mix = 1.0f;
     }
     fade.mix = mix;
-    // cutscene.c:587.
     fade.screen_factor = (1.0f - mix) + mix * screen.screen_size;
     return fade;
 }
 
 void CutSceneShakeDelta(float shake, const long double random_six[6], double out_position_delta[3],
                         double out_angle_delta[3]) {
-    // cutscene.c:569-575. Draw order: x, y, z for the position, then the three
-    // angle draws in the order s4, s5, s6 -- and Matrix_SetEuler(&shk, s6, s5, s4)
-    // means s6 is the X angle and s4 the Z angle.
     for (int axis = 0; axis < 3; ++axis) {
         out_position_delta[axis] =
             static_cast<double>((kCutSceneHalf - random_six[axis]) * shake * kCutSceneUnits);
@@ -457,8 +422,7 @@ bool EvaluateCutScene(const std::vector<CutSceneKey>& keys, float end,
         k[slot] = CutSceneKeyAt(keys, window.indices[slot]);
     }
 
-    // cutscene.c:488-492: a key's own unk98, or the CutScene's unk210 when it is
-    // not >= 0 (which is also true for NaN).
+    // Fallback to scene time-of-day when key override is invalid.
     float w[4];
     for (int slot = 0; slot < 4; ++slot) {
         w[slot] = k[slot]->params.time_of_day_override;
@@ -480,8 +444,6 @@ bool EvaluateCutScene(const std::vector<CutSceneKey>& keys, float end,
                                                           k[1]->params.position[axis],
                                                           k[2]->params.position[axis],
                                                           k[3]->params.position[axis]));
-        // The engine stores the spline result into a float before
-        // Matrix_SetEuler, so the state carries the float (cutscene.c:496-498).
         state.angles[axis] = static_cast<float>(spline(k[0]->params.angles[axis],
                                                        k[1]->params.angles[axis],
                                                        k[2]->params.angles[axis],
@@ -498,8 +460,6 @@ bool EvaluateCutScene(const std::vector<CutSceneKey>& keys, float end,
                                                    k[2]->params.filter_level,
                                                    k[3]->params.filter_level));
 
-    // cutscene.c:504-527. `span` is a float subtraction and `f` holds a double,
-    // because that is the width the engine computes each expression at.
     const long double d = static_cast<float>(t2) - static_cast<float>(t1);
     const float span = static_cast<float>(d);
     if (X87Equal(d, 0.0)) {
@@ -524,7 +484,6 @@ bool EvaluateCutScene(const std::vector<CutSceneKey>& keys, float end,
             f = static_cast<double>(t - static_cast<double>(t1)) / static_cast<double>(span);
         }
         for (int axis = 0; axis < 3; ++axis) {
-            // The difference is a float subtraction, then widened for `* f`.
             const float a = k[1]->params.colour[axis];
             const float b = k[2]->params.colour[axis];
             state.colour[axis] = static_cast<float>(static_cast<long double>(b - a) * f + a);

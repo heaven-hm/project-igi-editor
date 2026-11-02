@@ -517,8 +517,6 @@ void TrimFileInPlace(const std::string& filepath) {
 }
 
 std::string GetIGIRootPath() {
-	static std::string cachedPath;
-	if (!cachedPath.empty()) return cachedPath;
 #if defined(_WIN32)
 	char* envPath = nullptr;
 	size_t len = 0;
@@ -526,8 +524,7 @@ std::string GetIGIRootPath() {
 		std::string path(envPath);
 		free(envPath);
 		if (!path.empty()) {
-			cachedPath = path;
-			return cachedPath;
+			return path;
 		}
 	}
 #else
@@ -535,8 +532,7 @@ std::string GetIGIRootPath() {
 	if (envPath != nullptr) {
 		std::string path(envPath);
 		if (!path.empty()) {
-			cachedPath = path;
-			return cachedPath;
+			return path;
 		}
 	}
 #if defined(__APPLE__)
@@ -551,8 +547,7 @@ std::string GetIGIRootPath() {
 		if (in.is_open() && std::getline(in, line)) {
 			line = Trim(line);
 			if (!line.empty()) {
-				cachedPath = line;
-				return cachedPath;
+				return line;
 			}
 		}
 	}
@@ -576,8 +571,7 @@ std::string GetIGIRootPath() {
 	while (!path.empty() && (path.back() == '\\' || path.back() == '/' || path.back() == ' ')) {
 		path.pop_back();
 	}
-	cachedPath = path;
-	return cachedPath;
+	return path;
 }
 
 std::string GetIGIModelsPath(int level_no) {
