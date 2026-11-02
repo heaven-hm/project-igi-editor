@@ -48,21 +48,24 @@ static GLuint LoadOneSpr(const char* path, int& w, int& h) {
 }
 
 void App::LoadAllCursors() {
-	// Build absolute paths from IGI root — SPR files live in editor\qed\ relative to game install.
-	const std::string qed = Utils::GetIGIRootPath() + "\\editor\\qed\\";
+	// Search bundle/exe directory first, then game root
+	std::string qed = Utils::ToNativePath(Utils::GetExeDirectory() + "/editor/qed/");
+	if (!std::filesystem::exists(Utils::ToNativePath(qed + "TerrainEditIcon_Pointer.spr"))) {
+		qed = Utils::ToNativePath(Utils::GetIGIRootPath() + "/editor/qed/");
+	}
 	const std::string absPaths[NUM_CURSORS] = {
-		qed + "TerrainEditIcon_Pointer.spr",  // 0 Default
-		qed + "highlighttool.spr",             // 1 Hover
-		qed + "activetool.spr",                // 2 Selected
-		qed + "TerrainEditIcon_Lift.spr",      // 3 TerrainLift
-		qed + "TerrainEditIcon_Lower.spr",     // 4 TerrainLower
-		qed + "TerrainEditIcon_Flatten.spr",   // 5 TerrainFlatten
-		qed + "TerrainEditIcon_FlattenLine.spr",// 6 TerrainFlattenLine
-		qed + "TerrainEditIcon_Drop.spr",      // 7 TerrainDrop
-		qed + "TerrainEditIcon_Soften.spr",    // 8 TerrainSoften
-		qed + "inactivetool.spr",              // 9 Inactive
-		qed + "editor_camera.spr",             // 10 Camera (ALT held)
-		qed + "editor_move.spr",               // 11 Move (ALT held + moving)
+		Utils::ToNativePath(qed + "TerrainEditIcon_Pointer.spr"),  // 0 Default
+		Utils::ToNativePath(qed + "highlighttool.spr"),             // 1 Hover
+		Utils::ToNativePath(qed + "activetool.spr"),                // 2 Selected
+		Utils::ToNativePath(qed + "TerrainEditIcon_Lift.spr"),      // 3 TerrainLift
+		Utils::ToNativePath(qed + "TerrainEditIcon_Lower.spr"),     // 4 TerrainLower
+		Utils::ToNativePath(qed + "TerrainEditIcon_Flatten.spr"),   // 5 TerrainFlatten
+		Utils::ToNativePath(qed + "TerrainEditIcon_FlattenLine.spr"),// 6 TerrainFlattenLine
+		Utils::ToNativePath(qed + "TerrainEditIcon_Drop.spr"),      // 7 TerrainDrop
+		Utils::ToNativePath(qed + "TerrainEditIcon_Soften.spr"),    // 8 TerrainSoften
+		Utils::ToNativePath(qed + "inactivetool.spr"),              // 9 Inactive
+		Utils::ToNativePath(qed + "editor_camera.spr"),             // 10 Camera (ALT held)
+		Utils::ToNativePath(qed + "editor_move.spr"),               // 11 Move (ALT held + moving)
 	};
 	cursor_loaded_count_ = 0;
 	for (int i = 0; i < NUM_CURSORS; ++i) {
@@ -76,8 +79,12 @@ void App::LoadAllCursors() {
 	// Cache AITYPE_ model IDs from IGIModels.json
 	ai_model_ids_.clear();
 	{
-		std::string jsonPath = Utils::GetExeDirectory() + "\\editor\\tools\\IGIModels.json";
+		std::string jsonPath = Utils::ToNativePath(Utils::GetExeDirectory() + "/editor/tools/IGIModels.json");
 		std::ifstream jf(jsonPath);
+		if (!jf.is_open()) {
+			jsonPath = Utils::ToNativePath(Utils::GetIGIRootPath() + "/editor/tools/IGIModels.json");
+			jf.open(jsonPath);
+		}
 		if (jf) {
 			std::string content((std::istreambuf_iterator<char>(jf)), {});
 			size_t pos = 0;
@@ -178,11 +185,14 @@ void App::LoadHelpEntries() {
 
 void App::LoadAutoCompleteKeywords() {
 	autocomplete_keywords_.clear();
-	std::string path = Utils::GetExeDirectory() + "\\editor\\tools\\IGIAutoComplete.txt";
+	std::string path = Utils::ToNativePath(Utils::GetExeDirectory() + "/editor/tools/IGIAutoComplete.txt");
 	std::ifstream f(path);
 	if (!f.is_open()) {
-		// try IGI root fallback
-		path = Utils::GetIGIRootPath() + "\\editor\\tools\\IGIAutoComplete.txt";
+		path = Utils::ToNativePath(Utils::GetIGIRootPath() + "/editor/tools/IGIAutoComplete.txt");
+		f.open(path);
+	}
+	if (!f.is_open()) {
+		path = Utils::ToNativePath(Utils::GetExeDirectory() + "/editor/tools/igi1conv/IGIAutoComplete.txt");
 		f.open(path);
 	}
 	if (!f.is_open()) { Logger::Get().Log(LogLevel::WARNING, "[App] IGIAutoComplete.txt not found"); return; }

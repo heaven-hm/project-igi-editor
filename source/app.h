@@ -75,6 +75,7 @@ public:
   bool GetTerrainEditEnabled() const;
   void TogglePauseMenu();
   bool GetPauseMode() const;
+  int GetCursorLoadedCount() const { return cursor_loaded_count_; }
 
   // ── the live pause menu (#74) ───────────────────────────────────────────────
   //

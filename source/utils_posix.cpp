@@ -158,6 +158,20 @@ static int VkToMacKeyCode(int vk) {
 }
 
 static bool IsVkDown(int vk) {
+    if (vk == VK_MENU) {
+        return CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, kVK_Option) ||
+               CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, kVK_RightOption) ||
+               CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, kVK_Command) ||
+               CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, kVK_RightCommand);
+    }
+    if (vk == VK_SHIFT) {
+        return CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, kVK_Shift) ||
+               CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, kVK_RightShift);
+    }
+    if (vk == VK_CONTROL) {
+        return CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, kVK_Control) ||
+               CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, kVK_RightControl);
+    }
     const int macKey = VkToMacKeyCode(vk);
     if (macKey < 0) return false;
     return CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState,

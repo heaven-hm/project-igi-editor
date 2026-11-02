@@ -25,8 +25,12 @@ void App::ProcessInput(float delta_seconds) {
 	
 	bool enableCameraMode = Utils::IsKeyBindingPressed(Config::Get().keyEnableCamera);
 	
-	// Update cursor — always NONE so SPR sprite cursor is the only visible cursor
-	glutSetCursor(GLUT_CURSOR_NONE);
+	// Update cursor — hide native cursor only if custom SPR sprites are loaded
+	if (cursor_loaded_count_ > 0) {
+		glutSetCursor(GLUT_CURSOR_NONE);
+	} else {
+		glutSetCursor(GLUT_CURSOR_INHERIT);
+	}
 
 	if (!edit_mode_ || enableCameraMode) {
 		if (orbit_active_) {

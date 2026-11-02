@@ -28,6 +28,7 @@
 
 #include "tex_writer.h"
 #include "../logger.h"
+#include "../utils.h"
 
 #include <fstream>
 #include <cstring>
@@ -314,9 +315,10 @@ bool WriteTGA(const std::string& path, const TEXImage& img) {
 TEXFile TEX_Parse(const std::string& filepath) {
     TEXFile result;
 
-    std::ifstream f(filepath, std::ios::binary);
+    const std::string nativePath = Utils::ToNativePath(filepath);
+    std::ifstream f(nativePath, std::ios::binary);
     if (!f.is_open()) {
-        result.error = "Cannot open: " + filepath;
+        result.error = "Cannot open: " + nativePath;
         return result;
     }
 

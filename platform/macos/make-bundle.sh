@@ -37,7 +37,18 @@ fi
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/igi1ed" "$APP/Contents/MacOS/igi1ed"
+strip -x "$APP/Contents/MacOS/igi1ed" 2>/dev/null || true
 cp -R "$BIN/editor" "$APP/Contents/Resources/editor"
+
+# Ensure text/json tool files exist at top level of editor/tools
+if [ -f "$APP/Contents/Resources/editor/tools/igi1conv/IGIAutoComplete.txt" ]; then
+  cp "$APP/Contents/Resources/editor/tools/igi1conv/IGIAutoComplete.txt" "$APP/Contents/Resources/editor/tools/IGIAutoComplete.txt"
+fi
+
+# Prune Windows PE binaries, DLLs and batch files (~59MB) not usable on macOS
+rm -rf "$APP/Contents/Resources/editor/tools/igi1conv"
+rm -f "$APP/Contents/Resources/editor/editor.bat"
+
 cp "$BIN/version" "$APP/Contents/Resources/version" 2>/dev/null || true
 printf '%s\n' "$GAME" > "$APP/Contents/Resources/igi-game-path.txt"
 

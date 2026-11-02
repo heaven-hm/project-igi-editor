@@ -16,15 +16,15 @@
 // ============================================================
 
 static std::string ResPath() {
-    return Utils::GetIGIRootPath() +
-           "\\missions\\location0\\level1\\textures\\level1.res";
+    return Utils::ToNativePath(Utils::GetIGIRootPath() +
+           "/missions/location0/level1/textures/level1.res");
 }
 static std::string TempTexPath() {
-    return Utils::GetExeDirectory() + "\\fixtures\\_tmp_test.tex";
+    return Utils::ToNativePath(Utils::GetExeDirectory() + "/fixtures/_tmp_test.tex");
 }
 
 static bool ExtractFirstTex(const std::string& resPath, const std::string& outPath) {
-    RESFile res = RES_Parse(resPath);
+    RESFile res = RES_Parse(Utils::ToNativePath(resPath));
     if (!res.valid) return false;
     for (const auto& e : res.entries) {
         std::string name = e.name;
@@ -32,7 +32,10 @@ static bool ExtractFirstTex(const std::string& resPath, const std::string& outPa
         std::transform(ext.begin(), ext.end(), ext.begin(),
                        [](unsigned char c){ return (char)std::tolower(c); });
         if (ext == ".tex") {
-            std::ofstream f(outPath, std::ios::binary);
+            const std::string nativeOut = Utils::ToNativePath(outPath);
+            std::error_code ec;
+            std::filesystem::create_directories(std::filesystem::path(nativeOut).parent_path(), ec);
+            std::ofstream f(nativeOut, std::ios::binary);
             if (!f) return false;
             f.write(reinterpret_cast<const char*>(e.data.data()), (std::streamsize)e.data.size());
             return true;
@@ -91,7 +94,7 @@ TEST_F(TexParserTest, PixelDataSizeMatchesDimensions) {
 // ============================================================
 
 static std::string QedPath() {
-    return Utils::GetIGIRootPath() + "\\editor\\qed\\";
+    return Utils::ToNativePath(Utils::GetIGIRootPath() + "/editor/qed/");
 }
 
 struct CursorSprCase {

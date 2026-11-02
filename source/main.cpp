@@ -136,7 +136,8 @@ static void OnKeyboardUp(unsigned char key, int x, int y) {
 }
 
 static void OnDisplay() {
-  glutSetCursor(igi::ShouldUseNativeCursor(g_app.GetPauseMode())
+  glutSetCursor((igi::ShouldUseNativeCursor(g_app.GetPauseMode()) ||
+                 g_app.GetCursorLoadedCount() == 0)
                     ? GLUT_CURSOR_INHERIT
                     : GLUT_CURSOR_NONE);
   g_app.OnDisplay();

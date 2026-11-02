@@ -255,7 +255,7 @@ bool App::Init(int argc, char** argv) {
 	LoadAllCursors();
 	LoadHelpEntries();
 	LoadAutoCompleteKeywords();
-	glutSetCursor(GLUT_CURSOR_NONE);
+	glutSetCursor(cursor_loaded_count_ > 0 ? GLUT_CURSOR_NONE : GLUT_CURSOR_INHERIT);
 
 #if defined(_WIN32)
 	// Cache editor HWND for minimize/restore around game launch
@@ -696,7 +696,7 @@ void App::FocusEditorWindow() {
 
 	gameplay_host_.FocusEditorWindow();
 	RestoreEditorViewport();
-	glutSetCursor(GLUT_CURSOR_NONE);
+	glutSetCursor(cursor_loaded_count_ > 0 ? GLUT_CURSOR_NONE : GLUT_CURSOR_INHERIT);
 	edit_mode_ = true;
 	terrain_edit_enabled_ = false;
 	show_hud_ = true;

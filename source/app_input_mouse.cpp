@@ -606,7 +606,7 @@ void App::Input_OnMouse(int button, int state, int x, int y) {
 
 	// Update cursor instantly on click/release — keep NONE if SPR cursor is active
 	if (window_state_.cursor_visible_ && !pause_mode_) {
-		glutSetCursor(GLUT_CURSOR_NONE);
+		glutSetCursor(cursor_loaded_count_ > 0 ? GLUT_CURSOR_NONE : GLUT_CURSOR_INHERIT);
 	}
 
 }
